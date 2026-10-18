@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Eventuous.SignalR.Client;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services;
 
@@ -66,13 +68,19 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     Task _loop = Task.CompletedTask;
     volatile HubConnection? _hub;
 
-    public ServerConnectionService(ProfileContext? profiles, ICredentialSource? credentials, TimeProvider time)
+    public ServerConnectionService(ProfileContext? profiles, ICredentialSource? credentials, TimeProvider time, LocalRoot? localRoot = null)
         : this(
             time,
             profiles?.Resolution.ServerUrl,
             credentials is null
                 ? () => Task.FromResult<string?>(null)
-                : async () => (await credentials.ResolveAsync(default)).Bearer) { }
+                : async () => (await credentials.ResolveAsync(default)).Bearer) {
+        _localRoot = localRoot;
+        _refusal   = profiles is null ? null : LocalDestination.Refusal(profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint);
+    }
+
+    readonly LocalRoot? _localRoot;
+    readonly string?    _refusal;
 
     internal ServerConnectionService(
             TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
@@ -245,7 +253,11 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
 
     HubConnection Build() {
         var builder = new HubConnectionBuilder()
-            .WithUrl($"{_serverUrl}/hubs/sessions", o => o.AccessTokenProvider = _token);
+            .WithUrl($"{_serverUrl}/hubs/sessions", o => {
+                o.AccessTokenProvider = _token;
+                // Every negotiation, reconnects included, goes through it before a WebSocket is opened.
+                o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal) { InnerHandler = inner };
+            });
         if (_hubLogging is { } logging) builder.ConfigureLogging(logging);
         var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())
             .AddJsonProtocol(o => LaunchHubJson.Configure(o.PayloadSerializerOptions))

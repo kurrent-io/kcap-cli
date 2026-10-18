@@ -1,3 +1,4 @@
+using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
 
@@ -5,7 +6,7 @@ namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>This root's installation for the <c>kcap local</c> commands: a lock-free <see cref="Read"/> for reporting,
 /// and <see cref="RunAsync{T}"/> for anything that changes it.</summary>
-sealed class LocalStack(LocalRoot root, UserHome home, ILocalServerService service, HttpClient local, TimeProvider time) {
+sealed class LocalStack(LocalRoot root, UserHome home, ILocalServerService service, HttpClient local, TimeProvider time, IOutgoingRecorders recorders) {
     static readonly TimeSpan LeaseWait = TimeSpan.FromSeconds(10);
 
     public LocalRoot Root => root;
@@ -29,7 +30,7 @@ sealed class LocalStack(LocalRoot root, UserHome home, ILocalServerService servi
         CancellationToken ct) {
         // A rolled-forward setup is already committed; the command reads the state it left.
         var recovery  = new LocalSetupRecovery(service, home, local, time, progress, _ => { });
-        var lifecycle = new LocalLifecycle(root, [recovery, new LocalPurgeRecovery(service, home, progress)], time);
+        var lifecycle = new LocalLifecycle(root, [recovery, new LocalPurgeRecovery(service, home, recorders, mayStop: true, progress)], time);
 
         return lifecycle.RunAsync(LeaseWait, (lease, token) => command(lease, ReadRegistry(mayWrite: true), token), ct);
     }

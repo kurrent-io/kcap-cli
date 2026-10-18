@@ -4,24 +4,27 @@ using Capacitor.Cli.Core.LocalEdition;
 namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>Takes this root's server down for good before anything of the installation is deleted: its own unit
-/// unloaded and removed, a unit serving another root left alone, and nothing of this root's stack alive.</summary>
+/// stopped and disabled, and removed too when asked, a unit serving another root left alone, and nothing of this
+/// root's stack alive.</summary>
 static class LocalStackStop {
     /// <summary>Throws <see cref="LocalLifecycleException"/> naming what is left when the stop cannot be verified;
     /// nothing has been deleted then.</summary>
-    public static async Task RunAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home, CancellationToken ct) {
+    public static async Task RunAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home, bool removeUnit,
+        CancellationToken ct) {
         using (await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, ct)) {
             switch (LocalRootIdentity.Decide(root, service.Owner(unit))) {
                 case OwnerDecision.Ours:
                     FaultPoints.Hit("uninstall:unit");
 
                     try {
-                        await service.UninstallAsync(unit, CancellationToken.None);
+                        if (removeUnit) await service.UninstallAsync(unit, CancellationToken.None);
+                        else await service.StopAsync(unit, CancellationToken.None);
                     } catch (Exception ex) when (ex is not LocalLifecycleException) {
                         throw new LocalLifecycleException(
                             $"The {service.Describe} {unit.Label} could not be unloaded ({ex.Message}). Nothing was removed.", ex);
                     }
 
-                    if (Path.GetDirectoryName(service.UnitFile(unit)) is { } unitDir && Directory.Exists(unitDir))
+                    if (removeUnit && Path.GetDirectoryName(service.UnitFile(unit)) is { } unitDir && Directory.Exists(unitDir))
                         DurableDirectory.Sync(unitDir);
 
                     break;

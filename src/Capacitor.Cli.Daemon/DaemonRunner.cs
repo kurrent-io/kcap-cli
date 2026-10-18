@@ -108,6 +108,7 @@ public static partial class DaemonRunner {
         var localRoot  = LocalRoot.FromEnvironment(userHome);
         var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv, LocalEndpoints.Read(localRoot));
         config.Profiles  = profiles;
+        config.LocalRoot = localRoot;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
         // CLI arg overrides for daemon-specific settings — parse before host builder.
@@ -351,7 +352,7 @@ public static partial class DaemonRunner {
         builder.Services.AddSingleton(config);
         builder.Services.AddSingleton(harnesses);
         builder.Services.AddSingleton(daemonLock);
-        builder.Services.AddDaemonHttp(configRoot, config, serverEnv, machineEnv, localRoot);
+        builder.Services.AddDaemonHttp(configRoot, config, serverEnv, machineEnv);
         builder.Services.AddSingleton<ServerConnection>();
 
         // The owner consent gate — policy store + append-only decision log share the

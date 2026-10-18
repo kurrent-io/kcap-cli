@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
 
@@ -9,20 +10,24 @@ namespace Capacitor.Cli.Commands;
 sealed class OutgoingRecorders(
         DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
         HarnessRegistry harnesses, BinaryProbe binaries, WatcherManager watchers, TimeProvider time) : IOutgoingRecorders {
+    static readonly TimeSpan ProbeBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>A launch still starting is counted too: it is not in the agent table until its runtime answers. A
+    /// daemon that cannot give a complete snapshot, including one too old to report its pending launches, counts as
+    /// busy.</summary>
     public async Task<IReadOnlyList<string>> BusyAsync() {
         var busy = new List<string>();
 
         foreach (var name in LiveDaemons()) {
-            var socket = store.SocketPath(name);
-            var agents = File.Exists(socket) ? await AgentCommand.FetchAgentsAsync(socket) : null;
+            var probe = await LocalControlProbe.ProbeAsync(store, name, time, ProbeBudget);
 
-            if (agents is null) {
+            if (probe.Snapshot is not { Pending: { } pending } snapshot) {
                 busy.Add($"daemon '{name}': its agents cannot be listed");
                 continue;
             }
 
-            var active = agents.Count(a => a.Status is "Starting" or "Running");
-            if (active > 0) busy.Add($"daemon '{name}': {active} agent(s) running");
+            var running = snapshot.Daemon.ActiveAgents + pending.Count;
+            if (running > 0) busy.Add($"daemon '{name}': {running} agent(s) running or starting");
         }
 
         return busy;
@@ -53,13 +58,18 @@ sealed class OutgoingRecorders(
 
         if (await new CleanupCommand(watchers).HandleCleanup() != 0) stopped = false;
 
-        foreach (var name in LiveDaemons()) {
-            await Console.Error.WriteLineAsync($"  • Daemon '{name}' is still running.");
+        foreach (var survivor in Live()) {
+            await Console.Error.WriteLineAsync($"  • {survivor} is still running.");
             stopped = false;
         }
 
         return stopped;
     }
+
+    public IReadOnlyList<string> Live() => [
+        .. LiveDaemons().Select(n => $"Daemon '{n}'"),
+        .. LiveWatchers().Select(k => $"Watcher {k}"),
+    ];
 
     IEnumerable<string> LiveDaemons() =>
         Directory.Exists(store.Directory)
@@ -69,4 +79,16 @@ sealed class OutgoingRecorders(
                 .Where(n => n.Length > 0 && DaemonPidProbe.ValidatedPid(store, n) is not null)
                 .Order()
             : [];
+
+    IEnumerable<string> LiveWatchers() {
+        var dir = watchers.GetWatcherDir();
+
+        return Directory.Exists(dir)
+            ? Directory.EnumerateFiles(dir, "*.pid")
+                .Select(Path.GetFileNameWithoutExtension)
+                .OfType<string>()
+                .Where(k => k.Length > 0 && watchers.PidAlive(k))
+                .Order()
+            : [];
+    }
 }

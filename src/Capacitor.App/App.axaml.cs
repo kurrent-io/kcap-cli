@@ -522,7 +522,7 @@ public partial class App : Application {
         // Built here rather than with the other server clients below because a remote stop goes
         // over the hub: the lane must exist before the service that calls it. Start() still runs
         // down there, with the rest of the server graph.
-        var serverLane = new ServerConnectionService(profiles, ServerCredentials(profiles), _time);
+        var serverLane = new ServerConnectionService(profiles, ServerCredentials(profiles), _time, _localRoot);
         var actions = new AgentActionService(
             ops, notifier, opener, service.Snapshots, _shutdown.Token, ConfirmForceStopAsync,
             fallbackServerUrl: profiles?.Resolution.ServerUrl, lane: serverLane);
@@ -550,10 +550,10 @@ public partial class App : Application {
         // One launch client and one work-context source for the app, not one per window the
         // coordinator builds — each owns a live transport, and only a held instance can be
         // disposed at teardown.
-        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv);
-        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time);
-        var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv);
-        var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv);
+        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time, localRoot: _localRoot);
+        var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.

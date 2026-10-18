@@ -8,7 +8,8 @@ namespace Capacitor.Cli.LocalEdition;
 /// Removes the installation under the lifecycle lease, in order: refuse while a daemon runs agents unless forced;
 /// stop and verify every daemon and watcher; stop this root's unit and verify nothing of its stack is alive; only then
 /// remove the unit, <c>bin/</c> and <c>run/</c>. Without a purge the registry and <c>data/</c> stay, so a reinstall
-/// returns as the same installation on the same port. A purge then retires it (see <see cref="LocalPurge"/>).
+/// returns as the same installation on the same port. A purge removes nothing until it has retired the installation
+/// (see <see cref="LocalPurge"/>).
 /// </summary>
 sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoingRecorders recorders) {
     /// <summary>Throws <see cref="LocalLifecycleException"/> naming what stopped it; nothing is deleted before the
@@ -33,12 +34,19 @@ sealed class LocalUninstall(ILocalServerService service, UserHome home, IOutgoin
 
         FaultPoints.Hit("uninstall:recorders-stopped");
 
-        await LocalStackStop.RunAsync(lease.Root, LocalServerUnit.ForInstallation(lease.Root, installation.Port), service, home, ct);
+        var unit = LocalServerUnit.ForInstallation(lease.Root, installation.Port);
 
-        LocalStackStop.Delete(lease.Root, "bin", "run");
-        FaultPoints.Hit("uninstall:after-delete");
+        if (!purge) {
+            await LocalStackStop.RunAsync(lease.Root, unit, service, home, removeUnit: true, ct);
 
-        if (!purge) return LocalUninstallOutcome.Uninstalled;
+            LocalStackStop.Delete(lease.Root, "bin", "run");
+            FaultPoints.Hit("uninstall:after-delete");
+
+            return LocalUninstallOutcome.Uninstalled;
+        }
+
+        // Stopped, not removed: a purge deletes nothing until its retirement is durable.
+        await LocalStackStop.RunAsync(lease.Root, unit, service, home, removeUnit: false, ct);
 
         var entry = LocalPurge.Begin(lease, installation, configDir);
         FaultPoints.Hit("purge:begun");

@@ -84,7 +84,9 @@ public static class ServerVersionStore {
         ServerIdentity.Canonicalize(serverUrl) ?? serverUrl.Trim().TrimEnd('/');
 
     /// <summary>Deletes what was recorded for <paramref name="serverUrl"/>.</summary>
-    public static void Forget(string serverUrl, ConfigRoot config) => File.Delete(PathFor(Normalize(serverUrl), config));
+    public static void Forget(string serverUrl, ConfigRoot config) {
+        if (Directory.Exists(config.Directory)) File.Delete(PathFor(Normalize(serverUrl), config));
+    }
 
     static string PathFor(string normalizedUrl, ConfigRoot config) {
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(normalizedUrl)))[..16].ToLowerInvariant();

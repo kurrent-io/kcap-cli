@@ -33,7 +33,7 @@ public class LocalUninstallCommandTests {
 
     async Task<(int Exit, string Out, string Err)> RunAsync(params string[] args) {
         var command = new LocalCommand(
-            new StackFactory(() => new(Root, Home, Service, new HttpClient(), TimeProvider.System)),
+            new StackFactory(() => new(Root, Home, Service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders(_log))),
             new FakeOutgoingRecorders(_log), new ConfigRoot(Tmp.CreateDir("cfg")), Home);
 
         using var capture = ConsoleOutput.StartFullCapture();

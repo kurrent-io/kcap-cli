@@ -14,13 +14,29 @@ public static class LocalDestination {
             _ => null,
         };
 
-    /// <summary>The refusal for a request to <paramref name="uri"/>, reading the registry now. Only a loopback
-    /// request reads it.</summary>
-    public static string? Refusal(Uri uri, LocalRoot root) {
-        if (!uri.IsAbsoluteUri || !uri.IsLoopback) return null;
+    /// <summary>The refusal for a request to <paramref name="uri"/>: the registry under <paramref name="root"/> read
+    /// now, when there is one; otherwise <paramref name="resolvedRefusal"/>, for a request to
+    /// <paramref name="serverUrl"/>'s origin only.</summary>
+    public static string? Refusal(Uri uri, LocalRoot? root, string? serverUrl, string? resolvedRefusal) {
+        if (!uri.IsAbsoluteUri) return null;
 
-        var origin = uri.GetLeftPart(UriPartial.Authority);
+        // A WebSocket upgrade goes to the server's own origin under its ws spelling.
+        var scheme = uri.Scheme switch { "ws" => Uri.UriSchemeHttp, "wss" => Uri.UriSchemeHttps, var other => other };
+        var origin = $"{scheme}://{uri.Authority}";
 
-        return Refusal(origin, LocalEndpoints.Read(root).Classify(origin));
+        if (root is not null)
+            return uri.IsLoopback ? Refusal(origin, LocalEndpoints.Read(root).Classify(origin)) : null;
+
+        return resolvedRefusal is not null
+            && Uri.TryCreate(serverUrl, UriKind.Absolute, out var server)
+            && string.Equals(server.GetLeftPart(UriPartial.Authority), origin, StringComparison.OrdinalIgnoreCase)
+                ? resolvedRefusal
+                : null;
+    }
+
+    /// <summary>Throws <see cref="LocalDestinationException"/> when <paramref name="uri"/> is refused, for a transport
+    /// that does not go through a handler, such as a WebSocket.</summary>
+    public static void Check(Uri uri, LocalRoot? root, string? serverUrl, string? resolvedRefusal) {
+        if (Refusal(uri, root, serverUrl, resolvedRefusal) is { } refusal) throw new LocalDestinationException(refusal);
     }
 }

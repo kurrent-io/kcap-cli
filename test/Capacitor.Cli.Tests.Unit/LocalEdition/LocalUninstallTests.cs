@@ -37,7 +37,7 @@ public class LocalUninstallTests {
 
     FakeOutgoingRecorders Recorders => field ??= new(_log);
 
-    LocalStack Stack => field ??= new(Root, Home, Service, new HttpClient(Server), _time);
+    LocalStack Stack => field ??= new(Root, Home, Service, new HttpClient(Server), _time, Recorders);
 
     string Dir(string name) => Path.Combine(Root.Directory, name);
 
@@ -58,7 +58,7 @@ public class LocalUninstallTests {
         return new(Root, Config, Home, Service, Bundle.Client(), http, Bundle.Key, MacArm, _time,
             installer => [
                 new LocalSetupRecovery(Service, Home, http, _time, installer.Progress, installer.RolledForward),
-                new LocalPurgeRecovery(Service, Home, installer.Progress),
+                new LocalPurgeRecovery(Service, Home, Recorders, mayStop: false, installer.Progress),
             ]) {
             Version     = Version,
             SocketLimit = int.MaxValue,
@@ -139,11 +139,14 @@ public class LocalUninstallTests {
     }
 
     [Test]
-    public async Task A_unit_stop_that_fails_deletes_nothing() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_unit_stop_that_fails_deletes_nothing(bool purge) {
         var installed = await InstallAsync();
         Service.UninstallFailure = new LocalLifecycleException("launchctl bootout failed");
+        Service.StopFailure      = new LocalLifecycleException("launchctl bootout failed");
 
-        var refused = await Assert.ThrowsAsync<LocalLifecycleException>(() => UninstallAsync(purge: true));
+        var refused = await Assert.ThrowsAsync<LocalLifecycleException>(() => UninstallAsync(purge));
 
         await Assert.That(refused!.Message).Contains("bootout");
         await AssertUntouched(installed);
@@ -337,7 +340,12 @@ public class LocalUninstallTests {
 
         var classified = new LocalEndpoints(LocalStateFiles.ReadRegistry(Root)).Classify(installed.ServerUrl);
         await Assert.That(classified is LocalEndpointClass.Local or LocalEndpointClass.Retired).IsTrue();
-        if (!Directory.Exists(Dir("data"))) await Assert.That(classified).IsTypeOf<LocalEndpointClass.Retired>();
+
+        if (classified is LocalEndpointClass.Local) {
+            await Assert.That(Directory.Exists(Dir("bin"))).IsTrue();
+            await Assert.That(Directory.Exists(Dir("data"))).IsTrue();
+            await Assert.That(File.Exists(Plist)).IsTrue();
+        }
 
         var state = await Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None);
 
@@ -360,6 +368,46 @@ public class LocalUninstallTests {
         await Assert.That(fresh.InstallationId).IsNotEqualTo(installed.InstallationId);
         await Assert.That(fresh.Port).IsNotEqualTo(installed.Port);
         await Assert.That(_events.Reports).Contains(new LocalInstallEvent.Recovered(LocalPurgeJournal.Operation, LocalPurgeJournal.Retired));
+    }
+
+    /// <summary>The journal denies the server a start, not a daemon or a watcher; one started since the crash is
+    /// stopped before anything more is deleted.</summary>
+    [Test]
+    public async Task A_purge_recovered_by_a_local_command_stops_recorders_started_since_the_crash() {
+        await InstallAsync();
+
+        using (FaultPoints.Arm(p => { if (p == "purge:after-retired") throw new SimulatedCrash(); }))
+            await Assert.ThrowsAsync<SimulatedCrash>(() => UninstallAsync(purge: true));
+
+        Recorders.Alive.Add("Watcher abc");
+        _log.Clear();
+
+        await Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None);
+
+        await Assert.That(_log.IndexOf("recorders:stop")).IsEqualTo(0);
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(Directory.Exists(Dir("data"))).IsFalse();
+    }
+
+    /// <summary>Setup cannot stop them without printing into its JSON events, so it leaves the purge to the command
+    /// that can.</summary>
+    [Test]
+    public async Task Setup_leaves_an_interrupted_purge_alone_while_a_recorder_is_alive() {
+        await InstallAsync();
+
+        using (FaultPoints.Arm(p => { if (p == "purge:after-retired") throw new SimulatedCrash(); }))
+            await Assert.ThrowsAsync<SimulatedCrash>(() => UninstallAsync(purge: true));
+
+        Recorders.Alive.Add("Watcher abc");
+        _log.Clear();
+
+        var refused = await Assert.ThrowsAsync<LocalInstallFailure>(
+            () => Installer().InstallAsync(new(SingleUser: true, Confirmed: true), _events, CancellationToken.None));
+
+        await Assert.That(refused!.Message).Contains("Watcher abc");
+        await Assert.That(JournalAbsent()).IsFalse();
+        await Assert.That(Directory.Exists(Dir("data"))).IsTrue();
+        await Assert.That(_log).DoesNotContain("recorders:stop");
     }
 
     [Test]

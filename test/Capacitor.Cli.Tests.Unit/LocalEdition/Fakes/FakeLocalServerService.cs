@@ -12,6 +12,8 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
     public Exception? UninstallFailure { get; set; }
 
+    public Exception? StopFailure { get; set; }
+
     /// <summary>Runs after a <see cref="Start"/> is logged, e.g. to change what the fake server answers.</summary>
     public Action? OnStart { get; set; }
 
@@ -45,6 +47,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
     public Task StopAsync(LocalServerUnit unit, CancellationToken ct) {
         Log("stop");
+        if (StopFailure is { } failure) throw failure;
         return Task.CompletedTask;
     }
 

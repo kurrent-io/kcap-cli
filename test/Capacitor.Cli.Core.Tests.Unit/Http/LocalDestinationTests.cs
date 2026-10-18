@@ -109,6 +109,41 @@ public class LocalDestinationTests : IDisposable {
         await Assert.That(_server.LogEntries).IsEmpty();
     }
 
+    /// <summary>Discovery and login fetch through the anonymous lane, which carries no credential but still reaches
+    /// the server.</summary>
+    [Test]
+    public async Task An_anonymous_request_to_a_retired_origin_is_refused() {
+        var root = NewRoot();
+        Publish(root, Installed);
+        using var sp = Container(Resolutions.AtInstallation(Url, Config.Root, LocalEndpoints.Read(root)), root);
+        using var anonymous = sp.GetRequiredService<ICapacitorHttpClient>().Anonymous();
+
+        Publish(root, Installed.RetireActive());
+
+        await Assert.ThrowsAsync<LocalDestinationException>(() => anonymous.GetAsync($"{Url}/ping"));
+        await Assert.That(_server.LogEntries).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_websocket_to_a_retired_origin_is_refused() {
+        var root = NewRoot();
+        Publish(root, Installed.RetireActive());
+
+        var socket = new UriBuilder(Url) { Scheme = "ws", Path = "/hubs/sessions" }.Uri;
+
+        await Assert.That(() => LocalDestination.Check(socket, root, Url, null)).Throws<LocalDestinationException>();
+    }
+
+    /// <summary>Without a root only the resolution's own refusal is known, and it is about the server's origin: the
+    /// same process still reaches every other host.</summary>
+    [Test]
+    public async Task A_refusal_made_at_resolution_applies_to_its_server_only() {
+        const string refusal = "retired";
+
+        await Assert.That(LocalDestination.Refusal(new Uri($"{Url}/ping"), null, Url, refusal)).IsEqualTo(refusal);
+        await Assert.That(LocalDestination.Refusal(new Uri("https://registry.npmjs.org/kcap"), null, Url, refusal)).IsNull();
+    }
+
     /// <summary>The same sends go through when no installation ever claimed the port, which is what makes the cases
     /// above prove the registry rather than a broken fixture.</summary>
     [Test]

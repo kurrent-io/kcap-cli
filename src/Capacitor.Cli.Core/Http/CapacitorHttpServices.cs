@@ -103,6 +103,7 @@ public static class CapacitorHttpServices {
         // CONFIGURED server, and these requests go to one the caller has not adopted yet, so what they
         // captured would be filed against the wrong server.
         services.AddHttpClient(CapacitorClients.Anonymous)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             // With no bearer to strip there is nothing a redirect can break, and a download that
             // lands on an object store needs the hop followed.
@@ -115,6 +116,7 @@ public static class CapacitorHttpServices {
         // The observation tags ride here too, so a caller supplying its own bearer gets them without
         // attaching them itself. Registered centrally, the guarantee is a rule rather than a convention.
         services.AddHttpClient(CapacitorClients.Bearer)
+            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);

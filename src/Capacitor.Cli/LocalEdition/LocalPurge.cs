@@ -12,7 +12,7 @@ namespace Capacitor.Cli.LocalEdition;
 /// after a crash.
 /// </summary>
 static class LocalPurge {
-    /// <summary>Under the lease, with the unit already removed and nothing alive.</summary>
+    /// <summary>Under the lease, with the unit stopped and nothing alive.</summary>
     public static LifecycleJournalEntry Begin(LifecycleLease lease, LocalInstallation installation, string configDir) =>
         lease.Begin(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, installation.Id,
             LocalPurgeJournal.Build(installation, Path.GetFullPath(configDir)));
@@ -27,8 +27,10 @@ static class LocalPurge {
             throw new LocalLifecycleException(
                 $"The purge journal {root.JournalPath} cannot be acted on ({error}). Nothing was changed; fix or remove it, then run kcap local uninstall --purge again.");
 
+        var unit = LocalServerUnit.ForInstallation(root, details.Port);
+
         // Again on a recovery: the journal denies the server a start, but a unit loaded since would still run.
-        await LocalStackStop.RunAsync(root, LocalServerUnit.ForInstallation(root, details.Port), service, home, ct);
+        await LocalStackStop.RunAsync(root, unit, service, home, removeUnit: false, ct);
 
         lease.PublishRegistry(Retire(lease, details));
         FaultPoints.Hit("purge:after-retire");
@@ -38,6 +40,7 @@ static class LocalPurge {
             FaultPoints.Hit("purge:after-retired");
         }
 
+        await LocalStackStop.RunAsync(root, unit, service, home, removeUnit: true, ct);
         LocalStackStop.Delete(root, "bin", "run", "data", "logs");
         FaultPoints.Hit("purge:after-data");
 
@@ -78,7 +81,7 @@ static class LocalPurge {
 
         ServerVersionStore.Forget(serverUrl, config);
         PlanEntitlementStore.Forget(serverUrl, config);
-        SessionStartFlowsCatalogCache.Default(config).Delete(serverUrl);
+        SessionStartFlowsCatalogCache.Default(config).Forget(serverUrl);
     }
 
     /// <summary>Clears the URL and the provider stamp of every profile naming the installation, in any loopback

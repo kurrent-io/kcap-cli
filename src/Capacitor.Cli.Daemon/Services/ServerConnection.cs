@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Http;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -221,9 +222,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
         void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
 
+        // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
+        // to anything.
+        var refusal = config.DestinationRefusal;
+        DelegatingHandler Guarded(HttpMessageHandler inner) =>
+            new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal) { InnerHandler = inner };
+
         _eventQueue = new(
             config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
-            new HttpClient(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() }));
+            new HttpClient(Guarded(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() })));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
@@ -231,9 +238,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 options => {
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
                     options.HttpMessageHandlerFactory = inner =>
-                        new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
-                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
-                        context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                        Guarded(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner });
+                    options.WebSocketFactory = (context, ct) => {
+                        LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
+
+                        return BearerRejectionReportHandler.ConnectWebSocketAsync(
+                            context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                    };
                 }
             )
             .WithAutomaticReconnect(new RetryPolicy())

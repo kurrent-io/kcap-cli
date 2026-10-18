@@ -2,7 +2,6 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
-using Capacitor.Cli.Core.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Capacitor.Cli.Daemon;
@@ -15,8 +14,8 @@ public static class DaemonHttpServices {
     /// </summary>
     public static IServiceCollection AddDaemonHttp(
             this IServiceCollection services, ConfigRoot configRoot, DaemonConfig config,
-            ProfileOverrides env, MachineAuth machine, LocalRoot? localRoot = null) {
-        services.AddSingleton(_ => new CapacitorServer(config.ServerUrl, configRoot, config.Profiles, localRoot));
+            ProfileOverrides env, MachineAuth machine) {
+        services.AddSingleton(_ => new CapacitorServer(config.ServerUrl, configRoot, config.Profiles, config.LocalRoot));
         services.AddCapacitorHttp(env, machine);
 
         return services;
