@@ -69,9 +69,12 @@ public static class WorkContextReader {
     /// Every work-item route shares the plan gate, and a plan change between the calls must not
     /// leave the pane ready on retained data.
     static WorkContextRead? PlanGated<T>(WorkContextOutcome<T> outcome) where T : class =>
-        outcome is { StatusCode: 403, Error: { Error: PlanGateError } gate }
-            ? WorkContextRead.Of(WorkContextReadKind.NotInPlan, gate.Message)
+        IsPlanGate(outcome.StatusCode, outcome.Error)
+            ? WorkContextRead.Of(WorkContextReadKind.NotInPlan, outcome.Error!.Message)
             : null;
+
+    /// <summary>Whether a work-item route refused the call because the tenant's plan lacks Work Items.</summary>
+    public static bool IsPlanGate(int status, WorkItemErrorDto? error) => status == 403 && error?.Error == PlanGateError;
 
     static string StatusDetail(int status) => status == 0 ? "no response" : $"status {status}";
 }
