@@ -98,14 +98,17 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         // A tenant listed twice is one tenant: its rows share a name rather than claiming two.
         var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
 
+        // Tenants are named in an order of their own ids rather than the order discovery lists them,
+        // so a collision resolves the same way on every sign-in.
+        var order = Enumerable.Range(0, tenants.Length).Where(i => first[i] == i)
+            .OrderBy(i => StableKey(tenants[i]), StringComparer.Ordinal).ToArray();
+
         bool AloneOnServer(int i) => !Enumerable.Range(0, tenants.Length).Any(k =>
             first[k] == k && k != i && ServerIdentity.SameServer(tenants[k].Origin, tenants[i].Origin));
 
         // A profile already named for the tenant, under any of its rows' names, on its server is that
         // tenant's whatever order the tenants arrive in.
-        for (var i = 0; i < tenants.Length; i++) {
-            if (first[i] != i) continue;
-
+        foreach (var i in order) {
             names[i] = Enumerable.Range(0, tenants.Length)
                 .Where(j => first[j] == i)
                 .Select(j => tenants[j].ProfileName)
@@ -113,12 +116,12 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
             if (names[i] is { } own) claimed.Add(own);
         }
 
-        for (var i = 0; i < tenants.Length; i++)
-            if (first[i] == i && names[i] is null && AloneOnServer(i) && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
+        foreach (var i in order)
+            if (names[i] is null && AloneOnServer(i) && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
                 names[i] = onServer;
 
-        for (var i = 0; i < tenants.Length; i++)
-            if (first[i] == i) names[i] ??= Unclaimed(existing, claimed, tenants[i].ProfileName);
+        foreach (var i in order)
+            names[i] ??= Unclaimed(existing, claimed, tenants[i]);
 
         for (var i = 0; i < tenants.Length; i++)
             names[i] ??= names[first[i]];
@@ -149,11 +152,17 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
     static bool SameTenant(DiscoveredTenant a, DiscoveredTenant b) {
         if (a.IsWorkOS != b.IsWorkOS || !(a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin))) return false;
 
-        var idA = a.IsWorkOS ? a.OrganizationId : a.OrgId != 0 ? a.OrgId.ToString(CultureInfo.InvariantCulture) : null;
-        var idB = b.IsWorkOS ? b.OrganizationId : b.OrgId != 0 ? b.OrgId.ToString(CultureInfo.InvariantCulture) : null;
+        var idA = ProviderId(a);
+        var idB = ProviderId(b);
 
         return !string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB) ? idA == idB : a.ProfileName == b.ProfileName;
     }
+
+    static string StableKey(DiscoveredTenant t) =>
+        string.Join('\n', t.IsWorkOS ? "w" : "g", ProviderId(t) ?? "", t.ProfileName, t.Origin);
+
+    static string? ProviderId(DiscoveredTenant t) =>
+        t.IsWorkOS ? t.OrganizationId : t.OrgId != 0 ? t.OrgId.ToString(CultureInfo.InvariantCulture) : null;
 
     static bool IsOnServer(ProfileConfig existing, string name, DiscoveredTenant tenant) =>
         existing.Profiles.TryGetValue(name, out var profile)
@@ -174,12 +183,16 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         return onServer.Contains(tenant.ProfileName, StringComparer.Ordinal) ? tenant.ProfileName : onServer[0];
     }
 
-    static string Unclaimed(ProfileConfig existing, HashSet<string> claimed, string name) {
+    /// <summary>The tenant's slug, or the first numbered suffix free of other tenants; a numbered
+    /// profile already on the tenant's server is the one an earlier sign-in gave it.</summary>
+    static string Unclaimed(ProfileConfig existing, HashSet<string> claimed, DiscoveredTenant tenant) {
+        var name = tenant.ProfileName;
         if (claimed.Add(name)) return name;
 
         for (var n = 2; ; n++) {
             var candidate = $"{name}-{n}";
-            if (!existing.Profiles.ContainsKey(candidate) && claimed.Add(candidate)) return candidate;
+            if ((!existing.Profiles.ContainsKey(candidate) || IsOnServer(existing, candidate, tenant)) && claimed.Add(candidate))
+                return candidate;
         }
     }
 

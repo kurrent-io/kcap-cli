@@ -349,6 +349,26 @@ public class TenantDiscoveryTests {
         await Assert.That(string.Join(",", regrouped.Select(t => t.ProfileName))).IsEqualTo("other,other");
     }
 
+    /// <summary>Two workspaces with one slug on one server keep the profiles they had, whichever order
+    /// discovery lists them in: a numbered profile on the server goes back to the same workspace rather
+    /// than the slug's profile going to whichever arrives first.</summary>
+    [Test]
+    public async Task NameProfiles_keeps_same_slug_workspaces_on_their_profiles_in_any_order() {
+        DiscoveredTenant a = new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", Origin = "https://a.example" };
+        DiscoveredTenant b = new() { Provider = "WorkOS", OrganizationId = "org_b", Slug = "acme", Origin = "https://a.example" };
+
+        var (fresh, _) = TenantDiscovery.NameProfiles(ProfileConfig.Fresh(), [b, a], b);
+        var saved      = TenantDiscovery.MergeProfiles(ProfileConfig.Fresh(), fresh, fresh[0]);
+
+        foreach (DiscoveredTenant[] discovered in new[] { new[] { a, b }, new[] { b, a } }) {
+            var (tenants, _) = TenantDiscovery.NameProfiles(saved, discovered, discovered[0]);
+            var byOrg = tenants.ToDictionary(t => t.OrganizationId!, t => t.ProfileName);
+
+            await Assert.That(byOrg["org_a"]).IsEqualTo("acme");
+            await Assert.That(byOrg["org_b"]).IsEqualTo("acme-2");
+        }
+    }
+
     /// <summary>A tenant the discovery service lists twice is still one profile: rows match on the
     /// provider's own id even when their slugs differ, while two organizations, or one organization
     /// on two servers, stay apart.</summary>
@@ -365,8 +385,8 @@ public class TenantDiscoveryTests {
 
         await Assert.That(tenants[0].ProfileName).IsEqualTo("acme");
         await Assert.That(tenants[1].ProfileName).IsEqualTo("acme");
-        await Assert.That(tenants[2].ProfileName).IsEqualTo("acme-2");
-        await Assert.That(tenants[3].ProfileName).IsEqualTo("acme-3");
+        await Assert.That(tenants[2].ProfileName).IsEqualTo("acme-3");
+        await Assert.That(tenants[3].ProfileName).IsEqualTo("acme-2");
         await Assert.That(picked.ProfileName).IsEqualTo("acme");
         await Assert.That(TenantDiscovery.MergeProfiles(ProfileConfig.Fresh(), tenants, picked).Profiles.Keys)
             .IsEquivalentTo(["default", "acme", "acme-2", "acme-3"]);
