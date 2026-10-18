@@ -160,6 +160,37 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
 
+    /// <summary>A mid-round flow participant holds a self-detected restart only until the wait bound;
+    /// an eval in flight still holds it past the bound.</summary>
+    [Test]
+    public async Task A_mid_round_flow_participant_holds_a_self_detected_restart_only_until_the_bound() {
+        var spy  = new SpyStrategy();
+        var time = new FakeTimeProvider();
+        var size = 100L;
+        var hard = false;
+        var c    = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, time);
+        c.IsHardBusy     = () => hard;
+        c.IsBusy         = () => true;
+        c.AtTurnBoundary = () => true;
+        c.TurnWait       = TimeSpan.FromMinutes(5);
+        c.StatBinary     = () => new BinaryStat(size, 1);
+        c.PrimeBaseline();
+        size = 200;
+        c.Tick();
+        time.Advance(TimeSpan.FromMinutes(4));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        hard = true;
+        time.Advance(TimeSpan.FromMinutes(1));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        hard = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
     RestartCoordinator WiredCoordinator(SpyStrategy spy, AgentOrchestrator orch) =>
         RestartCoordinator.ForTest(
             Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System, orch, new EvalContextCache(TimeProvider.System));

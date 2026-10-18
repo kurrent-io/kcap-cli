@@ -36,7 +36,8 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<BinaryStat?> StatBinary = static () => null;
     internal Func<bool>        IsBusy     = static () => false;
-    // Busy for a forced restart: evals and launches in admission, not flow participants.
+    // Busy for a forced restart, or a self-detected one past TurnWait: evals and launches in
+    // admission, not flow participants.
     internal Func<bool>        IsHardBusy = static () => false;
     internal Func<bool>        HasAgents  = static () => false;
     internal Func<bool>        AtTurnBoundary = static () => true;
@@ -173,7 +174,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
             }
 
             var waitExpired = _selfDetected && _time.GetUtcNow() - _pendingSince >= TurnWait;
-            var busy = _force ? IsHardBusy() : _whenIdle ? IsHardBusy() || HasAgents() : IsBusy();
+            // Past the wait bound a mid-round flow participant no longer holds the restart; the
+            // shutdown ends or parks it.
+            var busy = _force || waitExpired ? IsHardBusy() : _whenIdle ? IsHardBusy() || HasAgents() : IsBusy();
             fire = RestartDecision.ShouldFire(_pending, busy, _force, _selfDetected, AtTurnBoundary(), waitExpired);
             if (fire) _fired = true; // claim before releasing the lock (single-fire)
         }
