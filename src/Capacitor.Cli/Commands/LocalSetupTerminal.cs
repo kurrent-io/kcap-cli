@@ -51,9 +51,11 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             if (!Ask("Continue?")) return Declined();
         }
 
-        var confirmed = args.Yes || plan.Hint == PlanHint.Reuse;
+        var confirmed = args.Yes;
 
-        if (!confirmed) {
+        // A reuse asks nothing, and passes on no confirmation: a plan that becomes an install under the lease
+        // must still be refused for want of one.
+        if (!confirmed && plan.Hint != PlanHint.Reuse) {
             if (!canAsk) return await FailAsync(MissingYes(plan.Version, root));
             if (!Ask($"Install Capacitor local {plan.Version} in {root}?")) return Declined();
 

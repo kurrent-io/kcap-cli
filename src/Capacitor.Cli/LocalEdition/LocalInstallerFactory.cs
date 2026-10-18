@@ -15,6 +15,6 @@ sealed class LocalInstallerFactory(
         var local   = http.CreateClient(CapacitorClients.LocalInstallation);
 
         return new(root, config, home, service, bundles, local, LocalBundleManifestKey.Load(), LocalPlatform.Current(), time,
-            _ => [new LocalSetupRecovery(service, home, local, time, progress)]);
+            installer => [new LocalSetupRecovery(service, home, local, time, installer.Progress)]);
     }
 }

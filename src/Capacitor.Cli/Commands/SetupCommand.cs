@@ -578,6 +578,12 @@ sealed class SetupCommand(
 
         if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
 
+        if (args.Contains("--json")) {
+            WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.InvalidArguments, "--json needs --local (or --discover)."));
+
+            return 1;
+        }
+
         var serverUrlArg     = GetArg(args, "--server-url");
 
         // `kcap setup <tenant>`: a leading positional arg (bare slug or full URL) is treated as the

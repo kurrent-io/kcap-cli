@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
@@ -9,6 +11,9 @@ using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.PrDetection;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
+using Spectre.Console;
+using TUnit.Assertions.Enums;
+using Profile = Capacitor.Cli.Core.Config.Profile;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -68,17 +73,22 @@ internal sealed class SetupLocalArmTests {
         };
     }
 
-    Task<(int Exit, string[] Stdout, string Spectre, string Stderr)> Run(params string[] args) => RunWith(null, args);
+    Task<(int Exit, string[] Stdout, string Spectre, string Stderr)> Run(params string[] args) => RunWith(null, null, args);
 
-    async Task<(int Exit, string[] Stdout, string Spectre, string Stderr)> RunWith(Func<HttpMessageHandler, HttpMessageHandler>? wrap, params string[] args) {
+    /// <param name="console">Reads the Spectre console the caller swapped in; null swaps in a capture here.</param>
+    async Task<(int Exit, string[] Stdout, string Spectre, string Stderr)> RunWith(
+            Func<HttpMessageHandler, HttpMessageHandler>? wrap, Func<string>? console, params string[] args) {
         using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
-        using var spectre = new SpectreCapture();
+        using var spectre = console is null ? new SpectreCapture() : null;
         using var capture = ConsoleOutput.StartFullCapture("\n");
 
         var exit = await Command(wrap).HandleAsync(args);
 
-        return (exit, capture.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries), spectre.Text, capture.GetCapturedError());
+        return (exit, capture.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries), console?.Invoke() ?? spectre!.Text,
+            capture.GetCapturedError());
     }
+
+    static string[] Events(string[] stdout) => [.. stdout.Select(l => JsonNode.Parse(l)!["event"]!.GetValue<string>())];
 
     static async Task AssertAllJson(string[] lines) {
         foreach (var line in lines) {
@@ -154,7 +164,7 @@ internal sealed class SetupLocalArmTests {
         (int Exit, string[] Stdout, string Spectre, string Stderr) run;
 
         try {
-            run = await RunWith(inner => new InterruptOnReady(inner), "setup", "--local", "--json", "--single-user", "--yes");
+            run = await RunWith(inner => new InterruptOnReady(inner), null, "setup", "--local", "--json", "--single-user", "--yes");
         } finally {
             InteractiveLifetime.Exit = original;
         }
@@ -194,6 +204,93 @@ internal sealed class SetupLocalArmTests {
         await Assert.That(string.Join('\n', stdout) + spectre).Contains("No sign-in needed for a local installation.");
     }
 
+    [Test]
+    public async Task Plain_setup_refuses_json() {
+        var (exit, stdout, spectre, _) = await Run("setup", "--json");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(stdout.Length).IsEqualTo(1);
+        await Assert.That(spectre).IsEmpty();
+        await Assert.That(JsonNode.Parse(stdout[0])!["code"]?.GetValue<string>()).IsEqualTo("invalid_arguments");
+    }
+
+    [Test]
+    public async Task Json_reuse_without_yes_ends_reused_then_committed() {
+        var first = await Run("setup", "--local", "--json", "--single-user", "--yes");
+        await Assert.That(first.Exit).IsEqualTo(0);
+
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--json", "--single-user");
+
+        await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout));
+        await Assert.That(Events(stdout)[^2..]).IsEquivalentTo(["reused", "committed"], CollectionOrdering.Matching);
+        await Assert.That(Events(stdout)).DoesNotContain("downloading");
+    }
+
+    /// <summary>The registry says reuse when the terminal reads the plan, and is gone by the time the installer
+    /// rechecks it under the lease; skipping the question on a reuse must not count as a confirmed install.</summary>
+    [Test]
+    public async Task A_reuse_that_becomes_an_install_under_the_lease_needs_yes() {
+        Directory.CreateDirectory(Root.Directory);
+        LocalStateFiles.PublishRegistry(Root, new(new("0123456789abcdef0123456789abcdef", 9473, "http://localhost:9473", Version), []));
+
+        var text     = new StringBuilder();
+        var original = AnsiConsole.Console;
+        AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings {
+            Ansi        = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out         = new AnsiConsoleOutput(new TriggerWriter(text, "one user", () => File.Delete(Root.RegistryPath))),
+        });
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            run = await RunWith(null, () => text.ToString(), "setup", "--local", "--single-user", "--no-prompt");
+        } finally {
+            AnsiConsole.Console = original;
+        }
+
+        await Assert.That(run.Exit).IsEqualTo(1);
+        await Assert.That(run.Stderr).Contains("--yes");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(Directory.Exists(Path.Combine(Root.Directory, "bin"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Terminal_decline_cancels_and_exits_0() {
+        using var console = new ScriptedConsole().Line("n");
+
+        var (exit, _, spectre, _) = await RunWith(null, () => console.Text, "setup", "--local");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(spectre).Contains("Setup cancelled.");
+        await Assert.That(_log).DoesNotContain("install");
+    }
+
+    [Test]
+    public async Task Terminal_interrupt_after_the_commit_exits_130_before_step_2() {
+        var exits    = new List<int>();
+        var original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = exits.Add;
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            run = await Run(["setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags]);
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        await Assert.That(exits).IsEquivalentTo([130]);
+        await Assert.That(run.Exit).IsEqualTo(130);
+        await Assert.That(run.Spectre).Contains("Committed");
+        await Assert.That(run.Spectre).DoesNotContain("Step 2/6");
+        await Assert.That(ActiveProfile().AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, ActiveProfile().ServerUrl!));
+    }
+
     /// <summary>Interrupts at the first readiness probe and holds it until the interrupt has cancelled the install,
     /// so the cancellation lands before the commit whatever the scheduling.</summary>
     sealed class InterruptOnReady(HttpMessageHandler inner) : DelegatingHandler(inner) {
@@ -204,6 +301,34 @@ internal sealed class SetupLocalArmTests {
             }
 
             return await base.SendAsync(request, ct);
+        }
+    }
+
+    /// <summary>Runs <paramref name="onMarker"/> once, as soon as the text written so far contains
+    /// <paramref name="marker"/>.</summary>
+    sealed class TriggerWriter(StringBuilder text, string marker, Action onMarker) : StringWriter(text, CultureInfo.InvariantCulture) {
+        bool _fired;
+
+        public override void Write(char value) {
+            base.Write(value);
+            Check();
+        }
+
+        public override void Write(string? value) {
+            base.Write(value);
+            Check();
+        }
+
+        public override void Write(char[] buffer, int index, int count) {
+            base.Write(buffer, index, count);
+            Check();
+        }
+
+        void Check() {
+            if (_fired || !GetStringBuilder().ToString().Contains(marker, StringComparison.Ordinal)) return;
+
+            _fired = true;
+            onMarker();
         }
     }
 }
