@@ -34,8 +34,10 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
         var options   = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnlyFile;
 
-        using (var writer = new StreamWriter(tempPath, options)) {
-            writer.Write(JsonSerializer.Serialize(entry, ResumeLedgerJsonContext.Default.ResumeLedgerEntry));
+        // The successor's only record of the agent must survive a power loss.
+        using (var fs = new FileStream(tempPath, options)) {
+            JsonSerializer.Serialize(fs, entry, ResumeLedgerJsonContext.Default.ResumeLedgerEntry);
+            fs.Flush(flushToDisk: true);
         }
 
         File.Move(tempPath, finalPath, overwrite: true);
@@ -71,6 +73,8 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
         var changed = 0;
 
         foreach (var entry in ReadAll()) {
+            // A newer-schema entry rewritten by this version would lose the fields this version does not know.
+            if (entry.State == ResumeState.Interrupted || entry.SchemaVersion > ResumeLedgerEntry.CurrentSchemaVersion) continue;
             if (where is not null && !where(entry)) continue;
 
             Write(entry with { State = ResumeState.Interrupted, LastError = reason, UpdatedAt = (time ?? TimeProvider.System).GetUtcNow() });

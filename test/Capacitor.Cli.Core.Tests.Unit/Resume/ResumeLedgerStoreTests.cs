@@ -162,6 +162,32 @@ public class ResumeLedgerStoreTests {
     }
 
     [Test]
+    public async Task MarkInterrupted_keeps_the_reason_of_an_entry_already_interrupted() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1", new FakeTimeProvider(T0.AddHours(1)));
+        var       entry = Entry("agent-1") with { State = ResumeState.Interrupted, LastError = "too_old" };
+        store.Write(entry);
+
+        var changed = store.MarkInterrupted("stopped_by_operator");
+
+        await Assert.That(changed).IsEqualTo(0);
+        await Assert.That(store.TryRead("agent-1")).IsEqualTo(entry);
+    }
+
+    [Test]
+    public async Task MarkInterrupted_leaves_a_newer_schema_file_untouched() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1", new FakeTimeProvider(T0.AddHours(1)));
+        store.Write(Entry("agent-1", schema: ResumeLedgerEntry.CurrentSchemaVersion + 1));
+        var before = await File.ReadAllBytesAsync(store.EntryPath("agent-1"));
+
+        var changed = store.MarkInterrupted("stopped_by_operator");
+
+        await Assert.That(changed).IsEqualTo(0);
+        await Assert.That(await File.ReadAllBytesAsync(store.EntryPath("agent-1"))).IsEquivalentTo(before);
+    }
+
+    [Test]
     public async Task FindByAgentId_scans_every_daemon_directory() {
         using var tmp = new TempDaemonStore();
         tmp.CreateFile($"first/resume/{ResumeLedgerStore.FileStem("agent-1")}.json", "{not json");
