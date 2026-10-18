@@ -1180,10 +1180,8 @@ public static partial class DaemonRunner {
     /// </summary>
     internal static int LockRefusalExit(bool supervised) => supervised ? 0 : 2;
 
-    /// <summary>Creates the state directory and makes it owner-only, warning rather than refusing when
-    /// either fails. A refusal would stop an existing daemon whose state sits where an ACL or mode cannot
-    /// be set — a FAT volume, a share, a directory another account owns — and leave its state no better
-    /// protected than before.</summary>
+    /// <summary>Makes the state directory owner-only, warning instead of refusing: a refusal would brick a
+    /// daemon whose state sits where no ACL or mode can be set.</summary>
     internal static void PrepareStateDirectory(string stateDir, TextWriter warnings) {
         try {
             OwnerOnlyDirectory.Ensure(stateDir);

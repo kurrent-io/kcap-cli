@@ -140,9 +140,6 @@ public sealed class TokenStore(
     // The write itself, for a caller that already holds the profile's lock.
     async Task SaveLockedAsync(string profile, StoredTokens tokens, CancellationToken ct) {
         Directory.CreateDirectory(TokenDir);
-
-        // Best-effort: where no ACL or mode can be set, failing the save would also lose the credential.
-        try { OwnerOnlyDirectory.Ensure(TokenDir); } catch { /* keeps the location's access */ }
         var path     = ProfileTokenPath(profile);
         // Unique per write so concurrent writers never splice each other's bytes; the atomic
         // File.Move then publishes one complete document, last-writer-wins.
@@ -186,10 +183,17 @@ public sealed class TokenStore(
         return guard(cfg) ? GuardedWriteOutcome.Written : GuardedWriteOutcome.GuardRefused;
     }
 
+    // Best-effort: where no ACL or mode can be set, failing would also cost the caller its credential.
+    // The store has no diagnostic channel, so a failure leaves the location's access as it was.
+    void SecureTokenDir() {
+        Directory.CreateDirectory(TokenDir);
+        try { OwnerOnlyDirectory.Ensure(TokenDir); } catch { /* keeps the location's access */ }
+    }
+
     // One lock file per profile, exclusive while open. Null once the holder has kept it past LockWait.
     async Task<FileStream?> TryAcquireProfileLockAsync(string profile, CancellationToken ct) {
         ValidateProfileName(profile);
-        Directory.CreateDirectory(TokenDir);
+        SecureTokenDir();
         var lockPath = Path.Combine(TokenDir, $"{profile}.lock");
         var deadline = time.GetUtcNow() + LockWait;
 
@@ -379,7 +383,11 @@ public sealed class TokenStore(
         }
 
         File.Move(LegacyTokenPath, target);
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+
+        // A Windows move keeps the ACL the file inherited from the config directory until the
+        // directory's DACL is propagated again.
+        if (OperatingSystem.IsWindows()) SecureTokenDir();
+        else File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     /// <summary>

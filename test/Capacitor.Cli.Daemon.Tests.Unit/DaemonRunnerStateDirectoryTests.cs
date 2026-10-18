@@ -1,5 +1,4 @@
 using System.Runtime.Versioning;
-using System.Security.Principal;
 using Capacitor.Cli.Core;
 using TUnit.Core.Enums;
 
@@ -16,19 +15,9 @@ public class DaemonRunnerStateDirectoryTests {
 
         DaemonRunner.PrepareStateDirectory(stateDir, warnings);
 
-        var security = new DirectoryInfo(stateDir).GetAccessControl();
-        var identities = security.GetAccessRules(true, true, typeof(SecurityIdentifier))
-            .Cast<System.Security.AccessControl.FileSystemAccessRule>()
-            .Select(r => r.IdentityReference.Value)
-            .Distinct().Order().ToArray();
-        string[] expected = [
-            WindowsIdentity.GetCurrent().User!.Value,
-            new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value,
-        ];
-
         await Assert.That(warnings.ToString()).IsEmpty();
-        await Assert.That(security.AreAccessRulesProtected).IsTrue();
-        await Assert.That(identities).IsEquivalentTo(expected.Order().ToArray());
+        await Assert.That(WindowsAcl.IsProtected(stateDir)).IsTrue();
+        await Assert.That(WindowsAcl.Identities(stateDir)).IsEquivalentTo(WindowsAcl.OwnerOnly);
     }
 
     /// <summary>A file where the directory belongs fails the create on every platform, standing in for

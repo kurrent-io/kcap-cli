@@ -4,20 +4,14 @@ using System.Security.Principal;
 
 namespace Capacitor.Cli.Core;
 
-/// <summary>A directory only the current user can enter: <c>0700</c> on Unix; on Windows a protected
-/// DACL granting full control to the current user and SYSTEM, inherited by everything beneath it.
-/// Without it a Windows directory inherits its parent's ACL, which a relocated <c>KCAP_DAEMONS_DIR</c>
-/// or <c>KCAP_CONFIG_DIR</c> makes whatever that location grants.
-///
-/// <para>SYSTEM keeps access because it is the OS itself — it can take any file regardless — and
-/// removing it breaks backup and antivirus scanning for no confidentiality gain, as <c>0700</c> does
-/// not exclude root. Administrators get no grant: one must take ownership first, which is audited.</para></summary>
+/// <summary><c>0700</c> on Unix; on Windows a protected DACL, inherited beneath it, for the current user and
+/// SYSTEM. SYSTEM stays, as root does under <c>0700</c>: it can take any file anyway, and backup and
+/// antivirus run as it.</summary>
 public static class OwnerOnlyDirectory {
     const UnixFileMode OwnerOnlyMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
-    /// <summary>Creates <paramref name="path"/> if it is missing and restricts it, an existing one
-    /// included. On Windows the new DACL also replaces what the entries already inside inherited.
-    /// Throws when the restriction cannot be applied.</summary>
+    /// <summary>Creates <paramref name="path"/> if missing and restricts it. On Windows what inherits from
+    /// it inside gets the new DACL too; an explicit grant on an entry survives. Throws on failure.</summary>
     public static void Ensure(string path) {
         if (OperatingSystem.IsWindows()) {
             Directory.CreateDirectory(path).SetAccessControl(OwnerOnlySecurity());
