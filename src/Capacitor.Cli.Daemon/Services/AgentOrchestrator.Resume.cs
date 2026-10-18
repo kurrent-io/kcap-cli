@@ -191,9 +191,23 @@ internal partial class AgentOrchestrator {
                 // A resumed agent already live under this id deletes its own entry in its teardown.
                 if (!_agents.ContainsKey(agentId)) DeleteLedger(agentId);
             }
+
+            // A resume the host stop already cancelled left neither candidate nor attempt behind, only its
+            // entry, which nothing live would delete and the next start would resume.
+            foreach (var entry in LedgerEntriesForEndAgents())
+                if (entry.State != ResumeState.Interrupted && !_agents.ContainsKey(entry.AgentId)) DeleteLedger(entry.AgentId);
         }
 
         foreach (var attempt in withdrawn) attempt.Cancel();
+    }
+
+    IReadOnlyList<ResumeLedgerEntry> LedgerEntriesForEndAgents() {
+        try {
+            return ResumeLedger?.ReadAll() ?? [];
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeLedgerFailed(ex, "reading", "*");
+            return [];
+        }
     }
 
     async Task PrepareForShutdownResumeAsync(AgentInstance agent) {
@@ -450,6 +464,9 @@ internal partial class AgentOrchestrator {
         /// <summary>A continuation writes its entry only once it takes the worktree over.</summary>
         public bool DefersLedger { get; init; }
 
+        /// <summary>Ends the runtime start with the attempt: a stop during the handshake must not wait for the vendor.</summary>
+        public CancellationToken Token { get; init; }
+
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
         public string       Origin    => Entry.Launch.Origin;
@@ -508,7 +525,7 @@ internal partial class AgentOrchestrator {
         entries = [.. entries.Where(e => e.State != ResumeState.Interrupted || now - e.UpdatedAt <= InterruptedRetention)];
 
         _ledgerWorktrees = [.. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
-        _ledgerAgentIds  = [.. entries.Select(e => e.AgentId)];
+        _ledgerAgentIds  = [.. entries.SelectMany(e => (e.InheritedAgentIds ?? []).Append(e.AgentId)).Distinct(StringComparer.Ordinal)];
 
         foreach (var entry in entries) {
             if (entry.State == ResumeState.Interrupted) continue;
@@ -741,6 +758,9 @@ internal partial class AgentOrchestrator {
             // The stop's own teardown ends the agent and removes what it kept.
             if (reason == StoppedDuringResume) return ResumeOutcome.Stopped;
 
+            // A start the shutdown or a withdrawal cancelled is no failed attempt.
+            ct.ThrowIfCancellationRequested();
+
             if (RecordFailedAttempt(entry, LastErrorOf(reason, exitCode)) is not { } failed) return ResumeOutcome.Stopped;
 
             entry = failed;
@@ -776,7 +796,7 @@ internal partial class AgentOrchestrator {
             entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
-        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry));
+        var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
         var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume);
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
@@ -833,7 +853,7 @@ internal partial class AgentOrchestrator {
         var summary = await ReadPreviousSummaryAsync(entry.SessionId, ct);
         var prompt  = ContinuePrompt.Build(entry.Launch.Prompt, entry.SessionId, reason, summary, LastAlive(entry, null));
 
-        var launch   = await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt);
+        var launch   = await LaunchContinuationAsync(entry, Guid.NewGuid().ToString("N"), prompt, ct);
         var agent    = launch?.Agent;
         var survived = false;
 
@@ -911,7 +931,7 @@ internal partial class AgentOrchestrator {
     /// <summary>The successor's launch once its agent is published, or null when it did not launch. It
     /// keeps its pending resume and writes no entry until the handover, so its teardown leaves the
     /// worktree to the entry it continues.</summary>
-    async Task<ResumeLaunch?> LaunchContinuationAsync(ResumeLedgerEntry entry, string agentId, string prompt) {
+    async Task<ResumeLaunch?> LaunchContinuationAsync(ResumeLedgerEntry entry, string agentId, string prompt, CancellationToken ct) {
         using var admission = _admission.TryAdmit();
         if (admission is null) return null;
 
@@ -923,9 +943,10 @@ internal partial class AgentOrchestrator {
         var consent = _consentGate.GrantContinue(agentId, input, entry.Launch.ConsentSource ?? "");
 
         var successor = entry with {
-            AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow()
+            AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow(),
+            InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId]
         };
-        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true };
+        var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
         var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch);
 

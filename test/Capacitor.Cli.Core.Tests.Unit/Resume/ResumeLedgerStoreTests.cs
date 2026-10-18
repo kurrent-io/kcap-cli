@@ -32,6 +32,16 @@ public class ResumeLedgerStoreTests {
     }
 
     [Test]
+    public async Task Inherited_agent_ids_round_trip_as_a_list() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+
+        store.Write(Entry("agent-2") with { InheritedAgentIds = ["agent-0", "agent-1"] });
+
+        await Assert.That(store.TryRead("agent-2")!.InheritedAgentIds).IsEquivalentTo(["agent-0", "agent-1"]);
+    }
+
+    [Test]
     public async Task An_entry_written_before_the_instance_worktree_and_permission_fields_reads_them_as_null() {
         using var tmp   = new TempDaemonStore();
         var       store = ResumeLedgerStore.For(tmp.Store, "d1");

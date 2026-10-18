@@ -1000,7 +1000,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal bool IsLiveJournalStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
 
     /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem. An
-    /// agent the loaded resume ledger names is live too: the sweep runs before any of them publishes.
+    /// agent the loaded resume ledger names, or one whose files a ledgered continuation still uses, is
+    /// live too: the sweep runs before any of them publishes.
     internal bool IsLiveAttachmentStem(string stem) =>
         _agents.Keys.Concat(_ledgerAgentIds).Any(id => AgentFileNames.For(id) == stem);
 
@@ -2708,7 +2709,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
 
             try {
-                start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
+                // A resume's start also ends with its attempt, so a stop during the handshake does not wait for the vendor.
+                using var startCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, resume?.Token ?? CancellationToken.None);
+                start = await runtimeFactory.StartAsync(runtimeCtx, startCts.Token);
             } catch (Exception ex) when (ex is CodexHooksNotInstalledException or CodexReviewerMcpIsolationException
                                             or CodexUnsupportedWindowsException) {
                 // CodexHooksNotInstalledException: hooks preflight failed in Prepare.
@@ -3032,14 +3035,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
 
-            // §3.5: this is the landing site for a factory pre-StartAsync failure — including a
-            // reclassified AcpReviewerReapedException (design spec §3.2) — thrown before any
-            // AgentInstance exists, so DescribeLaunchFailure's fallback is the ONLY cover a blank
-            // message gets here.
-            await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+            // A factory failure before any AgentInstance exists lands here, so the fallback description is
+            // the only cover a blank message gets. A resume whose attempt was cancelled ended by a stop or
+            // a shutdown, not by failing.
+            if (resume is null || ex is not OperationCanceledException)
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
 
-            // Phase B2-b (sequenced-settlement design §4.2.2): a pre-insert failure — the worktree (if any)
-            // was torn down and no agent was ever registered; terminal for the sequenced lane.
+            // A pre-insert failure: the worktree, if any, was torn down and no agent was registered;
+            // terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         } finally {
             capacity?.Dispose();

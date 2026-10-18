@@ -21,7 +21,10 @@ public sealed record ResumeLedgerEntry(
     string? LastError,
     string? PredecessorInstanceId,
     DateTimeOffset? ResumingAt,
-    string? DaemonInstanceId = null
+    string? DaemonInstanceId = null,
+    // Agents this one continued, whose attachment directories its prompt still names; the boot sweep
+    // keeps them for as long as this entry lives.
+    IReadOnlyList<string>? InheritedAgentIds = null
 ) {
     public const int CurrentSchemaVersion = 1;
 }

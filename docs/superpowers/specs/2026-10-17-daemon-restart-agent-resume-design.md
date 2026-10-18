@@ -83,6 +83,8 @@ Fields:
   a reference to the consent decision that admitted the launch.
 - `state`: `running`, `resuming` or `interrupted`; `attempts`; `last_error`;
   `predecessor_instance_id` once a restart has marked it.
+- `inherited_agent_ids`: the agents a chain of kcap continues replaced, whose attachment directories
+  the launch prompt still names; the boot sweep keeps them for as long as the entry lives.
 
 Lifecycle:
 

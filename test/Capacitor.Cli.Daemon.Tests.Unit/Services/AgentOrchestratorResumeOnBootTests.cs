@@ -94,7 +94,7 @@ public class AgentOrchestratorResumeOnBootTests {
             Fixture f, string agentId, string? worktree = null, string? vendorSession = "vendor-session-1",
             bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null,
             string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false,
-            string vendor = "cursor", string? permissionMode = null) {
+            string vendor = "cursor", string? permissionMode = null, IReadOnlyList<string>? inherited = null) {
         var stamp = at ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
@@ -109,7 +109,7 @@ public class AgentOrchestratorResumeOnBootTests {
             ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, vendor, "acp",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
             PredecessorInstanceId: predecessor, ResumingAt: state == ResumeState.Resuming ? stamp : null,
-            DaemonInstanceId: daemonInstanceId);
+            DaemonInstanceId: daemonInstanceId, InheritedAgentIds: inherited);
         f.Orch.ResumeLedger!.Write(entry);
 
         return entry;
@@ -408,7 +408,8 @@ public class AgentOrchestratorResumeOnBootTests {
     }
 
     /// <summary>A stop while the runtime is still handshaking finds no published agent to mark; the
-    /// attempt itself has to give up, or it would publish the agent and rewrite its entry afterwards.</summary>
+    /// attempt itself has to give up, or it would publish the agent and rewrite its entry afterwards. The
+    /// gate never opens: the stop has to end the start itself.</summary>
     [Test]
     public async Task A_stop_while_the_runtime_handshakes_publishes_nothing_and_writes_no_entry() {
         var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
@@ -426,7 +427,6 @@ public class AgentOrchestratorResumeOnBootTests {
         await WaitHarness.PollUntilAsync(() => factory.InFlight == 1);
 
         await f.Orch.HandleStopAgent("handshake-1");
-        factory.Gate.SetResult();
         await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
 
         await Assert.That(f.Orch.GetAgentForTest("handshake-1")).IsNull();
@@ -434,6 +434,28 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(continued).IsEqualTo(0);
         await Assert.That(f.Server.ShutdownReports.Any(r => r.Reason.StartsWith("resume_failed", StringComparison.Ordinal))).IsFalse();
         await Assert.That(f.Orch.LedgerOnlyAgents()).IsEmpty();
+    }
+
+    /// <summary>The host stop cancels the resume lane before the orchestrator's own shutdown runs, so the
+    /// end-agents withdrawal finds neither candidate nor attempt; the entry still has to go.</summary>
+    [Test]
+    public async Task An_end_agents_shutdown_after_the_lane_was_cancelled_still_deletes_the_entry() {
+        var factory = new ResumableFactory { Gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var f = Build(factory);
+        Entry(f, "drained-1");
+        using var stopping = new CancellationTokenSource();
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(stopping.Token);
+        await WaitHarness.PollUntilAsync(() => factory.InFlight == 1);
+
+        f.Orch.ShutdownIntent = ShutdownIntent.EndAgents;
+        await stopping.CancelAsync();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await f.Orch.DisposeAsync();
+
+        await Assert.That(f.Orch.ResumeLedger!.ReadAll()).IsEmpty();
+        await Assert.That(f.Server.LaunchFailedCalls).IsEmpty();
     }
 
     /// <summary>An end-agents shutdown ends a resumed agent still inside its readiness window and a
@@ -612,6 +634,8 @@ public class AgentOrchestratorResumeOnBootTests {
         await using var _ = f.Orch;
         Entry(f, "attach-1");
         Entry(f, "attach-2", state: ResumeState.Interrupted);
+        Entry(f, "attach-3", inherited: ["attach-0"]);
+        var inheritedDir = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("attach-0")).FullName;
         var candidate   = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("attach-1")).FullName;
         var interrupted = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("attach-2")).FullName;
         var unknown     = Directory.CreateDirectory(f.Orch.AttachmentStore.DirectoryFor("unknown-1")).FullName;
@@ -621,6 +645,7 @@ public class AgentOrchestratorResumeOnBootTests {
 
         await Assert.That(Directory.Exists(candidate)).IsTrue();
         await Assert.That(Directory.Exists(interrupted)).IsTrue();
+        await Assert.That(Directory.Exists(inheritedDir)).IsTrue();
         await Assert.That(Directory.Exists(unknown)).IsFalse();
     }
 

@@ -157,6 +157,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(f.Orch.GetAgentForTest(ctx.AgentId)).IsNotNull();
         await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)).IsNull();
         await Assert.That(f.Orch.ResumeLedger!.TryRead(ctx.AgentId)!.State).IsEqualTo(ResumeState.Running);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(ctx.AgentId)!.InheritedAgentIds).IsEquivalentTo([OldAgent]);
 
         var consentLog = await File.ReadAllTextAsync(
             Path.Combine(f.Config.Store.StateDirectory(f.Config.Name), "consent-decisions.jsonl"));
