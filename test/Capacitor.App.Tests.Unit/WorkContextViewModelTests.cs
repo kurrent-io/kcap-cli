@@ -2,6 +2,7 @@ using ReactiveUnit = System.Reactive.Unit;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Controls;
+using Avalonia.Threading;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
@@ -1289,6 +1290,46 @@ public class WorkContextViewModelTests {
             await h.TickAsync();
             await Assert.That(h.Vm.Links.Select(l => (l.Key, l.Title))).IsEquivalentTo(new[] { ("#42", "") });
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// The pull requests listed before the summary named the primary repository list again when
+    /// it arrives, and a later read naming the same repository does not list them again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_primary_repository_arriving_relists_the_pull_requests_once() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var source = new FakePullRequestSource(h.Time);
+            var pullRequests = new PullRequestContextViewModel(h.Presence, source, h.Time, h.Opener, () => { }, primaryRepo: () => h.Vm.PrimaryRepository);
+            h.Vm.PullRequests = pullRequests;
+            pullRequests.SetForeground(true);
+            var summary = new SessionSummaryDto {
+                SessionId = SessionA,
+                Repositories = [new SessionRepositoryDto { RepoHash = "hash1", Owner = "owner", RepoName = "repo", IsPrimary = true }],
+            };
+            async Task AdvanceUntilListedAsync(int lists) {
+                for (var second = 0; second < 10 && source.Lists < lists; second++) {
+                    h.Time.Advance(TimeSpan.FromSeconds(1));
+                    await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+                }
+            }
+            try {
+                h.Source.Enqueue(ReadyWith(null, summary: summary));
+                await h.PushAsync(Dto() with { WorktreePath = null });
+                await AdvanceUntilListedAsync(2);
+                await Assert.That(source.Lists).IsEqualTo(2);
+                await Assert.That(source.Descriptions.Select(d => d.Repository)).IsEquivalentTo(new[] { null, h.Vm.PrimaryRepository });
+
+                h.Source.Enqueue(ReadyWith(null, summary: summary));
+                h.Vm.Reconnected();
+                await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
+                await AdvanceUntilListedAsync(3);
+                await Assert.That(source.Lists).IsEqualTo(2);
+            } finally {
+                await pullRequests.TeardownAsync();
+                await h.Vm.TeardownAsync();
+            }
         });
     }
 

@@ -242,6 +242,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _refreshDiscovery = true;
         RequestRefresh();
     }
+    /// A list read before the work context named the primary repository described the session
+    /// without one, so the registry skipped live discovery: list again once the hint exists.
+    public void PrimaryRepositoryArrived() {
+        if (_disposed || !_foreground || _stopped || _session is null) return;
+        _queuedRefresh = true;
+        RequestRefresh();
+        Notify();
+    }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
     public void Refresh() { _userRefresh = true; RequestRefresh(manual: true); Notify(); }
     /// On a legacy or unsupported capability the reader would open onto a notice and nothing else,

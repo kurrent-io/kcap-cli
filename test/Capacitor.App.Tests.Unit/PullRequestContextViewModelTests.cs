@@ -45,6 +45,28 @@ public class PullRequestContextViewModelTests {
         }
     });
 
+    /// A list read before the work context named the primary repository described the session
+    /// without one; the hint arriving lists again, inside the 30-second poll.
+    [Test]
+    public Task The_primary_repository_arriving_lists_again_with_it() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+
+            h.Vm.PrimaryRepositoryArrived();
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+
+            await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "the second list");
+            await Assert.That(h.Source.Descriptions.Select(d => d.Repository)).IsEquivalentTo(new[] { null, repository });
+        } finally {
+            await h.Dispose();
+        }
+    });
+
     [Test]
     public Task Teardown_does_not_wait_for_a_stalled_branch_lookup_or_publish_its_result() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
