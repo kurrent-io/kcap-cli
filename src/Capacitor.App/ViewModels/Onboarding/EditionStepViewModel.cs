@@ -15,7 +15,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
         "Just you, no account. The server runs on this machine and your sessions never leave it. Free.";
     public const string CloudTitle = "For your team, cloud";
     public const string CloudDetail =
-        "A Team workspace on kcap.ai that your team shares. Sign in with your work account; Team is free for 30 days.";
+        "A Team workspace on kcap.ai that your team shares. Sign in with your work account; Team is free for 60 days.";
     public const string LocalUnavailable =
         "The local install isn't in this version of the app yet. Choose cloud, or finish setup later.";
 
