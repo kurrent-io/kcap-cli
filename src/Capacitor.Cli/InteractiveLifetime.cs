@@ -4,28 +4,11 @@ using Capacitor.Cli.Core.FirstRun;
 namespace Capacitor.Cli;
 
 /// <summary>
-/// Interrupt / abandonment safety net for interactive commands.
-///
-/// Commands such as <c>setup</c>, <c>login</c>, <c>profile</c>, <c>use</c>,
-/// <c>import</c>, and <c>uninstall</c> block on synchronous Spectre.Console
-/// prompts (<c>ConfirmationPrompt</c>, <c>SelectionPrompt</c>, <c>TextPrompt</c>).
-/// A blocking console read has no timeout and observes neither Ctrl+C nor a
-/// detached/closed console, so when the controlling terminal or the launching
-/// agent goes away mid-prompt the read never returns and the process is
-/// orphaned alive — the reported stray <c>kcap.exe</c> processes left behind
-/// after a user abandons <c>kcap setup</c> partway through.
-///
-/// Redirected/piped stdin is already safe: the prompt read throws
-/// "Failed to read input in non-interactive mode" and the process exits. This
-/// closes the two gaps that piped stdin doesn't cover:
-///   1. Ctrl+C / SIGTERM / SIGHUP while blocked in a prompt.
-///   2. The launching parent (shell or coding agent) exiting while we wait for
-///      input — a detached pseudo-console delivers no signal at all, so a
-///      liveness watchdog is the only thing that reaps it.
-///
-/// This mirrors what <see cref="Commands.WatchCommand"/> already does for the
-/// long-lived watcher; every other interactive command previously had no such
-/// protection. Idempotent — safe to call once per process.
+/// Interrupt and abandonment handling for interactive commands. A blocking Spectre.Console prompt observes neither
+/// Ctrl+C nor a closed console, so without this a command whose terminal or launching agent went away mid-prompt
+/// stays alive forever. Ctrl+C, SIGTERM and SIGHUP exit 130, and a watchdog exits the same way once the parent
+/// process is gone, since a detached pseudo-console delivers no signal at all. Inside a <see cref="Defer"/> scope an
+/// interrupt cancels the scope's token instead, and the exit waits until the scope ends. Idempotent.
 /// </summary>
 static class InteractiveLifetime {
     // Exit code for an interrupted interactive command (128 + SIGINT).
