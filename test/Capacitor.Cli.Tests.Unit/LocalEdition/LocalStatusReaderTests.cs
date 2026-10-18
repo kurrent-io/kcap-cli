@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
@@ -12,7 +13,8 @@ namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 /// do; only a running, committed, ready server reads as ready.</summary>
 [ExcludeOn(OS.Windows)]
 public class LocalStatusReaderTests {
-    [TempDir] public required TempDir Tmp { get; init; }
+    // Short: a test binds the Postgres socket under the root, and the path has to fit in sockaddr_un.
+    [TempDir("lsr")] public required TempDir Tmp { get; init; }
 
     readonly List<string> _log = [];
 
@@ -20,7 +22,7 @@ public class LocalStatusReaderTests {
 
     UserHome Home => field ??= NewHome();
 
-    LocalRoot Root => field ??= LocalRoot.Resolve(null, Home);
+    LocalRoot Root => field ??= LocalRoot.Resolve(Tmp.PathTo("r"), Home);
 
     FakeLocalServerService Service => field ??= new(_log, Home);
 
@@ -168,14 +170,31 @@ public class LocalStatusReaderTests {
     }
 
     [Test]
-    public async Task A_stopped_server_that_left_something_alive_says_so() {
+    public async Task A_stopped_server_that_left_postgres_alive_says_so() {
+        Running();
+        await Service.StopAsync(Unit, CancellationToken.None);
+        Directory.CreateDirectory(Path.Combine(Root.Directory, "run"));
+
+        using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        listener.Bind(new UnixDomainSocketEndPoint(Path.Combine(Root.Directory, "run", LocalStackProbe.PostgresSocketName)));
+        listener.Listen();
+
+        var report = await Read();
+
+        await Assert.That(Text(report)).Contains("Though nothing runs the server, Postgres still accepts connections").And.Contains("Postgres: up");
+    }
+
+    /// <summary>A probe of the instance lock holds it for a moment, and a concurrent start could be bringing the server
+    /// up in that moment; held here, any probe would read it as a live server.</summary>
+    [Test]
+    public async Task Status_never_probes_the_instance_lock() {
         Running();
         await Service.StopAsync(Unit, CancellationToken.None);
         var lockPath = CreateUnder(Path.Combine(Root.Directory, "run", LocalStackProbe.ServerLockName));
 
         using var held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 
-        await Assert.That(Text(await Read())).Contains("Though nothing runs the server, the server still holds its instance lock");
+        await Assert.That(Text(await Read())).DoesNotContain("instance lock");
     }
 
     [Test]

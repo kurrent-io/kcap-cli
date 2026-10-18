@@ -140,6 +140,49 @@ public class LocalStackControlTests {
     }
 
     [Test]
+    public async Task Start_counts_exits_it_never_saw_running() {
+        Publish();
+        var time   = new FakeTimeProvider();
+        var starts = 1;
+        Service.ActivityOverride = new UnitActivity.Restarting(3) { Starts = starts };
+        Server.OnRequest = path => {
+            if (path == "/healthz/ready") Service.ActivityOverride = new UnitActivity.Restarting(3) { Starts = ++starts };
+        };
+        Server.Override = _ => throw new HttpRequestException("Connection refused");
+
+        var start = Start(time);
+        while (!start.IsCompleted) {
+            time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(1);
+        }
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => start);
+
+        await Assert.That(failure!.Message).Contains("keeps exiting with code 3");
+    }
+
+    [Test]
+    public async Task Start_does_not_take_a_ready_answer_from_another_listener() {
+        Publish();
+        _holders.Add(new(1, "kcap-server"));
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Start());
+
+        await Assert.That(failure!.Message).Contains("Port 9473 is taken by kcap-server (pid 1)");
+    }
+
+    [Test]
+    public async Task Start_rereads_the_process_before_calling_the_listener_foreign() {
+        Publish();
+        _holders.Add(new(42, "kcap-server"));
+        Service.Activities.Enqueue(new UnitActivity.Restarting(null));
+        Service.Activities.Enqueue(new UnitActivity.Running(42));
+        Service.ActivityOverride = new UnitActivity.Running(42);
+
+        await Assert.That(await Start()).IsEqualTo("Ready on http://localhost:9473");
+    }
+
+    [Test]
     public async Task Start_refuses_a_server_that_does_not_answer_as_this_installation() {
         Publish();
         Server.WhileAllowed = FakeAuthConfig.Forbidden;

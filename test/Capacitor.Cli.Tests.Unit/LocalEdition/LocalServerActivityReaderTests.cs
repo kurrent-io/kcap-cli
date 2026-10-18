@@ -33,6 +33,12 @@ public class LocalServerActivityReaderTests {
             .IsEqualTo(new UnitActivity.Restarting(null));
 
     [Test]
+    public async Task Launchd_runs_and_systemd_restarts_are_the_start_count() {
+        await Assert.That(LocalServerActivityReader.FromPrint(0, "\truns = 7\n\tpid = 1\n", "").Starts).IsEqualTo(7);
+        await Assert.That(LocalServerActivityReader.FromShow(0, "ActiveState=active\nMainPID=9\nNRestarts=4\n", "").Starts).IsEqualTo(4);
+    }
+
+    [Test]
     [Arguments("ActiveState=active\nSubState=running\nMainPID=99\nExecMainStatus=0\n", "running")]
     [Arguments("ActiveState=activating\nSubState=auto-restart\nMainPID=0\nExecMainStatus=1\n", "restarting")]
     [Arguments("ActiveState=failed\nSubState=failed\nMainPID=0\nExecMainStatus=1\n", "exited")]

@@ -83,36 +83,48 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
     /// port, a server that exited for good, or one that keeps exiting.</summary>
     async Task WaitReadyAsync(LocalServerUnit unit, CancellationToken ct) {
         var deadline = stack.Time.GetUtcNow() + LocalServerReadiness.StartBudget;
-        var restarts = 0;
-        int? lastPid = null;
+        var exits    = 0;
+        int? lastPid = null, lastCode = null, firstStarts = null;
 
         while (true) {
+            var health   = await LocalServerHealth.ReadAsync(stack.Local, unit, stack.Time, ct);
             var activity = stack.Service.Activity(unit);
 
-            if (await LocalServerHealth.ReadAsync(stack.Local, unit, stack.Time, ct) is ServerHealth.Answered { Ready: true }
-             && activity is UnitActivity.Running) return;
+            if (findHolder(unit.Port) is { } holder && holder.Pid != Pid(activity)) {
+                // The process may have been replaced since the reading above.
+                activity = stack.Service.Activity(unit);
 
-            var serverPid = activity is UnitActivity.Running(var running) ? running : (int?)null;
-            if (findHolder(unit.Port) is { } holder && holder.Pid != serverPid)
-                throw Failed($"Port {unit.Port} is taken by {holder.Command} (pid {holder.Pid}), so the server cannot listen on it. "
-                           + "The port is part of this installation's identity; stop that process and the server starts on its own, or run kcap local stop to stop it trying.");
+                if (holder.Pid != Pid(activity))
+                    throw Failed($"Port {unit.Port} is taken by {holder.Command} (pid {holder.Pid}), so the server cannot listen on it. "
+                               + "The port is part of this installation's identity; stop that process and the server starts on its own, or run kcap local stop to stop it trying.");
+            }
+
+            if (health is ServerHealth.Answered { Ready: true } && activity is UnitActivity.Running) return;
 
             switch (activity) {
                 case UnitActivity.Exited(var code):
                     throw Failed($"The server exited{ExitCode(code)} and will not be started again on its own. kcap local logs shows why.");
 
                 case UnitActivity.Running(var pid) when pid != lastPid:
-                    if (lastPid is not null) restarts++;
+                    if (lastPid is not null) exits++;
                     lastPid = pid;
                     break;
 
-                case UnitActivity.Restarting(var code) when lastPid is not null:
-                    restarts++;
+                case UnitActivity.Restarting(var code):
+                    lastCode = code;
+                    if (lastPid is not null) exits++;
                     lastPid = null;
-                    if (restarts >= RestartsBeforeGivingUp)
-                        throw Failed($"The server keeps exiting{ExitCode(code)}. kcap local logs shows why; kcap local status shows what it is doing now.");
                     break;
             }
+
+            // The manager's own count sees exits between two polls; the first start may land after the first reading.
+            if (activity.Starts is { } starts) {
+                firstStarts ??= starts;
+                exits = Math.Max(exits, starts - firstStarts.Value - 1);
+            }
+
+            if (exits >= RestartsBeforeGivingUp)
+                throw Failed($"The server keeps exiting{ExitCode(lastCode)}. kcap local logs shows why; kcap local status shows what it is doing now.");
 
             if (stack.Time.GetUtcNow() >= deadline)
                 throw Failed($"The local server did not report ready on {unit.BaseUrl} within {LocalServerReadiness.StartBudget.TotalMinutes:0} minutes. kcap local logs shows why.");
@@ -131,6 +143,8 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
 
         return Failed($"The {stack.Service.Describe} {unit.Label} ({stack.Service.UnitFile(unit)}) is not provably this installation's{serves}. Nothing was changed.");
     }
+
+    static int? Pid(UnitActivity activity) => activity is UnitActivity.Running(var pid) ? pid : null;
 
     static string ExitCode(int? code) => code is { } c ? $" with code {c}" : "";
 

@@ -21,6 +21,9 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// <summary>The root the loaded job serves, or null when no job is loaded.</summary>
     public string? LoadedRoot { get; set; }
 
+    /// <summary>Answered by <see cref="Activity"/>, one per call, before anything else.</summary>
+    public Queue<UnitActivity> Activities { get; } = new();
+
     /// <summary>Replaces the activity <see cref="Activity"/> would otherwise derive.</summary>
     public UnitActivity? ActivityOverride { get; set; }
 
@@ -93,5 +96,5 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     }
 
     public UnitActivity Activity(LocalServerUnit unit) =>
-        ActivityOverride ?? (Running ? new UnitActivity.Running(Environment.ProcessId) : UnitActivity.Stopped.Instance);
+        Activities.TryDequeue(out var next) ? next : ActivityOverride ?? (Running ? new UnitActivity.Running(Environment.ProcessId) : UnitActivity.Stopped.Instance);
 }

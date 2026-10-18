@@ -12,11 +12,24 @@ static class LocalServerActivityReader {
             case LabelProbe.Unknown: return new UnitActivity.Unknown($"launchctl print failed (exit {exitCode}): {LaunchdUnit.ToolError(stderr)}");
         }
 
-        if (LaunchdUnit.PidFromPrint(stdout) is { } pid) return new UnitActivity.Running(pid);
+        var runs = Field(stdout, "runs = ");
+
+        if (LaunchdUnit.PidFromPrint(stdout) is { } pid) return new UnitActivity.Running(pid) { Starts = runs };
 
         var last = LastExitCode(stdout);
 
-        return last == 0 ? new UnitActivity.Exited(0) : new UnitActivity.Restarting(last);
+        return last == 0 ? new UnitActivity.Exited(0) { Starts = runs } : new UnitActivity.Restarting(last) { Starts = runs };
+    }
+
+    static int? Field(string stdout, string prefix) {
+        foreach (var raw in stdout.Split('\n')) {
+            var line = raw.Trim();
+            if (line.StartsWith(prefix, StringComparison.Ordinal)
+             && int.TryParse(line[prefix.Length..], NumberStyles.None, CultureInfo.InvariantCulture, out var n))
+                return n;
+        }
+
+        return null;
     }
 
     /// <summary>"last exit code = 1" or "last exit code = (never exited)"; the code may be followed by its name.</summary>
@@ -50,7 +63,7 @@ static class LocalServerActivityReader {
         int? pid   = Int(props, "MainPID") is > 0 and var p ? p : null;
         var status = Int(props, "ExecMainStatus");
 
-        return props.GetValueOrDefault("ActiveState") switch {
+        UnitActivity activity = props.GetValueOrDefault("ActiveState") switch {
             "active" or "deactivating" when pid is { } live => new UnitActivity.Running(live),
             "activating" when props.GetValueOrDefault("SubState") == "auto-restart" => new UnitActivity.Restarting(status),
             "activating" when pid is { } starting => new UnitActivity.Running(starting),
@@ -59,6 +72,8 @@ static class LocalServerActivityReader {
             "inactive"                            => UnitActivity.Stopped.Instance,
             var other => new UnitActivity.Unknown($"systemd reports the unit {other ?? "with no state"}"),
         };
+
+        return activity with { Starts = Int(props, "NRestarts") };
     }
 
     static int? Int(Dictionary<string, string> props, string key) =>

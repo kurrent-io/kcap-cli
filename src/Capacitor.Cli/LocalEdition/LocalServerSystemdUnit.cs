@@ -53,6 +53,6 @@ static class LocalServerSystemdUnit {
     public static string[] RestartArgs(LocalServerUnit unit)     => ["--user", "restart", unit.SystemdName];
     public static string[] ShowArgs(LocalServerUnit unit)        => ["--user", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "Environment", unit.SystemdName];
     public static string[] ActivityArgs(LocalServerUnit unit)    =>
-        ["--user", "show", "-p", "ActiveState", "-p", "SubState", "-p", "MainPID", "-p", "ExecMainStatus", unit.SystemdName];
+        ["--user", "show", "-p", "ActiveState", "-p", "SubState", "-p", "MainPID", "-p", "ExecMainStatus", "-p", "NRestarts", unit.SystemdName];
     public static string[] IsActiveArgs(LocalServerUnit unit)    => ["--user", "is-active", unit.SystemdName];
 }

@@ -151,9 +151,10 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
 
     string PostgresField() => LocalStackProbe.FindLivePostgres(stack.Root) is null ? "down" : "up";
 
-    /// <summary>Only for a server the service manager will not start: probing the instance lock takes it for a moment.</summary>
+    /// <summary>Never the server's instance lock: a probe holds it for a moment, and a concurrent start could be
+    /// bringing the server up in that moment.</summary>
     string[] Leftovers() =>
-        LocalStackProbe.FindLive(stack.Root) is { } live
+        LocalStackProbe.FindLivePostgres(stack.Root) is { } live
             ? [$"Though nothing runs the server, {live}. kcap local start stops what an earlier server left behind and refuses what it did not start; {Logs} says which."]
             : [];
 
