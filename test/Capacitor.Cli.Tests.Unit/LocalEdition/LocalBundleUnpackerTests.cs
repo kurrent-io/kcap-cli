@@ -82,7 +82,9 @@ public class LocalBundleUnpackerTests {
         Write(Archive, Server, Symlink("./a", "."), Symlink("./A/b", ".."), RegularFile("./B/evil", "x"));
         var before = Names();
 
-        await AssertRefused("");
+        // On a case-sensitive volume `A` is a directory of its own and every link stays in the tree.
+        if (CaseInsensitive()) await AssertRefused("");
+        else await Unpack();
 
         await Assert.That(Names()).IsEquivalentTo(before);
     }
@@ -103,6 +105,11 @@ public class LocalBundleUnpackerTests {
     public async Task A_name_with_a_nul_is_refused() {
         Write(Archive, Server, RegularFile("./a\0b", "x"));
         await AssertRefused("invalid name");
+    }
+
+    bool CaseInsensitive() {
+        var probe = Tmp.CreateFile("case-probe", "");
+        try { return File.Exists(Tmp.PathTo("CASE-PROBE")); } finally { File.Delete(probe); }
     }
 
     string[] Names() => Directory.GetFileSystemEntries(Tmp.Path).Select(Path.GetFileName).Where(n => n != "out").Order().ToArray()!;
