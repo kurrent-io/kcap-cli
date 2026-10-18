@@ -116,6 +116,27 @@ public class LocalAgentClientReconnectTests {
     }
 
     [Test]
+    public async Task A_first_refusal_while_the_agent_resumes_waits_for_it_and_attaches() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        SeedLedger(ResumeState.Resuming);
+        using var listener = Listen();
+        using var terminal = new FakeAgentTerminal();
+        using var console  = ConsoleOutput.StartErrorCapture("\n");
+
+        var run = Attach(SocketPath, terminal, Reconnect());
+
+        await AnswerAsync(listener, LocalFrame.Error($"no such agent {AgentId}"));
+        var again = AnswerAsync(listener, FrameCodec.Attached(AgentId, Encoding.UTF8.GetBytes("resumed\r\n")), LocalFrame.Exited(0));
+
+        var exit = await run.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That((await again.WaitAsync(TimeSpan.FromSeconds(5)))?.Type).IsEqualTo(FrameType.Attach);
+        await Assert.That(terminal.Output).IsEqualTo("resumed\r\n");
+        await Assert.That(console.GetCapturedError()).DoesNotContain("no such agent");
+    }
+
+    [Test]
     public async Task A_dropped_socket_without_a_ledger_entry_is_a_lost_connection() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         using var terminal = new FakeAgentTerminal();

@@ -44,6 +44,7 @@ internal static class LocalAgentClient {
         var       exitCode    = 0;
         var       readOnly    = false; // daemon attached us to a protected agent; input is dropped
         var       attached    = false; // some connection got an Attached reply
+        var       refusedWhileResuming = false; // the opening attach was refused before the resume published
 
         async Task Send(LocalFrame f) {
             await writeLock.WaitAsync(ct);
@@ -102,6 +103,13 @@ internal static class LocalAgentClient {
 
                     return true;
                 case FrameType.Error:
+                    // The daemon has not published the agent yet: the reconnect loop waits for it.
+                    if (!attached && reconnect?.Ledger() is { State: not ResumeState.Interrupted }) {
+                        refusedWhileResuming = true;
+
+                        return true;
+                    }
+
                     // A refused attach to an agent a restart left interrupted: its reason says more.
                     if (attached || reconnect is null || !await ReportInterruptedAsync(reconnect))
                         await Console.Error.WriteLineAsync($"\r\nkcap: {f.Text}");
@@ -119,7 +127,12 @@ internal static class LocalAgentClient {
                 while (!ct.IsCancellationRequested) {
                     var f = await FrameCodec.ReadAsync(stream, ct);
                     if (f is null) return true;
-                    if (await HandleAsync(f)) return false;
+                    if (await HandleAsync(f)) {
+                        var refused = refusedWhileResuming;
+                        refusedWhileResuming = false;
+
+                        return refused;
+                    }
                 }
             } catch (Exception ex) when (ex is OperationCanceledException or IOException or EndOfStreamException or InvalidDataException) {
                 /* connection closed */
