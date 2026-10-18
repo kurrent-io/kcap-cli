@@ -12,9 +12,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// The resume ledger: one durable entry per interactive agent, written at launch, rewritten as its
 /// session ids are learned, deleted at a normal end. Flow participants never get one.
 internal partial class AgentOrchestrator {
-    /// The transport an entry records before its runtime exists; the rewrite from the live
-    /// instance replaces it with the runtime's own.
-    const string PreStartTransport = "pty";
+    /// The transport an entry records before its runtime exists: a value no factory maps, so a resume
+    /// of such an entry takes the daemon's own route. The rewrite from the live instance replaces it.
+    const string PreStartTransport = "pending";
 
     readonly Lock _ledgerLock = new();
 
