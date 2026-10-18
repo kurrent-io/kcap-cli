@@ -1,6 +1,7 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -99,6 +100,42 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(manager.Uninstalled).IsEquivalentTo(["solo"]);
+    }
+
+    /// <summary>A daemon that could not be asked to end its agents leaves entries a later start would
+    /// resume; the operator meant to end them.</summary>
+    [Test]
+    public async Task Uninstall_of_a_daemon_that_does_not_answer_marks_its_ledger_interrupted() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var ledger = ResumeLedgerStore.For(Daemons.Store, "solo");
+        ledger.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        ledger.Write(ResumeLedgerEntries.For("agent-2", ResumeState.Resuming));
+        var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "solo").Uninstall();
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ledger.ReadAll().All(e => e is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" })).IsTrue();
+    }
+
+    [Test]
+    public async Task UninstallUnder_of_a_daemon_that_does_not_answer_marks_its_ledger_interrupted() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var ledger = ResumeLedgerStore.For(Daemons.Store, "laptop");
+        ledger.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
     }
 
     [Test]
