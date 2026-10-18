@@ -74,9 +74,13 @@ static class LocalPurge {
     /// <summary>The recordings spooled for it and the caches keyed by its identity. While an installation exists the
     /// machine records to nothing else, so the spools hold only its recordings.</summary>
     static void ForgetServer(ConfigRoot config, string serverUrl) {
+        // Deleted outright rather than after an existence check, which reads an unreadable directory as absent.
         foreach (var dir in new[] { HookSpool.DirName, TranscriptSpool.DirName }) {
-            var path = config.Path(dir);
-            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+            try {
+                Directory.Delete(config.Path(dir), recursive: true);
+            } catch (DirectoryNotFoundException) {
+                // Nothing was spooled.
+            }
         }
 
         ServerVersionStore.Forget(serverUrl, config);

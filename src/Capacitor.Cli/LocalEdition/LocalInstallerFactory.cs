@@ -20,7 +20,7 @@ sealed class LocalInstallerFactory(
             installer => [
                 new LocalSetupRecovery(service, home, local, time, installer.Progress, installer.RolledForward),
                 // Setup may be writing JSON events to stdout, which stopping a daemon would print into.
-                new LocalPurgeRecovery(service, home, recorders, mayStop: false, installer.Progress),
+                new LocalPurgeRecovery(service, home, recorders, config, mayStop: false, force: false, installer.Progress),
             ]);
     }
 }

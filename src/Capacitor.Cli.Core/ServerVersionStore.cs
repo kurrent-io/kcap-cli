@@ -85,7 +85,11 @@ public static class ServerVersionStore {
 
     /// <summary>Deletes what was recorded for <paramref name="serverUrl"/>.</summary>
     public static void Forget(string serverUrl, ConfigRoot config) {
-        if (Directory.Exists(config.Directory)) File.Delete(PathFor(Normalize(serverUrl), config));
+        try {
+            File.Delete(PathFor(Normalize(serverUrl), config));
+        } catch (DirectoryNotFoundException) {
+            // Nothing was ever recorded.
+        }
     }
 
     static string PathFor(string normalizedUrl, ConfigRoot config) {

@@ -37,7 +37,7 @@ public class LocalUninstallTests {
 
     FakeOutgoingRecorders Recorders => field ??= new(_log);
 
-    LocalStack Stack => field ??= new(Root, Home, Service, new HttpClient(Server), _time, Recorders);
+    LocalStack Stack => field ??= new(Root, Home, Service, new HttpClient(Server), _time, Recorders, Config);
 
     string Dir(string name) => Path.Combine(Root.Directory, name);
 
@@ -58,7 +58,7 @@ public class LocalUninstallTests {
         return new(Root, Config, Home, Service, Bundle.Client(), http, Bundle.Key, MacArm, _time,
             installer => [
                 new LocalSetupRecovery(Service, Home, http, _time, installer.Progress, installer.RolledForward),
-                new LocalPurgeRecovery(Service, Home, Recorders, mayStop: false, installer.Progress),
+                new LocalPurgeRecovery(Service, Home, Recorders, Config, mayStop: false, force: false, installer.Progress),
             ]) {
             Version     = Version,
             SocketLimit = int.MaxValue,
@@ -384,9 +384,49 @@ public class LocalUninstallTests {
 
         await Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None);
 
-        await Assert.That(_log.IndexOf("recorders:stop")).IsEqualTo(0);
+        await Assert.That(_log.Take(2)).IsEquivalentTo(["recorders:busy?", "recorders:stop"]);
         await Assert.That(JournalAbsent()).IsTrue();
         await Assert.That(Directory.Exists(Dir("data"))).IsFalse();
+    }
+
+    async Task CrashAfterRetiredAsync() {
+        using (FaultPoints.Arm(p => { if (p == "purge:after-retired") throw new SimulatedCrash(); }))
+            await Assert.ThrowsAsync<SimulatedCrash>(() => UninstallAsync(purge: true));
+
+        _log.Clear();
+    }
+
+    [Test]
+    public async Task A_purge_recovery_will_not_end_running_agents_without_force() {
+        await InstallAsync();
+        await CrashAfterRetiredAsync();
+        Recorders.Busy.Add("daemon 'me': 1 agent(s) running or starting");
+
+        await Assert.ThrowsAsync<LocalLifecycleException>(() => Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None));
+
+        await Assert.That(_log).DoesNotContain("recorders:stop");
+        await Assert.That(JournalAbsent()).IsFalse();
+        await Assert.That(Directory.Exists(Dir("data"))).IsTrue();
+
+        await Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None, force: true);
+
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    /// <summary>The spools it would delete belong to the config root the purge began under, whose watchers another
+    /// root's kcap cannot see.</summary>
+    [Test]
+    public async Task A_purge_begun_under_another_config_root_is_left_for_that_root() {
+        await InstallAsync();
+        await CrashAfterRetiredAsync();
+        var elsewhere = new LocalStack(Root, Home, Service, new HttpClient(Server), _time, Recorders, new ConfigRoot(Tmp.CreateDir("other-cfg")));
+
+        var refused = await Assert.ThrowsAsync<LocalLifecycleException>(
+            () => elsewhere.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None));
+
+        await Assert.That(refused!.Message).Contains(Config.Directory);
+        await Assert.That(_log).IsEmpty();
+        await Assert.That(JournalAbsent()).IsFalse();
     }
 
     /// <summary>Setup cannot stop them without printing into its JSON events, so it leaves the purge to the command
@@ -422,6 +462,7 @@ public class LocalUninstallTests {
             () => Stack.RunAsync(_events, (_, s, _) => Task.FromResult(s), CancellationToken.None));
 
         await Assert.That(refused!.Message).Contains("port:");
+        await Assert.That(_log).DoesNotContain("recorders:stop");
         await Assert.That(JournalAbsent()).IsFalse();
         await Assert.That(Registry().Active?.Id).IsEqualTo(installed.InstallationId);
         await Assert.That(Directory.Exists(Dir("data"))).IsTrue();

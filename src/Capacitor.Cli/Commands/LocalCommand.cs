@@ -79,7 +79,7 @@ sealed class LocalCommand(ILocalStackFactory stacks, IOutgoingRecorders recorder
 
         try {
             outcome = await stack.RunAsync(progress,
-                (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None);
+                (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None, force);
         } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure) {
             await Console.Error.WriteLineAsync($"Error: {ex.Message}");
             return 1;

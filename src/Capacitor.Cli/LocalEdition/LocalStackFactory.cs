@@ -5,12 +5,12 @@ using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
 
-sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time, IHttpClientFactory http, IOutgoingRecorders recorders)
+sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time, IHttpClientFactory http, IOutgoingRecorders recorders, ConfigRoot config)
     : ILocalStackFactory {
     public LocalStack Create() {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
             throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
 
-        return new(root, home, LocalServerServices.ForCurrentOs(home, time), http.CreateClient(CapacitorClients.LocalInstallation), time, recorders);
+        return new(root, home, LocalServerServices.ForCurrentOs(home, time), http.CreateClient(CapacitorClients.LocalInstallation), time, recorders, config);
     }
 }

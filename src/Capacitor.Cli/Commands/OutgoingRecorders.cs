@@ -19,19 +19,27 @@ sealed class OutgoingRecorders(
         var busy = new List<string>();
 
         foreach (var name in LiveDaemons()) {
-            var probe = await LocalControlProbe.ProbeAsync(store, name, time, ProbeBudget);
-
-            if (probe.Snapshot is not { Pending: { } pending } snapshot) {
-                busy.Add($"daemon '{name}': its agents cannot be listed");
+            // A snapshot reads its agents before its pending launches, so a launch published between the two reads is in
+            // neither. It is in the agents of the next one, unless it has ended: idle twice running is idle.
+            if (await RunningAsync(name) is not 0 and var first) {
+                busy.Add(Describe(name, first));
                 continue;
             }
 
-            var running = snapshot.Daemon.ActiveAgents + pending.Count;
-            if (running > 0) busy.Add($"daemon '{name}': {running} agent(s) running or starting");
+            if (await RunningAsync(name) is not 0 and var second) busy.Add(Describe(name, second));
         }
 
         return busy;
     }
+
+    /// <summary>Agents running or starting, or null when the daemon gives no complete snapshot.</summary>
+    async Task<int?> RunningAsync(string name) =>
+        (await LocalControlProbe.ProbeAsync(store, name, time, ProbeBudget)).Snapshot is { Pending: { } pending } snapshot
+            ? snapshot.Daemon.ActiveAgents + pending.Count
+            : null;
+
+    static string Describe(string name, int? running) =>
+        running is { } count ? $"daemon '{name}': {count} agent(s) running or starting" : $"daemon '{name}': its agents cannot be listed";
 
     public async Task<bool> StopAsync() {
         var stopped = true;
