@@ -1204,11 +1204,16 @@ jobs:
           chmod +x fetch.sh
           bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" ./fetch.sh win-x64
 
+      # vpk uploads every asset the manifest lists, and the build renamed the installer it lists;
+      # the next step publishes the renamed one.
       - name: Upload the feed and packages
-        run: >
-          vpk upload s3 --channel win-x64 --outputDir releases --endpoint "${{ secrets.R2_ENDPOINT }}"
-          --bucket "${{ secrets.R2_BUCKET }}" --prefix desktop/win-x64
-          --keyId "${{ secrets.R2_ACCESS_KEY_ID }}" --secret "${{ secrets.R2_SECRET_ACCESS_KEY }}"
+        run: |
+          set -euo pipefail
+          jq '[.[] | select(.Type != "Installer")]' releases/assets.win-x64.json > assets.tmp
+          mv assets.tmp releases/assets.win-x64.json
+          vpk upload s3 --channel win-x64 --outputDir releases --endpoint "${{ secrets.R2_ENDPOINT }}" \
+            --bucket "${{ secrets.R2_BUCKET }}" --prefix desktop/win-x64 \
+            --keyId "${{ secrets.R2_ACCESS_KEY_ID }}" --secret "${{ secrets.R2_SECRET_ACCESS_KEY }}"
 
       - name: Upload the installer and promote aliases
         shell: bash
