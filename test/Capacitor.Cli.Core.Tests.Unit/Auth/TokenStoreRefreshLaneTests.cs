@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// <summary>
 /// The refreshes run on a client the store is handed, never one it builds. A store that makes its
 /// own reaches the real WorkOS host from a unit test, and the only way to tell the two apart is to
-/// hand it a client and see whether the request arrives. Also what a refresh leaves on disk.
+/// hand it a client and see whether the request arrives.
 /// </summary>
 public class TokenStoreRefreshLaneTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -68,5 +68,27 @@ public class TokenStoreRefreshLaneTests {
         var persisted = await store.LoadAsync("default");
         await Assert.That(persisted!.RefreshToken).IsNull();
         await Assert.That(persisted.GitHubUsername).IsEqualTo("alice");
+    }
+
+    /// A reader that saw a refresh token before the lock, and finds it retired by a peer once it holds
+    /// the lock, reports the token expired without sending anything.
+    [Test]
+    public async Task A_reader_queued_behind_a_retirement_sends_nothing() {
+        using var script = new AuthHttpScript(
+            _ => AuthHttp.Json("""{"access_token":"fresh","refresh_token":"rotated"}"""));
+        var store = AuthFixtures.NewTokenStore(Config.Root, script);
+        await store.SaveAsync("default", Expired);
+        var tokenFile = store.TokenPath("default");
+        var retired   = (await File.ReadAllTextAsync(tokenFile)).Replace("\"rt\"", "null", StringComparison.Ordinal);
+
+        Task<StoredTokens?> reader;
+        using (new FileStream(Path.ChangeExtension(tokenFile, ".lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)) {
+            reader = store.GetValidTokensForProfileAsync("default");
+            await Task.Delay(200);
+            await File.WriteAllTextAsync(tokenFile, retired);
+        }
+
+        await Assert.That(await reader).IsNull();
+        await Assert.That(script.Seen).IsEmpty();
     }
 }

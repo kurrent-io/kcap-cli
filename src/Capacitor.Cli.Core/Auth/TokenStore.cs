@@ -828,7 +828,14 @@ public sealed class TokenStore(
     // Runs under the lock of the profile it is given, which every caller already holds.
     async Task<StoredTokens?> RefreshWorkOSAsync(
             string profile, StoredTokens tokens, CancellationToken ct, Action<WorkOSRefreshOutcome>? onOutcome = null) {
-        var result = await workos.RefreshAsync(tokens.ClientId!, tokens.RefreshToken!, ct);
+        // The lock's re-read can find a token a peer retired while this reader waited.
+        if (tokens is not { RefreshToken: { } refreshToken, ClientId: { } clientId }) {
+            onOutcome?.Invoke(WorkOSRefreshOutcome.Rejected);
+
+            return null;
+        }
+
+        var result = await workos.RefreshAsync(clientId, refreshToken, ct);
 
         onOutcome?.Invoke(result.Outcome);
 
