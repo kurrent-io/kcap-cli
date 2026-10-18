@@ -670,16 +670,17 @@ sealed class DaemonServiceCommands(
         }
 
         var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
-        var exited  = DaemonPidProbe.ValidatedPid(store, id) is null
-                   || await DaemonShutdownClient.StopAndWaitAsync(store, id, request, DaemonCommands.StopExitWait, time, CancellationToken.None)
-                   || DaemonPidProbe.ValidatedPid(store, id) is null;
+        var outcome = DaemonPidProbe.ValidatedPid(store, id) is null
+            ? ShutdownOutcome.Exited
+            : await DaemonShutdownClient.StopAsync(store, id, request, DaemonCommands.StopExitWait, time, CancellationToken.None);
+        var exited  = outcome == ShutdownOutcome.Exited || DaemonPidProbe.ValidatedPid(store, id) is null;
 
         if (!manager.Stop(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not stop service '{id}': {error}");
             return 1;
         }
 
-        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time);
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, DaemonCommands.KeepsSavedResumes(request, outcome));
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;

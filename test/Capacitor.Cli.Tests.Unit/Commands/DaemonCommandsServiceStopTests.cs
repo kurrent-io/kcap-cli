@@ -3,6 +3,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Services;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -17,8 +18,8 @@ public class DaemonCommandsServiceStopTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
 
-    DaemonServiceCommands Commands(IServiceManager manager) =>
-        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, Name, Home, TimeProvider.System);
+    DaemonServiceCommands Commands(IServiceManager manager, TimeProvider? time = null) =>
+        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, Name, Home, time ?? TimeProvider.System);
 
     DummyProcess StartDaemon() {
         var child = DummyProcess.StartSleep(120);
@@ -45,5 +46,35 @@ public class DaemonCommandsServiceStopTests {
         await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("end", "final"));
         await Assert.That(manager.Stopped).IsEquivalentTo([Name]);
         await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
+    }
+
+    /// <summary>A keep-agents stop that overruns keeps the entries the daemon already saved as resuming.</summary>
+    [Test]
+    [Arguments(true, ResumeState.Resuming)]
+    [Arguments(false, ResumeState.Interrupted)]
+    public async Task An_overrun_stop_keeps_the_resuming_entries_only_when_it_kept_agents(bool keep, ResumeState resumingAfter) {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var ledger = ResumeLedgerStore.For(Daemons.Store, Name);
+        ledger.Write(ResumeLedgerEntries.For("running-1", ResumeState.Running));
+        ledger.Write(ResumeLedgerEntries.For("saved-1", ResumeState.Resuming));
+        var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: () => acked.SetResult());
+        var manager = new RecordingServiceManager(new() { [Name] = "/opt/kcap/kcap-daemon" });
+        var time    = new FakeTimeProvider();
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var run = Commands(manager, time).Stop(keep ? ["--keep-agents"] : []);
+        await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        for (var steps = 0; !run.IsCompleted; steps++) {
+            if (steps > 2000) throw new TimeoutException("the stop never gave up waiting under the fake clock");
+            time.Advance(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(5);
+        }
+
+        await Assert.That(await run).IsEqualTo(0);
+        await Assert.That(ledger.TryRead("running-1")!.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(ledger.TryRead("saved-1")!.State).IsEqualTo(resumingAfter);
     }
 }

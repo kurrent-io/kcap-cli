@@ -144,6 +144,37 @@ public class DaemonCommandsStopTests {
         await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
     }
 
+    /// <summary>A keep-agents stop that overruns had already saved some agents as resuming; only the
+    /// entries still running are killed mid-run. An end request ends them all.</summary>
+    [Test]
+    [Arguments(true, ResumeState.Resuming)]
+    [Arguments(false, ResumeState.Interrupted)]
+    public async Task An_overrun_stop_keeps_the_resuming_entries_only_when_it_kept_agents(bool keep, ResumeState resumingAfter) {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = StartDaemon();
+        var identity = PidIdentity.Capture(child.Pid);
+        var ledger   = SeedLedger(("running-1", ResumeState.Running, null), ("saved-1", ResumeState.Resuming, null));
+        var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: () => acked.SetResult());
+        var time = new FakeTimeProvider();
+        using var console = ConsoleOutput.StartCapture();
+
+        string[] args = keep ? ["daemon", "stop", "--name", Name, "--keep-agents"] : ["daemon", "stop", "--name", Name];
+        var run = Commands(time).HandleAsync(args);
+        await acked.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        for (var steps = 0; !run.IsCompleted; steps++) {
+            if (steps > 2000) throw new TimeoutException("the stop never gave up waiting under the fake clock");
+            time.Advance(TimeSpan.FromMilliseconds(500));
+            await Task.Delay(5);
+        }
+
+        await Assert.That(await run).IsEqualTo(0);
+        await PidIdentity.WaitUntilGoneAsync(child.Pid, identity, TimeSpan.FromSeconds(10));
+        await Assert.That(ledger.TryRead("running-1")!.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(ledger.TryRead("saved-1")!.State).IsEqualTo(resumingAfter);
+    }
+
     /// <summary>The daemon exits between the end of the bound and the fallback, having left its ledger as
     /// it wants it: the fallback must neither signal the pid nor overwrite the ledger.</summary>
     [Test]

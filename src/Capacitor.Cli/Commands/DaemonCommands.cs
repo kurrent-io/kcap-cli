@@ -449,6 +449,8 @@ public sealed class DaemonCommands(
             return 1;
         }
 
+        var outcome = ShutdownOutcome.NoAnswer;
+
         try {
             // entry is bound ONCE above and reused for both the ownership classification and (on
             // the live branch) the actual kill target. Re-reading the PID file here — e.g. via a
@@ -487,8 +489,9 @@ public sealed class DaemonCommands(
 
             // Re-checked after the wait: a daemon that finished its stop just past the bound has left its
             // ledger as it meant to, and its pid may already name another process.
-            if (await DaemonShutdownClient.StopAndWaitAsync(store, name, request, StopExitWait, time, CancellationToken.None)
-             || !DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
+            outcome = await DaemonShutdownClient.StopAsync(store, name, request, StopExitWait, time, CancellationToken.None);
+
+            if (outcome == ShutdownOutcome.Exited || !DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
                 Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
                 TryCleanupMarkersUnderLock(name);
 
@@ -534,7 +537,7 @@ public sealed class DaemonCommands(
             Console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
 
-        MarkLedgerInterrupted(store, name, time);
+        MarkLedgerInterrupted(store, name, time, KeepsSavedResumes(request, outcome));
 
         // Clean up the killed daemon's markers. The kill was a SIGKILL, so the
         // daemon's own Dispose never ran. Do it under the flock: if a `daemon
@@ -546,14 +549,19 @@ public sealed class DaemonCommands(
         return 0;
     }
 
-    /// <summary>A killed daemon stopped none of its agents for resume, so none of them is resumed.</summary>
-    internal static void MarkLedgerInterrupted(DaemonStore store, string name, TimeProvider time) {
+    /// <summary>A killed daemon's agents are not resumed, except those <paramref name="where"/> excludes.</summary>
+    internal static void MarkLedgerInterrupted(DaemonStore store, string name, TimeProvider time, Func<ResumeLedgerEntry, bool>? where = null) {
         try {
-            ResumeLedgerStore.For(store, name, time).MarkInterrupted("stopped_by_operator");
+            ResumeLedgerStore.For(store, name, time).MarkInterrupted("stopped_by_operator", where);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             Console.Error.WriteLine($"Daemon '{name}': could not mark its resume ledger interrupted ({ex.Message}).");
         }
     }
+
+    /// <summary>A keep-agents stop that overran had already stopped some agents cleanly and recorded them
+    /// resuming; only the rest are killed mid-run. Null marks every entry.</summary>
+    internal static Func<ResumeLedgerEntry, bool>? KeepsSavedResumes(ShutdownRequestDto request, ShutdownOutcome outcome) =>
+        request.Agents == "keep" && outcome == ShutdownOutcome.Overran ? e => e.State != ResumeState.Resuming : null;
 
     /// <summary>
     /// Remove the daemon-owned on-disk markers (PID file + version marker) for
