@@ -1,3 +1,4 @@
+using System.Globalization;
 using Capacitor.Cli.Core.Config;
 using Config_Profile = Capacitor.Cli.Core.Config.Profile;
 
@@ -124,8 +125,18 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
             && now.Select(t => t.ProfileName).SequenceEqual(named.Select(t => t.ProfileName), StringComparer.Ordinal);
     }
 
-    static bool SameTenant(DiscoveredTenant a, DiscoveredTenant b) =>
-        a.ProfileName == b.ProfileName && (a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin));
+    /// <summary>Rows naming one tenant: the same provider-qualified id (a WorkOS organization, a
+    /// GitHub org), whatever slug each carries; rows without one match on name and server.</summary>
+    static bool SameTenant(DiscoveredTenant a, DiscoveredTenant b) {
+        if (a.IsWorkOS != b.IsWorkOS) return false;
+
+        var idA = a.IsWorkOS ? a.OrganizationId : a.OrgId != 0 ? a.OrgId.ToString(CultureInfo.InvariantCulture) : null;
+        var idB = b.IsWorkOS ? b.OrganizationId : b.OrgId != 0 ? b.OrgId.ToString(CultureInfo.InvariantCulture) : null;
+
+        if (!string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB)) return idA == idB;
+
+        return a.ProfileName == b.ProfileName && (a.Origin == b.Origin || ServerIdentity.SameServer(a.Origin, b.Origin));
+    }
 
     static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant) {
         var onServer = existing.Profiles
