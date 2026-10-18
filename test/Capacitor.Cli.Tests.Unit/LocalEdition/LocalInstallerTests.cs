@@ -6,7 +6,6 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
-using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition;
@@ -19,7 +18,7 @@ public class LocalInstallerTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     readonly List<string> _log = [];
-    readonly FakeTimeProvider _time = new();
+    readonly TimerSignallingTimeProvider _time = new();
     readonly RecordingProgress<LocalInstallEvent> _events = new();
 
     UserHome Home => field ??= NewHome();
@@ -275,21 +274,22 @@ public class LocalInstallerTests {
     public async Task Lifted_on_a_later_poll_needs_no_restart() {
         Server.WhileAllowed = FakeAuthConfig.Pending;
 
-        // The answer is chosen after OnRequest runs, so the switch on the second poll makes that poll the first lifted one.
+        // The answer is chosen after OnRequest runs, so the switch on the second poll makes that poll the first lifted
+        // one. Between them the clock moves exactly past the poll gap, once that delay is registered.
         var polls = 0;
         Server.OnRequest = path => {
-            if (path == "/auth/config" && JournalPhase() == LocalSetupJournal.Allowed && ++polls == 2) Server.WhileAllowed = FakeAuthConfig.Lifted;
+            if (path != "/auth/config" || JournalPhase() != LocalSetupJournal.Allowed) return;
+
+            if (++polls == 1)
+                _time.OnTimerCreated = due => {
+                    _time.OnTimerCreated = null;
+                    _ = Task.Run(() => _time.Advance(due));
+                };
+            else
+                Server.WhileAllowed = FakeAuthConfig.Lifted;
         };
 
-        using var pump = new CancellationTokenSource();
-        var clock = AdvanceUntilCancelled(pump.Token);
-
-        try {
-            using (Record()) await Install();
-        } finally {
-            await pump.CancelAsync();
-            await clock;
-        }
+        using (Record()) await Install();
 
         await Assert.That(JournalAbsent()).IsTrue();
 
@@ -297,20 +297,6 @@ public class LocalInstallerTests {
         await Assert.That(afterAllowed).IsEquivalentTo([
             "journal:allowed", "GET /auth/config", "GET /auth/config", "journal:cleared",
         ], CollectionOrdering.Matching);
-    }
-
-    /// <summary>Moves the fake clock so the lift poll's gap elapses; the first answer is already decided when it is
-    /// read, so how far the clock runs does not change the outcome.</summary>
-    async Task AdvanceUntilCancelled(CancellationToken ct) {
-        while (!ct.IsCancellationRequested) {
-            _time.Advance(TimeSpan.FromMilliseconds(250));
-
-            try {
-                await Task.Delay(5, ct);
-            } catch (OperationCanceledException) {
-                return;
-            }
-        }
     }
 
     [Test]

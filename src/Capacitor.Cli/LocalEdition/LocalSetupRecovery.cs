@@ -10,8 +10,6 @@ namespace Capacitor.Cli.LocalEdition;
 /// </summary>
 sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, HttpClient local, TimeProvider time, IProgress<LocalInstallEvent> progress)
     : ILifecycleRecovery {
-    static readonly TimeSpan UnitLockWait = TimeSpan.FromMinutes(1);
-
     public string Operation => LocalSetupJournal.Operation;
 
     public async Task RecoverAsync(LifecycleLease lease, LifecycleJournalEntry interrupted, CancellationToken ct) {
@@ -30,7 +28,7 @@ sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, Http
         else
             await RollForwardAsync(lease, interrupted, details);
 
-        progress.ReportFinished(new LocalInstallEvent.Recovered(Operation, interrupted.Phase));
+        progress.TryReport(new LocalInstallEvent.Recovered(Operation, interrupted.Phase));
     }
 
     async Task RollForwardAsync(LifecycleLease lease, LifecycleJournalEntry entry, SetupDetails details) {
@@ -39,27 +37,36 @@ sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, Http
         if (!File.Exists(unit.ServerBinary))
             throw Failed($"The interrupted setup cannot be finished: {unit.ServerBinary} is missing. The setup journal {lease.Root.JournalPath} is kept.");
 
-        if (entry.Phase == LocalSetupJournal.Committing) await LocalSetupCommit.PublishAsync(lease, entry, details);
+        try {
+            // Decided before anything is published: a foreign server answering on the port must never prove this
+            // installation's lift, nor receive its profile.
+            if (await EnsureOwnUnitAsync(lease.Root, unit))
+                await LocalServerReadiness.WaitAsync(local, unit, LocalServerReadiness.StartBudget, time, CancellationToken.None);
 
-        if (!service.IsInstalled(unit)) {
-            await ReinstallAsync(lease.Root, unit);
-            await LocalServerReadiness.WaitAsync(local, unit, LocalServerReadiness.StartBudget, time, CancellationToken.None);
+            if (entry.Phase == LocalSetupJournal.Committing) await LocalSetupCommit.PublishAsync(lease, entry, details);
+
+            await LocalSetupCommit.ConfirmAsync(lease, details, service, home, local, time);
+        } catch (Exception ex) when (ex is not LocalInstallFailure) {
+            throw new LocalInstallFailure(LocalInstallFailureCode.CommitFailed,
+                $"Setup could not finish its commit ({ex.Message}). Nothing was removed; run kcap setup --local again to finish it.");
         }
-
-        await LocalSetupCommit.ConfirmAsync(lease, details, service, home, local, time);
     }
 
-    /// <summary>Only into an empty slot or over this root's own job: the unit is per user.</summary>
-    async Task ReinstallAsync(LocalRoot root, LocalServerUnit unit) {
-        using var _ = await LocalUnitLock.AcquireAsync(home, UnitLockWait, TimeProvider.System, CancellationToken.None);
+    /// <summary>True when the unit had to be installed. The unit is per user, so it is installed only into an empty
+    /// slot or over this root's own job, and one that is not provably this root's is left alone.</summary>
+    async Task<bool> EnsureOwnUnitAsync(LocalRoot root, LocalServerUnit unit) {
+        using var _ = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, CancellationToken.None);
 
         var owner = service.Owner(unit);
         var empty = owner is { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent };
 
         if (!empty && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
-            throw Failed($"The interrupted setup cannot be finished: its {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is missing, and the job loaded under that label is not provably this installation's. The setup journal {root.JournalPath} is kept.");
+            throw Failed($"The interrupted setup cannot be finished: the {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's. Nothing was changed and the setup journal {root.JournalPath} is kept.");
+
+        if (!empty && service.IsInstalled(unit)) return false;
 
         service.Install(unit);
+        return true;
     }
 
     static LocalInstallFailure Failed(string message) => new(LocalInstallFailureCode.RecoveryFailed, message);

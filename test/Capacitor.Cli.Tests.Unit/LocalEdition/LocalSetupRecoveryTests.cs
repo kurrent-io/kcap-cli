@@ -242,10 +242,35 @@ public class LocalSetupRecoveryTests {
         await AssertCommitted(interrupted);
 
         var log = RecoveryLog;
-        await Assert.That(log.IndexOf("install")).IsGreaterThan(log.IndexOf("journal:allowed"));
+        await Assert.That(log.IndexOf("install")).IsGreaterThanOrEqualTo(0);
         await Assert.That(log.IndexOf("GET /healthz/ready")).IsGreaterThan(log.IndexOf("install"));
-        await Assert.That(log.LastIndexOf("GET /auth/config")).IsGreaterThan(log.IndexOf("GET /healthz/ready"));
+        await Assert.That(log.IndexOf("registry")).IsGreaterThan(log.IndexOf("GET /healthz/ready"));
+        await Assert.That(log.LastIndexOf("GET /auth/config")).IsGreaterThan(log.IndexOf("journal:allowed"));
         await Assert.That(File.Exists(Plist)).IsTrue();
+    }
+
+    /// <summary>The plist was replaced outside kcap by another root's, serving the same port. Its unfenced answer
+    /// must not count as this installation's lift, nor its profile be pointed there.</summary>
+    [Test]
+    public async Task A_foreign_unit_at_committing_publishes_nothing() {
+        await CrashAt("setup:after-committing");
+
+        Tmp.CreateDir("other");
+        var other = Tmp.GetResolvedPath("other");
+        File.WriteAllText(Plist, other);
+        Service.LoadedRoot = other;
+
+        var journal = File.ReadAllBytes(Root.JournalPath);
+        var config  = File.ReadAllBytes(ConfigPath);
+
+        var failure = await Recover();
+
+        await Assert.That(failure?.Code).IsEqualTo(LocalInstallFailureCode.RecoveryFailed);
+        await Assert.That(File.ReadAllBytes(Root.JournalPath)).IsEquivalentTo(journal);
+        await Assert.That(File.ReadAllBytes(ConfigPath)).IsEquivalentTo(config);
+        await Assert.That(Registered(Root)).IsFalse();
+        await Assert.That(RecoveryLog).IsEmpty();
+        await Assert.That(File.ReadAllText(Plist)).IsEqualTo(other);
     }
 
     [Test]
@@ -402,6 +427,7 @@ public class LocalSetupRecoveryTests {
     [Arguments("port 70000")]
     [Arguments("server_url")]
     [Arguments("config_dir")]
+    [Arguments("profile")]
     [Arguments("committing/allow")]
     [Arguments("allowed/fenced")]
     public async Task A_malformed_setup_journal_changes_nothing(string malformed) {
@@ -429,6 +455,7 @@ public class LocalSetupRecoveryTests {
                 break;
             case "server_url": details[LocalSetupJournal.ServerUrlKey] = "http://127.0.0.1:9473"; field = "server_url"; break;
             case "config_dir": details[LocalSetupJournal.ConfigDirKey] = "relative/cfg"; field = "config_dir"; break;
+            case "profile": details[LocalSetupJournal.ProfileKey] = "../x"; field = "profile"; break;
             case "committing/allow": phase = LocalSetupJournal.Committing; serverStart = ServerStart.Allow; field = "server_start"; break;
             default: phase = LocalSetupJournal.Allowed; field = "server_start"; break;
         }
@@ -467,11 +494,12 @@ public class LocalSetupRecoveryTests {
         await Assert.That(File.ReadAllBytes(Root.JournalPath)).IsEquivalentTo(journal);
     }
 
-    /// <summary>Every file under the temp directory and its bytes; lock files are created empty by whoever takes them.</summary>
+    /// <summary>Every directory and file under the temp directory, with each file's bytes; lock files are created empty
+    /// by whoever takes them.</summary>
     Dictionary<string, string> Snapshot() =>
-        Directory.EnumerateFiles(Tmp.Path, "*", SearchOption.AllDirectories)
+        Directory.EnumerateFileSystemEntries(Tmp.Path, "*", SearchOption.AllDirectories)
             .Where(f => !f.EndsWith(".lock", StringComparison.Ordinal))
-            .ToDictionary(f => f, f => Convert.ToBase64String(File.ReadAllBytes(f)), StringComparer.Ordinal);
+            .ToDictionary(f => f, f => Directory.Exists(f) ? "<dir>" : Convert.ToBase64String(File.ReadAllBytes(f)), StringComparer.Ordinal);
 
     [Test]
     [NotInParallel]

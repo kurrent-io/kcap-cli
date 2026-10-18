@@ -8,6 +8,9 @@ namespace Capacitor.Cli.LocalEdition;
 sealed class LocalUnitLock : IDisposable {
     static readonly TimeSpan PollGap = TimeSpan.FromMilliseconds(100);
 
+    /// <summary>How long every lifecycle command waits for another root's holder.</summary>
+    public static readonly TimeSpan Wait = TimeSpan.FromMinutes(1);
+
     readonly FileStream _lock;
 
     LocalUnitLock(FileStream @lock) => _lock = @lock;

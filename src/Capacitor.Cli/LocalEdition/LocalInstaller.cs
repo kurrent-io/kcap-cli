@@ -18,8 +18,7 @@ sealed class LocalInstaller(
     LocalRoot root, ConfigRoot config, UserHome home, ILocalServerService service, LocalBundleClient bundles,
     HttpClient local, ECDsa manifestKey, LocalPlatform platform, TimeProvider time,
     Func<LocalInstaller, IEnumerable<ILifecycleRecovery>> recoveries) {
-    static readonly TimeSpan LeaseWait    = TimeSpan.FromSeconds(10);
-    static readonly TimeSpan UnitLockWait = TimeSpan.FromMinutes(1);
+    static readonly TimeSpan LeaseWait = TimeSpan.FromSeconds(10);
 
     const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
@@ -69,7 +68,7 @@ sealed class LocalInstaller(
 
         try {
             // Held from the empty-slot check of the unit through Install, so two roots cannot both pass it.
-            unitLock = await LocalUnitLock.AcquireAsync(home, UnitLockWait, TimeProvider.System, ct);
+            unitLock = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, ct);
             plan     = Checks.Recheck(Version);
 
             _progress.Report(new LocalInstallEvent.PreflightPassed(plan.Hint, plan.Version, root.Directory));
@@ -143,7 +142,7 @@ sealed class LocalInstaller(
                 $"Setup could not finish its commit ({ex.Message}). Nothing was removed; run kcap setup --local again to finish it.");
         }
 
-        _progress.ReportFinished(committed);
+        _progress.TryReport(committed);
 
         return committed;
     }

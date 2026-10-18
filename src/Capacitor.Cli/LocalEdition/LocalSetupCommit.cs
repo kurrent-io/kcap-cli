@@ -12,7 +12,6 @@ namespace Capacitor.Cli.LocalEdition;
 static class LocalSetupCommit {
     static readonly TimeSpan LiftBudget  = TimeSpan.FromSeconds(10);
     static readonly TimeSpan LiftPollGap = TimeSpan.FromMilliseconds(250);
-    static readonly TimeSpan UnitLockWait = TimeSpan.FromMinutes(1);
 
     /// <summary>From a <c>committing</c> or <c>allowed</c> entry to a cleared journal. The caller reports the
     /// result.</summary>
@@ -61,7 +60,7 @@ static class LocalSetupCommit {
 
     /// <summary>The unit is per user: one that names another root, or that cannot be read, is never stopped.</summary>
     static async Task RestartAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service, UserHome home) {
-        using var _ = await LocalUnitLock.AcquireAsync(home, UnitLockWait, TimeProvider.System, CancellationToken.None);
+        using var _ = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, CancellationToken.None);
 
         if (LocalRootIdentity.Decide(root, service.Owner(unit)) != OwnerDecision.Ours)
             throw new LocalInstallFailure(LocalInstallFailureCode.RecoveryFailed,

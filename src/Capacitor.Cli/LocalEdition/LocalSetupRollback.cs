@@ -11,8 +11,6 @@ namespace Capacitor.Cli.LocalEdition;
 /// the journal exactly as it was, so the next lifecycle command makes another verified unload first.</para>
 /// </summary>
 static class LocalSetupRollback {
-    static readonly TimeSpan UnitLockWait = TimeSpan.FromMinutes(1);
-
     static readonly string[] Created = ["bin", "data", "run"];
 
     /// <summary>Throws <see cref="LocalInstallFailure"/> with <see cref="LocalInstallFailureCode.RecoveryFailed"/>
@@ -30,7 +28,7 @@ static class LocalSetupRollback {
         // At pending no Install was attempted, and the empty-slot check proved no unit existed.
         var unitPhase = entry.Phase == LocalSetupJournal.Unit;
 
-        using (unitPhase ? await LocalUnitLock.AcquireAsync(home, UnitLockWait, TimeProvider.System, CancellationToken.None) : null) {
+        using (unitPhase ? await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, CancellationToken.None) : null) {
             if (unitPhase) {
                 FaultPoints.Hit("rollback:unit");
                 await UnloadAsync(root, unit, service);
@@ -39,7 +37,7 @@ static class LocalSetupRollback {
             if (LocalStackProbe.FindLive(root) is { } live)
                 throw Stopped($"Setup could not be undone: {live} under {root.Directory}. Nothing was removed.");
 
-            progress.Report(new LocalInstallEvent.RollingBack(reason));
+            progress.TryReport(new LocalInstallEvent.RollingBack(reason));
             FaultPoints.Hit("rollback:delete");
 
             foreach (var name in Created) Delete(Path.Combine(root.Directory, name));
@@ -53,7 +51,7 @@ static class LocalSetupRollback {
             lease.Complete();
         }
 
-        progress.ReportFinished(new LocalInstallEvent.RolledBack());
+        progress.TryReport(new LocalInstallEvent.RolledBack());
     }
 
     static async Task UnloadAsync(LocalRoot root, LocalServerUnit unit, ILocalServerService service) {
