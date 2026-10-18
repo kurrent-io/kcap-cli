@@ -287,11 +287,13 @@ both.
   session keeps its id. A hook-recorded session reactivates the server's read model on its first
   event. An ACP session whose binding is terminal cannot be reopened; that case falls through to
   kcap continue.
-- Kcap continue: always a new agent id and a new session. Before the launch the daemon ends the
-  old pair explicitly, `AgentStatusChanged(Completed)` and `EndAgentSession` with the new reason
-  `superseded`, so nothing is left active forever and the server never sees a live agent change
-  its session id. The continue-session design's choice stands: no continuation link is written;
-  the work items and plans are the shared state, and `SessionTakeover` attaches them.
+- Kcap continue: always a new agent id and a new session. Once the successor has stayed alive
+  through the readiness window, the daemon ends the old pair explicitly,
+  `AgentStatusChanged(Completed)` and `EndAgentSession` with the new reason `superseded`, so nothing
+  is left active forever and the server never sees a live agent change its session id. Until then
+  the old entry keeps the worktree, and a successor that dies inside the window leaves it
+  interrupted. The continue-session design's choice stands: no continuation link is written; the
+  work items and plans are the shared state, and `SessionTakeover` attaches them.
 
 A new agent id registered by the daemon has no server-side launch intent, and the server attributes
 such a registration to the daemon's owner. The ledger keeps the original requester, and the new
@@ -354,7 +356,7 @@ a clean exit; OpenCode and Grok have never been probed. A vendor that fails stay
 ### 4.6 Kcap continue
 
 A fresh session launched through the ordinary path with the ledger's descriptor under a new agent
-id, after the old agent and session are ended as `superseded` (§3.6). Its prompt is the original
+id; the old pair ends as `superseded` (§3.6) once it passes readiness. Its prompt is the original
 launch prompt, a note that it continues an interrupted session, the old session's summary from
 `GET /api/sessions/{id}/summary` when the fetch succeeds within its timeout, and the nudge. Once
 the new session id is known, the daemon attaches it to the old session's work items and unfinished
