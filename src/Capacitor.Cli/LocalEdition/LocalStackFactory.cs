@@ -1,0 +1,14 @@
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
+
+namespace Capacitor.Cli.LocalEdition;
+
+sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time, IHttpClientFactory http) : ILocalStackFactory {
+    public LocalStack Create() {
+        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
+            throw new LocalInstallFailure(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+
+        return new(root, home, LocalServerServices.ForCurrentOs(home, time), http.CreateClient(CapacitorClients.LocalInstallation), time);
+    }
+}
