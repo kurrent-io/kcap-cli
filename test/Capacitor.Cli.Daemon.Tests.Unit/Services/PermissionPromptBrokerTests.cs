@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
@@ -9,6 +10,16 @@ public class PermissionPromptBrokerTests {
 
     static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? toolUseId = null) =>
         new(id, agent, "s1", "claude", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"), toolUseId);
+
+    /// A prompt as Claude's permission hook raises it: no tool-use id, the tool named and its input carried.
+    static PermissionPendingDto Prompt(string id, string toolName, string? inputJson, string? requestedAt = null, bool omitted = false) =>
+        new(id, "a1", "s1", "claude", toolName, inputJson is null ? null : Input(inputJson), null, omitted, false,
+            requestedAt ?? DateTimeOffset.UtcNow.ToString("O"));
+
+    static JsonElement Input(string json) {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
 
     static PermissionDecision Allow => new("allow", null, null);
 
@@ -244,6 +255,75 @@ public class PermissionPromptBrokerTests {
 
         await Assert.That(next.IsCompleted).IsFalse();
         await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
+    }
+
+    /// Claude's permission hook names the tool and carries its input but no tool-use id, so the
+    /// settled tool's name and input are what identify the prompt it answered. Key order is not
+    /// identity; a different input or a different tool with the same input is another call.
+    [Test]
+    public async Task A_settled_tool_withdraws_the_prompt_with_its_name_and_input_when_the_prompt_has_no_id() {
+        var broker = new PermissionPromptBroker();
+        var ls    = broker.Register(Prompt("r1", "Bash", """{"command":"ls","description":"list"}"""));
+        var rm    = broker.Register(Prompt("r2", "Bash", """{"command":"rm -rf x"}"""));
+        var read  = broker.Register(Prompt("r3", "Read", """{"command":"ls","description":"list"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"description":"list","command":"ls"}"""))).IsTrue();
+
+        var settled = await WaitBounded(ls, "the matching prompt withdrawn");
+        await Assert.That(settled.Outcome).IsEqualTo("withdrawn");
+        await Assert.That(settled.Source).IsEqualTo("tool_settled");
+        await Assert.That(settled.Decision.Behavior).IsEqualTo("deny");
+        await Assert.That(rm.IsCompleted).IsFalse();
+        await Assert.That(read.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Select(p => p.RequestId).Order()).IsEquivalentTo(["r2", "r3"]);
+    }
+
+    /// Two identical pending calls are answered in the order they were raised, so each settled
+    /// tool retires the oldest survivor.
+    [Test]
+    public async Task Identical_prompts_are_withdrawn_oldest_first() {
+        var broker = new PermissionPromptBroker();
+        var newer = broker.Register(Prompt("r-new", "Bash", """{"command":"ls"}""", requestedAt: "2026-10-18T10:00:05.0000000+00:00"));
+        var older = broker.Register(Prompt("r-old", "Bash", """{"command":"ls"}""", requestedAt: "2026-10-18T10:00:00.0000000+00:00"));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(older, "the older prompt first")).Outcome).IsEqualTo("withdrawn");
+        await Assert.That(newer.IsCompleted).IsFalse();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(newer, "the newer prompt second")).Outcome).IsEqualTo("withdrawn");
+        await Assert.That(broker.PendingSnapshot()).IsEmpty();
+    }
+
+    /// A prompt that does carry a tool-use id is matched by that id alone: the same name and input
+    /// under a different id is another call.
+    [Test]
+    public async Task A_prompt_with_its_own_id_is_not_matched_by_name_and_input() {
+        var broker = new PermissionPromptBroker();
+        var dto = Prompt("r1", "Bash", """{"command":"ls"}""") with { ToolUseId = "toolu_other" };
+        var s1 = broker.Register(dto);
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+
+        await Assert.That(s1.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Count).IsEqualTo(1);
+    }
+
+    /// An input the wire dropped as oversize cannot prove a match, and a notice without an input
+    /// has only its id to offer; both leave the prompt to the turn's end.
+    [Test]
+    public async Task A_prompt_without_a_comparable_input_is_not_matched() {
+        var broker = new PermissionPromptBroker();
+        var omitted = broker.Register(Prompt("r1", "Bash", null, omitted: true));
+        var plain   = broker.Register(Prompt("r2", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(plain, "the comparable prompt")).Outcome).IsEqualTo("withdrawn");
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_3")).IsFalse();
+
+        await Assert.That(omitted.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r1");
     }
 
     [Test]

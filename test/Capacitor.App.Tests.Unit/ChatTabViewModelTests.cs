@@ -143,6 +143,8 @@ public class ChatTabViewModelTests {
     const string ToolCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
     const string ToolResultLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
     const string ToolErrorLine = """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"boom","is_error":true}]}}""";
+    const string TimedToolCallLine = """{"type":"assistant","timestamp":"2026-08-28T10:00:00Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls -la"}}]}}""";
+    const string TimedToolResultLine = """{"type":"user","timestamp":"2026-08-28T10:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}""";
     const string MatchingQuestion = """{"questions":[{"question":"Run payload?","header":"Run payload","options":[{"label":"Yes"},{"label":"No"}]}]}""";
     const string OtherQuestion = """{"questions":[{"question":"Something else?","options":[{"label":"A"}]}]}""";
     const string QuestionCallLine = """{"type":"assistant","timestamp":"2026-08-28T10:00:00Z","message":{"content":[{"type":"tool_use","id":"qtool","name":"AskUserQuestion","input":{"questions":[{"question":"Run payload?","header":"Run payload","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}""";
@@ -1181,6 +1183,39 @@ public class ChatTabViewModelTests {
             await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 2, what: "the late request withdrawn");
             await Assert.That(h.Permissions.Withdrawn[1]).IsEqualTo("r4");
             await Assert.That(h.Chat.PendingCards.Count).IsEqualTo(2);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// Claude's permission hook carries no tool-use id for any tool, so a plain prompt is retired
+    /// by tool name and input once a call with both has a result at or after the card; input
+    /// formatting is not identity. A different input, another tool with the same input, and a card
+    /// raised after the result stay; a matching card that arrives after the result goes on arrival.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_settled_call_withdraws_cards_with_its_name_and_input_that_have_no_tool_id() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [TimedToolCallLine]);
+            await h.PushAsync(Dto(path));
+
+            h.Permissions.Add(PermissionEntries.Entry("r-match", "a1", toolInputJson: """{"command":"ls -la"}"""));
+            h.Permissions.Add(PermissionEntries.Entry("r-other", "a1", toolInputJson: """{"command":"rm -rf x"}"""));
+            h.Permissions.Add(PermissionEntries.Entry("r-read", "a1", toolName: "Read", toolInputJson: """{"command":"ls -la"}"""));
+            h.Permissions.Add(PermissionEntries.Entry("r-later", "a1", toolInputJson: """{"command":"ls -la"}""", requestedAt: "2026-08-28T12:00:00.0000000+00:00"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 4, what: "four cards");
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            File.AppendAllText(path, TimedToolResultLine + "\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 3, what: "the settled call's card withdrawn");
+            await Assert.That(h.Permissions.Withdrawn).IsEquivalentTo(["r-match"]);
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            h.Permissions.Add(PermissionEntries.Entry("r-late", "a1", toolInputJson: """{ "command" : "ls -la" }"""));
+            await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 2, what: "the late card withdrawn on arrival");
+            await Assert.That(h.Permissions.Withdrawn[1]).IsEqualTo("r-late");
+            await Assert.That(h.Chat.PendingCards.Count).IsEqualTo(3);
             await h.TeardownAsync();
         });
     }

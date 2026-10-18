@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Commands;
 
@@ -41,13 +42,19 @@ internal static class DaemonBridgeRelay {
     /// <summary>
     /// A tool ran, a subagent stopped (<paramref name="subagentId"/>) or, with neither id, the
     /// turn ended, so a prompt the daemon still holds for it can be retired: the answer was given
-    /// in the vendor's own terminal, which the daemon cannot see.
+    /// in the vendor's own terminal, which the daemon cannot see. The tool's name and input go
+    /// with its id because the permission hook that raised the prompt had no id to record; an
+    /// input past the wire's element cap is left out, as the prompt's own was.
     /// </summary>
     public static Task NotifyToolSettledAsync(
-            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget) {
+            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget,
+            string? toolName = null, JsonNode? toolInput = null) {
         var payload = new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd };
         if (toolUseId is not null) payload["tool_use_id"] = toolUseId;
         if (subagentId is not null) payload["subagent_id"] = subagentId;
+        if (toolName is not null) payload["tool_name"] = toolName;
+        if (toolInput is not null && Encoding.UTF8.GetByteCount(toolInput.ToJsonString()) <= PermissionWire.MaxElementBytes)
+            payload["tool_input"] = toolInput.DeepClone();
 
         return PostAsync(hosted, vendor, "tool-settled", payload, budget);
     }

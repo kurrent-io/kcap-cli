@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Globalization;
+using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
@@ -97,16 +99,28 @@ internal sealed class PermissionPromptBroker {
     }
 
     /// A tool that has run was answered where the daemon cannot see, so its prompt is moot. The
-    /// agent and the session are matched as well as the id: every hosted agent posts on the same
-    /// shared token, and a notice retires only what its own session registered.
-    public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId) {
+    /// agent and the session are matched as well as the tool: every hosted agent posts on the same
+    /// shared token, and a notice retires only what its own session registered. A prompt that
+    /// carries a tool-use id is matched by it alone; one raised without an id (Claude's permission
+    /// hook never sends one) is matched by tool name and input, oldest first, so two identical
+    /// pending calls retire in the order they were raised.
+    public bool TryWithdrawTool(string agentId, string sessionId, string? toolUseId, string? toolName = null, JsonElement? toolInput = null) {
         lock (_gate) {
-            var entry = _pending.Values.FirstOrDefault(e =>
-                e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
+            var own = _pending.Values.Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId);
+            var entry = toolUseId is null ? null : own.FirstOrDefault(e => e.Dto.ToolUseId == toolUseId);
+            if (entry is null && toolName is not null && toolInput is { } input)
+                entry = own
+                    .Where(e => e.Dto.ToolUseId is null && e.Dto.ToolName == toolName
+                             && e.Dto.ToolInput is { } pendingInput && JsonElement.DeepEquals(pendingInput, input))
+                    .OrderBy(e => RequestedAt(e.Dto))
+                    .FirstOrDefault();
             return entry is not null
                 && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled);
         }
     }
+
+    static DateTimeOffset RequestedAt(PermissionPendingDto dto) =>
+        DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) ? at : DateTimeOffset.MaxValue;
 
     /// Withdraws what a finished turn left pending in the session: the main agent's own requests
     /// for a null subagentId, otherwise that subagent's. A background subagent's prompt outlives

@@ -44,6 +44,39 @@ public class LocalPermissionBridgeToolSettledTests {
         await Assert.That(h.Seen.Single()).IsEqualTo(("agent-1", new ToolSettledNotice(Session, "toolu_1", null)));
     }
 
+    /// Claude's permission hook raises a prompt without a tool-use id, so the settled tool's name
+    /// and input travel with the notice for the broker to match on.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
+    public async Task A_settled_tool_reaches_the_agent_with_its_name_and_input() {
+        await using var h = new Harness();
+        await h.StartAsync();
+
+        var response = await h.PostAsync(new {
+            session_id = Session, agent_id = "agent-1", cwd = "/repo", tool_use_id = "toolu_1",
+            tool_name = "Bash", tool_input = new { command = "ls" },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
+        var (agentId, notice) = h.Seen.Single();
+        await Assert.That(agentId).IsEqualTo("agent-1");
+        await Assert.That(notice.ToolUseId).IsEqualTo("toolu_1");
+        await Assert.That(notice.ToolName).IsEqualTo("Bash");
+        await Assert.That(notice.ToolInput?.GetRawText()).IsEqualTo("""{"command":"ls"}""");
+    }
+
+    /// A tool name past the wire cap can match no pending prompt, and ignoring it would leave the
+    /// notice looking like a tool that ran without a name.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
+    public async Task An_over_cap_tool_name_is_a_bad_request() {
+        await using var h = new Harness();
+        await h.StartAsync();
+
+        var response = await h.PostAsync(new { session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_1", tool_name = new string('x', 513) });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(h.Seen).IsEmpty();
+    }
+
     [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
     public async Task A_stopped_subagent_reaches_the_agent_with_the_subagent_id() {
         await using var h = new Harness();

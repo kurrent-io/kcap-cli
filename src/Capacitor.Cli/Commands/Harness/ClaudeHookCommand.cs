@@ -236,7 +236,8 @@ public sealed class ClaudeHookCommand(
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
         // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
-        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null;
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null, toolName = null;
+        JsonNode? toolInput = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
@@ -247,6 +248,8 @@ public sealed class ClaudeHookCommand(
             source         = node?["source"]?.GetValue<string>();
             agentId        = node?["agent_id"]?.GetValue<string>();
             toolUseId      = node?["tool_use_id"]?.GetValue<string>();
+            toolName       = node?["tool_name"]?.GetValue<string>();
+            toolInput      = node?["tool_input"];
 
             // Ahead of both arms below, since each claims the new session before it posts.
             if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
@@ -270,7 +273,7 @@ public sealed class ClaudeHookCommand(
         // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
         // ending says nothing about a background subagent's.
         if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining, toolName, toolInput);
 
         if (command == "stop" && agentId is null)
             await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);

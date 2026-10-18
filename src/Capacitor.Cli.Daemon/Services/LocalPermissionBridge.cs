@@ -982,14 +982,16 @@ internal sealed partial class LocalPermissionBridge(
         if (await ReadRelayAsync(context, path, ToolSettledSuffix, reviewerAllowed: false) is not (var node, var sessionId, _)) return;
 
         if (!TryScope(node, "tool_use_id", PermissionWire.MaxToolUseIdBytes, out var toolUseId)
-         || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)) {
+         || !TryScope(node, "subagent_id", PermissionWire.MaxAgentIdBytes, out var subagentId)
+         || !TryScope(node, "tool_name", PermissionWire.MaxToolNameBytes, out var toolName)) {
             Close(context, 400);
 
             return;
         }
 
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
+        if (attributed is { } agent)
+            ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId, toolName, ExtractElement(node, "tool_input")));
 
         Close(context, 204);
     }

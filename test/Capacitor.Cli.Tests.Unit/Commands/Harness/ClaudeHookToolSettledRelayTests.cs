@@ -66,11 +66,12 @@ public class ClaudeHookToolSettledRelayTests {
     }
 
     /// The server has no route for a tool's completion and the transcript watcher already carries
-    /// its result, so the hook's only work is the notice.
+    /// its result, so the hook's only work is the notice. The permission hook raised the prompt
+    /// without a tool-use id, so the tool's name and input ride along for the daemon to match on.
     [Test, NotInParallel]
     [Arguments("PostToolUse")]
     [Arguments("PostToolUseFailure")]
-    public async Task A_finished_tool_relays_its_id_and_never_reaches_the_server(string eventName) {
+    public async Task A_finished_tool_relays_its_id_name_and_input_and_never_reaches_the_server(string eventName) {
         using var bridge = Bridge();
 
         var (exit, serverPosts) = await RunAsync(HostedOn(bridge), eventName, extraFields: ",\"tool_use_id\":\"toolu_01X\"");
@@ -79,6 +80,8 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(serverPosts).IsEqualTo(0);
         var body = Relayed(bridge)!;
         await Assert.That(body["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_01X");
+        await Assert.That(body["tool_name"]!.GetValue<string>()).IsEqualTo("Bash");
+        await Assert.That(body["tool_input"]!["command"]!.GetValue<string>()).IsEqualTo("ls");
         await Assert.That(body["subagent_id"]).IsNull();
         await Assert.That(body["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
         await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo(Sid);
