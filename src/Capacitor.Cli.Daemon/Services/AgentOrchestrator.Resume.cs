@@ -546,15 +546,15 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    /// <summary>The later of the entry's resuming stamp and the predecessor's last heartbeat; an entry
-    /// with neither was last known alive when it was written.</summary>
-    static DateTimeOffset LastAlive(ResumeLedgerEntry entry, DateTimeOffset? beat) =>
-        (entry.ResumingAt, beat) switch {
-            ({ } resuming, { } b) => resuming > b ? resuming : b,
-            ({ } resuming, null)  => resuming,
-            (null, { } b)         => b,
-            _                     => entry.UpdatedAt
-        };
+    /// <summary>The latest of the entry's write, its resuming stamp and the last heartbeat. A heartbeat file
+    /// outlives the incarnation that wrote it, so it never hides a newer write.</summary>
+    static DateTimeOffset LastAlive(ResumeLedgerEntry entry, DateTimeOffset? beat) {
+        var alive = entry.UpdatedAt;
+        if (entry.ResumingAt is { } resuming && resuming > alive) alive = resuming;
+        if (beat is { } b && b > alive) alive = b;
+
+        return alive;
+    }
 
     /// <summary>The candidates still waiting on their resume, private agents excluded.</summary>
     internal ResumingAgentClaim[] ResumingClaims() => [
@@ -606,8 +606,6 @@ internal partial class AgentOrchestrator {
         lock (_ledgerLock) {
             if (_agents.TryGetValue(agentId, out live) || TryReadLedger(agentId) is null) return false;
 
-            _resumeCandidates.TryRemove(agentId, out _);
-
             try {
                 ledger.Delete(agentId);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
@@ -615,6 +613,7 @@ internal partial class AgentOrchestrator {
                 return false;
             }
 
+            _resumeCandidates.TryRemove(agentId, out _);
             if (_resumeAttempts.TryGetValue(agentId, out attempt)) attempt.Withdrawn = true;
         }
 
@@ -697,9 +696,13 @@ internal partial class AgentOrchestrator {
             // `agent resume` until the next boot.
             if (!_agents.ContainsKey(entry.AgentId) && !IsWithdrawn(entry.AgentId)) InterruptEntry(entry.AgentId, ex.GetType().Name);
         } finally {
+            // A manual retry may already hold the id with its own candidate and attempt.
             lock (_ledgerLock) {
-                if (attempt is not null) _resumeAttempts.Remove(entry.AgentId);
-                _resumeCandidates.TryRemove(entry.AgentId, out _);
+                if (attempt is not null && _resumeAttempts.TryGetValue(entry.AgentId, out var registered) && ReferenceEquals(registered, attempt))
+                    _resumeAttempts.Remove(entry.AgentId);
+
+                if (_resumeCandidates.TryGetValue(entry.AgentId, out var candidate) && ReferenceEquals(candidate, entry))
+                    _resumeCandidates.TryRemove(entry.AgentId, out _);
             }
 
             attempt?.Dispose();

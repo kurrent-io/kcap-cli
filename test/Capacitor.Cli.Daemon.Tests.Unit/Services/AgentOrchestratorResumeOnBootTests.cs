@@ -175,6 +175,31 @@ public class AgentOrchestratorResumeOnBootTests {
     }
 
     [Test]
+    [ExcludeOn(TUnit.Core.Enums.OS.Windows), System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task A_discard_whose_delete_fails_keeps_the_candidate_listed() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-ro");
+        f.Orch.LoadResumeLedger();
+        var dir  = Path.GetDirectoryName(f.Orch.ResumeLedger!.EntryPath("resume-ro"))!;
+        var mode = File.GetUnixFileMode(dir);
+        File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        bool discarded;
+
+        try {
+            discarded = f.Orch.TryDiscardResumeEntry("resume-ro");
+        } finally {
+            File.SetUnixFileMode(dir, mode);
+        }
+
+        await Assert.That(discarded).IsFalse();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-ro")).IsNotNull();
+        await Assert.That(f.Orch.LedgerOnlyAgents().Select(r => r.Entry.AgentId)).Contains("resume-ro");
+        await Assert.That(f.Orch.ResumingClaims().Select(c => c.AgentId)).Contains("resume-ro");
+    }
+
+    [Test]
     public async Task A_resumed_claude_agent_keeps_its_permission_mode() {
         var f = Build(new ResumableFactory { Vendor = "claude", PtyStyle = true });
         await using var _ = f.Orch;
@@ -234,6 +259,26 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(entry.LastError).IsEqualTo("too_old");
         await Assert.That(f.Factory.Contexts).IsEmpty();
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    /// <summary>A heartbeat file outlives the incarnation that wrote it, so an entry written after the
+    /// last beat is the newer evidence of life.</summary>
+    [Test]
+    public async Task A_recent_entry_behind_a_stale_heartbeat_is_resumed() {
+        var time = TimeProvider.System;
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "fresh-1", state: ResumeState.Running, at: time.GetUtcNow() - TimeSpan.FromSeconds(30));
+        f.Config.Store.EnsureDirectory();
+        var heartbeat = f.Config.Store.HeartbeatPath(f.Config.Name);
+        await File.WriteAllBytesAsync(heartbeat, []);
+        File.SetLastWriteTimeUtc(heartbeat, (time.GetUtcNow() - f.Config.ResumeMaxAge - TimeSpan.FromHours(1)).UtcDateTime);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts.Single().AgentId).IsEqualTo("fresh-1");
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("fresh-1")!.State).IsNotEqualTo(ResumeState.Interrupted);
     }
 
     [Test]
@@ -506,6 +551,36 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
             .Contains(("fails-1", "Failed", "resume_failed:runtime_exited"));
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    /// <summary>A manual retry that lands while a failed run still reports keeps its own candidate: the
+    /// failed run's teardown removes only what it registered.</summary>
+    [Test]
+    public async Task A_retry_during_a_failed_runs_report_keeps_its_candidate() {
+        var f = Build(new ResumableFactory { ExitBeforeHandshake = true }, c => c.ResumeConcurrency = 2);
+        await using var _ = f.Orch;
+        Entry(f, "retry-1");
+        f.Orch.ContinueEntry = (_, _, _) => Task.FromResult(ResumeOutcome.Interrupted);
+        var report = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Server.ShutdownReportGate = report;
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => { lock (f.Server.ShutdownReports) return f.Server.ShutdownReports.Count == 1; });
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Factory.Gate = start;
+        await Assert.That(await f.Orch.ResumeInterruptedAsync("retry-1", CancellationToken.None)).IsEqualTo("resuming");
+        await WaitHarness.PollUntilAsync(() => f.Factory.Contexts.Count == 2);
+
+        report.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.ResumingClaims().Select(c => c.AgentId)).Contains("retry-1");
+        await Assert.That(f.Orch.LedgerOnlyAgents().Single(r => r.Entry.AgentId == "retry-1").Status).IsEqualTo("Resuming");
+
+        await Assert.That(f.Orch.TryDiscardResumeEntry("retry-1")).IsTrue();
+        start.SetResult();
     }
 
     /// <summary>A fault outside the resume's own failure path leaves the entry where <c>kcap agent ls</c>

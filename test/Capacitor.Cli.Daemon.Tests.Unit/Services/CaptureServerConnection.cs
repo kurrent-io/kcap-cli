@@ -408,7 +408,11 @@ sealed class CaptureServerConnection() : ServerConnection(
         lock (ShutdownReportExitCodes) ShutdownReportExitCodes.Add((agentId, exitCode));
 
         if (ShutdownReportHangs) await Task.Delay(Timeout.Infinite, ct);
+        if (ShutdownReportGate is { } gate) await gate.Task.WaitAsync(ct);
     }
+
+    /// <summary>When set, the shutdown report is recorded and then held until the gate completes.</summary>
+    public TaskCompletionSource? ShutdownReportGate { get; set; }
 
     // ── Task 8: resolved-model report capture ──────────────────────────────────
     /// <summary>Every legacy (agentId, model) pair passed to ReportAgentResolvedModelAsync — proves
