@@ -185,9 +185,14 @@ public sealed class TokenStore(
 
     // Best-effort: where no ACL or mode can be set, failing would also cost the caller its credential.
     // The store has no diagnostic channel, so a failure leaves the location's access as it was.
-    void SecureTokenDir() {
+    bool SecureTokenDir() {
         Directory.CreateDirectory(TokenDir);
-        try { OwnerOnlyDirectory.Ensure(TokenDir); } catch { /* keeps the location's access */ }
+        try {
+            OwnerOnlyDirectory.Ensure(TokenDir);
+            return true;
+        } catch {
+            return false; // keeps the location's access
+        }
     }
 
     // One lock file per profile, exclusive while open. Null once the holder has kept it past LockWait.
@@ -387,8 +392,10 @@ public sealed class TokenStore(
         // A Windows move keeps the file's own ACL: what it inherited from the config directory until
         // the directory's DACL is propagated again, and any explicit grant for good.
         if (OperatingSystem.IsWindows()) {
-            SecureTokenDir();
-            try { OwnerOnlyDirectory.InheritOnly(target); } catch { /* keeps the file's access */ }
+            // Inheriting from a directory that could not be secured might widen the file instead.
+            if (SecureTokenDir()) {
+                try { OwnerOnlyDirectory.InheritOnly(target); } catch { /* keeps the file's access */ }
+            }
         } else {
             File.SetUnixFileMode(target, UnixFileMode.UserRead | UnixFileMode.UserWrite);
         }
