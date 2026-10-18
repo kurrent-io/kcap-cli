@@ -628,8 +628,10 @@ static class SessionImporter {
 
             // A blocked Cursor batch leaves the server's watermark at the gap; any later batch would
             // move it past the blocked lines, and the next import resumes from the watermark.
-            if (vendor is HarnessId.Cursor && resp.StatusCode is HttpStatusCode.Conflict)
+            if (vendor is HarnessId.Cursor && resp.StatusCode is HttpStatusCode.Conflict) {
+                progress?.Report(new BatchDropped(sessionId, agentId, first, last, "HTTP 409: the server blocked this batch at a gap"));
                 throw new TranscriptDeliveryAbortedException();
+            }
 
             loss = resp.IsSuccessStatusCode ? null : $"HTTP {(int)resp.StatusCode}";
         } catch (HttpRequestException ex) {

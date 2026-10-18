@@ -2228,9 +2228,7 @@ public class CursorImportSourceTests {
             File.WriteAllText(Path.Combine(dir, "workspace.json"), $$"""{"folder":"{{folderUri}}"}""");
         }
 
-        public void Dispose() {
-            try { Directory.Delete(Root, recursive: true); } catch { }
-        }
+        public void Dispose() => _root.Dispose();
     }
 
     sealed class StubHandler(
