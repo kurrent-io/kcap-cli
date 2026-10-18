@@ -269,11 +269,12 @@ public sealed class ClaudeHookCommand(
         // Retiring a held prompt goes first: it and the heartbeat below share this hook's budget
         // and each post caps at 1s, so a wedged bridge must not let the heartbeat starve the notice
         // that frees a prompt the daemon still holds — a stale subagent count instead recovers by
-        // its own expiry. A finished tool names itself; a finished turn covers a terminal deny,
-        // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
-        // ending says nothing about a background subagent's.
+        // its own expiry. A finished tool names itself, and the subagent it ran in, since the
+        // prompt it answered carried no tool id and is matched within that scope; a finished turn
+        // covers a terminal deny, which runs no tool; a finished subagent covers its own prompts,
+        // since the parent's turn ending says nothing about a background subagent's.
         if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining, toolName, toolInput);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget.Remaining, toolName, toolInput);
 
         if (command == "stop" && agentId is null)
             await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);

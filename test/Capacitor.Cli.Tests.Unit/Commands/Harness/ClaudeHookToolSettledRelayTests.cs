@@ -88,16 +88,18 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(body["cwd"]!.GetValue<string>()).IsEqualTo("/tmp");
     }
 
-    /// A subagent's tool call runs the same hook with the parent's environment; its id is unique
-    /// across the session, so the notice needs no other scope.
+    /// A subagent's tool call runs the same hook with the parent's environment. Its id is unique
+    /// across the session, but the prompt it answered was raised without one, so the subagent's
+    /// id scopes the name-and-input match to that subagent's own prompts.
     [Test, NotInParallel]
-    public async Task A_subagents_finished_tool_relays_its_id_too() {
+    public async Task A_subagents_finished_tool_relays_its_id_and_its_subagent() {
         using var bridge = Bridge();
 
         var (exit, _) = await RunAsync(HostedOn(bridge), "PostToolUse", extraFields: $",\"tool_use_id\":\"toolu_02Y\",\"agent_id\":\"{Sub}\"");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Relayed(bridge)!["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_02Y");
+        await Assert.That(Relayed(bridge)!["subagent_id"]!.GetValue<string>()).IsEqualTo(Sub);
     }
 
     /// A tool that ran without its id cannot be named; the turn's end still retires its prompt.

@@ -687,7 +687,10 @@ internal sealed partial class LocalPermissionBridge(
                                 toolName ?? "", behavior, PermissionSettlements.SourcePolicy));
                             _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
                             // No Register: a call the policy answered raises no card, and the
-                            // decision log plus the run event are its audit trail.
+                            // decision log plus the run event are its audit trail. An allowed one
+                            // still runs and reports, and that report must not retire a prompt.
+                            if (decided.Outcome == PolicyOutcome.Allow)
+                                _broker.ExpectCompletion(governed.AgentId, canonicalSessionId!, SubagentIdOf(node), toolName ?? "", toolInput);
                             await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
 
                             return;

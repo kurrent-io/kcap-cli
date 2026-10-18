@@ -32,4 +32,21 @@ public class AgentOrchestratorToolSettledTests {
         await Assert.That(rm.IsCompleted).IsFalse();
         await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
     }
+
+    /// A subagent's notice carries its subagent id beside the tool id, and that scope travels to
+    /// the broker: the parent's identical prompt is not the subagent's to retire.
+    [Test]
+    public async Task A_subagents_notice_leaves_the_parents_identical_prompt_pending() {
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var broker = orch.PermissionBrokerForTest;
+        var parent = broker.Register(Prompt("r-parent", """{"command":"ls"}""", "2026-10-18T10:00:00.0000000+00:00"));
+        var sub    = broker.Register(Prompt("r-sub", """{"command":"ls"}""", "2026-10-18T10:00:01.0000000+00:00"), subagentId: "sub-1");
+
+        orch.PermissionBridgeForTest.ToolSettledHandler!("a1", new ToolSettledNotice("s1", "toolu_1", "sub-1", "Bash", Input("""{"command":"ls"}""")));
+
+        await Assert.That(sub.IsCompleted).IsTrue();
+        await Assert.That(parent.IsCompleted).IsFalse();
+        await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r-parent");
+    }
 }

@@ -129,6 +129,14 @@ public class LocalPermissionBridgePolicyTests {
         await Assert.That(evt.RequestedOutcome).IsEqualTo("allow");
         await Assert.That(evt.EffectiveOutcome).IsEqualTo("allow");
         await Assert.That(evt.MatchedRules.Single().Outcome).IsEqualTo("allow");
+
+        // The allowed call still runs and reports, so its completion must not be read as the
+        // terminal answer to an identical prompt raised later.
+        using var input = JsonDocument.Parse("""{"command":"git status"}""");
+        var later = h.Broker.Register(new PermissionPendingDto("r-later", "agent-1", PermissionWire.Canonical(Session)!, "claude", "Bash",
+            input.RootElement.Clone(), null, false, false, DateTimeOffset.UtcNow.ToString("O")));
+        await Assert.That(h.Broker.TryWithdrawTool("agent-1", PermissionWire.Canonical(Session)!, "toolu_1", "Bash", input.RootElement)).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
     }
 
     [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]

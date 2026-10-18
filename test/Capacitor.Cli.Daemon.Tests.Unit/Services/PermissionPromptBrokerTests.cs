@@ -326,6 +326,81 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r1");
     }
 
+    /// A subagent's hook runs with the parent's environment, so its finished tool is scoped by
+    /// its id: the parent's identical pending prompt is not the one it answered, and the reverse
+    /// holds for the parent's own completion.
+    [Test]
+    public async Task A_settled_tool_matched_by_name_and_input_stays_within_its_subagent_scope() {
+        var broker = new PermissionPromptBroker();
+        var parent = broker.Register(Prompt("r-parent", "Bash", """{"command":"ls"}"""));
+        var sub    = broker.Register(Prompt("r-sub", "Bash", """{"command":"ls"}"""), subagentId: "sub-1");
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""), subagentId: "sub-1")).IsTrue();
+        await Assert.That((await WaitBounded(sub, "the subagent's own prompt")).Outcome).IsEqualTo("withdrawn");
+        await Assert.That(parent.IsCompleted).IsFalse();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""), subagentId: "sub-2")).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_3", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(parent, "the parent's prompt")).Outcome).IsEqualTo("withdrawn");
+    }
+
+    /// A prompt allowed here is still owed its tool's completion notice, and that notice must not
+    /// be read as the answer to a newer identical prompt nobody has answered: hooks run
+    /// asynchronously, so the completion can land after the next identical call is raised.
+    [Test]
+    public async Task An_allowed_prompts_completion_leaves_a_newer_identical_prompt_pending() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(next, "the second completion is the terminal answer")).Outcome).IsEqualTo("withdrawn");
+    }
+
+    /// A denied call never runs, so it owes no completion; the next identical call's completion is
+    /// a terminal answer to its own prompt.
+    [Test]
+    public async Task A_denied_prompt_is_owed_no_completion() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Prompt("r-denied", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r-denied", PermissionSettlements.DenyDecision, "deny", "app")).IsTrue();
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(next, "the pending prompt")).Outcome).IsEqualTo("withdrawn");
+    }
+
+    /// A call the launch policy allowed raises no prompt but still runs and still reports, so the
+    /// bridge registers the completion it is owed the same way an allowed prompt does.
+    [Test]
+    public async Task A_policy_allowed_call_is_owed_a_completion() {
+        var broker = new PermissionPromptBroker();
+        broker.ExpectCompletion("a1", "s1", subagentId: null, "Bash", Input("""{"command":"ls"}"""));
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(next.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// A turn's end settles its accounts: a completion the turn never reported must not absorb the
+    /// next turn's terminal answer.
+    [Test]
+    public async Task A_turn_end_forgets_the_completions_that_turn_was_owed() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Prompt("r-allowed", "Bash", """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r-allowed", Allow, "allow", "app")).IsTrue();
+        await Assert.That(broker.WithdrawTurn("a1", "s1", subagentId: null)).IsEqualTo(0);
+        var next = broker.Register(Prompt("r-next", "Bash", """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", "Bash", Input("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That((await WaitBounded(next, "the next turn's prompt")).Outcome).IsEqualTo("withdrawn");
+    }
+
     [Test]
     public async Task Correlate_after_settlement_is_a_no_op_and_broadcasts_nothing() {
         var broker = new PermissionPromptBroker();
