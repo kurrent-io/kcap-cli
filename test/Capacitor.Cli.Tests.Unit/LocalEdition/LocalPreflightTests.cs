@@ -25,6 +25,7 @@ public class LocalPreflightTests {
         public void Start(LocalServerUnit unit) => throw new NotSupportedException();
         public Task StopAsync(LocalServerUnit unit, CancellationToken ct) => throw new NotSupportedException();
         public Task UninstallAsync(LocalServerUnit unit, CancellationToken ct) => throw new NotSupportedException();
+        public string UnitFile(LocalServerUnit unit) => throw new NotSupportedException();
         public bool IsInstalled(LocalServerUnit unit) => throw new NotSupportedException();
         public UnitOwner Owner(LocalServerUnit unit) => owner ?? new(OwnerReading.Absent.Instance, OwnerReading.Absent.Instance);
     }

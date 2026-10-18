@@ -23,7 +23,9 @@ sealed class LocalServerSystemdService(
 
     public string Describe => "systemd --user unit";
 
-    public bool IsInstalled(LocalServerUnit unit) => File.Exists(LocalServerSystemdUnit.UnitPath(home, unit));
+    public string UnitFile(LocalServerUnit unit) => LocalServerSystemdUnit.UnitPath(home, unit);
+
+    public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit));
 
     public UnitOwner Owner(LocalServerUnit unit) {
         var (exit, stdout, stderr) = _run("systemctl", LocalServerSystemdUnit.ShowArgs(unit));

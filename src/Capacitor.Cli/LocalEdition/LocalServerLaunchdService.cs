@@ -27,7 +27,9 @@ sealed partial class LocalServerLaunchdService(
 
     public string Describe => "launchd LaunchAgent";
 
-    public bool IsInstalled(LocalServerUnit unit) => File.Exists(LocalServerLaunchdUnit.PlistPath(home, unit));
+    public string UnitFile(LocalServerUnit unit) => LocalServerLaunchdUnit.PlistPath(home, unit);
+
+    public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit));
 
     public UnitOwner Owner(LocalServerUnit unit) {
         var (exit, stdout, stderr) = _run("launchctl", LocalServerLaunchdUnit.PrintArgs(_uid, unit));

@@ -6,4 +6,7 @@ namespace Capacitor.Cli.LocalEdition;
 sealed record LocalPlatform(bool IsMacOS, bool IsLinux, bool IsMusl, Architecture Arch) {
     public static LocalPlatform Current() =>
         new(OperatingSystem.IsMacOS(), OperatingSystem.IsLinux(), OperatingSystem.IsLinux() && RuntimeRid.IsMusl(), RuntimeInformation.ProcessArchitecture);
+
+    /// <summary>The runtime identifier a bundle for this machine is published under.</summary>
+    public string Rid => $"{(IsMacOS ? "osx" : IsMusl ? "linux-musl" : "linux")}-{Arch.ToString().ToLowerInvariant()}";
 }
