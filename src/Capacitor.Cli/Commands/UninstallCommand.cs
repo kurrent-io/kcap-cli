@@ -23,8 +23,8 @@ namespace Capacitor.Cli.Commands;
 /// Cursor / Gemini hook files, deletes the kcap-owned Copilot hooks file, the
 /// kcap Kiro agent (~/.kiro/agents/kcap.json) — restoring the default agent it
 /// replaced — and the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts),
-/// removes agent skills (and legacy Codex skills), deletes the kcap config
-/// directory, the vendor account registry and, last, the daemon state directory.
+/// removes agent skills (and legacy Codex skills), deletes the daemon state
+/// directory, the kcap config directory and, last, the vendor account registry.
 ///
 /// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
@@ -232,6 +232,26 @@ public sealed class UninstallCommand(
             CodexHooksInstaller.DeleteMarker(codexProject);
         }
 
+        // Holds the daemons' locks and their granted consent. It goes before the config directory, which
+        // holds it by default, so a lock still held keeps both. Kept after a failure for the same reason
+        // as the registry: a re-run has to find and stop what is still running. A directory
+        // KCAP_DAEMONS_DIR moved, or a link, may be shared, so nothing in it is assumed to be kcap's.
+        if (!ownsDaemonDir) {
+            await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
+        } else if (!hadFailures && Directory.Exists(store.Directory)) {
+            try {
+                if (store.DeleteAll()) {
+                    await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+                } else {
+                    await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
+                    hadFailures = true;
+                }
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
+                hadFailures = true;
+            }
+        }
+
         if (!keepConfig) {
             if (hadFailures) {
                 await Console.Error.WriteLineAsync(
@@ -258,25 +278,6 @@ public sealed class UninstallCommand(
                 await Console.Out.WriteLineAsync($"Removed account registry: {accountStore.Directory}");
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 await Console.Error.WriteLineAsync($"Could not remove account registry {accountStore.Directory}: {ex.Message}");
-                hadFailures = true;
-            }
-        }
-
-        // Holds the daemons' locks and their granted consent. Kept after a failure for the same reason
-        // as the registry: a re-run has to find and stop what is still running. A directory
-        // KCAP_DAEMONS_DIR moved, or a link, may be shared, so nothing in it is assumed to be kcap's.
-        if (!ownsDaemonDir) {
-            await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
-        } else if (!hadFailures && Directory.Exists(store.Directory)) {
-            try {
-                if (store.DeleteAll()) {
-                    await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
-                } else {
-                    await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
-                    hadFailures = true;
-                }
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
                 hadFailures = true;
             }
         }
