@@ -840,9 +840,10 @@ public sealed class TokenStore(
         onOutcome?.Invoke(result.Outcome);
 
         // A refused refresh token is retired, so every later read reports Expired without
-        // presenting it to WorkOS again; only `kcap login` writes a usable one.
+        // presenting it to WorkOS again; only `kcap login` writes a usable one. Not cancellable:
+        // a cancelled write would leave the refused token on disk to be sent again.
         if (result.Outcome is WorkOSRefreshOutcome.Rejected) {
-            await SaveLockedAsync(profile, tokens with { RefreshToken = null }, ct);
+            await SaveLockedAsync(profile, tokens with { RefreshToken = null }, CancellationToken.None);
         }
 
         if (result.Outcome is not WorkOSRefreshOutcome.Rotated) {

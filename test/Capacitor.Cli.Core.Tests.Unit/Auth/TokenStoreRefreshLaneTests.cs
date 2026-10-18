@@ -70,6 +70,27 @@ public class TokenStoreRefreshLaneTests {
         await Assert.That(persisted.GitHubUsername).IsEqualTo("alice");
     }
 
+    /// Once WorkOS has refused the token, the retirement is written even if the caller cancels:
+    /// a cancelled write would leave the refused token on disk to be sent again.
+    [Test]
+    public async Task A_refused_refresh_token_is_retired_when_the_caller_cancels_after_the_refusal() {
+        using var cts    = new CancellationTokenSource();
+        using var script = new AuthHttpScript(_ => {
+            cts.Cancel();
+
+            return AuthHttp.Status(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}""");
+        });
+        var store = AuthFixtures.NewTokenStore(Config.Root, script);
+        await store.SaveAsync("default", Expired);
+
+        try {
+            await store.ForceRefreshAsync("default", "stale", ct: cts.Token);
+        } catch (OperationCanceledException) { }
+
+        await Assert.That(script.Seen.Count).IsEqualTo(1);
+        await Assert.That((await store.LoadAsync("default"))!.RefreshToken).IsNull();
+    }
+
     /// A reader that saw a refresh token before the lock, and finds it retired by a peer once it holds
     /// the lock, reports the token expired without sending anything.
     [Test]
