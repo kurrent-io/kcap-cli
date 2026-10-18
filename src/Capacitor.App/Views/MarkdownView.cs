@@ -2,6 +2,7 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -65,11 +66,14 @@ public sealed class MarkdownView : ContentControl {
         ? !string.IsNullOrEmpty(plain.SelectedText)
         : MarkViewSelection.HasSelection(_viewer);
 
-    public Task CopySelectionAsync() {
-        if (Content is not SelectableTextBlock plain) return MarkViewSelection.CopyAsync(_viewer);
-
-        plain.Copy();
-        return Task.CompletedTask;
+    /// The fallback's own Copy is fire-and-forget, so its clipboard write is awaited here instead.
+    public async Task CopySelectionAsync() {
+        if (Content is not SelectableTextBlock plain) {
+            await MarkViewSelection.CopyAsync(_viewer);
+            return;
+        }
+        if (plain.SelectedText is not { Length: > 0 } text || TopLevel.GetTopLevel(plain)?.Clipboard is not { } clipboard) return;
+        await clipboard.SetTextAsync(text);
     }
 
     public void SelectAll() {

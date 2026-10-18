@@ -535,6 +535,8 @@ public class MarkdownViewTests {
                 await Assert.That(All<TextBlock>(root).Select(Reads)).IsEquivalentTo([deep]);
                 view.SelectAll();
                 await Assert.That(view.HasSelection).IsTrue();
+                await view.CopySelectionAsync();
+                await Assert.That(await TopLevel.GetTopLevel(view)!.Clipboard!.TryGetTextAsync()).IsEqualTo(deep);
 
                 view.Flavor = flavor == MarkdownFlavor.Chat ? MarkdownFlavor.GitHub : MarkdownFlavor.Chat;
                 view.Text = "**bold**";
