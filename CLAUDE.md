@@ -88,6 +88,11 @@ running notes file that every PR edits.
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
+  command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
+  contains its pattern. The PTY launch writes the prompt to an owner-only file under the daemon's
+  state directory and passes a pointer; only a slash command stays inline, because the agent runs
+  one only as the literal first message.
 - **The PTY read loop never awaits a consumer.** Local sinks and the cloud sink take chunks through
   a non-blocking `TryEnqueue` under `SinksLock`, and each drains on its own pump. A consumer that
   falls behind is cut off and replayed from the ring — a local client by reattaching, the cloud
