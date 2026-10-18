@@ -1,3 +1,4 @@
+using System.Net;
 using Capacitor.Cli.Core.Auth;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
@@ -5,7 +6,7 @@ namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 /// <summary>
 /// The refreshes run on a client the store is handed, never one it builds. A store that makes its
 /// own reaches the real WorkOS host from a unit test, and the only way to tell the two apart is to
-/// hand it a client and see whether the request arrives.
+/// hand it a client and see whether the request arrives. Also what a refresh leaves on disk.
 /// </summary>
 public class TokenStoreRefreshLaneTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -46,5 +47,26 @@ public class TokenStoreRefreshLaneTests {
 
         var persisted = await store.LoadAsync("default");
         await Assert.That(persisted!.RefreshToken).IsEqualTo("rotated");
+    }
+
+    /// A refresh token WorkOS refused is retired on disk, so the next read reports Expired without
+    /// presenting it again, while the identity stays for `kcap status` to name.
+    [Test]
+    public async Task A_refused_refresh_token_is_retired_and_never_sent_again() {
+        using var script = new AuthHttpScript(
+            _ => AuthHttp.Status(HttpStatusCode.BadRequest, """{"error":"invalid_grant"}"""));
+        var store = AuthFixtures.NewTokenStore(Config.Root, script);
+        await store.SaveAsync("default", Expired);
+
+        await Assert.That(await store.GetValidTokensForProfileAsync("default")).IsNull();
+
+        var later = await store.GetValidTokensForServerAsync("default", "https://kcap.example.com");
+
+        await Assert.That(later.Status).IsEqualTo(AuthStatus.Expired);
+        await Assert.That(script.Seen.Count(s => s.EndsWith("/user_management/authenticate", StringComparison.Ordinal))).IsEqualTo(1);
+
+        var persisted = await store.LoadAsync("default");
+        await Assert.That(persisted!.RefreshToken).IsNull();
+        await Assert.That(persisted.GitHubUsername).IsEqualTo("alice");
     }
 }

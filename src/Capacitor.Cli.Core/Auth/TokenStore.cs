@@ -476,7 +476,8 @@ public sealed class TokenStore(
         // file lock — otherwise a peer refreshing with the same rotated-out WorkOS
         // refresh token would invalidate the session.
         if (tokens is { Provider: "workos", RefreshToken: not null, ClientId: not null }) {
-            return await RefreshWithCrossProcessLockAsync(profile, tokens, RefreshWorkOSAsync, cancellationToken: ct);
+            return await RefreshWithCrossProcessLockAsync(
+                profile, tokens, t => RefreshWorkOSAsync(profile, t, CancellationToken.None), cancellationToken: ct);
         }
 
         // GitHub: refresh via server's /auth/refresh endpoint
@@ -528,7 +529,7 @@ public sealed class TokenStore(
                 return Task.FromResult<StoredTokens?>(null);
 
             return latest switch {
-                { Provider: AuthProvider.WorkOS, RefreshToken: not null, ClientId: not null } => RefreshWorkOSAsync(latest, ct),
+                { Provider: AuthProvider.WorkOS, RefreshToken: not null, ClientId: not null } => RefreshWorkOSAsync(profile, latest, ct),
                 { Provider: AuthProvider.GitHubApp } => RefreshGitHubAsync(profile, latest, ct),
                 _ => Task.FromResult<StoredTokens?>(null)
             };
@@ -617,7 +618,7 @@ public sealed class TokenStore(
         WorkOSRefreshOutcome? workosOutcome = null;
 
         var refresh = decision == RefreshDecision.RefreshWorkOS
-            ? (Func<StoredTokens, Task<StoredTokens?>>)(t => RefreshWorkOSAsync(t, CancellationToken.None, o => workosOutcome = o))
+            ? (Func<StoredTokens, Task<StoredTokens?>>)(t => RefreshWorkOSAsync(profile, t, CancellationToken.None, o => workosOutcome = o))
             : t => RefreshGitHubAsync(profile, t, CancellationToken.None);
 
         var contended = false;
@@ -712,10 +713,9 @@ public sealed class TokenStore(
 
             var refreshed = await refresh(latest);
 
-            // Persist under THIS profile's lock, with the profile we locked. The refresh delegates
-            // deliberately do NOT persist themselves: resolving the active profile at write time
-            // would let a switch mid-refresh write this profile's rotated token into another
-            // profile's file, without that profile's lock.
+            // Persist under THIS profile's lock, with the profile we locked: resolving the active
+            // profile at write time would let a switch mid-refresh write this profile's rotated
+            // token into another profile's file, without that profile's lock.
             if (refreshed is not null) {
                 await SaveLockedAsync(profile, refreshed, cancellationToken);
             }
@@ -822,17 +822,21 @@ public sealed class TokenStore(
         }
     }
 
-    Task<StoredTokens?> RefreshWorkOSAsync(StoredTokens tokens) =>
-        RefreshWorkOSAsync(tokens, CancellationToken.None);
-
     // `onOutcome` reports the raw WorkOS classification so a caller (the proactive tick) can tell a
     // refused refresh token — terminal, `kcap login` repairs it — from a transport failure it may
     // retry. A non-Rotated outcome maps to null; only the proactive tick reads onOutcome.
+    // Runs under the lock of the profile it is given, which every caller already holds.
     async Task<StoredTokens?> RefreshWorkOSAsync(
-            StoredTokens tokens, CancellationToken ct, Action<WorkOSRefreshOutcome>? onOutcome = null) {
+            string profile, StoredTokens tokens, CancellationToken ct, Action<WorkOSRefreshOutcome>? onOutcome = null) {
         var result = await workos.RefreshAsync(tokens.ClientId!, tokens.RefreshToken!, ct);
 
         onOutcome?.Invoke(result.Outcome);
+
+        // A refused refresh token is retired, so every later read reports Expired without
+        // presenting it to WorkOS again; only `kcap login` writes a usable one.
+        if (result.Outcome is WorkOSRefreshOutcome.Rejected) {
+            await SaveLockedAsync(profile, tokens with { RefreshToken = null }, ct);
+        }
 
         if (result.Outcome is not WorkOSRefreshOutcome.Rotated) {
             return null;
