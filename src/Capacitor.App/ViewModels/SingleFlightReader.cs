@@ -91,8 +91,7 @@ internal sealed class SingleFlightReader<TState, TResult>(
     void Settle(Lease lease, TResult? result) {
         lease.IsReading = false;
         _outstanding.Remove(lease);
-        var current = ReferenceEquals(lease, _current) && !_tornDown;
-        if (!current) { lease.Cts.Dispose(); return; }
+        if (!IsLive(lease)) { lease.Cts.Dispose(); return; }
         try {
             lease.Settled = true;
             if (result is not null) apply(result);
@@ -100,9 +99,14 @@ internal sealed class SingleFlightReader<TState, TResult>(
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: {logTag}: {ex.Message}");
         }
+        // The callbacks may switch, clear, refresh or tear down this reader; a released lease's
+        // source is already disposed and must never be listed again.
+        if (!IsLive(lease) || lease.IsReading) return;
         if (lease.RefreshPending) { StartRead(lease); return; }
         onReadingChanged?.Invoke(false);
     }
+
+    bool IsLive(Lease lease) => ReferenceEquals(lease, _current) && !_tornDown;
 
     public async Task TeardownAsync(bool waitForPending = true) {
         if (_tornDown) return;
