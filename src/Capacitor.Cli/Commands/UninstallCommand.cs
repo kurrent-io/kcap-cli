@@ -24,7 +24,7 @@ namespace Capacitor.Cli.Commands;
 /// kcap Kiro agent (~/.kiro/agents/kcap.json) — restoring the default agent it
 /// replaced — and the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts),
 /// removes agent skills (and legacy Codex skills), deletes the kcap config
-/// directory and, last, the vendor account registry.
+/// directory, the vendor account registry and, last, the daemon state directory.
 ///
 /// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
@@ -82,6 +82,9 @@ public sealed class UninstallCommand(
         if (!keepConfig) {
             await Console.Out.WriteLineAsync($"  • Delete the kcap config directory ({configDir})");
         }
+
+        // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
+        await Console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 
         if (!skipPrompt) {
             await Console.Out.WriteAsync("Proceed? [y/N] ");
@@ -249,6 +252,18 @@ public sealed class UninstallCommand(
                 await Console.Out.WriteLineAsync($"Removed account registry: {accountStore.Directory}");
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 await Console.Error.WriteLineAsync($"Could not remove account registry {accountStore.Directory}: {ex.Message}");
+                hadFailures = true;
+            }
+        }
+
+        // Holds the daemons' locks and their granted consent. Kept after a failure for the same reason
+        // as the registry: a re-run has to find and stop what is still running.
+        if (!hadFailures && Directory.Exists(store.Directory)) {
+            try {
+                Directory.Delete(store.Directory, recursive: true);
+                await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
                 hadFailures = true;
             }
         }

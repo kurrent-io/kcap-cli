@@ -684,6 +684,21 @@ public class UninstallCommandTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Uninstall_deletes_the_daemon_state_directory(bool keepConfig) {
+        await using var fixture = await Fixture.CreateAsync();
+        var consent = Path.Combine(Daemons.Directory, "vscode", "consent.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(consent)!);
+        await File.WriteAllTextAsync(consent, "{}");
+
+        var exit = await RunUninstall(fixture, args: keepConfig ? ["--keep-config"] : []);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(Daemons.Directory)).IsFalse();
+    }
+
+    [Test]
     public async Task Uninstall_keeps_the_registry_when_an_account_cannot_be_unwired() {
         await using var fixture = await Fixture.CreateAsync();
         var accounts = AccountStore.Beside(Daemons.Store);
@@ -694,6 +709,7 @@ public class UninstallCommandTests {
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(File.Exists(Path.Combine(accounts.Directory, "accounts.json"))).IsTrue();
+        await Assert.That(Directory.Exists(Daemons.Directory)).IsTrue();
     }
 
     [Test, ExcludeOn(OS.Windows)]
