@@ -304,8 +304,9 @@ public class TenantDiscoveryTests {
         await Assert.That(TenantDiscovery.NamesHold(existing, discovered, discovered[0], tenants, picked)).IsTrue();
     }
 
-    /// <summary>Two workspaces on one server each take one of the profiles already there, the active
-    /// one going to the first, before any new name is made.</summary>
+    /// <summary>Two workspaces on one server each take one of the profiles already there before any new
+    /// name is made, and a profile already named for a workspace stays that workspace's whatever the
+    /// order they arrive in.</summary>
     [Test]
     public async Task NameProfiles_shares_out_the_profiles_already_on_a_server() {
         var existing = new ProfileConfig {
@@ -323,7 +324,16 @@ public class TenantDiscoveryTests {
 
         var (tenants, _) = TenantDiscovery.NameProfiles(existing, discovered, discovered[0]);
 
-        await Assert.That(tenants.Select(t => t.ProfileName)).IsEquivalentTo(["work", "other"]);
+        await Assert.That(string.Join(",", tenants.Select(t => t.ProfileName))).IsEqualTo("work,other");
+
+        DiscoveredTenant[] named = [
+            new() { Provider = "WorkOS", OrganizationId = "org_2", Slug = "other", Origin = "https://a.example" },
+            new() { Provider = "WorkOS", OrganizationId = "org_1", Slug = "work",  Origin = "https://a.example" },
+        ];
+
+        var (exact, _) = TenantDiscovery.NameProfiles(existing, named, named[0]);
+
+        await Assert.That(string.Join(",", exact.Select(t => t.ProfileName))).IsEqualTo("other,work");
     }
 
     /// <summary>A tenant the discovery service lists twice is still one profile: rows match on the

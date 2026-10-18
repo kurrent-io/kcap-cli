@@ -96,8 +96,14 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         // A tenant listed twice is one tenant: its rows share a name rather than claiming two.
         var first = tenants.Select((t, i) => Array.FindIndex(tenants, o => SameTenant(o, t))).ToArray();
 
+        // A profile already named for the tenant on its server is that tenant's, whatever order the
+        // tenants arrive in; only then are the server's other profiles shared out.
         for (var i = 0; i < tenants.Length; i++)
-            if (first[i] == i && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
+            if (first[i] == i && IsOnServer(existing, tenants[i].ProfileName, tenants[i]) && claimed.Add(tenants[i].ProfileName))
+                names[i] = tenants[i].ProfileName;
+
+        for (var i = 0; i < tenants.Length; i++)
+            if (first[i] == i && names[i] is null && ProfileOnServer(existing, tenants[i], claimed) is { } onServer && claimed.Add(onServer))
                 names[i] = onServer;
 
         for (var i = 0; i < tenants.Length; i++)
@@ -138,12 +144,15 @@ public class TenantDiscovery(IAuthProxyClient proxy, ITenantPicker picker) {
         return !string.IsNullOrEmpty(idA) || !string.IsNullOrEmpty(idB) ? idA == idB : a.ProfileName == b.ProfileName;
     }
 
+    static bool IsOnServer(ProfileConfig existing, string name, DiscoveredTenant tenant) =>
+        existing.Profiles.TryGetValue(name, out var profile)
+     && !string.IsNullOrWhiteSpace(profile.ServerUrl) && ServerIdentity.SameServer(profile.ServerUrl, tenant.Origin);
+
     /// <summary>An existing profile on the tenant's server that no other tenant has taken: the active
     /// one first, then the slug's, then the first by name.</summary>
     static string? ProfileOnServer(ProfileConfig existing, DiscoveredTenant tenant, IReadOnlySet<string> claimed) {
         var onServer = existing.Profiles
-            .Where(p => !claimed.Contains(p.Key)
-                     && !string.IsNullOrWhiteSpace(p.Value.ServerUrl) && ServerIdentity.SameServer(p.Value.ServerUrl, tenant.Origin))
+            .Where(p => !claimed.Contains(p.Key) && IsOnServer(existing, p.Key, tenant))
             .Select(p => p.Key)
             .Order(StringComparer.Ordinal)
             .ToList();
