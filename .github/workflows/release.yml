@@ -684,7 +684,9 @@ jobs:
       - name: Derive release channel
         id: disttag
         shell: bash
-        run: echo "TAG=$(bash scripts/npm-dist-tag.sh '${{ steps.version.outputs.VERSION }}')" >> "$GITHUB_OUTPUT"
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: echo "TAG=$(bash scripts/npm-dist-tag.sh "$VERSION")" >> "$GITHUB_OUTPUT"
 
       - name: Download all release archives
         uses: actions/download-artifact@v8
