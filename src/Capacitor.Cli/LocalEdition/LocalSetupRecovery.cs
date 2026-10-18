@@ -6,9 +6,12 @@ namespace Capacitor.Cli.LocalEdition;
 /// <summary>
 /// Finishes or undoes a setup the previous lifecycle command left in the journal: before <c>committing</c> it is
 /// rolled back, from <c>committing</c> on it is rolled forward with the journal's own details, never the current
-/// process's. An entry this build would not have written changes nothing.
+/// process's. An entry this build would not have written changes nothing. A roll-forward hands its commit to
+/// <paramref name="rolledForward"/>.
 /// </summary>
-sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, HttpClient local, TimeProvider time, IProgress<LocalInstallEvent> progress)
+sealed class LocalSetupRecovery(
+    ILocalServerService service, UserHome home, HttpClient local, TimeProvider time, IProgress<LocalInstallEvent> progress,
+    Action<LocalInstallEvent.Committed> rolledForward)
     : ILifecycleRecovery {
     public string Operation => LocalSetupJournal.Operation;
 
@@ -26,12 +29,12 @@ sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, Http
         if (interrupted.Phase is LocalSetupJournal.Pending or LocalSetupJournal.Unit)
             await LocalSetupRollback.RunAsync(lease, interrupted, service, home, progress, "An earlier kcap setup --local stopped before it committed.");
         else
-            await RollForwardAsync(lease, interrupted, details);
+            rolledForward(await RollForwardAsync(lease, interrupted, details));
 
         progress.TryReport(new LocalInstallEvent.Recovered(Operation, interrupted.Phase));
     }
 
-    async Task RollForwardAsync(LifecycleLease lease, LifecycleJournalEntry entry, SetupDetails details) {
+    async Task<LocalInstallEvent.Committed> RollForwardAsync(LifecycleLease lease, LifecycleJournalEntry entry, SetupDetails details) {
         var unit = LocalServerUnit.ForInstallation(lease.Root, details.Port);
 
         if (!File.Exists(unit.ServerBinary))
@@ -45,7 +48,7 @@ sealed class LocalSetupRecovery(ILocalServerService service, UserHome home, Http
 
             if (entry.Phase == LocalSetupJournal.Committing) await LocalSetupCommit.PublishAsync(lease, entry, details);
 
-            await LocalSetupCommit.ConfirmAsync(lease, details, service, home, local, time, LocalInstallFailureCode.RecoveryFailed);
+            return await LocalSetupCommit.ConfirmAsync(lease, details, service, home, local, time, LocalInstallFailureCode.RecoveryFailed);
         } catch (Exception ex) when (ex is not LocalInstallFailure) {
             throw new LocalInstallFailure(LocalInstallFailureCode.CommitFailed,
                 $"Setup could not finish its commit ({ex.Message}). Nothing was removed; run kcap setup --local again to finish it.");

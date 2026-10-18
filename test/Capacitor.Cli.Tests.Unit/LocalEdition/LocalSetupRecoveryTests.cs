@@ -58,7 +58,7 @@ public class LocalSetupRecoveryTests {
         var http  = new HttpClient(server ?? Server);
 
         return new(root ?? Root, config ?? Config, Home, Service, (bundle ?? Bundle).Client(), http, (bundle ?? Bundle).Key, MacArm, clock,
-            installer => [new LocalSetupRecovery(Service, Home, http, clock, installer.Progress)]) {
+            installer => [new LocalSetupRecovery(Service, Home, http, clock, installer.Progress, installer.RolledForward)]) {
             Version     = Version,
             SocketLimit = int.MaxValue,
         };
@@ -191,6 +191,44 @@ public class LocalSetupRecoveryTests {
         await AssertCommitted(interrupted);
         await AssertRecovered(phase);
         await Assert.That(RecoveryLog).DoesNotContain("stop");
+    }
+
+    [Test]
+    public async Task A_cancel_during_a_roll_forward_returns_the_recovered_commit() {
+        await CrashAt("setup:after-committing");
+        var interrupted = Journal(Root)!;
+
+        using var cts = new CancellationTokenSource();
+
+        LocalInstallEvent.Committed committed;
+
+        using (FaultPoints.Arm(point => { if (point == "setup:after-registry") cts.Cancel(); }))
+            committed = await Installer().InstallAsync(Yes, _events, cts.Token);
+
+        await Assert.That(committed.InstallationId).IsEqualTo(interrupted.InstallationId);
+        await Assert.That(_events.Reports[^1]).IsEqualTo(committed);
+        await AssertRecovered(LocalSetupJournal.Committing);
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_cancel_during_the_reuse_after_a_roll_forward_returns_the_recovered_commit() {
+        await CrashAt("setup:after-committing");
+        var interrupted = Journal(Root)!;
+
+        using var cts     = new CancellationTokenSource();
+        var       reports = new List<LocalInstallEvent>();
+        var       events  = new SyncProgress<LocalInstallEvent>(e => {
+            reports.Add(e);
+            if (e is LocalInstallEvent.PreflightPassed) cts.Cancel();
+        });
+
+        var committed = await Installer().InstallAsync(Yes, events, cts.Token);
+
+        await Assert.That(committed.InstallationId).IsEqualTo(interrupted.InstallationId);
+        await Assert.That(reports.OfType<LocalInstallEvent.PreflightPassed>()).IsNotEmpty();
+        await Assert.That(reports[^1]).IsEqualTo(committed);
+        await Assert.That(reports.OfType<LocalInstallEvent.Committed>().Count()).IsEqualTo(1);
     }
 
     [Test]

@@ -47,12 +47,16 @@ internal sealed class SetupLocalArmTests {
 
     /// <param name="wrap">Wraps <see cref="Server"/> as the installer's transport.</param>
     SetupCommand Command(Func<HttpMessageHandler, HttpMessageHandler>? wrap) {
-        var factory = new FakeLocalInstallerFactory(() =>
-            new LocalInstaller(Root, Config.Root, Home, new FakeLocalServerService(_log, Home), Bundle.Client(), new HttpClient(wrap?.Invoke(Server) ?? Server),
-                Bundle.Key, MacArm, TimeProvider.System, _ => []) {
+        var factory = new FakeLocalInstallerFactory(() => {
+            var service = new FakeLocalServerService(_log, Home);
+            var local   = new HttpClient(wrap?.Invoke(Server) ?? Server);
+
+            return new LocalInstaller(Root, Config.Root, Home, service, Bundle.Client(), local, Bundle.Key, MacArm, TimeProvider.System,
+                installer => [new LocalSetupRecovery(service, Home, local, TimeProvider.System, installer.Progress, installer.RolledForward)]) {
                 Version     = Version,
                 SocketLimit = int.MaxValue,
-            });
+            };
+        });
 
         var http = new PlainHttpClientFactory();
 
@@ -176,6 +180,40 @@ internal sealed class SetupLocalArmTests {
         await Assert.That(run.Stdout.Select(l => JsonNode.Parse(l)!["event"]!.GetValue<string>())).Contains("rolled_back");
         await Assert.That(exits).IsEquivalentTo([130]);
         await Assert.That(ActiveProfile().ServerUrl).IsNull();
+    }
+
+    /// <summary>The roll-forward ignores the interrupt and commits; the setup must report that commit rather than the
+    /// cancellation a later step would observe.</summary>
+    [Test]
+    public async Task Json_interrupt_during_a_roll_forward_ends_with_committed_and_exits_130() {
+        using (FaultPoints.Arm(point => { if (point == "setup:after-committing") throw new SimulatedCrash(); })) {
+            var crashed = await Run("setup", "--local", "--json", "--single-user", "--yes");
+            await Assert.That(crashed.Exit).IsEqualTo(1);
+        }
+
+        await Assert.That(LocalStateFiles.ReadJournal(Root) is StateRead<LifecycleJournalEntry>.Present).IsTrue();
+
+        var exits    = new List<int>();
+        var original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = exits.Add;
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            run = await Run("setup", "--local", "--json", "--single-user", "--yes");
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        await AssertAllJson(run.Stdout);
+        await Assert.That(Events(run.Stdout)).Contains("recovered");
+        await Assert.That(Events(run.Stdout)[^1]).IsEqualTo("committed").Because(string.Join('\n', run.Stdout));
+        await Assert.That(exits).IsEquivalentTo([130]);
+        await Assert.That(LocalStateFiles.ReadJournal(Root) is StateRead<LifecycleJournalEntry>.Absent).IsTrue();
     }
 
     [Test]

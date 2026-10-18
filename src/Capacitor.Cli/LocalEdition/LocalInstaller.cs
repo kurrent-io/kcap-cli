@@ -24,6 +24,8 @@ sealed class LocalInstaller(
 
     IProgress<LocalInstallEvent> _progress = new SyncProgress<LocalInstallEvent>(_ => { });
 
+    LocalInstallEvent.Committed? _rolledForward;
+
     /// <summary>The version to install. Defaults to the override or this CLI's own.</summary>
     public string Version { get; init; } = LocalBundleClient.RequestedVersion();
 
@@ -38,13 +40,34 @@ sealed class LocalInstaller(
 
     void Report(LocalInstallEvent e) => _progress.Report(e);
 
+    /// <summary>Records the commit a recovery's roll-forward produced, for <see cref="AfterRollForwardAsync"/>.</summary>
+    public void RolledForward(LocalInstallEvent.Committed committed) => _rolledForward = committed;
+
+    /// <summary>The plan is still decided from the state the roll-forward left, but a cancellation, which the
+    /// roll-forward ignored, ends the setup with that commit rather than as cancelled.</summary>
+    async Task<LocalInstallEvent.Committed> AfterRollForwardAsync(LifecycleLease lease, LocalInstallAnswers answers, LocalInstallEvent.Committed done,
+        CancellationToken ct) {
+        if (!ct.IsCancellationRequested) {
+            try {
+                return await UnderLeaseAsync(lease, answers, ct);
+            } catch (Exception ex) when (ct.IsCancellationRequested && ex is OperationCanceledException or LocalInstallFailure { Code: LocalInstallFailureCode.Cancelled }) {
+                // The installation is committed; only the reuse pass over it was cut short.
+            }
+        }
+
+        _progress.TryReport(done);
+
+        return done;
+    }
+
     LocalPreflight Checks => new(root, config, platform, service, SocketLimit);
 
     /// <summary>No lock, no network, no writes.</summary>
     public LocalPlan Preflight() => Checks.Check(Version);
 
     public async Task<LocalInstallEvent.Committed> InstallAsync(LocalInstallAnswers answers, IProgress<LocalInstallEvent> progress, CancellationToken ct) {
-        _progress = progress;
+        _progress      = progress;
+        _rolledForward = null;
 
         var hint      = Checks.Check(Version).Hint;
         var lifecycle = new LocalLifecycle(root, recoveries(this), time);
@@ -53,7 +76,8 @@ sealed class LocalInstaller(
         try {
             return await lifecycle.RunAsync(LeaseWait, (lease, token) => {
                 recovered = true;
-                return UnderLeaseAsync(lease, answers, token);
+
+                return _rolledForward is { } done ? AfterRollForwardAsync(lease, answers, done, token) : UnderLeaseAsync(lease, answers, token);
             }, ct);
         } catch (LocalLifecycleException ex) when (ex.InnerException is IOException) {
             throw new LocalInstallFailure(LocalInstallFailureCode.LifecycleBusy, ex.Message);
