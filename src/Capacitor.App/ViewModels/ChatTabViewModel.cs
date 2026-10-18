@@ -589,7 +589,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
-        sessionId?.Subscribe(id => _sessionId = id).DisposeWith(_disposables);
+        // A local session's id names an app-server session only while the local daemon reports
+        // that server; otherwise a match is another session's.
+        var onAppServer = origin == AgentOrigin.Remote ? Observable.Return(true) : localDaemonOnAppServer ?? Observable.Return(true);
+        sessionId?.CombineLatest(onAppServer, (id, admitted) => admitted ? id : null)
+            .Subscribe(id => _sessionId = id).DisposeWith(_disposables);
         Cards = new PendingCardsViewModel(
             agentId, origin, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
             localDaemonOnAppServer);
@@ -745,7 +749,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             finally { _sending = null; }
             if (_lifetimeToken.IsCancellationRequested) {
                 // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
-                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
+                if (outcome == ChatSendOutcome.Accepted) {
+                    _drafts?.ClearDelivered(draftRevision);
+                    delivered?.Invoke();
+                }
                 return;
             }
             if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
