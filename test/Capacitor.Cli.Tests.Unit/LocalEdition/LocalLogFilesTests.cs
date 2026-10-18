@@ -29,4 +29,20 @@ public class LocalLogFilesTests {
 
         await Assert.That(LocalLogFiles.Current(Root)).IsEquivalentTo([rolling, output], TUnit.Assertions.Enums.CollectionOrdering.Matching);
     }
+
+    [Test]
+    [Arguments(3)]
+    [Arguments(200_000)]
+    public async Task Tail_returns_the_last_lines_of_a_file_longer_than_one_block(int count) {
+        var lines = Enumerable.Range(1, 20_000).Select(i => $"line {i}").ToArray();
+        var path  = Tmp.CreateFile("logs/server.out.log", string.Join("\r\n", lines) + "\r\n");
+
+        var tail = LocalLogFiles.Tail(path, count);
+
+        await Assert.That(tail).IsEquivalentTo(lines[^Math.Min(count, lines.Length)..], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    [Test]
+    public async Task Tail_keeps_a_last_line_with_no_newline() =>
+        await Assert.That(LocalLogFiles.Tail(Tmp.CreateFile("x.log", "a\nb\nc"), 2)).IsEquivalentTo(["b", "c"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
 }

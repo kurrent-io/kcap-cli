@@ -45,15 +45,7 @@ public class LocalStatusReaderTests {
         Root.EnsureCreated();
         LocalStateFiles.PublishRegistry(Root, InstallRegistry.Empty.WithActive(Active));
 
-        if (withBinary) CreateUnder(Unit.ServerBinary);
-    }
-
-    /// <summary>The home is the resolved temp path, so files under the root are made where they are, not through
-    /// <see cref="TempDir"/>'s own spelling.</summary>
-    static string CreateUnder(string path) {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, "");
-        return path;
+        if (withBinary) Tmp.CreateFile(["r", "bin", "current", "kcap-server"]);
     }
 
     void Running() {
@@ -173,7 +165,7 @@ public class LocalStatusReaderTests {
     public async Task A_stopped_server_that_left_postgres_alive_says_so() {
         Running();
         await Service.StopAsync(Unit, CancellationToken.None);
-        Directory.CreateDirectory(Path.Combine(Root.Directory, "run"));
+        Tmp.CreateDir("r/run");
 
         using var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
         listener.Bind(new UnixDomainSocketEndPoint(Path.Combine(Root.Directory, "run", LocalStackProbe.PostgresSocketName)));
@@ -190,7 +182,7 @@ public class LocalStatusReaderTests {
     public async Task Status_never_probes_the_instance_lock() {
         Running();
         await Service.StopAsync(Unit, CancellationToken.None);
-        var lockPath = CreateUnder(Path.Combine(Root.Directory, "run", LocalStackProbe.ServerLockName));
+        var lockPath = Tmp.CreateFile(["r", "run", LocalStackProbe.ServerLockName]);
 
         using var held = new FileStream(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
 

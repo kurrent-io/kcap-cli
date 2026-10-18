@@ -15,11 +15,13 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser) {
 
         return sub switch {
             null or "help" => await PrintUsage(sub is null ? 1 : 0),
+            "logs"         => await WithStack(s => LogsAsync(s, args)),
+            "status" or "start" or "stop" or "restart" or "open" when args.Length > 2
+                           => await FailAsync($"kcap local {sub} takes no arguments: {string.Join(' ', args[2..])}"),
             "status"       => await WithStack(StatusAsync),
             "start"        => await WithStack(s => LifecycleAsync(c => c.StartAsync, s)),
             "stop"         => await WithStack(s => LifecycleAsync(c => c.StopAsync, s)),
             "restart"      => await WithStack(s => LifecycleAsync(c => c.RestartAsync, s)),
-            "logs"         => await WithStack(s => LogsAsync(s, args)),
             "open"         => await WithStack(OpenAsync),
             _              => await Unknown(sub),
         };
@@ -37,8 +39,11 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser) {
         return await run(stack);
     }
 
+    static Task<LocalStatusReport> ReadStatusAsync(LocalStack stack) =>
+        new LocalStatusReader(stack, CapacitorVersion.CurrentDisplay(), PortHolder.Find).ReadAsync(CancellationToken.None);
+
     static async Task<int> StatusAsync(LocalStack stack) {
-        var report = await new LocalStatusReader(stack, CapacitorVersion.CurrentDisplay(), PortHolder.Find).ReadAsync(CancellationToken.None);
+        var report = await ReadStatusAsync(stack);
 
         await Console.Out.WriteLineAsync($"  {report.Headline}");
 
@@ -93,25 +98,21 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser) {
         if (files.Count == 0) return await FailAsync($"No logs in {LocalLogFiles.Directory(stack.Root)}.");
 
         foreach (var file in files) {
-            // Read write-sharing: the server holds its logs open for its whole life.
-            var all   = (await File.ReadAllTextSharedAsync(file)).Split('\n');
-            var count = all.Length > 0 && all[^1].Length == 0 ? all.Length - 1 : all.Length;
+            foreach (var line in LocalLogFiles.Tail(file, lines)) await Console.Out.WriteLineAsync(line);
 
-            for (var i = Math.Max(0, count - lines); i < count; i++)
-                await Console.Out.WriteLineAsync(all[i].TrimEnd('\r'));
-
-            await Console.Error.WriteLineAsync($"\n--- {file} ({count} lines total) ---");
+            await Console.Error.WriteLineAsync($"\n--- {file} ---");
         }
 
         return 0;
     }
 
+    /// <summary>Opens only what status calls ready: this root's unit, running, answering as this installation.</summary>
     async Task<int> OpenAsync(LocalStack stack) {
-        if (stack.Read() is not LocalStackState.Installed { Installation.ServerUrl: var url, Unit: var unit })
+        if (stack.Read() is not LocalStackState.Installed { Installation.ServerUrl: var url })
             return await FailAsync("There is no local installation to open. kcap local status says why.");
 
-        if (await LocalServerProbe.AuthConfigAsync(stack.Local, unit.BaseUrl, CancellationToken.None) != AuthConfigAnswer.Lifted)
-            return await FailAsync($"The local server is not ready on {url}. kcap local status says why.");
+        if (await ReadStatusAsync(stack) is { Ready: false } report)
+            return await FailAsync($"{report.Headline} kcap local status says more.");
 
         if (browser.TryOpen(url)) await Console.Out.WriteLineAsync($"  Opened {url}");
         else await Console.Out.WriteLineAsync($"  Open {url} in a browser.");

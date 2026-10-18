@@ -382,7 +382,7 @@ kcap local status          # explain its state and what to do about it
 kcap local start           # start it and wait until it is ready
 kcap local stop            # stop it, and keep it stopped across logins
 kcap local restart
-kcap local logs [-n 200]   # the end of the server's log, which holds Postgres's and KurrentDB's too
+kcap local logs -n 200     # the end of the server's log, which holds Postgres's and KurrentDB's too
 kcap local open            # open the web UI in a browser
 ```
 

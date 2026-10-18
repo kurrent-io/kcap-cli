@@ -13,6 +13,9 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
     /// <summary>A server that exits this many times after a start will not come up without a change.</summary>
     const int RestartsBeforeGivingUp = 3;
 
+    /// <summary>How long a just-started unit may still read as stopped before the start counts as having failed.</summary>
+    static readonly TimeSpan StoppedGrace = TimeSpan.FromSeconds(15);
+
     /// <summary>Returns the line to end on. Failures throw <see cref="LocalInstallFailure"/> or
     /// <see cref="LocalLifecycleException"/>.</summary>
     public Task<string> StartAsync(IProgress<LocalInstallEvent> progress, Action<string> say, CancellationToken ct) =>
@@ -82,7 +85,8 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
     /// <summary>Waits as long as a migration may take, but gives up early on what no wait will fix: a stranger on the
     /// port, a server that exited for good, or one that keeps exiting.</summary>
     async Task WaitReadyAsync(LocalServerUnit unit, CancellationToken ct) {
-        var deadline = stack.Time.GetUtcNow() + LocalServerReadiness.StartBudget;
+        var started  = stack.Time.GetUtcNow();
+        var deadline = started + LocalServerReadiness.StartBudget;
         var exits    = 0;
         int? lastPid = null, lastCode = null, firstStarts = null;
 
@@ -90,11 +94,12 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
             var health   = await LocalServerHealth.ReadAsync(stack.Local, unit, stack.Time, ct);
             var activity = stack.Service.Activity(unit);
 
-            if (findHolder(unit.Port) is { } holder && holder.Pid != Pid(activity)) {
+            // With the process unknown, no listener can be called foreign.
+            if (activity is not UnitActivity.Unknown && findHolder(unit.Port) is { } holder && holder.Pid != Pid(activity)) {
                 // The process may have been replaced since the reading above.
                 activity = stack.Service.Activity(unit);
 
-                if (holder.Pid != Pid(activity))
+                if (activity is not UnitActivity.Unknown && holder.Pid != Pid(activity))
                     throw Failed($"Port {unit.Port} is taken by {holder.Command} (pid {holder.Pid}), so the server cannot listen on it. "
                                + "The port is part of this installation's identity; stop that process and the server starts on its own, or run kcap local stop to stop it trying.");
             }
@@ -104,6 +109,10 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
             switch (activity) {
                 case UnitActivity.Exited(var code):
                     throw Failed($"The server exited{ExitCode(code)} and will not be started again on its own. kcap local logs shows why.");
+
+                // A clean exit on systemd, or a concurrent stop: nothing will start it again.
+                case UnitActivity.Stopped when lastPid is not null || stack.Time.GetUtcNow() - started >= StoppedGrace:
+                    throw Failed("The server stopped and will not be started again on its own. kcap local logs shows why; kcap local start starts it.");
 
                 case UnitActivity.Running(var pid) when pid != lastPid:
                     if (lastPid is not null) exits++;
@@ -117,10 +126,10 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
                     break;
             }
 
-            // The manager's own count sees exits between two polls; the first start may land after the first reading.
+            // The manager's own count sees exits between two polls.
             if (activity.Starts is { } starts) {
                 firstStarts ??= starts;
-                exits = Math.Max(exits, starts - firstStarts.Value - 1);
+                exits = Math.Max(exits, starts - firstStarts.Value);
             }
 
             if (exits >= RestartsBeforeGivingUp)

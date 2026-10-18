@@ -18,7 +18,7 @@ public class LocalStackControlTests {
 
     UserHome Home => field ??= NewHome();
 
-    LocalRoot Root => field ??= LocalRoot.Resolve(null, Home);
+    LocalRoot Root => field ??= LocalRoot.Resolve(Tmp.PathTo("r"), Home);
 
     FakeLocalServerService Service => field ??= new(_log, Home);
 
@@ -40,8 +40,7 @@ public class LocalStackControlTests {
         Root.EnsureCreated();
         LocalStateFiles.PublishRegistry(Root, InstallRegistry.Empty.WithActive(Active));
 
-        Directory.CreateDirectory(Path.GetDirectoryName(Unit.ServerBinary)!);
-        File.WriteAllText(Unit.ServerBinary, "");
+        Tmp.CreateFile(["r", "bin", "current", "kcap-server"]);
     }
 
     Task<string> Start(TimeProvider? time = null) => Control(time).StartAsync(new RecordingProgress<LocalInstallEvent>(), _said.Add, CancellationToken.None);
@@ -180,6 +179,42 @@ public class LocalStackControlTests {
         Service.ActivityOverride = new UnitActivity.Running(42);
 
         await Assert.That(await Start()).IsEqualTo("Ready on http://localhost:9473");
+    }
+
+    [Test]
+    public async Task Start_gives_up_on_a_server_that_stopped_after_running() {
+        Publish();
+        Server.Override = _ => throw new HttpRequestException("Connection refused");
+        Service.Activities.Enqueue(new UnitActivity.Running(7));
+        Service.ActivityOverride = UnitActivity.Stopped.Instance;
+
+        var time  = new FakeTimeProvider();
+        var start = Start(time);
+        while (!start.IsCompleted) {
+            time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(1);
+        }
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => start);
+
+        await Assert.That(failure!.Message).Contains("stopped and will not be started again");
+    }
+
+    [Test]
+    public async Task Start_does_not_call_a_listener_foreign_while_the_process_cannot_be_read() {
+        Publish();
+        _holders.Add(new(42, "kcap-server"));
+        Service.Activities.Enqueue(new UnitActivity.Unknown("launchctl print failed"));
+        Service.ActivityOverride = new UnitActivity.Running(42);
+        var time = new FakeTimeProvider();
+
+        var start = Start(time);
+        while (!start.IsCompleted) {
+            time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(1);
+        }
+
+        await Assert.That(await start).IsEqualTo("Ready on http://localhost:9473");
     }
 
     [Test]

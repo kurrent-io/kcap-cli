@@ -7,7 +7,8 @@ Subcommands:
   start                     Start the server and wait until it is ready
   stop                      Stop the server and wait until nothing of it is left; it stays stopped until start
   restart                   Stop, then start
-  logs [-n|--lines N]       Print the last N lines (default 50) of the server's log, which holds the stores'
+  logs [-n|--lines N]       Print the last N lines (default 50) of each log: the server's, which carries
+                            Postgres's and KurrentDB's output too, and its startup output when it has any
   open                      Open the web UI in a browser
   help                      Show this help
 

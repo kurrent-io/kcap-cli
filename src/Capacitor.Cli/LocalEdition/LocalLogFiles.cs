@@ -26,4 +26,35 @@ static class LocalLogFiles {
 
         return files;
     }
+
+    /// <summary>The last <paramref name="count"/> lines, read back from the end: the output log is never rotated. Opened
+    /// sharing writes and deletes, since the server holds its logs open.</summary>
+    public static IReadOnlyList<string> Tail(string path, int count) {
+        const int block = 64 * 1024;
+
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+        var position = stream.Length;
+        var chunks   = new List<byte[]>();
+        var newlines = 0;
+
+        // One newline more than the count is needed to know the first line is whole; a trailing one ends the last line.
+        while (position > 0 && newlines <= count) {
+            var size = (int)Math.Min(block, position);
+            position -= size;
+
+            var chunk = new byte[size];
+            stream.Seek(position, SeekOrigin.Begin);
+            stream.ReadExactly(chunk);
+
+            newlines += chunk.Count(b => b == (byte)'\n');
+            chunks.Insert(0, chunk);
+        }
+
+        var text  = System.Text.Encoding.UTF8.GetString([.. chunks.SelectMany(c => c)]);
+        var lines = text.Split('\n');
+        var whole = lines.Length > 0 && lines[^1].Length == 0 ? lines[..^1] : lines;
+
+        return [.. whole.Skip(Math.Max(0, whole.Length - count)).Select(l => l.TrimEnd('\r'))];
+    }
 }
