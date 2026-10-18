@@ -194,7 +194,7 @@ internal partial class AgentOrchestrator {
             await FrameCodec.WriteAsync(stream,
                 discarded     ? LocalFrame.StopAck($"{agentId}\tstopped")
               : reportMissing ? LocalFrame.StopAck($"{agentId}\tmissing")
-              :                 LocalFrame.Error($"no such agent {agentId}"), ct);
+              :                 LocalFrame.NoSuchAgent(agentId), ct);
 
             return;
         }
@@ -439,7 +439,7 @@ internal partial class AgentOrchestrator {
     /// <summary>Attach an existing agent to a local client (used by <c>kcap agent attach</c>).</summary>
     public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
         if (!_agents.TryGetValue(agentId, out var agent))
-            return FrameCodec.WriteAsync(stream, LocalFrame.Error($"no such agent {agentId}"), ct);
+            return FrameCodec.WriteAsync(stream, LocalFrame.NoSuchAgent(agentId), ct);
 
         // A runtime that emits no terminal output has nothing for a terminal to attach TO: its
         // stdout is protocol traffic (agy's NDJSON, ACP's JSON-RPC), and its output buffer is

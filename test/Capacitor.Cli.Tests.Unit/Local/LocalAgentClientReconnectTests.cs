@@ -136,6 +136,47 @@ public class LocalAgentClientReconnectTests {
         await Assert.That(console.GetCapturedError()).DoesNotContain("no such agent");
     }
 
+    /// <summary>Only the daemon's own not-published refusal is ridden out; any other first-attach error is
+    /// final, or a live agent with no terminal would be retried for the whole window.</summary>
+    [Test]
+    public async Task A_first_refusal_for_another_reason_is_printed_and_ends_the_attach() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        SeedLedger(ResumeState.Running);
+        using var listener = Listen();
+        using var terminal = new FakeAgentTerminal();
+        using var console  = ConsoleOutput.StartErrorCapture("\n");
+
+        var run = Attach(SocketPath, terminal, Reconnect());
+        await AnswerAsync(listener, LocalFrame.Error($"{AgentId} has no terminal to attach to"));
+
+        var exit = await run.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(console.GetCapturedError()).Contains("has no terminal to attach to");
+        await Assert.That(console.GetCapturedError()).DoesNotContain("daemon restarting");
+    }
+
+    /// <summary>The daemon can be gone when the attach opens, between its exit and its successor's socket.</summary>
+    [Test]
+    public async Task An_opening_connect_refused_while_the_agent_resumes_waits_for_the_daemon() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        SeedLedger(ResumeState.Resuming);
+        using var terminal = new FakeAgentTerminal();
+        using var console  = ConsoleOutput.StartErrorCapture("\n");
+
+        var run = Attach(SocketPath, terminal, Reconnect());
+        await Task.Delay(200);
+        using var listener = Listen();
+        var opened = await AnswerAsync(listener, FrameCodec.Attached(AgentId, Encoding.UTF8.GetBytes("resumed\r\n")), LocalFrame.Exited(0));
+
+        var exit = await run.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(opened?.Type).IsEqualTo(FrameType.Attach);
+        await Assert.That(terminal.Output).IsEqualTo("resumed\r\n");
+        await Assert.That(console.GetCapturedError()).Contains($"daemon restarting; waiting for {AgentId} to resume…");
+    }
+
     [Test]
     public async Task A_dropped_socket_without_a_ledger_entry_is_a_lost_connection() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");

@@ -19,21 +19,24 @@ internal static class LocalAgentClient {
     public static async Task<int> RunAsync(
             string socketPath, LocalFrame opening, TimeProvider time, IAgentTerminal terminal,
             AttachReconnect? reconnect, CancellationToken outerCt) {
-        NetworkStream first;
+        NetworkStream? first = null;
 
         try {
             first = await ConnectAsync(socketPath, outerCt);
         } catch (Exception ex) when (ex is SocketException or IOException) {
-            await Console.Error.WriteLineAsync($"kcap: cannot connect to daemon at {socketPath}: {ex.Message}");
+            // A ledgered agent's daemon may be restarting: the reconnect window covers the opening connection too.
+            if (reconnect?.Ledger() is null) {
+                await Console.Error.WriteLineAsync($"kcap: cannot connect to daemon at {socketPath}: {ex.Message}");
 
-            return 1;
+                return 1;
+            }
         }
 
         using var cts     = CancellationTokenSource.CreateLinkedTokenSource(outerCt);
         var       ct      = cts.Token;
         var       current = (NetworkStream?)first;
 
-        await FrameCodec.WriteAsync(first, opening, ct);
+        if (first is not null) await FrameCodec.WriteAsync(first, opening, ct);
 
         // Touch the size getter once BEFORE enabling raw mode, so .NET's lazy console init can't
         // re-cook the terminal after we set raw.
@@ -103,8 +106,10 @@ internal static class LocalAgentClient {
 
                     return true;
                 case FrameType.Error:
-                    // The daemon has not published the agent yet: the reconnect loop waits for it.
-                    if (!attached && reconnect?.Ledger() is { State: not ResumeState.Interrupted }) {
+                    // Only this refusal means the daemon has not published the agent yet; any other is final.
+                    if (!attached
+                     && f.Text?.StartsWith(LocalFrame.NoSuchAgentPrefix, StringComparison.Ordinal) == true
+                     && reconnect?.Ledger() is { State: not ResumeState.Interrupted }) {
                         refusedWhileResuming = true;
 
                         return true;
@@ -242,13 +247,16 @@ internal static class LocalAgentClient {
         var connection = first;
         var announced  = false;
 
+        // A null connection is an opening connect the daemon refused: the loop starts at the reconnect.
         while (true) {
-            var pump = PumpAsync(connection);
-            if (await Task.WhenAny(pump, stdinPump) == stdinPump) break;
+            if (connection is not null) {
+                var pump = PumpAsync(connection);
+                if (await Task.WhenAny(pump, stdinPump) == stdinPump) break;
 
-            var dropped = await pump;
-            await SwapConnectionAsync(null);
-            if (!dropped) break;
+                var dropped = await pump;
+                await SwapConnectionAsync(null);
+                if (!dropped) break;
+            }
 
             exitCode = 1;
 

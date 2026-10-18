@@ -18,6 +18,12 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Detach()                   => new(FrameType.Detach);
     public static LocalFrame Exited(int code)           => new(FrameType.Exited) { ExitCode = code };
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
+
+    /// <summary>The refusal for an id the daemon is not running; an attach to a resuming agent retries on
+    /// this text and on no other.</summary>
+    public const string NoSuchAgentPrefix = "no such agent";
+
+    public static LocalFrame NoSuchAgent(string agentId)  => Error($"{NoSuchAgentPrefix} {agentId}");
     public static LocalFrame Restart(string mode)       => new(FrameType.Restart)    { Text = mode };
     public static LocalFrame RestartAck(string status)  => new(FrameType.RestartAck) { Text = status };
     public static LocalFrame Shutdown(ShutdownRequestDto dto) => new(FrameType.Shutdown)       { Text = ShutdownIpc.Serialize(dto) };
