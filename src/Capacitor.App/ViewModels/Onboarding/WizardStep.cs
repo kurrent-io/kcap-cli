@@ -1,7 +1,7 @@
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// Declaration order is display order.
-public enum WizardStepId { Welcome, SignIn, Harnesses, Import, Done }
+public enum WizardStepId { Edition, SignIn, Harnesses, Import, Done }
 
 public enum WizardNavigation { Back, Next, Skip }
 
@@ -40,6 +40,9 @@ public interface IWizardStep {
 
     bool CanContinue => true;
     bool CanSkip => true;
+
+    /// The page's own action moves the wizard forward, through the same CanLeaveAsync veto as Next.
+    event Action? AdvanceRequested { add { } remove { } }
 
     Task OnEnterAsync(CancellationToken ct);
 

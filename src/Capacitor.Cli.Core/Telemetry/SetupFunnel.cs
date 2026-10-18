@@ -35,6 +35,16 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
             ["no_prompt"]            = noPrompt,
         });
 
+    /// <summary>The app wizard's first screen came up; the denominator for the edition branch.</summary>
+    public void EditionOffered() => Emit("cli_setup_edition_offered", new JsonObject());
+
+    /// <summary>
+    /// The funnel's first branch: <c>local</c>, <c>cloud</c> or <c>existing_workspace</c>. A run that
+    /// goes Back and picks again emits again, so a breakdown reads the last choice before each later step.
+    /// </summary>
+    public void EditionChosen(string edition) =>
+        Emit("cli_setup_edition_chosen", new JsonObject { ["edition"] = edition });
+
     public void SigninOpened(string mode, string provider) =>
         Emit("cli_setup_signin_opened", new JsonObject { ["mode"] = mode, ["provider"] = provider });
 
