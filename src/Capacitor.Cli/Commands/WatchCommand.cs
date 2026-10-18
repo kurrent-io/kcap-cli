@@ -133,6 +133,14 @@ partial class WatchCommand(
             ? id
             : null;
 
+    /// <summary><paramref name="resumingId"/>, after releasing the handed end's claim when a resume holds
+    /// it: a claim left in place would block an end handed over later.</summary>
+    internal static string? HoldHandedEndForResume(MuseSessionEndRequest handed, string? resumingId) {
+        if (resumingId is not null) MuseSessionEndRequest.Release(handed.ClaimedPath);
+
+        return resumingId;
+    }
+
     /// <summary>Whether a watcher also watches for Kiro Crew finishing with its session: a Kiro session
     /// watcher on a machine where Crew has run.</summary>
     internal static bool WatchesCrewEnd(string vendor, string? agentId, bool crewPresent) =>
@@ -777,7 +785,7 @@ partial class WatchCommand(
                 if (ClaimHandedMuseEnd(sessionId) is { } handed) {
                     await watchers.InlineDrainAsync(sessionId, transcriptPath, agentId: null, vendor: vendor);
 
-                    if (AgentHoldingEndForResume() is { } resumingId) {
+                    if (HoldHandedEndForResume(handed, AgentHoldingEndForResume()) is { } resumingId) {
                         Log(time, $"session end suppressed: agent {resumingId} is resuming");
                     } else switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, repository: null, handed)) {
                         case HandedEndOutcome.Dropped:
@@ -1224,7 +1232,7 @@ partial class WatchCommand(
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
 
         if (museEndRequest is { } handedEnd) {
-            if (AgentHoldingEndForResume() is { } resumingId) {
+            if (HoldHandedEndForResume(handedEnd, AgentHoldingEndForResume()) is { } resumingId) {
                 Log(time, $"session end suppressed: agent {resumingId} is resuming");
             } else switch (await PostHandedSessionEndAsync(sessionId, transcriptPath, vendor, state.Repository, handedEnd)) {
                 // The session carried on, so this watcher's stop must not leave it unwatched.
