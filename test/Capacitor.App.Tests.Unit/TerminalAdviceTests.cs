@@ -38,6 +38,15 @@ public class TerminalAdviceTests {
             "Found leftover state from another installation: /Users/me/.local/kcap/bin already exists. Nothing was changed; remove it or uninstall that installation first.");
         yield return () => ("\"1.x\" is not a version of the form 1.2.3 or 1.2.3-beta.1.",
             "\"1.x\" is not a version of the form 1.2.3 or 1.2.3-beta.1.");
+        yield return () => (
+            "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.",
+            "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
+        yield return () => (
+            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.",
+            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
+        yield return () => (
+            "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.",
+            "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
 
         // LocalInstaller
         yield return () => ("Setup was cancelled.", "Setup was cancelled.");

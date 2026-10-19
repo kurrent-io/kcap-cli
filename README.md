@@ -301,6 +301,7 @@ The first version is for a machine with one user: on a shared machine, other OS 
 - Without Ollama, setup carries on and search works by keyword; re-run `kcap setup --local` once Ollama runs. A failed pull or a model that cannot embed is reported the same way and never fails the install.
 
 - A machine that already has a profile for another server is refused for now.
+- Every kcap that talks to the local server must be newer than 1.3.0, which does not keep to its rules. Setup asks the `kcap` on `PATH` and the desktop app's bundled one (in `/Applications` or `~/Applications`) for their versions, and stops if either is 1.3.0 or older, or does not report one: update it, or remove the one on `PATH`. The local server refuses an older kcap too, so its hooks and watcher record nothing there.
 - Builds of kcap for musl Linux are not supported.
 - `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
 
