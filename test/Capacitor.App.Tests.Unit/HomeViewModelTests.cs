@@ -982,34 +982,86 @@ public class HomeViewModelTests {
         });
     }
 
-    /// A local server that is up says nothing about a remote machine, so that machine's lost
-    /// connection still has its notice.
+    (HomeViewModel Vm, LocalServerRecoveryViewModel Local, FakeServerLane Lane, FakeDaemonClientService Daemon) LocalServerWithRemote(
+            bool remoteConnected, List<IDisposable> owned) {
+        var daemon = new FakeDaemonClientService();
+        var remote = new FakeRemoteAgents();
+        remote.DaemonsSubject.OnNext([
+            new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = remoteConnected, RepoPaths = ["/w/repo"] },
+        ]);
+        var lane = new FakeServerLane();
+        var vm = new HomeViewModel(
+            daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
+            daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
+            appServerUrl: "http://localhost:9999");
+        var local = new LocalServerRecoveryViewModel(
+            lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+            () => Task.CompletedTask, CancellationToken.None);
+        vm.AttachLocalServerRecovery(local);
+        owned.Add(vm);
+        owned.Add(local);
+        Connect(daemon, "connected");
+
+        return (vm, local, lane, daemon);
+    }
+
+    /// The Start banner speaks for this Mac only: under a remote pick it must not hide that machine's notice.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_running_local_server_keeps_a_remote_machines_lost_notice() {
+    public async Task A_remote_pick_keeps_its_notice_while_the_local_server_is_down() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            var path = Tmp.PathTo("app-state.json");
-            var daemon = new FakeDaemonClientService();
-            var remote = new FakeRemoteAgents();
-            remote.DaemonsSubject.OnNext([
-                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = false, RepoPaths = ["/w/repo"] },
-            ]);
-            var lane = new FakeServerLane();
-            using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
-                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
-                appServerUrl: "http://localhost:9999");
-            using var local = new LocalServerRecoveryViewModel(
-                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
-                () => Task.CompletedTask, CancellationToken.None);
-            vm.AttachLocalServerRecovery(local);
+            var owned = new List<IDisposable>();
+            try {
+                var (vm, local, lane, _) = LocalServerWithRemote(remoteConnected: true, owned);
+                await vm.SelectMachineAsync("home-pc", isLocal: false);
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
 
-            Connect(daemon, "connected");
-            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            await vm.SelectMachineAsync("home-pc", isLocal: false);
+                await Assert.That(local.Visible).IsTrue();
+                await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            } finally {
+                owned.ForEach(d => d.Dispose());
+            }
+        });
+    }
 
-            await Assert.That(local.Visible).IsFalse();
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.LocalServerLostNotice);
+    /// A remote machine that dropped off is that machine's story, not the local server's, and never a sign-in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_offline_remote_pick_under_a_running_local_server_names_the_machine() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var owned = new List<IDisposable>();
+            try {
+                var (vm, local, lane, _) = LocalServerWithRemote(remoteConnected: false, owned);
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+                await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+                await Assert.That(local.Visible).IsFalse();
+                await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.RemoteOfflineNotice("home-pc"));
+                await Assert.That(vm.ConnectionNotice!).DoesNotContain("Sign in");
+            } finally {
+                owned.ForEach(d => d.Dispose());
+            }
+        });
+    }
+
+    /// Selecting this Mac again restores the local server's own handling.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task This_mac_selected_under_a_down_local_server_leaves_the_start_banner_alone() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var owned = new List<IDisposable>();
+            try {
+                var (vm, local, lane, daemon) = LocalServerWithRemote(remoteConnected: true, owned);
+                await vm.SelectMachineAsync("home-pc", isLocal: false);
+                await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
+                Connect(daemon, "disconnected");
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+                await Assert.That(local.Visible).IsTrue();
+                await Assert.That(vm.ConnectionNotice).IsNull();
+            } finally {
+                owned.ForEach(d => d.Dispose());
+            }
         });
     }
 

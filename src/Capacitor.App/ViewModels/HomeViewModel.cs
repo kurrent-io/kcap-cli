@@ -82,6 +82,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart Capacitor.";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. Capacitor keeps trying to reconnect.";
 
+    internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
+
     const string IncompatibleReason = "daemon_incompatible";
 
     readonly IDaemonClientService _daemon;
@@ -641,7 +643,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(_localServer, _localServerDown, NoticeForLocalServer);
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -848,15 +851,18 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
         timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
 
-    /// While a local server is down its Start banner is the whole story, so the generic connecting
-    /// and lost-session lines would contradict it; the daemon's own notices still stand. A local
-    /// server takes no sign-in, so its lost and refused lines name the local recovery instead.
-    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown) =>
-        !localServer ? notice : notice switch {
-            ConnectingNotice or ServerLostNotice when localServerDown => null,
-            ServerLostNotice                                          => LocalServerLostNotice,
-            SignInExpiredNotice                                       => LocalServerRefusedNotice,
-            _                                                         => notice,
+    /// A local server takes no sign-in, so none of its notices asks for one. With this Mac selected,
+    /// the Start banner is the whole story while the server is down, so the generic connecting and
+    /// lost lines would contradict it; the daemon's own notices still stand. A remote pick
+    /// (<paramref name="remoteMachine"/>) keeps its own notices, naming the machine when it is lost.
+    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown, string? remoteMachine) =>
+        !localServer ? notice : (notice, remoteMachine) switch {
+            (SignInExpiredNotice, _)                                    => LocalServerRefusedNotice,
+            (ServerLostNotice, { } machine)                             => RemoteOfflineNotice(machine),
+            (_, not null)                                               => notice,
+            (ConnectingNotice or ServerLostNotice, _) when localServerDown => null,
+            (ServerLostNotice, _)                                       => LocalServerLostNotice,
+            _                                                           => notice,
         };
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
