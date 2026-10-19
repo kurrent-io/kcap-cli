@@ -83,6 +83,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         try {
             launcher.Prepare(launcherCtx);
+            if (launcherCtx.Work == Core.LocalIpc.WorkLocation.OwnedWorktree) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path);
         } catch (UnattendedReviewPolicyException) {
             throw;
         } catch (CodexHooksNotInstalledException) {

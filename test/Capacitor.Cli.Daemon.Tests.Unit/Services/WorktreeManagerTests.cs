@@ -187,13 +187,13 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
-    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, StagedConfigChange }
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, StagedConfigChange }
 
     /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
     /// file or a commit no other ref has keeps the worktree and its branch. The daemon's own edits (the
     /// MCP config it deletes at creation, the config a launch writes, a file identical to the source
-    /// checkout's) are not work; a staged change to that config is, and so is a link, even to an
-    /// identical file, since the link itself would be lost.</summary>
+    /// checkout's) are not work; that config edited after the daemon recorded it is, as is a staged
+    /// change to it, and so is a link, even to an identical file, since the link itself would be lost.</summary>
     [Test]
     [Arguments(WorktreeState.Clean, false)]
     [Arguments(WorktreeState.ChangedFile, true)]
@@ -203,6 +203,7 @@ public class WorktreeManagerTests {
     [Arguments(WorktreeState.DaemonEditsOnly, false)]
     [Arguments(WorktreeState.LinkToOverlay, true)]
     [Arguments(WorktreeState.LaunchWrittenConfig, false)]
+    [Arguments(WorktreeState.LaunchConfigEditedAfter, true)]
     [Arguments(WorktreeState.StagedConfigChange, true)]
     public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
@@ -237,8 +238,12 @@ public class WorktreeManagerTests {
                 tree.CreateFile("notes.txt", "overlay");
                 break;
             case WorktreeState.LaunchWrittenConfig:
+            case WorktreeState.LaunchConfigEditedAfter:
                 tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{}}}""");
                 tree.CreateFile(".claude/settings.local.json", """{"permissions":{"allow":["Bash"]}}""");
+                WorktreeManager.RecordDaemonBaseline(worktree.Path); // as a launch's Prepare does
+                if (state == WorktreeState.LaunchConfigEditedAfter)
+                    tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{},"mine":{}}}""");
                 break;
             case WorktreeState.StagedConfigChange:
                 tree.CreateFile(".mcp.json", """{"mcpServers":{"mine":{}}}""");

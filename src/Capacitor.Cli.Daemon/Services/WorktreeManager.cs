@@ -518,6 +518,7 @@ public partial class WorktreeManager(
             // rollback means a filter-inventory failure cleans up like any other fail-closed step.
             await CheckoutInTargetContextAsync(created.Path);
             StripWorkspaceMcpConfig(created.Path);
+            RecordDaemonBaseline(created.Path);
         } catch {
             try { await RemoveAsync(created, time); } catch { /* keep the original failure */ }
             throw;
@@ -665,8 +666,64 @@ public partial class WorktreeManager(
 
     /// <summary>Files the daemon itself deletes or writes in an owned worktree: the MCP configs it removes
     /// at creation, the <c>.mcp.json</c> Claude's launch writes, and the local settings it merges.</summary>
-    static bool IsDaemonWritten(string path) =>
-        path == ".claude/settings.local.json" || WorkspaceMcpConfigPaths.Contains(path);
+    static IEnumerable<string> DaemonWrittenPaths() => [.. WorkspaceMcpConfigPaths, ".claude/settings.local.json"];
+
+    const string DaemonBaselineFile = "kcap-daemon-files";
+
+    /// <summary>Records what the daemon left at each path it writes, in the worktree's own git dir, so
+    /// a later removal can tell the daemon's edit from the agent's: only an entry still as recorded is
+    /// the daemon's. Called after creation and after a launch prepares the worktree. Best-effort: with
+    /// no record, every such change counts as work.</summary>
+    public static void RecordDaemonBaseline(string worktreePath) {
+        try {
+            if (GitDirOf(worktreePath) is not { } gitDir) return;
+
+            var lines = DaemonWrittenPaths().Select(path => $"{path}\t{ContentStamp(Path.Combine(worktreePath, path))}");
+            File.WriteAllLines(Path.Combine(gitDir, DaemonBaselineFile), lines);
+        } catch (IOException) {
+        } catch (UnauthorizedAccessException) {
+        }
+    }
+
+    static Dictionary<string, string>? ReadDaemonBaseline(string worktreePath) {
+        try {
+            if (GitDirOf(worktreePath) is not { } gitDir) return null;
+            var file = Path.Combine(gitDir, DaemonBaselineFile);
+            if (!File.Exists(file)) return null;
+
+            return File.ReadAllLines(file)
+                .Select(line => line.Split('\t', 2))
+                .Where(parts => parts.Length == 2)
+                .ToDictionary(parts => parts[0], parts => parts[1], StringComparer.Ordinal);
+        } catch (IOException) {
+            return null;
+        } catch (UnauthorizedAccessException) {
+            return null;
+        }
+    }
+
+    /// <summary>A linked worktree's git dir, from the <c>gitdir:</c> line of its <c>.git</c> file.</summary>
+    static string? GitDirOf(string worktreePath) {
+        var dotGit = Path.Combine(worktreePath, ".git");
+        if (!File.Exists(dotGit)) return null;
+
+        var line = File.ReadLines(dotGit).FirstOrDefault(l => l.StartsWith("gitdir:", StringComparison.Ordinal));
+        if (line is null) return null;
+
+        var dir = line["gitdir:".Length..].Trim();
+        return Path.IsPathRooted(dir) ? dir : Path.GetFullPath(Path.Combine(worktreePath, dir));
+    }
+
+    /// <summary>"-" for a missing path, else the SHA-256 of an ordinary file; a link is stamped as such
+    /// so it never matches a file.</summary>
+    static string ContentStamp(string path) {
+        var info = new FileInfo(path);
+        if (info.LinkTarget is not null) return "link";
+        if (!info.Exists) return "-";
+
+        using var stream = info.OpenRead();
+        return Convert.ToHexString(SHA256.HashData(stream));
+    }
 
     /// <summary>Why the worktree holds work that would be lost with it, or null when it holds none: a
     /// change or untracked file, or a commit no other branch, remote or fetched ref has. The daemon's
@@ -680,7 +737,8 @@ public partial class WorktreeManager(
             worktree.Path, GitTimeout, time, sourceReadOnly: true, [], "status", "--porcelain=v1", "-z", "--untracked-files=all");
         if (status.ExitCode != 0) return "its git status could not be read";
 
-        var changes = ParsePorcelainZ(status.Stdout).Count(entry => !IsDaemonEdit(worktree, entry));
+        var baseline = ReadDaemonBaseline(worktree.Path);
+        var changes  = ParsePorcelainZ(status.Stdout).Count(entry => !IsDaemonEdit(worktree, baseline, entry));
         if (changes > 0) return $"{changes} uncommitted {(changes == 1 ? "change" : "changes")}";
 
         string[] uniqueCommits = ["rev-list", "--count", "HEAD", "--not"];
@@ -694,8 +752,10 @@ public partial class WorktreeManager(
         return count > 0 ? $"{count} {(count == 1 ? "commit" : "commits")} on no other branch or remote" : null;
     }
 
-    static bool IsDaemonEdit(WorktreeInfo worktree, (string Code, string Path) entry) {
-        if (IsDaemonWritten(entry.Path) && (entry.Code[0] == ' ' || entry.Code == "??")) return true;
+    static bool IsDaemonEdit(WorktreeInfo worktree, Dictionary<string, string>? baseline, (string Code, string Path) entry) {
+        // Unstaged and still exactly as the daemon left it; anything staged is the agent's.
+        if (baseline?.GetValueOrDefault(entry.Path) is { } recorded)
+            return (entry.Code[0] == ' ' || entry.Code == "??") && SafeStamp(Path.Combine(worktree.Path, entry.Path)) == recorded;
         if (entry.Code != "??") return false;
 
         // Ordinary files only: a link is the entry itself, and would be lost even if its target matched.
@@ -709,6 +769,10 @@ public partial class WorktreeManager(
         } catch (UnauthorizedAccessException) {
             return false;
         }
+    }
+
+    static string? SafeStamp(string path) {
+        try { return ContentStamp(path); } catch (IOException) { return null; } catch (UnauthorizedAccessException) { return null; }
     }
 
     static bool SameContent(FileInfo a, FileInfo b) {
@@ -1563,7 +1627,7 @@ public partial class WorktreeManager(
                 IsActive(fullDir[..^ReviewContextSuffix.Length], activePaths))
                 continue;
 
-            if (keepUnsavedWork && await LeftWorktreeAsync(dir) is { } left && await UnsavedWorkAsync(left, time) is { } unsaved) {
+            if (keepUnsavedWork && await LeftBehindWorkAsync(dir) is { } unsaved) {
                 LogOrphanKept(dir, unsaved);
                 continue;
             }
@@ -1573,11 +1637,18 @@ public partial class WorktreeManager(
         }
     }
 
-    /// <summary>The git worktree a left-behind directory is, or null when it is not one. Its source is
-    /// read from the worktree's own common git dir.</summary>
-    async Task<WorktreeInfo?> LeftWorktreeAsync(string dir) {
-        if (!Path.Exists(Path.Combine(dir, ".git"))) return null;
+    /// <summary>Why a left-behind directory must be kept, or null when it holds nothing to lose. A
+    /// directory that is no longer a git worktree cannot be checked, so it is kept unless empty.</summary>
+    async Task<string?> LeftBehindWorkAsync(string dir) {
+        if (!Path.Exists(Path.Combine(dir, ".git")))
+            return Directory.EnumerateFileSystemEntries(dir).Any() ? "files outside any git worktree" : null;
 
+        return await UnsavedWorkAsync(await LeftWorktreeAsync(dir), time);
+    }
+
+    /// <summary>The git worktree a left-behind directory is; its source is read from the worktree's own
+    /// common git dir.</summary>
+    async Task<WorktreeInfo> LeftWorktreeAsync(string dir) {
         var common = await RunGitCaptureResultUnproven(
             dir, GitTimeout, time, sourceReadOnly: true, [], "rev-parse", "--path-format=absolute", "--git-common-dir");
         var branch = await RunGitCaptureResultUnproven(
