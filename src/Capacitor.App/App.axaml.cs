@@ -13,6 +13,7 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
@@ -192,6 +193,8 @@ public partial class App : Application {
     WizardAuthService? _wizardAuth;
     // The History step, kept past the handoff: its import outlives onboarding and only shutdown stops it.
     HistoryStepViewModel? _historyImport;
+    // The open wizard's local install, which every close and a quit settle before moving on.
+    LocalInstallController? _localInstall;
     Window? _wizardWindow;
     // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
     // it over so the main surface opens in place rather than in a second window.
@@ -297,21 +300,13 @@ public partial class App : Application {
             _lane = lane;
 
             var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token);
-            // A graph built while the lane still owns a live action must not also drive automatic
-            // ones — only the wizard's own handoff can answer this with anything but true.
-            var laneQuiesced = true;
-
-            // An incomplete gate builds NO daemon graph at all — the wizard owns
-            // the app until it closes, and the graph is then built against a FRESH resolution,
-            // because the wizard is exactly what may have changed the answer.
-            if (ShouldShowWizard(gate, desktop.Args)) {
-                laneQuiesced = await RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, profiles,
-                    alreadyAuthenticated: gate is GateResult.Complete);
-                if (_shutdown.IsCancellationRequested) return; // quit during onboarding — nothing left to build
-                (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token);
-            }
-
-            BuildDaemonGraph(desktop, lane, channel, gate, profiles, laneQuiesced);
+            await RunWizardThenBuildGraphAsync(
+                gate, profiles, ShouldShowWizard(gate, desktop.Args),
+                (current, currentProfiles) => RunWizardModeAsync(desktop, lane, channel, laneRunner, laneProbe, currentProfiles,
+                    alreadyAuthenticated: current is GateResult.Complete),
+                () => ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token),
+                (current, currentProfiles, laneQuiesced) => BuildDaemonGraph(desktop, lane, channel, current, currentProfiles, laneQuiesced),
+                _shutdown.Token);
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
             // A quit landing mid-startup (gate evaluation, the wizard's PATH probe, the post-wizard
             // re-resolve) is not a startup failure: the shutdown path already owns teardown, and an
@@ -371,6 +366,8 @@ public partial class App : Application {
             _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
             if (_historyImport is { } history) await history.CancelActiveRunAsync();
             _historyImport = null;
+            if (_localInstall is { } install) await install.SettleAsync();
+            _localInstall = null;
             _wizardWindow = null;
         }
     }
@@ -452,6 +449,30 @@ public partial class App : Application {
             ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, LocalRoot local, TimeProvider time,
             CancellationToken ct) =>
         EvaluateGateSafelyAsync(new OnboardingGate(config, tokenStore, env, local, time).EvaluateAsync, ct);
+
+    // An incomplete gate builds no daemon graph while the wizard owns the app, and the graph is then
+    // built against a fresh resolution, because the wizard is what may have changed the answer. A
+    // close that leaves local setup pending reopens the wizard instead: that graph would come up
+    // over a half-installed edition. A quit builds nothing. Only the wizard's handoff can report a
+    // lane still live, and a graph built over one must not also drive automatic actions.
+    internal static async Task RunWizardThenBuildGraphAsync(
+            GateResult gate, ProfileContext? profiles, bool showWizard,
+            Func<GateResult, ProfileContext?, Task<bool>> runWizard,
+            Func<Task<(GateResult Gate, ProfileContext? Profiles)>> reevaluate,
+            Action<GateResult, ProfileContext?, bool> buildGraph, CancellationToken shutdown) {
+        var laneQuiesced = true;
+        if (showWizard) {
+            do {
+                laneQuiesced = await runWizard(gate, profiles).ConfigureAwait(true);
+                if (shutdown.IsCancellationRequested) return;
+                (gate, profiles) = await reevaluate().ConfigureAwait(true);
+            } while (gate is GateResult.Incomplete { Reason: GateReason.LocalSetupPending } && !shutdown.IsCancellationRequested);
+
+            if (shutdown.IsCancellationRequested) return;
+        }
+
+        buildGraph(gate, profiles, laneQuiesced);
+    }
 
     internal static bool ShouldShowWizard(GateResult gate, string[]? args) =>
         gate is GateResult.Incomplete || args?.Contains("--setup", StringComparer.Ordinal) == true;
@@ -1051,6 +1072,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
+        _localInstall = graph.Install;
         var window = ShowWizardWindow(desktop, graph.ViewModel, _appState);
         _wizardWindow = window;
 
@@ -1063,14 +1085,16 @@ public partial class App : Application {
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
         var quiesced = await HandoffAfterWizardAsync(
-            graph.Auth, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
+            graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
+        _localInstall = null;
         _wizardWindow = null;
         // A finished onboarding leaves its window up for the main surface to take over; a window the
         // user closed is gone, and the main surface builds its own.
         if (window.IsVisible) {
-            if (_shutdown.IsCancellationRequested) window.Close();
+            // A pending setup reopens a fresh wizard, so this one is not left beside it.
+            if (_shutdown.IsCancellationRequested || LocalSetupState.Pending(_localRoot)) window.Close();
             else _adoptableWindow = window;
         }
 
@@ -1160,11 +1184,12 @@ public partial class App : Application {
         }
     }
 
-    /// <summary>Close boundary: settle sign-in, quiesce the lane under the cap, then transfer the
-    /// channel. A history import keeps running into the main window.</summary>
+    /// <summary>Close boundary: settle the local install and sign-in, quiesce the lane under the cap,
+    /// then transfer the channel. A history import keeps running into the main window.</summary>
     internal static async Task<bool> HandoffAfterWizardAsync(
-            WizardAuthService? auth, Func<Task> laneQuiescedAsync, TimeSpan cap, OutcomeChannel channel,
-            TimeProvider time) {
+            WizardAuthService? auth, LocalInstallController? install, Func<Task> laneQuiescedAsync, TimeSpan cap,
+            OutcomeChannel channel, TimeProvider time) {
+        if (install is not null) await install.SettleAsync().ConfigureAwait(false);
         await CancelAndAwaitAuthAsync(auth).ConfigureAwait(false);
         var quiesced = await AwaitQuiescedAsync(laneQuiescedAsync, cap, time).ConfigureAwait(false);
         channel.TransferConsumer();
@@ -1965,8 +1990,9 @@ public partial class App : Application {
 
         // An in-flight sign-in always settles, mutations get a bounded chance
         // to — both while the UI is still up, before teardown.
-        if (_wizardAuth is not null || _historyImport is not null || _lifecycle is not null || _lane is not null)
-            await QuiesceAppAsync(_wizardAuth, _historyImport, _lifecycle, _lane, QuiesceShutdownCap, _time)
+        if (_wizardAuth is not null || _historyImport is not null || _localInstall is not null || _lifecycle is not null
+         || _lane is not null)
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time)
                 .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -2020,12 +2046,14 @@ public partial class App : Application {
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Quiesces shutdown in two phases: sign-in and import finish uncapped so an in-progress commit isn't torn down, then lifecycle/lane quiesce under the cap.</summary>
+    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install finish uncapped
+    /// so an in-progress commit or rollback isn't torn down, then lifecycle/lane quiesce under the cap.</summary>
     internal static async Task QuiesceAppAsync(
-            WizardAuthService? auth, HistoryStepViewModel? import,
+            WizardAuthService? auth, HistoryStepViewModel? import, LocalInstallController? install,
             DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time) {
         var authTerminal = CancelAndAwaitAuthAsync(auth);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
+        if (install is not null) await install.SettleAsync().ConfigureAwait(false);
         await authTerminal.ConfigureAwait(false);
         await AwaitQuiescedAsync(() => QuiesceLifecycleAndLaneAsync(lifecycle, lane), cap, time).ConfigureAwait(false);
     }

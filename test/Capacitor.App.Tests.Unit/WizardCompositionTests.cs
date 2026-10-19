@@ -302,7 +302,7 @@ public class WizardCompositionAbandonTests {
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
+                    graph.Auth, graph.Install, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(harness.Claims.Pending()).IsEmpty();
