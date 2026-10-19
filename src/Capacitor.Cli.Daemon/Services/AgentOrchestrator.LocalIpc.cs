@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -109,7 +110,18 @@ internal partial class AgentOrchestrator {
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
-                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null)),
+            .. LedgerOnlyAgents().Select(l => LedgerStatusRow(l.Entry, l.Status))];
+
+    static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) => new(
+        entry.AgentId, KindText(LaunchKind.Default), entry.Vendor, entry.Launch.RepoPath, status,
+        entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
+        string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
+        Title: entry.Launch.Title, WorktreePath: entry.Launch.WorktreePath,
+        WorkLocation: entry.Launch.Work == WorkLocation.OwnedWorktree ? WorkLocationText.Owned : WorkLocationText.Borrowed,
+        SessionId: entry.SessionId,
+        Branch: string.IsNullOrWhiteSpace(entry.Launch.WorktreeBranch) ? null : entry.Launch.WorktreeBranch,
+        Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame

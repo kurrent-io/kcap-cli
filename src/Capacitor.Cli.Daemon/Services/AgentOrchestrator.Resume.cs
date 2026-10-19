@@ -643,6 +643,7 @@ internal partial class AgentOrchestrator {
         }
 
         attempt?.Cancel();
+        _statusNotifier.Pulse();
 
         return new ResumeDiscard(entry, attempt is not null, null);
     }
@@ -752,6 +753,8 @@ internal partial class AgentOrchestrator {
                 discarded = attempt?.Discarded == true;
             }
 
+            _statusNotifier.Pulse();
+
             // Whatever the attempt had started is ended by now, so nothing still runs in the worktree.
             if (discarded) await RemoveDiscardedResourcesAsync(entry);
 
@@ -782,6 +785,7 @@ internal partial class AgentOrchestrator {
             _resumeCandidates[agentId] = resuming;
         }
 
+        _statusNotifier.Pulse();
         _ = RunResumeThroughLaneAsync(resuming, _shutdownCts.Token);
 
         return Task.FromResult("resuming");
@@ -1151,6 +1155,8 @@ internal partial class AgentOrchestrator {
                 LogResumeLedgerFailed(ex, "interrupting", agentId);
             }
         }
+
+        _statusNotifier.Pulse();
     }
 
     Task ReportResumeFailedAsync(ResumeLedgerEntry entry, string reason, int? exitCode, CancellationToken ct) =>

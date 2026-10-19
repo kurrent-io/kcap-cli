@@ -674,6 +674,47 @@ public class AgentOrchestratorResumeOnBootTests {
         start.SetResult();
     }
 
+    /// <summary>The desktop app has no other view of an agent without a process: the status payload lists
+    /// each ledger-only entry once, with its launch's identity and, when interrupted, the reason.</summary>
+    [Test]
+    public async Task The_status_snapshot_lists_resuming_and_interrupted_entries_with_the_reason() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-1");
+        var gone = Entry(f, "gone-1", state: ResumeState.Interrupted);
+        f.Orch.ResumeLedger!.Write(gone with { LastError = "too_old" });
+
+        f.Orch.LoadResumeLedger();
+        var rows = f.Orch.SnapshotAgentsForStatus().ToDictionary(r => r.Id);
+
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows["resume-1"].Status).IsEqualTo("Resuming");
+        await Assert.That(rows["resume-1"].Interruption).IsNull();
+        await Assert.That(rows["gone-1"].Status).IsEqualTo("Interrupted");
+        await Assert.That(rows["gone-1"].Interruption).IsEqualTo("too_old");
+        await Assert.That(rows["gone-1"].SessionId).IsEqualTo("session-gone-1");
+        await Assert.That(rows["gone-1"].WorktreePath).IsEqualTo(gone.Launch.WorktreePath);
+        await Assert.That(rows["gone-1"].Branch).IsEqualTo("capacitor/custom-gone-1");
+        await Assert.That(rows["gone-1"].Title).IsEqualTo("the thing");
+        await Assert.That(rows["gone-1"].Vendor).IsEqualTo("cursor");
+        await Assert.That(rows["gone-1"].Kind).IsEqualTo("agent");
+    }
+
+    /// <summary>An interruption changes nothing else the status payload reads, so it must pulse on its own.</summary>
+    [Test]
+    public async Task An_interrupted_resume_pulses_the_status_notifier() {
+        var f = Build(new ResumableFactory { ThrowsFromSupports = true });
+        await using var _ = f.Orch;
+        Entry(f, "faults-1");
+        f.Orch.LoadResumeLedger();
+        var before = f.Orch.StatusNotifierForTest.Version;
+
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Orch.StatusNotifierForTest.Version).IsGreaterThan(before);
+        await Assert.That(f.Orch.SnapshotAgentsForStatus().Single().Status).IsEqualTo("Interrupted");
+    }
+
     /// <summary>A fault outside the resume's own failure path leaves the entry where <c>kcap agent ls</c>
     /// shows it and <c>kcap agent resume</c> can retry it.</summary>
     [Test]
