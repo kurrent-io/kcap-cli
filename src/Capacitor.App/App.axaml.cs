@@ -1083,7 +1083,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
-        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState);
+        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested);
         _wizardWindow = window;
 
         // The SAME consumer function, over the wizard's own surface: outcome presentation stays
@@ -1156,16 +1156,20 @@ public partial class App : Application {
     // closing the window mid-onboarding abandons it and hands over to the normal graph, it never
     // exits the app.
     internal static MainWindow ShowWizardWindow(
-            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null) {
+            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null,
+            LocalInstallController? install = null, Func<bool>? shuttingDown = null) {
         var window = new MainWindow { Onboarding = wizard };
         if (appState is not null) {
             WindowSizeMemory.Restore(window, appState);
             WindowSizeMemory.Attach(window, appState);
         }
 
-        // Never cancelled — the window only notifies the flow. Detached once the flow has closed, so
-        // the main surface's own hide-on-close is the window's only close behaviour after handover.
-        void OnClosing(object? sender, WindowClosingEventArgs e) => wizard.RequestClose();
+        // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
+        // only close behaviour after handover.
+        void OnClosing(object? sender, WindowClosingEventArgs e) {
+            var userClose = e.CloseReason == WindowCloseReason.WindowClosing && shuttingDown?.Invoke() != true;
+            if (WizardWindowClosing(wizard, install, userClose)) e.Cancel = true;
+        }
         window.Closing += OnClosing;
         wizard.CloseRequested += () => window.Closing -= OnClosing;
 
@@ -1173,6 +1177,21 @@ public partial class App : Application {
         window.Show();
 
         return window;
+    }
+
+    /// <summary>
+    /// Whether the window must stay open. A user's close during a local install interrupts it and keeps
+    /// the wizard on Install, so the rollback and its settled outcome stay in view; the next close goes
+    /// through. A quit is never held: the shutdown path settles the install itself.
+    /// </summary>
+    internal static bool WizardWindowClosing(OnboardingViewModel wizard, LocalInstallController? install, bool userClose) {
+        if (userClose && install is { Running: true }) {
+            install.Interrupt();
+            return true;
+        }
+
+        wizard.RequestClose();
+        return false;
     }
 
     // One logical close (the Done step's finish and the window's own Closing both route through

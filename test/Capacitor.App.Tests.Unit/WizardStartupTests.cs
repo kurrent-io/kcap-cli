@@ -822,6 +822,66 @@ public class WizardStartupTests {
         });
     }
 
+    /// A titlebar close mid-install undoes the install with the window still open on Install, and
+    /// only a close after the settle closes the wizard.
+    [Test]
+    public async Task A_window_close_during_install_interrupts_and_keeps_the_wizard_on_install() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        var setup = new InterruptibleSetup();
+        harness.Cli.SetupLocalBehavior = setup.RunAsync;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await setup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            var heldFirst  = AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+            var heldSecond = AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true);
+
+            await Assert.That(heldFirst).IsTrue();
+            await Assert.That(heldSecond).IsTrue();
+            await Assert.That(graph.ViewModel.Closed).IsFalse();
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Install);
+
+            setup.Release.SetResult();
+            await graph.Install.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(setup.Signals).IsEqualTo(1);
+            await Assert.That(graph.ViewModel.Closed).IsFalse();
+            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.Install);
+
+            await Assert.That(AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: true)).IsFalse();
+            await Assert.That(graph.ViewModel.Closed).IsTrue();
+
+            return true;
+        });
+    }
+
+    /// A quit closes the window through the shutdown path, which settles the install itself.
+    [Test]
+    public async Task A_shutdown_close_during_install_is_not_held() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
+        var setup = new InterruptibleSetup();
+        harness.Cli.SetupLocalBehavior = setup.RunAsync;
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            await setup.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(AppUnderTest.WizardWindowClosing(graph.ViewModel, graph.Install, userClose: false)).IsFalse();
+            await Assert.That(graph.ViewModel.Closed).IsTrue();
+            await Assert.That(setup.Signals).IsEqualTo(0);
+
+            setup.Release.SetResult();
+            await graph.Install.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            return true;
+        });
+    }
+
     // ── the wizard graph: composition invariants ──────────────────────────────
 
     [Test]
