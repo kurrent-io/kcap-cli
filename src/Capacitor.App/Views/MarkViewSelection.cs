@@ -80,15 +80,25 @@ static class MarkViewSelection {
     }
 
     static void OnPressed(MarkdownViewer viewer, PointerPressedEventArgs e) {
-        if (e.ClickCount != 2 || !e.GetCurrentPoint(viewer).Properties.IsLeftButtonPressed) return;
+        if (!e.GetCurrentPoint(viewer).Properties.IsLeftButtonPressed) return;
         if (LayerOf(viewer) is not Visual layer) return;
         var point = e.GetPosition(layer);
-        if (HitTestEntry(layer, point) is not { } entry || HitTestOffset(layer, point) is not { } offset) return;
-        var start = AbsStart(entry);
-        var plain = PlainText(entry);
-        var (from, to) = LineSelection.LineBounds(plain[MarkerLength(entry, plain)..], offset - start);
-        Anchor(layer) = start + from;
-        Focus(layer) = start + to;
+        if (e.ClickCount == 2) {
+            if (HitTestEntry(layer, point) is not { } entry || HitTestOffset(layer, point) is not { } offset) return;
+            var start = AbsStart(entry);
+            var plain = PlainText(entry);
+            var (from, to) = LineSelection.LineBounds(plain[MarkerLength(entry, plain)..], offset - start);
+            Anchor(layer) = start + from;
+            Focus(layer) = start + to;
+            layer.InvalidateVisual();
+            return;
+        }
+        if (e.ClickCount != 1 || HitTestOffset(layer, point) is not null) return;
+        // Padding sits outside the glyph bounds, so MarkView records no anchor and the drag never starts.
+        if (Nearest(layer, point) is not { } inside || HitTestOffset(layer, inside) is not { } snapped) return;
+        Anchor(layer) = snapped;
+        Focus(layer) = snapped;
+        IsDragging(viewer) = true;
         layer.InvalidateVisual();
     }
 

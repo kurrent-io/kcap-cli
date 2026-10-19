@@ -142,4 +142,20 @@ public class MarkViewSelectionTests {
             } finally { window.Close(); }
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_drag_starting_in_left_padding_selects_from_the_nearest_character() {
+        await RunOnUiAsync(async () => {
+            var (window, view, _) = Show("```\nhello world\n```");
+            try {
+                var block = All<TextBlock>(view).First(t => Reads(t).Contains("hello", StringComparison.Ordinal));
+                var mid = block.TextLayout.HitTestTextPosition(0);
+                var origin = block.TranslatePoint(new Point(mid.X, mid.Y + mid.Height / 2), window)!.Value;
+                var end = block.TranslatePoint(new Point(block.TextLayout.HitTestTextPosition(10).X, mid.Y + mid.Height / 2), window)!.Value;
+                Drag(window, new Point(origin.X - 8, origin.Y), end);
+                await Assert.That(await Copied(view)).Contains("hello");
+            } finally { window.Close(); }
+        });
+    }
 }
