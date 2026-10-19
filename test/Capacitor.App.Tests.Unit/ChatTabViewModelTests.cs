@@ -1500,10 +1500,11 @@ public class ChatTabViewModelTests {
             var answered = new List<string>();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
-                new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true }, new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
                 sessionId: new BehaviorSubject<string?>("s1")) {
                 InputSending = sid => { sending.Add(sid); return () => answered.Add(sid); },
             };
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "refused";
             var send = chat.SendCommand.Execute().ToTask();
@@ -3328,8 +3329,9 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -3378,8 +3380,9 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -3405,11 +3408,12 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
-            var feed = new ScriptedFeed();
+            var feed = new ScriptedFeed { ResetNext = true };
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
                 new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -3433,6 +3437,60 @@ public class ChatTabViewModelTests {
 
     /// A refusal with nothing on screen replaces the wait with its reason; the next read that is
     /// not one clears it.
+    /// A remote prompt sent before the transcript's seed has nothing to be acknowledged against: its
+    /// echo can land inside the replayed history. Send waits for the seed; a local pane does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(AgentOrigin.Remote, false)]
+    [Arguments(AgentOrigin.Local, true)]
+    public async Task Send_waits_for_the_transcript_seed_on_the_remote_lane(AgentOrigin origin, bool beforeSeed) {
+        await RunOnUiAsync(async () => {
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feed = new ScriptedFeed();
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", origin, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            chat.ComposerText = "do it";
+
+            await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsEqualTo(beforeSeed);
+
+            feed.ResetNext = true;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A queued prompt's send-now waits for the new feed's seed too, after the pane moves to another session.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_queued_prompt_waits_for_a_new_feeds_seed_before_sending_now() {
+        await RunOnUiAsync(async () => {
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feeds = new Dictionary<string, ScriptedFeed> { ["s1"] = new() { ResetNext = true }, ["s2"] = new() { ResetNext = true } };
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), key => feeds[key],
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            await WaitUntilAsync(() => chat.HasSeed, what: "the first feed's seed");
+            chat.ComposerText = "do it";
+            await chat.SendCommand.Execute();
+            var own = chat.QueuedMessages.Single();
+            await Assert.That(own.CanSendNow).IsTrue();
+
+            session.OnNext(Session("s2"));
+            await Assert.That(chat.HasSeed).IsFalse();
+            await Assert.That(own.CanSendNow).IsFalse();
+
+            await WaitUntilAsync(() => chat.HasSeed, what: "the new feed's seed");
+            await Assert.That(own.CanSendNow).IsTrue();
+            await chat.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_refused_read_says_why_in_place_of_the_wait_until_a_read_is_not_refused() {
