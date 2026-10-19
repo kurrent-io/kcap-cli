@@ -252,6 +252,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                 options => {
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
                     options.HttpMessageHandlerFactory = Guarded;
+                    HttpClientExtensions.AddObservationHeaders(options.Headers, config.UpdateCheckOff);
                     options.WebSocketFactory = (context, ct) => {
                         LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
 

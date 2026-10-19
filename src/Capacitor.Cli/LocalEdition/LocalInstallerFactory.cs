@@ -25,7 +25,8 @@ sealed class LocalInstallerFactory(
                 new LocalPurgeRecovery(service, home, recorders, config, mayStop: false, force: false, installer.Progress),
                 new LocalUpgradeRecovery(stack, installer.Progress),
             ]) {
-            Ollama = new OllamaClient(http.CreateClient(CapacitorClients.Ollama), OllamaClient.DefaultUrl, time),
+            Ollama       = new OllamaClient(http.CreateClient(CapacitorClients.Ollama), OllamaClient.DefaultUrl, time),
+            ClientCopies = LocalClientCopies.ForCurrentProcess(home, time),
         };
     }
 }

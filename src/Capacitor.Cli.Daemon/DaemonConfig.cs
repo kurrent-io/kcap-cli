@@ -100,6 +100,9 @@ public class DaemonConfig {
     /// was resolved.</summary>
     public string? DestinationRefusal => _profiles is null ? null : LocalDestination.Refusal(ServerUrl, _profiles.Resolution.Endpoint);
 
+    /// <summary>Whether the resolved profile opted out of the update check; false when nothing was resolved.</summary>
+    public bool UpdateCheckOff => _profiles?.Effective?.UpdateCheck == false;
+
     /// <summary>Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
     /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children
     /// whose epoch differs from the current one (i.e. survivors of a prior incarnation). Null → the
