@@ -1,19 +1,16 @@
 using System.Net;
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Continuation;
-using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 using TUnit.Assertions.Enums;
 
-namespace Capacitor.Cli.Tests.Unit.Continuation;
+namespace Capacitor.Cli.Core.Tests.Unit.Continuation;
 
 public class SessionTakeoverTests {
-    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
-
     const string Previous = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const string Current  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const string Base     = "http://x";
 
-    AgentSessions Local => field ??= new(Config.Root, _ => null);
+    readonly LocalLiveness Local = new();
 
     static string Ended() => """{"session_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","status":"ended"}""";
 
@@ -42,11 +39,7 @@ public class SessionTakeoverTests {
 
     static JsonObject Outcome(TakeoverResult r) => ((TakeoverResult.Completed)r).Outcome;
 
-    void DeadClaim(string session) {
-        var note = Config.Root.Path("agent-sessions", "900001");
-        Directory.CreateDirectory(Path.GetDirectoryName(note)!);
-        File.WriteAllText(note, $"{session}\nlx:another-boot:1");
-    }
+    void DeadClaim(string session) => Local.Set(session, SessionLiveness.Exited);
 
     [Test]
     public async Task Refuses_to_continue_itself_across_id_forms() {
@@ -81,7 +74,7 @@ public class SessionTakeoverTests {
 
     [Test]
     public async Task Refuses_while_a_live_process_here_runs_it() {
-        Local.Claim(Environment.ProcessId, SessionId.Parse(Previous)!);
+        Local.Set(Previous, SessionLiveness.Running);
         var routes = Server(Ended());
 
         var r = await Run(routes);
@@ -100,7 +93,7 @@ public class SessionTakeoverTests {
 
     [Test]
     public async Task Force_overrides_a_live_local_claim() {
-        Local.Claim(Environment.ProcessId, SessionId.Parse(Previous)!);
+        Local.Set(Previous, SessionLiveness.Running);
         var r = await Run(Server(Active(TimeSpan.FromMinutes(5))), force: true);
         await Assert.That(Outcome(r)["liveness"]!.GetValue<string>()).IsEqualTo("forced");
     }
@@ -549,6 +542,16 @@ public class SessionTakeoverTests {
         var o = Outcome(await Run(routes));
 
         await Assert.That(o["plans_error"]!.GetValue<string>()).Contains("500");
+    }
+
+    sealed class LocalLiveness : ISessionLivenessSource {
+        readonly Dictionary<SessionId, SessionLiveness> _known = [];
+
+        public void Set(string session, SessionLiveness liveness) => _known[SessionId.Parse(session)!] = liveness;
+
+        public void Reap() { }
+
+        public SessionLiveness Liveness(SessionId session) => _known.GetValueOrDefault(session, SessionLiveness.Unknown);
     }
 
     /// <summary>An in-memory server: unrouted requests answer 404 so a missing route fails the test

@@ -336,17 +336,28 @@
                             <ItemsControl ItemsSource="{Binding QueuedMessages}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:QueuedChatMessage">
-                                        <StackPanel Margin="0,2" Spacing="2">
-                                            <TextBlock Text="{Binding DisplayText}" ToolTip.Tip="{Binding DisplayText}" FontSize="13.5"
-                                                       TextTrimming="CharacterEllipsis" MaxLines="1"
-                                                       Foreground="{StaticResource KcapMutedBrush}" />
-                                            <TextBlock Text="{x:Static vm:QueuedChatMessage.AwaitingPickupNote}" IsVisible="{Binding IsAwaitingPickup}"
-                                                       FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                            <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
-                                                       FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
-                                            <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
-                                                       FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                        </StackPanel>
+                                        <Grid Margin="0,2" ColumnDefinitions="*,Auto">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding DisplayText}" ToolTip.Tip="{Binding DisplayText}" FontSize="13.5"
+                                                           TextTrimming="CharacterEllipsis" MaxLines="1"
+                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                                <TextBlock Text="{Binding PickupNote}"
+                                                           IsVisible="{Binding PickupNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                           FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                                <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
+                                                           FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
+                                                <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
+                                                           FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                            </StackPanel>
+                                            <Button x:Name="SendQueuedButton" Grid.Column="1" Classes="kcapPrimary" Content="Send"
+                                                    Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    IsVisible="{Binding CanSendNow}"
+                                                    Height="24" Padding="12,0" Margin="12,0,0,0"
+                                                    VerticalAlignment="Center" VerticalContentAlignment="Center"
+                                                    FontSize="13" FontWeight="SemiBold" CornerRadius="7"
+                                                    AutomationProperties.Name="Send queued message" />
+                                        </Grid>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

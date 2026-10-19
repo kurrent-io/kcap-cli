@@ -31,7 +31,7 @@ public class LaunchdUnitRefreshTests {
     static string Print(string spawnType, bool running = true) =>
         $"gui/501/{Label} = {{\n\tstate = {(running ? "running" : "not running")}\n\tspawn type = {spawnType}\n}}\n";
 
-    static readonly Func<TimeSpan> Plenty = static () => TimeSpan.FromMinutes(1);
+    static readonly Func<TimeSpan> Plenty = static () => LaunchdServiceManager.ReloadBudget + TimeSpan.FromMinutes(1);
 
     /// <param name="bootstrapExits">Exit code of each successive bootstrap; the last repeats.</param>
     /// <param name="bootoutExit">A non-zero exit leaves the job loaded; zero unloads it.</param>

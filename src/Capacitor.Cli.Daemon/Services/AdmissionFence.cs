@@ -41,6 +41,11 @@ internal sealed partial class AdmissionFence {
 
     public enum AcquireResult { Acquired, Busy, Fenced }
 
+    /// <summary>Admitted work whose entry point has not returned yet.</summary>
+    public int InFlight {
+        get { lock (_gate) return _inFlight; }
+    }
+
     /// <summary>True while a fence is held or committed — new work is refused.</summary>
     public bool IsFenced {
         get { lock (_gate) return FencedLocked(); }

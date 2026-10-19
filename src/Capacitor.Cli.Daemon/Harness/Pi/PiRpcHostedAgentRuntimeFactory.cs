@@ -109,6 +109,8 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
     /// unlike a vendor whose model-selection hook is unverified.</summary>
     public bool SupportsModelSelection => true;
 
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
+
     public IReadOnlyList<string> CatalogFingerprintPaths =>
         paths is null ? [] : [paths.AuthJson, paths.ModelsJson];
 
@@ -403,6 +405,8 @@ internal sealed partial class PiRpcHostedAgentRuntimeFactory(
     internal static ProcessStartInfo BuildPsi(DaemonConfig config, RuntimeStartContext ctx,
                                                PiReviewerLaunchPaths? reviewer, IReadOnlyList<PiReviewerTool>? tools) {
         var argv = new List<string> { "--mode", "rpc" };
+
+        if (ctx.ResumeSessionId is { Length: > 0 } resume) argv.AddRange(["--session", resume]);
 
         if (reviewer is not null) {
             // Order is pinned by test. --session-dir and --offline are containment, not hygiene: without the

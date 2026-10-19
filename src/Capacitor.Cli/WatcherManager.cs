@@ -228,7 +228,7 @@ public sealed partial class WatcherManager(
         }
     }
 
-    bool PidAlive(string key) => PidAlive(paths, key);
+    internal bool PidAlive(string key) => PidAlive(paths, key);
 
     /// <summary>The pid file names a process that is still this watcher's incarnation, irrespective of
     /// whether it's wedged. A pid file that exists but cannot be read counts as alive: reading it as

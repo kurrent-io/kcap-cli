@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -15,6 +16,7 @@ public class ShutdownAgentReportTests {
         var server = new CaptureServerConnection();
         var orch   = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.ShutdownIntent = ShutdownIntent.EndAgents;
 
         orch.SeedAgentForTest("shutdown-1", status: "Running");
         orch.SeedAgentForTest("shutdown-2", status: "Running");
@@ -34,6 +36,7 @@ public class ShutdownAgentReportTests {
         var server = new CaptureServerConnection();
         var orch   = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.ShutdownIntent = ShutdownIntent.EndAgents;
 
         orch.SeedAgentForTest("live-token-1", status: "Running");
 
@@ -50,6 +53,7 @@ public class ShutdownAgentReportTests {
         var server = new CaptureServerConnection();
         var orch   = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.ShutdownIntent = ShutdownIntent.EndAgents;
 
         orch.SeedAgentForTest("done-1", status: "Completed");
 
@@ -64,12 +68,29 @@ public class ShutdownAgentReportTests {
         var server = new CaptureServerConnection();
         var orch   = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.ShutdownIntent = ShutdownIntent.EndAgents;
 
         orch.SeedAgentForTest("private-1", status: "Running", isPrivate: true);
 
         await orch.DisposeAsync();
 
         await Assert.That(server.ShutdownReports.Any(r => r.AgentId == "private-1")).IsFalse();
+    }
+
+    /// <summary>A keep-agents shutdown only spares the agents it stops for resume: a flow participant
+    /// has no resume, so it ends and is reported as it always was.</summary>
+    [Test]
+    public async Task A_keep_agents_shutdown_still_reports_a_non_interactive_agent() {
+        var server = new CaptureServerConnection();
+        var orch   = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.SeedAgentForTest("flow-1", LaunchKind.ReviewFlow, flowRunId: "run-1", flowRole: "reviewer");
+
+        await orch.DisposeAsync();
+
+        await Assert.That(server.ShutdownReports)
+            .Contains(("flow-1", "Failed", AgentOrchestrator.DaemonShutdownStopReason, false));
     }
 
     /// <summary>A server that has stopped answering must not hold a shutdown open: the budget is a
@@ -79,6 +100,7 @@ public class ShutdownAgentReportTests {
         var server = new CaptureServerConnection { ShutdownReportHangs = true };
         var orch   = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.ShutdownIntent = ShutdownIntent.EndAgents;
 
         orch.SeedAgentForTest("hung-1", status: "Running");
 

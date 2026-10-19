@@ -137,7 +137,8 @@ public class AgentStopTests {
     [Arguments("a\tRunning\t/repo\tagent\tflow", 1)]
     [Arguments("a\tRunning\t/repo\tagent\t\t", 0)]
     [Arguments("a\tRunning\t/repo\tagent\t\t\tFix it", 0)]
-    [Arguments("a\tRunning\t/repo\tagent\t\t\tFix it\textra", 1)]
+    [Arguments("a\tRunning\t/repo\tagent\t\t\tFix it\tRunning", 0)]
+    [Arguments("a\tRunning\t/repo\tagent\t\t\tFix it\tRunning\textra", 1)]
     [Arguments("a\tRunning\t/repo\nb\tRunning\t/repo\tagent", 1)]
     [Arguments("\tRunning\t/repo", 1)]
     public async Task Stop_all_refuses_the_entire_malformed_table(string table, int expected) {

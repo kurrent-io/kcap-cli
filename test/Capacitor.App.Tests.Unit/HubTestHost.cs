@@ -48,7 +48,9 @@ public sealed class HubTestHost : IAsyncDisposable {
 
     /// <param name="admissionDelay">Holds back the server's registration of each connection, to widen
     /// the gap <see cref="BroadcastAsync"/> waits out into one a test can rely on.</param>
-    public static async Task<HubTestHost> StartAsync(bool requireAuth = false, TimeSpan? admissionDelay = null) {
+    /// <param name="onRequest">Sees each request's path and whether it is a WebSocket upgrade, before the hub does.</param>
+    public static async Task<HubTestHost> StartAsync(bool requireAuth = false, TimeSpan? admissionDelay = null,
+            Action<string, bool>? onRequest = null) {
         DaemonsHandler = () => [];
         LaunchHandler = _ => "agent-1";
         _launchCalls = 0;
@@ -87,6 +89,11 @@ public sealed class HubTestHost : IAsyncDisposable {
                 new DelayedAdmission(delay, sp.GetRequiredService<ILogger<DefaultHubLifetimeManager<SessionsHub>>>()));
 
         var app = builder.Build();
+        if (onRequest is not null)
+            app.Use(async (ctx, next) => {
+                onRequest(ctx.Request.Path.Value ?? "", ctx.WebSockets.IsWebSocketRequest);
+                await next();
+            });
         if (requireAuth)
             app.Use(async (ctx, next) => {
                 if (!ctx.Request.Headers.ContainsKey("Authorization")) {

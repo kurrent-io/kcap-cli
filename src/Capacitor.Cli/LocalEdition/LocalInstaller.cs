@@ -34,6 +34,9 @@ sealed class LocalInstaller(
     /// <summary>Replaces the platform's socket-path limit.</summary>
     public int? SocketLimit { get; init; }
 
+    /// <summary>How long it waits for another root's hold on the per-user unit lock.</summary>
+    public TimeSpan UnitLockWait { get; init; } = LocalUnitLock.Wait;
+
     /// <summary>Reports to whichever <see cref="InstallAsync"/> is running, so a recovery built before the call can
     /// report into it.</summary>
     public IProgress<LocalInstallEvent> Progress => new SyncProgress<LocalInstallEvent>(Report);
@@ -99,7 +102,7 @@ sealed class LocalInstaller(
 
         try {
             // Held from the empty-slot check of the unit through Install, so two roots cannot both pass it.
-            unitLock = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, ct);
+            unitLock = await LocalUnitLock.AcquireAsync(home, UnitLockWait, TimeProvider.System, ct);
             plan     = Checks.Recheck(Version);
 
             _progress.Report(new LocalInstallEvent.PreflightPassed(plan.Hint, plan.Version, root.Directory));
@@ -182,16 +185,27 @@ sealed class LocalInstaller(
         return committed;
     }
 
-    /// <summary>Takes over the unit lock. Nothing is downloaded, no port is taken and no journal is written: the
-    /// profile is published only once the installation's own server answers unfenced.</summary>
+    /// <summary>Takes over the unit lock. No port is taken and no journal is written: the profile is published only
+    /// once the installation's own server answers unfenced. Nothing is downloaded unless an uninstall removed the
+    /// binaries; then the installed version is staged again over the data it kept.</summary>
     async Task<LocalInstallEvent.Committed> ReuseAsync(LocalInstallation existing, LocalUnitLock unitLock, CancellationToken ct) {
-        var unit = LocalServerUnit.ForInstallation(root, existing.Port);
+        var unit    = LocalServerUnit.ForInstallation(root, existing.Port);
+        var details = new SetupDetails(existing.Id, existing.Port, existing.Version, existing.ServerUrl, Path.GetFullPath(config.Directory), ActiveProfile());
+
+        LocalInstallFailure NotOurs() => new(LocalInstallFailureCode.NotOurServer,
+            $"The {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed.");
 
         try {
-            LocalOwnUnit.Ensure(root, unit, service,
-                () => new LocalInstallFailure(LocalInstallFailureCode.NotOurServer,
-                    $"The {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed."),
-                startPresent: true);
+            if (!File.Exists(unit.ServerBinary)) {
+                // Decided before bin/ is touched: a refusal must leave the installation as it found it.
+                var owner = service.Owner(unit);
+                if (owner is not { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent } && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
+                    throw NotOurs();
+
+                await RestageAsync(details, ct);
+            }
+
+            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true);
         } finally {
             unitLock.Dispose();
         }
@@ -206,8 +220,6 @@ sealed class LocalInstaller(
                 $"Something other than this installation's local server answers on {unit.BaseUrl}, so the profile was not changed.");
 
         ct.ThrowIfCancellationRequested();
-
-        var details = new SetupDetails(existing.Id, existing.Port, existing.Version, existing.ServerUrl, Path.GetFullPath(config.Directory), ActiveProfile());
 
         try {
             await LocalSetupCommit.PublishProfileAsync(details, "Fix the configuration, then run kcap setup --local again.");
@@ -265,6 +277,23 @@ sealed class LocalInstaller(
         DurableDirectory.Sync(bin);
 
         _progress.Report(new LocalInstallEvent.Unpacked(versionDir));
+    }
+
+    /// <summary>Whatever an interrupted earlier attempt left in <c>bin/</c> is replaced, which is safe only while
+    /// nothing of the stack runs: the registry still names the installation, so a crash here is retried by the next
+    /// setup rather than journaled.</summary>
+    async Task RestageAsync(SetupDetails details, CancellationToken ct) {
+        if (LocalStackProbe.FindLive(root) is { } live)
+            throw new LocalInstallFailure(LocalInstallFailureCode.StartFailed,
+                $"The local installation's binaries are missing, but {live} under {root.Directory}. Nothing was changed.");
+
+        LocalStackStop.Delete(root, "bin");
+
+        try {
+            await StageAsync(details, ct);
+        } catch (LocalBundleException bundle) {
+            throw new LocalInstallFailure(bundle.Code, bundle.Message);
+        }
     }
 
     async Task RollBackAsync(LifecycleLease lease, LifecycleJournalEntry entry, LocalInstallFailure failure) {

@@ -654,7 +654,7 @@ public class KcapCliTests {
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "refresh", "--name", "daemon-a", "--force"], CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(75));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(105));
         await Assert.That(runner.SeenOptions.EnvOverlay![KcapCli.ExpectServerUrlVar]).IsEqualTo(CanonicalServer);
     }
 

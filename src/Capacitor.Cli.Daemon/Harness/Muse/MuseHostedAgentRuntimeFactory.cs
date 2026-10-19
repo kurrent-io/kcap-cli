@@ -118,6 +118,8 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
 
     public bool ReviewFlowRedirectsHome => false;
 
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
+
     public UnattendedSupport DescribeUnattendedSupport() =>
         ReviewerRefusal() is { } reason ? new(false, reason) : new(true, null);
 

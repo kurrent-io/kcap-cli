@@ -13,7 +13,6 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
-using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -110,36 +109,10 @@ public sealed class UninstallCommand(
         // — this flag captures the boolean for the final decision only.
         var hadFailures = false;
 
-        // Deregister any OS-managed daemon services FIRST. `daemon stop` defers to
-        // the supervisor for service-managed daemons (a raw kill would be
-        // auto-restarted), so without this the launchd/systemd/Scheduled-Task unit
-        // would survive uninstall and keep relaunching a daemon whose config we're
-        // about to delete. Uninstalling the unit also stops the running instance
-        // (launchctl bootout / systemctl disable --now), after which the plain
-        // `daemon stop --yes` below mops up any non-service daemons.
-        try {
-            var services = ServiceManagerFactory.ForCurrentOs(config, home, time);
-            foreach (var id in services.ListInstalled()) {
-                if (services.Uninstall(id, out var error)) {
-                    await Console.Out.WriteLineAsync($"  • Removed daemon service '{id}' ({services.Describe()})");
-                } else {
-                    await Console.Error.WriteLineAsync($"  • Could not remove daemon service '{id}': {error}");
-                    hadFailures = true;
-                }
-            }
-        } catch (PlatformNotSupportedException) {
-            // No service backend on this OS — nothing to deregister.
-        }
-
-        // Stop daemons first — they hold lock files inside the config dir we're
-        // about to delete. --yes silences the multi-daemon confirmation so this
-        // works non-interactively. A non-zero exit code means at least one
-        // daemon couldn't be stopped; we leave the config dir alone in that case.
-        if (await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time)
-                .HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
-
-        // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
-        if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
+        // Daemons hold lock files inside the config dir we're about to delete; one still running leaves the
+        // config dir in place.
+        if (!await new OutgoingRecorders(store, config, profiles, home, harnesses, binaries, watchers, time).StopAsync())
+            hadFailures = true;
 
         var accountStore  = AccountStore.Beside(store);
         var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries, accountStore);

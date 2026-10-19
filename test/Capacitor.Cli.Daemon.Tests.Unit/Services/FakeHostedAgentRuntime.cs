@@ -14,7 +14,7 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
     public string Vendor              => vendor;
     public int    Pid                 => 0;
     public bool   HasExited           => ExitGate.Task.IsCompleted;
-    public int?   ExitCode            => 0;
+    public int?   ExitCode            { get; init; } = 0;
     public bool   EmitsTerminalOutput => emitsTerminalOutput;
 
     /// <summary>Released by a test to simulate the hosted process exiting.</summary>
@@ -49,10 +49,25 @@ sealed class FakeHostedAgentRuntime(string vendor, bool emitsTerminalOutput) : I
     }
 
     public void Resize(ushort              cols, ushort rows) { }
-    public Task RequestGracefulStopAsync() => Task.CompletedTask;
-    public Task WaitForExitAsync(TimeSpan?    timeout = null) => Task.CompletedTask;
+    /// <summary>The order the graceful-stop and terminate calls arrived in.</summary>
+    public List<string> StopCalls { get; } = [];
+
+    /// <summary>When set, a graceful stop never returns and the process exits only when terminated,
+    /// like a child that has stopped reading its terminal.</summary>
+    public bool NeverExitsOnItsOwn { get; init; }
+
+    public Task RequestGracefulStopAsync() {
+        lock (StopCalls) StopCalls.Add("graceful");
+
+        return NeverExitsOnItsOwn ? new TaskCompletionSource().Task : Task.CompletedTask;
+    }
+
+    public async Task WaitForExitAsync(TimeSpan? timeout = null) {
+        if (NeverExitsOnItsOwn) await Task.WhenAny(ExitGate.Task, Task.Delay(timeout ?? Timeout.InfiniteTimeSpan));
+    }
 
     public Task TerminateAsync(TimeSpan? timeout = null) {
+        lock (StopCalls) StopCalls.Add("terminate");
         ExitGate.TrySetResult();
 
         return Task.CompletedTask;

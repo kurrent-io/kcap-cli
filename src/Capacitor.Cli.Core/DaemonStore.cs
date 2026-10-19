@@ -118,6 +118,12 @@ public sealed partial class DaemonStore(string directory) {
     public string RetiringMarkerPath(string daemonName) =>
         Path.Combine(StateDirectory(daemonName), "retiring.json");
 
+    /// <summary>The per-daemon resume ledger directory.</summary>
+    public string ResumeDirectory(string daemonName) => Path.Combine(StateDirectory(daemonName), "resume");
+
+    /// <summary>The liveness heartbeat file.</summary>
+    public string HeartbeatPath(string daemonName) => File(daemonName, "heartbeat");
+
     /// <summary>The per-daemon state directory.</summary>
     public string StateDirectory(string daemonName) => Path.Combine(Directory, Sanitize(daemonName));
 

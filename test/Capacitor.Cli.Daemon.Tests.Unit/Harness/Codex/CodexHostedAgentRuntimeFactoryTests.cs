@@ -195,6 +195,82 @@ public class CodexHostedAgentRuntimeFactoryTests {
         await Assert.That(start.Runtime).IsTypeOf<StubRuntime>();
     }
 
+    [Test]
+    public async Task Resume_on_the_pty_route_starts_the_pty_launcher() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = Factory(pty, appServerActive: false);
+
+        await factory.StartAsync(Ctx(isReviewFlow: false, wt.Path) with { ResumeSessionId = "thread-1" }, CancellationToken.None);
+
+        await Assert.That(pty.StartCalls).IsEqualTo(1);
+    }
+
+    /// <summary>A resumed local session was a terminal; on a daemon whose interactive launches go to
+    /// app-server it must come back as one, or <c>agent attach</c> has nothing to attach to.</summary>
+    [Test]
+    public async Task A_resume_requesting_pty_starts_the_pty_launcher_on_a_daemon_opted_into_app_server() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = Factory(pty, appServerActive: true, appServerInteractive: true);
+        var resumed = Ctx(isReviewFlow: false, wt.Path) with { ResumeSessionId = "thread-1", RequestedTransport = "pty" };
+
+        await Assert.That(factory.UsesAppServer(resumed)).IsFalse();
+        await factory.StartAsync(resumed, CancellationToken.None);
+
+        await Assert.That(pty.StartCalls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_reviewer_resume_without_the_app_server_route_refuses_to_start_a_pty_session() {
+        using var wt = new TempDir();
+        var pty = new RecordingPtyFactory();
+        var factory = Factory(pty, appServerActive: false);
+
+        await Assert.That(() => factory.StartAsync(Ctx(isReviewFlow: true, wt.Path) with { ResumeSessionId = "thread-parked-1" }, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+        await Assert.That(pty.StartCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_resume_requesting_app_server_takes_app_server_without_the_interactive_opt_in() {
+        using var wt = new TempDir();
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, appServerInteractive: false);
+        var resumed = Ctx(isReviewFlow: false, wt.Path) with { RequestedTransport = "app-server" };
+
+        await Assert.That(factory.UsesAppServer(resumed)).IsTrue();
+        await Assert.That(factory.UsesAppServer(Ctx(isReviewFlow: false, wt.Path))).IsFalse();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("pty")]
+    [Arguments("appserver")]
+    public async Task Both_transports_support_a_restart_resume(string? transport) {
+        await Assert.That(((IHostedAgentRuntimeFactory)Factory(new RecordingPtyFactory(), appServerActive: false)).SupportsRestartResume(transport)).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task App_server_resume_still_sends_thread_resume() {
+        using var wt   = new TempDir();
+        WriteWorktreeHooks(wt);
+        await using var fake = new FakeCodexAppServer();
+
+        using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
+
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+            Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam);
+
+        var start = await factory.StartAsync(
+            Ctx(isReviewFlow: true, wt.Path) with { ResumeSessionId = "thread-parked-1" }, CancellationToken.None).WaitAsync(HangGuard);
+        await start.Runtime.DisposeAsync();
+
+        await Assert.That(fake.ReceivedMethods).Contains("thread/resume");
+        await Assert.That(fake.LastResumeThreadId).IsEqualTo("thread-parked-1");
+    }
+
     // ── App-server route (spawn seam; isolated HOME so TrustWorktree touches nothing real) ──────
     [Test]
     [NotInParallel]

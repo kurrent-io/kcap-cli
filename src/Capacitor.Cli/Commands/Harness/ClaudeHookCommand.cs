@@ -256,6 +256,8 @@ public sealed class ClaudeHookCommand(
                 body = hook.ToJsonString();
         } catch { }
 
+        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
+
         var budget = clock.Budget(Ceiling(command));
 
         // Ahead of every gate below: the hosting daemon's hints are local, so neither the server's
@@ -532,6 +534,8 @@ public sealed class ClaudeHookCommand(
         // Normalize Claude's PascalCase event names to the kebab-case server
         // route convention (`SessionStart` → `session-start`).
         var command = ToKebab(eventName);
+
+        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
 
         // Taken out here, where the event is finally known. Its own rather than the caller's: this is
         // an entry point in its own right, and a budget is nothing but a ceiling read off the shared

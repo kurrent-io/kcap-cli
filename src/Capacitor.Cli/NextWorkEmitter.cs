@@ -47,17 +47,13 @@ static partial class NextWorkEmitter {
     [GeneratedRegex(@"^[A-Za-z0-9_]{1,64}\z")]
     private static partial Regex ArmName();
 
-    [GeneratedRegex(@"^[a-z0-9_]{1,64}\z")]
-    private static partial Regex CodePattern();
-
     [GeneratedRegex(@"^(?<arm>[A-Za-z0-9_]{1,64}): (?<state>[a-z_]{1,64})(?: \((?<code>[a-z0-9_]{1,64})\))?\z")]
     private static partial Regex ArmNotCurrent();
 
-    /// <summary>A server error or failure code: short snake-case, nothing else.</summary>
-    internal static bool IsCode(string value) => CodePattern().IsMatch(value);
+    internal static bool IsCode(string value) => NextWorkUntrustedText.IsCode(value);
 
-    internal const string DataOpen  = "<next-work-data>";
-    internal const string DataClose = "</next-work-data>";
+    internal const string DataOpen  = NextWorkUntrustedText.DataOpen;
+    internal const string DataClose = NextWorkUntrustedText.DataClose;
 
     internal const string Guidance =
         "Finish a listed item before starting new work. When you decide to defer something in this " +
