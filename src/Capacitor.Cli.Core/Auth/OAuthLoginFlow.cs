@@ -160,18 +160,13 @@ public static class OAuthLoginFlow {
     /// RFC 8628 §3.4-3.5 polling, shared by every provider. Parameterised on the token URL, the extra
     /// form fields, and how to read a token and an error code out of the response.
     /// </summary>
-    /// <param name="device">
-    /// Carries the <c>expires_in</c> that bounds the loop. Without it the poll ran forever against a
-    /// code the server had already discarded.
-    /// </param>
     internal static async Task<T?> PollDeviceGrantAsync<T, TResponse>(
             Func<Dictionary<string, string>, CancellationToken, Task<HttpResponseMessage>> post,
             Dictionary<string, string> form,
             System.Text.Json.Serialization.Metadata.JsonTypeInfo<TResponse> typeInfo,
             Func<TResponse, (T? Value, string? Error)> read,
             DeviceCodeResponse device, int interval,
-            CancellationToken ct, IAuthProgress progress, TimeProvider time,
-            TimeSpan? attemptTimeout = null)
+            CancellationToken ct, IAuthProgress progress, TimeProvider time)
         where T : class where TResponse : class {
         form["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code";
 
@@ -194,7 +189,7 @@ public static class OAuthLoginFlow {
             // Bound each attempt well inside the code's own lifetime: HttpClient's default timeout is
             // 100 seconds, which on a 300-second device code spends a third of the window on one hung
             // request.
-            using var attemptCap = new CancellationTokenSource(attemptTimeout ?? TimeSpan.FromSeconds(20), time);
+            using var attemptCap = new CancellationTokenSource(TimeSpan.FromSeconds(20), time);
             using var attempt    = CancellationTokenSource.CreateLinkedTokenSource(ct, attemptCap.Token);
 
             HttpResponseMessage response;
@@ -214,16 +209,18 @@ public static class OAuthLoginFlow {
             // otherwise piles up one undisposed response per tick for the code's whole lifetime.
             using var polled = response;
 
-            // Parse the body whatever the status: RFC 8628 §3.5 carries authorization_pending in a 400,
-            // and GitHub returns it in a 200. Only an UNREADABLE body is a transport problem - a 429 or
-            // a 5xx HTML page - and it is retried rather than force-unwrapped.
+            // Providers encode authorization_pending in both successful and error responses.
             TResponse? parsed = null;
 
             try {
                 parsed = await response.Content.ReadFromJsonAsync(typeInfo, attempt.Token);
-            } catch (Exception ex) when (ex is System.Text.Json.JsonException or HttpRequestException
-                                          || (ex is OperationCanceledException && !ct.IsCancellationRequested)) {
-                // fall through to the transient arm below
+            } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+                interval += 5;
+                progress.PollTick();
+
+                continue;
+            } catch (Exception ex) when (ex is System.Text.Json.JsonException or HttpRequestException) {
+                // Status distinguishes malformed success from a transient error page.
             }
 
             if (parsed is null) {
