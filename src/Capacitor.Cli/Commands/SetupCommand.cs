@@ -558,6 +558,9 @@ sealed class SetupCommand(
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
     internal Func<IReadOnlyList<string>, string?>? PickHandoffVendor { get; set; }
 
+    /// <summary>Whether the edition choice offers the local edition, which runs on macOS only.</summary>
+    internal bool LocalEditionAvailable { get; init; } = OperatingSystem.IsMacOS();
+
     /// <summary>The whole run's JSON report, set only while a <c>--json --no-prompt</c> run is in progress.</summary>
     SetupJsonReport? _json;
 
@@ -787,6 +790,28 @@ sealed class SetupCommand(
         string serverUrl;
         string  provider;
         bool    loginComplete = false; // Discovery authenticates inline; skip the Step-2 login.
+
+        // Only a bare run asks: a named server, --local or --org has already chosen.
+        if (serverUrlArg is null && local is null && requestedWorkspace is null && !noPrompt && AnsiConsole.Profile.Capabilities.Interactive) {
+            switch (ChooseEdition()) {
+                case SetupEdition.Choice.Local:
+                    var (parsed, refusal) = LocalSetupArgs.Parse([.. args, "--local"], Environment.GetEnvironmentVariable(ProfileOverrides.UrlVar));
+
+                    if (refusal is not null) {
+                        await Console.Error.WriteLineAsync($"  {refusal}");
+
+                        return SetupExit.Refused;
+                    }
+
+                    local = parsed;
+
+                    break;
+                case SetupEdition.Choice.Cloud:
+                    OpenSignUp();
+
+                    break;
+            }
+        }
 
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
@@ -2131,6 +2156,35 @@ sealed class SetupCommand(
               + $"--org/--slug create a workspace only for an account that has none — re-run with "
               + $"--server-url {landed} to configure that one.");
         };
+    }
+
+    SetupEdition.Choice ChooseEdition() {
+        telemetry.Funnel.EditionOffered();
+
+        SetupEdition.Choice[] offered = LocalEditionAvailable
+            ? [SetupEdition.Choice.Local, SetupEdition.Choice.Cloud, SetupEdition.Choice.Existing]
+            : [SetupEdition.Choice.Cloud, SetupEdition.Choice.Existing];
+
+        var choice = AnsiConsole.Prompt(new SelectionPrompt<SetupEdition.Choice>()
+            .Title("How do you want to run Capacitor?")
+            .AddChoices(offered)
+            .UseConverter(SetupEdition.Label));
+
+        telemetry.Funnel.EditionChosen(SetupEdition.Wire(choice));
+
+        return choice;
+    }
+
+    /// <summary>Sign-up and the workspace it creates happen on kcap-web's pages; the terminal waits, then the
+    /// discovery that follows finds the new workspace.</summary>
+    void OpenSignUp() {
+        var url = SetupEdition.SignUpUrl(endpoints);
+
+        AnsiConsole.MarkupLine("  Opening your browser to sign up and create your team's workspace.");
+        browser.TryOpen(url);
+        AnsiConsole.MarkupLine($"  [dim]If it didn't open:[/]  {Markup.Escape(url)}");
+
+        AnsiConsole.Prompt(new TextPrompt<string>("  Press Enter once your workspace is ready, to sign in to it here.").AllowEmpty());
     }
 
     /// <summary>The vendor ids this run installed kcap's hooks into.</summary>
