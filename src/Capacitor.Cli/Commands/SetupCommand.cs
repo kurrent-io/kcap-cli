@@ -626,6 +626,7 @@ sealed class SetupCommand(
         var skipMuseFlag     = args.Contains("--skip-muse-hooks");
         var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
         var skipImport       = args.Contains("--skip-import") || museAssistant;
+        var skipHarnesses    = args.Contains("--skip-harnesses");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -875,7 +876,9 @@ sealed class SetupCommand(
 
         if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility")
-                              ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility : "org_public")).ToLowerInvariant();
+                              ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility
+                                : local is not null ? LocalDefaultVisibility
+                                : "org_public")).ToLowerInvariant();
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else if (flowVisibility.Apply is { } fromFlow) {
@@ -931,7 +934,11 @@ sealed class SetupCommand(
 
         bool installAgents;
 
-        if (browserAgents is { } answered) {
+        if (skipHarnesses) {
+            // The one answer to the consent question below that no per-vendor flag spells.
+            installAgents = false;
+            AnsiConsole.MarkupLine("  [dim]Skipping harnesses (--skip-harnesses).[/]");
+        } else if (browserAgents is { } answered) {
             // Asked and answered in the browser minutes ago, so this step applies rather than
             // re-asks — the flow settles its Agents step on the decision being recorded, not on the
             // install finishing, which is what leaves the work here.
@@ -1097,7 +1104,7 @@ sealed class SetupCommand(
         OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
         OfferedIf(detected.Muse,        skipMuseFlag,        HarnessId.Muse);
         // The posture offers no harness, so nothing may be recorded as offered.
-        if (!museAssistant) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
+        if (!museAssistant && !skipHarnesses) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -2043,6 +2050,9 @@ sealed class SetupCommand(
               + $"--server-url {landed} to configure that one.");
         };
     }
+
+    /// <summary>A local installation has one user, so nobody else is there to read a shared session.</summary>
+    internal const string LocalDefaultVisibility = "private";
 
     internal const string MachineDaemonLine =
         "  [dim]No daemon service was set up: a service cannot carry the machine credential. Where "

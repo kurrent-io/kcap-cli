@@ -257,6 +257,20 @@ internal sealed class SetupLocalArmTests : IDisposable {
         await Assert.That(string.Join('\n', stdout) + spectre).Contains("No sign-in needed for a local installation.");
     }
 
+    /// <summary>A local installation has one user, so its sessions default to private, as the app's local path does.</summary>
+    [Test]
+    [Arguments(null, "private")]
+    [Arguments("org_public", "org_public")]
+    public async Task No_prompt_local_visibility_defaults_to_private(string? flag, string expected) {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+            .. flag is null ? Array.Empty<string>() : ["--default-visibility", flag],
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(string.Join('\n', stdout) + spectre + stderr);
+        await Assert.That(ActiveProfile().DefaultVisibility).IsEqualTo(expected);
+    }
+
     [Test]
     public async Task Json_with_ollama_running_configures_the_default_model_before_the_first_start() {
         Ollama.Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
