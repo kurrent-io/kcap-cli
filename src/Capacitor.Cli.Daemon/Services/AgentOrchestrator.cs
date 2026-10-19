@@ -85,6 +85,9 @@ internal record AgentInstance(
     /// Stops in progress, under the orchestrator's ledger lock; the last to settle sends the owed report.
     public int                  StopsInFlight;
 
+    /// Orders a reconnect's status send against a stop's report: whichever starts its sends first is sent first.
+    public readonly Lock        StatusSendGate = new();
+
     /// Completes once every stop has settled and the report is sent, so the finalizer ends the session
     /// only after it.
     public TaskCompletionSource StopSettled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -4248,6 +4251,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         Interlocked.CompareExchange(ref agent.RunReport, RunReportSent, RunReportOwedByStop) == RunReportOwedByStop;
 
     void SendStopReport(AgentInstance agent) {
+        lock (agent.StatusSendGate) SendStopReportGated(agent);
+    }
+
+    void SendStopReportGated(AgentInstance agent) {
         var gone = agent.Runtime.HasExited;
         if (!gone) {
             LogStopUnconfirmed(agent.Id);
@@ -5382,12 +5389,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
                     // it across initiation), preserving the retry-on-failure semantics.
                     // A stop under way reports the ending once termination is confirmed; its Completed is not yet
-                    // true. Read under the lock a stop marks itself requested by, before it sets that status.
-                    string? status;
-                    lock (_ledgerLock) status = agent.StopRequested ? null : agent.Status;
-                    if (status is null) break;
-                    if (!TrySendAgentStatus(agent, status, null, out var statusSend))
-                        break; // verdict published → terminal Failed; skip this agent's re-registration
+                    // true. Started under the gate a stop's report takes, so it can never follow that report.
+                    Task? statusSend;
+                    lock (agent.StatusSendGate) {
+                        if (agent.StopRequested) break;
+                        if (!TrySendAgentStatus(agent, agent.Status, null, out statusSend))
+                            break; // verdict published → terminal Failed; skip this agent's re-registration
+                    }
                     await statusSend;
 
                     // Re-send the fixed PTY dims. The server stores them in memory, so a
