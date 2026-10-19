@@ -12,6 +12,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// root, while the requester stays the session.</summary>
 public class McpFlowsServerRepoPathTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+    [TempDir] public required TempDir Checkout { get; init; }
 
     const string StartV2 = "/api/flows/review/start/v2";
 
@@ -50,25 +51,20 @@ public class McpFlowsServerRepoPathTests {
 
     [Test]
     public async Task A_named_checkout_is_the_hosted_repository_and_the_session_stays_the_requester() {
-        var checkout = Directory.CreateTempSubdirectory("kcap-repo-path-").FullName;
-        try {
-            Directory.CreateDirectory(Path.Combine(checkout, ".git"));
-            var nested = Directory.CreateDirectory(Path.Combine(checkout, "src", "deep")).FullName;
-            using var server = RefusingServer();
-            using var client = new HttpClient();
+        Directory.CreateDirectory(Path.Combine(Checkout.Path, ".git"));
+        var nested = Directory.CreateDirectory(Path.Combine(Checkout.Path, "src", "deep")).FullName;
+        using var server = RefusingServer();
+        using var client = new HttpClient();
 
-            await Server().HandleToolCallAsync(
-                JsonNode.Parse("1")!, StartRequest(nested), client, server.Url!,
-                cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null);
+        await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, StartRequest(nested), client, server.Url!,
+            cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null);
 
-            var body = JsonNode.Parse(server.LogEntries.Single(e => e.RequestMessage.Path == StartV2).RequestMessage.Body!)!.AsObject();
-            var root = new DirectoryInfo(checkout).FullName;
-            await Assert.That(body["repo_path"]!.GetValue<string>()).IsEqualTo(root);
-            await Assert.That(body["requesting_repo_root"]!.GetValue<string>()).IsEqualTo(root);
-            await Assert.That(body["requesting_cwd"]!.GetValue<string>()).IsEqualTo("/tmp/session");
-        } finally {
-            Directory.Delete(checkout, recursive: true);
-        }
+        var body = JsonNode.Parse(server.LogEntries.Single(e => e.RequestMessage.Path == StartV2).RequestMessage.Body!)!.AsObject();
+        var root = new DirectoryInfo(Checkout.Path).FullName;
+        await Assert.That(body["repo_path"]!.GetValue<string>()).IsEqualTo(root);
+        await Assert.That(body["requesting_repo_root"]!.GetValue<string>()).IsEqualTo(root);
+        await Assert.That(body["requesting_cwd"]!.GetValue<string>()).IsEqualTo("/tmp/session");
     }
 
     [Test]
