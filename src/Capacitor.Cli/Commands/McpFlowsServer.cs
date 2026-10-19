@@ -1198,7 +1198,7 @@ partial class McpFlowsServer(
     /// <summary>The start's patch and base commit, or null when it names none. Read once per tool call and
     /// checked before anything is posted, so a bad path or SHA never starts a run and a retried post sends the
     /// same bytes.</summary>
-    internal static async Task<(string Text, string BaseCommit)?> ReadPatchAsync(JsonObject? arguments, CancellationToken ct) {
+    static async Task<(string Text, string BaseCommit)?> ReadPatchAsync(JsonObject? arguments, CancellationToken ct) {
         var path       = McpToolArguments.OptionalString(arguments, "patch_path");
         var baseCommit = McpToolArguments.OptionalString(arguments, "base_commit")?.ToLowerInvariant();
         if (path is null && baseCommit is null) return null;
