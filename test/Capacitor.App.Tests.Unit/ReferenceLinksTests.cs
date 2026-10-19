@@ -28,6 +28,7 @@ public class ReferenceLinksTests {
     [Arguments("See acme/other#3", "acme/other#3", "https://github.com/acme/other/issues/3")]
     [Arguments("Thanks @octo-cat!", "@octo-cat", "https://github.com/octo-cat")]
     [Arguments("Landed in 1a2b3c4d.", "1a2b3c4d", Repository + "/commit/1a2b3c4d")]
+    [Arguments("Landed in 1A2B3C4D.", "1A2B3C4D", Repository + "/commit/1a2b3c4d")]
     [Arguments("**Fixes #12**", "#12", Repository + "/issues/12")]
     public async Task A_reference_in_text_links_into_the_repository(string markdown, string label, string target) {
         await RunOnUiAsync(async () => {
@@ -42,6 +43,7 @@ public class ReferenceLinksTests {
     [Arguments("```\n#7 @octo 1a2b3c4\n```")]
     [Arguments("Mail a@b.com about 1234567 or deadbee.")]
     [Arguments("No space#8 and no x/y/z#9.")]
+    [Arguments("Escaped \\#12 and \\@octo stay text.")]
     public async Task Code_emails_and_lookalikes_stay_text(string markdown) {
         await RunOnUiAsync(async () => {
             var links = await LinksIn(markdown, Repository);

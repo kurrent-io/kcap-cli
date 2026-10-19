@@ -8,7 +8,7 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
-/// GitHub's references in text — `@login`, `#123`, `owner/repo#123` and a commit SHA — as links into
+/// GitHub's references in text — `@login`, `#N`, `owner/repo#N` and a commit SHA — as links into
 /// the repository the view's <see cref="MarkdownView.ReferenceBase"/> names. Only literal text is
 /// read, so a code span, a fenced block and an existing link's label stay as they are.
 public sealed partial class ReferenceLinks(MarkdownView view) : IMarkViewExtension {
@@ -22,7 +22,7 @@ public sealed partial class ReferenceLinks(MarkdownView view) : IMarkViewExtensi
         (?<![\w@/.-])@(?<login>[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})(?![\w-])
         |(?<![\w/.-])(?<owner>[A-Za-z0-9][A-Za-z0-9-]{0,38})/(?<repo>[A-Za-z0-9._-]{1,100})\#(?<other>[0-9]+)\b
         |(?<![\w&/\#])\#(?<number>[0-9]+)\b
-        |(?<![\w/@.-])(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])(?<sha>[0-9a-f]{7,40})(?![\w-])
+        |(?<![\w/@.-])(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*[0-9])(?<sha>[0-9a-fA-F]{7,40})(?![\w-])
         """, RegexOptions.IgnorePatternWhitespace)]
     private static partial Regex Reference();
 
@@ -33,7 +33,7 @@ public sealed partial class ReferenceLinks(MarkdownView view) : IMarkViewExtensi
         if (match.Groups["login"].Success) return $"{site}/{match.Groups["login"].Value}";
         if (match.Groups["other"].Success) return $"{site}/{match.Groups["owner"].Value}/{match.Groups["repo"].Value}/issues/{match.Groups["other"].Value}";
         if (match.Groups["number"].Success) return $"{repo}/issues/{match.Groups["number"].Value}";
-        if (match.Groups["sha"].Success) return $"{repo}/commit/{match.Groups["sha"].Value}";
+        if (match.Groups["sha"].Success) return $"{repo}/commit/{match.Groups["sha"].Value.ToLowerInvariant()}";
 
         return null;
     }
@@ -54,6 +54,8 @@ public sealed partial class ReferenceLinks(MarkdownView view) : IMarkViewExtensi
             }
             var at = 0;
             foreach (Match match in Reference().Matches(text)) {
+                // `\#12` and `\@login` are the writer's way of saying "not a reference".
+                if (match.Index == 0 && obj.IsFirstCharacterEscaped) continue;
                 if (Target(match, repository) is not { } url || !LinkPolicy.IsOpenable(url)) continue;
                 if (match.Index > at) Plain(renderer, text[at..match.Index]);
                 var link = KcapMarkdownExtension.Hyperlink(url);
