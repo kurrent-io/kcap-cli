@@ -70,7 +70,7 @@ internal partial class AgentOrchestrator {
             .OrderBy(p => p.CreatedAt)
             .ThenBy(p => p.Id, StringComparer.Ordinal)
             .Select(p => new PendingLaunchDto(
-                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage))];
+                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage, KindText(p.Kind)))];
 
     /// <summary>Whether any agent is running or starting, as one observation: an admitted launch still before its
     /// runtime starts (consent, worktree, attachments), a pending one, or a published one. A launch is admitted before
