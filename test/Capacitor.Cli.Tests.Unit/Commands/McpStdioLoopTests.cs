@@ -71,7 +71,7 @@ public class McpStdioLoopTests {
     }
 
     [Test]
-    public async Task Serial_calls_run_in_arrival_order_while_a_ping_is_still_answered() {
+    public async Task Calls_in_arrival_order_run_one_at_a_time_while_a_ping_is_still_answered() {
         var release     = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var slowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started     = new ConcurrentQueue<string>();
@@ -84,12 +84,39 @@ public class McpStdioLoopTests {
 
             slowStarted.SetResult();
             return release.Task;
-        }, (id, method, _) => Answer(id, method), "test", serialCalls: true);
+        }, (id, method, _) => Answer(id, method), "test", McpStdioLoop.InArrivalOrder);
         await slowStarted.Task;
         await output.WaitForAsync(1);
 
         await Assert.That(string.Join(",", output.Ids)).IsEqualTo("3");
         await Assert.That(string.Join(",", started)).IsEqualTo("slow");
+
+        release.SetResult(Answer(1, "tools/call"));
+        await loop;
+
+        await Assert.That(string.Join(",", output.Ids)).IsEqualTo("3,1,2");
+    }
+
+    [Test]
+    public async Task Calls_sharing_a_key_run_in_arrival_order_while_other_keys_run_alongside() {
+        var release     = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstHeld   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started     = new ConcurrentQueue<string>();
+        using var output = new Responses();
+        var input = string.Join('\n', Call(1, "a-first"), Call(2, "a-second"), Call(3, "b"));
+
+        var loop = McpStdioLoop.RunAsync(new StringReader(input), output, (id, request) => {
+            started.Enqueue(Tool(request));
+            if (Tool(request) != "a-first") return Task.FromResult(Answer(id, "tools/call"));
+
+            firstHeld.SetResult();
+            return release.Task;
+        }, (id, method, _) => Answer(id, method), "test", request => Tool(request)[..1]);
+        await firstHeld.Task;
+        await output.WaitForAsync(1);
+
+        await Assert.That(string.Join(",", output.Ids)).IsEqualTo("3");
+        await Assert.That(started).DoesNotContain("a-second");
 
         release.SetResult(Answer(1, "tools/call"));
         await loop;

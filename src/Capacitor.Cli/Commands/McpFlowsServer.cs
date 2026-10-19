@@ -66,8 +66,6 @@ class McpFlowsServer(
             return created;
         });
 
-        var rounds = new FlowRoundGates();
-
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
         // return a JSON-RPC tool error instead so it keeps serving.
@@ -77,8 +75,6 @@ class McpFlowsServer(
 
             try {
                 var client = await sessionClient.GetAsync();
-                using var round = await rounds.EnterAsync(
-                    McpTelemetry.SafeToolName(callRequest), (callRequest["params"] as JsonObject)?["arguments"] as JsonObject);
 
                 return await HandleToolCallAsync(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),
@@ -121,9 +117,25 @@ class McpFlowsServer(
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
                             ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-        }, "flows");
+        }, "flows", RoundOrderKey);
 
         return 0;
+    }
+
+    /// <summary>A flow's rounds run one at a time per participant, in the order they arrive: the server refuses a
+    /// round for a participant whose previous round is still running.</summary>
+    internal static string? RoundOrderKey(JsonObject request) {
+        var arguments   = (request["params"] as JsonObject)?["arguments"] as JsonObject;
+        var participant = McpTelemetry.SafeToolName(request) switch {
+            "submit_review_round" => "reviewer",
+            "send_to_participant" => Text(arguments, "participant"),
+            _                     => null,
+        };
+
+        return participant is not null && Text(arguments, "flow_run_id") is { } flowRunId ? $"{flowRunId}\n{participant}" : null;
+
+        static string? Text(JsonObject? args, string key) =>
+            args?[key] is JsonValue value && value.TryGetValue(out string? text) && text.Length > 0 ? text : null;
     }
 
     /// <summary>The checkout a call names in <c>repo_path</c>: its repository root and remote identity. The

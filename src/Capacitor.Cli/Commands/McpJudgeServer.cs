@@ -62,7 +62,7 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
                             ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-        }, "judge", serialCalls: true);
+        }, "judge", McpStdioLoop.InArrivalOrder);
 
         return 0;
 

@@ -6,22 +6,24 @@ namespace Capacitor.Cli.Commands;
 /// The stdio JSON-RPC loop every kcap MCP server runs. Each <c>tools/call</c> runs as its own task, so a long
 /// poll never holds up a <c>ping</c> or another call; every other method is answered in order. Only the writer
 /// is serialised, one response per line. A handler shared across calls must therefore be safe to run
-/// concurrently, or ask for <c>serialCalls</c>: calls then run one at a time in arrival order, still
-/// without holding up anything else.
+/// concurrently, or give calls an <c>orderKey</c>: calls that share a key run one at a time in arrival
+/// order, still without holding up anything else.
 /// </summary>
 static class McpStdioLoop {
     /// <param name="callTool">Answers a <c>tools/call</c>; expected to turn its own failures into tool errors.</param>
     /// <param name="answer">Answers any other request that carries an id, given its method (null when absent or not a string).</param>
+    /// <param name="orderKey">The key a <c>tools/call</c> is ordered under, or null for one that runs alongside everything.</param>
     public static async Task RunAsync(
             TextReader reader,
             TextWriter writer,
             Func<JsonNode, JsonObject, Task<string>> callTool,
             Func<JsonNode, string?, JsonObject, string> answer,
             string serverName,
-            bool serialCalls = false) {
+            Func<JsonObject, string?>? orderKey = null) {
         using var writeGate = new SemaphoreSlim(1, 1);
         var inFlight = new List<Task>();
-        var previous = Task.CompletedTask;
+        // The last call queued under each key; read and written only by this loop.
+        var tails = new Dictionary<string, Task>(StringComparer.Ordinal);
 
         async Task WriteAsync(string response) {
             await writeGate.WaitAsync();
@@ -64,11 +66,16 @@ static class McpStdioLoop {
                 var method = request["method"] is JsonValue value && value.TryGetValue(out string? m) ? m : null;
                 if (method == "tools/call") {
                     inFlight.RemoveAll(t => t.IsCompletedSuccessfully);
-                    var prior = previous;
-                    var call = serialCalls
-                        ? Task.Run(() => CallAfterAsync(prior, id, request))
-                        : Task.Run(() => CallAsync(id, request));
-                    previous = call;
+                    foreach (var done in tails.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList()) tails.Remove(done);
+
+                    Task call;
+                    if (orderKey?.Invoke(request) is { } key) {
+                        var prior = tails.GetValueOrDefault(key) ?? Task.CompletedTask;
+                        call       = Task.Run(() => CallAfterAsync(prior, id, request));
+                        tails[key] = call;
+                    } else {
+                        call = Task.Run(() => CallAsync(id, request));
+                    }
                     inFlight.Add(call);
                 } else {
                     await WriteAsync(answer(id, method, request));
@@ -99,6 +106,9 @@ static class McpStdioLoop {
             return null;
         }
     }
+
+    /// <summary>An <c>orderKey</c> that runs every call in arrival order.</summary>
+    public static string? InArrivalOrder(JsonObject request) => "";
 
     static string Error(JsonNode id, int code, string message) => new JsonObject {
         ["jsonrpc"] = "2.0",

@@ -191,6 +191,8 @@ public class TelemetryClientTests {
         public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int _calls;
 
+        public int Requests => Volatile.Read(ref _calls);
+
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             if (Interlocked.Increment(ref _calls) > 1) return new HttpResponseMessage(HttpStatusCode.InternalServerError);
 
@@ -215,6 +217,26 @@ public class TelemetryClientTests {
         await Assert.That(await held).IsTrue();
         await Assert.That(await failing).IsFalse();
         await Assert.That(spool.DrainAll().Select(e => e.Name)).IsEquivalentTo(["spilled"]);
+    }
+
+    [Test]
+    public async Task A_flush_that_spends_its_budget_waiting_spills_its_queue_without_a_request() {
+        var handler = new HeldThenFailingHandler();
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+
+        client.Enqueue(Event("held"));
+        var held = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10));
+        client.Enqueue(Event("waited"));
+        var waited = client.FlushAsync("device-1", null, TimeSpan.FromMilliseconds(20));
+        await Task.Delay(100);
+        handler.Release.SetResult();
+
+        await Assert.That(await held).IsTrue();
+        await Assert.That(await waited).IsFalse();
+        await Assert.That(handler.Requests).IsEqualTo(1);
+        await Assert.That(spool.DrainAll().Select(e => e.Name)).IsEquivalentTo(["waited"]);
     }
 
     [Test]

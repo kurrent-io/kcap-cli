@@ -183,7 +183,7 @@ sealed class McpFlowResultServer(
             "tools/list" => BuildToolsListResponse(id, tools),
             _            => McpProtocol.TryHandleStandardMethod(method, id)
                             ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-        }, "flow-result", serialCalls: true);
+        }, "flow-result", McpStdioLoop.InArrivalOrder);
 
         return 0;
     }

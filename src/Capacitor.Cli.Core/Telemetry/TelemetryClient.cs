@@ -42,7 +42,7 @@ public sealed class TelemetryClient(
     ///
     /// Flushes run one at a time: each drains, appends to and clears the same spool, so an overlapping
     /// one could clear events another had just spilled. Waiting for an earlier flush counts against
-    /// the budget.</summary>
+    /// the budget, and a flush whose wait used it all spills its queue without draining the spool.</summary>
     public Task<bool> FlushAsync(string distinctId, string? orgGroup, TimeSpan budget) {
         var start = _clock.GetTimestamp();
 
@@ -63,6 +63,11 @@ public sealed class TelemetryClient(
         lock (_queue) {
             queued = [.. _queue];
             _queue.Clear();
+        }
+
+        if (_clock.GetElapsedTime(start) >= budget) {
+            spool.Append(queued);
+            return false;
         }
 
         try {
