@@ -839,7 +839,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// </summary>
     public async Task StartAsync(
             string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null,
-            IReadOnlyList<AcpMcpServerSpec>? mcpServers = null, string? modelOwedAnExplanation = null) {
+            IReadOnlyList<AcpMcpServerSpec>? mcpServers = null, string? modelOwedAnExplanation = null,
+            string? resumeSessionId = null) {
         _cwd            = cwd;
         _requestedModel = requestedModel;
         // Captured for session/load: a resume must hand the agent the SAME server list the
@@ -917,21 +918,36 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // not a throw — the reconnect eligibility gate reads loadSession off this.
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
-            var sessionNewParams = JsonSerializer.SerializeToElement(
-                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke(_isReviewFlow)),
-                CapacitorJsonContext.Default.SessionNewParams);
+            if (resumeSessionId is not null) {
+                // A session/new here would answer the resume with a fresh conversation under the old agent id.
+                if (!_negotiatedCapabilities.LoadSession)
+                    throw new InvalidOperationException(
+                        $"{DiagnosticBinary} does not advertise loadSession, so session {resumeSessionId} cannot be reopened.");
 
-            sessionNewResult = await RunHandshakeStageAsync(
-                    "session_created", stageCt => connection.RequestAsync("session/new", sessionNewParams, stageCt), ct)
-                .ConfigureAwait(false);
+                sessionNewResult = await RunHandshakeStageAsync(
+                        "session_created", stageCt => LoadForRestartResumeAsync(connection, resumeSessionId, cwd, stageCt), ct)
+                    .ConfigureAwait(false);
 
-            if (!sessionNewResult.TryGetProperty("sessionId", out var sessionIdElement) || sessionIdElement.GetString() is not { Length: > 0 } sessionId)
-                throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
+                _sessionId = resumeSessionId;
 
-            _sessionId = sessionId;
+                LogSessionLoaded(_agentId, resumeSessionId);
+            } else {
+                var sessionNewParams = JsonSerializer.SerializeToElement(
+                    new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke(_isReviewFlow)),
+                    CapacitorJsonContext.Default.SessionNewParams);
 
-            LogSessionStarted(_agentId, sessionId);
-            AcpMetrics.SessionsStarted.Add(1);
+                sessionNewResult = await RunHandshakeStageAsync(
+                        "session_created", stageCt => connection.RequestAsync("session/new", sessionNewParams, stageCt), ct)
+                    .ConfigureAwait(false);
+
+                if (!sessionNewResult.TryGetProperty("sessionId", out var sessionIdElement) || sessionIdElement.GetString() is not { Length: > 0 } sessionId)
+                    throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
+
+                _sessionId = sessionId;
+
+                LogSessionStarted(_agentId, sessionId);
+                AcpMetrics.SessionsStarted.Add(1);
+            }
         } catch (AcpProtocolVersionException) {
             // Already actionable and NOT an auth issue — rethrow verbatim, without the auth hint.
             // Failure already recorded above, at the point the version mismatch was detected.
@@ -952,7 +968,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // failure is unverified, so this does NOT pattern-match specific error text (a live
             // logged-out probe is a follow-up). Never masks the original error, only annotates it.
             throw new AcpHandshakeFailedException(
-                "initialize/session-new", SanitizeForForward(ex.Message), DiagnosticAuthHint, ex);
+                resumeSessionId is null ? "initialize/session-new" : "initialize/session-load",
+                SanitizeForForward(ex.Message), DiagnosticAuthHint, ex);
         }
 
         // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never
@@ -1054,6 +1071,26 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         ActivityClock?.SetLaunchStage(stage);
 
         return result;
+    }
+
+    /// <summary>Reopens a session for a restart resume. Everything the load replays is dropped: the server
+    /// already holds that history, and the load response is the vendor's barrier after the last replayed
+    /// update.</summary>
+    async Task<JsonElement> LoadForRestartResumeAsync(AcpConnection connection, string sessionId, string cwd, CancellationToken ct) {
+        var loadParams = JsonSerializer.SerializeToElement(
+            new SessionLoadParams(SessionId: sessionId, Cwd: cwd, McpServers: _mcpServersForResume),
+            CapacitorJsonContext.Default.SessionLoadParams);
+
+        _suppressNotifications = true;
+
+        try {
+            var result = await connection.RequestAsync("session/load", loadParams, ct).ConfigureAwait(false);
+            AcpMetrics.SessionsLoaded.Add(1);
+
+            return result;
+        } finally {
+            _suppressNotifications = false;
+        }
     }
 
     /// <summary>
@@ -2952,6 +2989,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP session started: agentId={AgentId} acpSessionId={AcpSessionId}")]
     partial void LogSessionStarted(string agentId, string acpSessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP session reopened for a restart resume: agentId={AgentId} sessionId={SessionId}")]
+    partial void LogSessionLoaded(string agentId, string sessionId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP handshake OK: agentId={AgentId} protocolVersion={ProtocolVersion} loadSession={LoadSession} resolvedModel={ResolvedModel}")]
     partial void LogHandshakeOk(string agentId, int protocolVersion, bool loadSession, string? resolvedModel);
