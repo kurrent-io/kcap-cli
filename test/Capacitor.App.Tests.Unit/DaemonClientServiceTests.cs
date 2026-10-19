@@ -492,12 +492,10 @@ public class DaemonClientServiceTests {
         }
     }
 
-    // DaemonClientService.BuildStartDaemon is the request-building seam
-    // CreateResolved wires to the resolution the gate was evaluated on — this drives it directly
-    // against a scripted profile resolver, proving the main-window Start path produces a
-    // DetachedStart MutationRequest through the lane rather than any direct process spawn.
+    // The main-window Start path installs the service through the lane at the identity the gate
+    // was evaluated on — never a daemon outside the service, never a direct process spawn.
     [Test]
-    public async Task BuildStartDaemon_produces_a_detached_start_request_at_the_resolved_identity() {
+    public async Task BuildStartDaemon_produces_an_install_request_at_the_resolved_identity() {
         MutationRequest? seen = null;
         Task<MutationOutcome> RunMutation(MutationRequest request, CancellationToken ct) {
             seen = request;
@@ -511,7 +509,7 @@ public class DaemonClientServiceTests {
 
         await Assert.That(outcome).IsTypeOf<MutationOutcome.Succeeded>();
         await Assert.That(seen).IsNotNull();
-        await Assert.That(seen!.Verb).IsEqualTo(MutationVerb.DetachedStart);
+        await Assert.That(seen!.Verb).IsEqualTo(MutationVerb.Install);
         await Assert.That(seen.Profile).IsEqualTo("default");
         await Assert.That(seen.CanonicalServer).IsEqualTo("https://kcap.example.com:443");
         await Assert.That(seen.DaemonName).IsEqualTo("daemon-a");

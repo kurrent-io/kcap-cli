@@ -237,7 +237,8 @@ sealed class CaptureServerConnection() : ServerConnection(
 
         AcpEventsCallSignal.Writer.TryWrite(callCount);
 
-        return AcpEventsAckOverride?.Invoke(envelopes) ?? new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq);
+        return AcpEventsAckOverride?.Invoke(envelopes)
+            ?? (envelopes.Length == 0 ? new AcpBatchAck(-1, -1) : new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq));
     }
 
     // ── §2.5 source-claim / confirm seams ───────────────────────────────────────────────
@@ -400,12 +401,19 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// server a shutdown must not wait on.</summary>
     public bool ShutdownReportHangs { get; init; }
 
+    public List<(string AgentId, int? ExitCode)> ShutdownReportExitCodes { get; } = [];
+
     public override async Task ReportAgentEndedForShutdownAsync(
             string agentId, string? sessionId, string status, string reason, int? exitCode, CancellationToken ct) {
         lock (ShutdownReports) ShutdownReports.Add((agentId, status, reason, ct.IsCancellationRequested));
+        lock (ShutdownReportExitCodes) ShutdownReportExitCodes.Add((agentId, exitCode));
 
         if (ShutdownReportHangs) await Task.Delay(Timeout.Infinite, ct);
+        if (ShutdownReportGate is { } gate) await gate.Task.WaitAsync(ct);
     }
+
+    /// <summary>When set, the shutdown report is recorded and then held until the gate completes.</summary>
+    public TaskCompletionSource? ShutdownReportGate { get; set; }
 
     // ── Task 8: resolved-model report capture ──────────────────────────────────
     /// <summary>Every legacy (agentId, model) pair passed to ReportAgentResolvedModelAsync — proves

@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Http;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -118,6 +119,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
+    /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
+    public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
     /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
     /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
@@ -208,6 +212,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The credential every lane to this server sends: the hub, agent-run events, attachments.</summary>
     internal ICredentialSource Credentials { get; }
 
+    static HttpMessageHandler NoRedirects(HttpMessageHandler handler) {
+        switch (handler) {
+            case HttpClientHandler h:  h.AllowAutoRedirect = false; break;
+            case SocketsHttpHandler s: s.AllowAutoRedirect = false; break;
+        }
+
+        return handler;
+    }
+
     public ServerConnection(
             DaemonConfig config, ICredentialSource credentials, ILoggerFactory loggerFactory,
             ILogger<ServerConnection> logger, TimeProvider time, DaemonStatusNotifier? statusNotifier = null) {
@@ -221,19 +234,30 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
         void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
 
+        // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
+        // to anything.
+        var refusal = config.DestinationRefusal;
+        // It follows redirects itself, so it can check each hop; the handler under it follows none.
+        DelegatingHandler Guarded(HttpMessageHandler inner) =>
+            new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal, followRedirects: true) {
+                InnerHandler = new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = NoRedirects(inner) },
+            };
+
         _eventQueue = new(
-            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
-            new HttpClient(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() }));
+            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler())));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
-                    options.HttpMessageHandlerFactory = inner =>
-                        new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
-                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
-                        context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                    options.HttpMessageHandlerFactory = Guarded;
+                    options.WebSocketFactory = (context, ct) => {
+                        LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
+
+                        return BearerRejectionReportHandler.ConnectWebSocketAsync(
+                            context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                    };
                 }
             )
             .WithAutomaticReconnect(new RetryPolicy())
@@ -684,7 +708,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             EvalProtocolVersion: 2,
             VendorModels: _config.VendorModels,
             SupportsRawInput: AdvertisesRawInput,
-            SupportsBranchBaseRef: true);
+            SupportsBranchBaseRef: true,
+            ResumingAgents: GetResumingAgents?.Invoke());
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";

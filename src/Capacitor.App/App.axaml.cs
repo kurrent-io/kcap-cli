@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core.Telemetry;
+using System.Collections.Frozen;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Reactive.Linq;
@@ -28,6 +29,7 @@ using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -98,7 +100,7 @@ public partial class App : Application {
         return _serverHttp ??= new ServiceCollection()
             .AddSingleton(_config)
             .AddSingleton(profiles)
-            .AddSingleton(new CapacitorServer(url, _config, profiles))
+            .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
             .AddCapacitorHttp(_serverEnv, _machineEnv)
             .BuildValidated();
     }
@@ -521,7 +523,7 @@ public partial class App : Application {
         // Built here rather than with the other server clients below because a remote stop goes
         // over the hub: the lane must exist before the service that calls it. Start() still runs
         // down there, with the rest of the server graph.
-        var serverLane = new ServerConnectionService(profiles, ServerCredentials(profiles), _time);
+        var serverLane = new ServerConnectionService(profiles, ServerCredentials(profiles), _time, _localRoot);
         var actions = new AgentActionService(
             ops, notifier, opener, service.Snapshots, _shutdown.Token, ConfirmForceStopAsync,
             fallbackServerUrl: profiles?.Resolution.ServerUrl, lane: serverLane);
@@ -549,10 +551,10 @@ public partial class App : Application {
         // One launch client and one work-context source for the app, not one per window the
         // coordinator builds — each owns a live transport, and only a held instance can be
         // disposed at teardown.
-        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv);
-        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time);
-        var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv);
-        var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv);
+        var workContext = new ServerWorkContextSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time, localRoot: _localRoot);
+        var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
@@ -673,7 +675,9 @@ public partial class App : Application {
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: linkGitHub,
             access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
-            commands: commands, drafts: drafts, pullRequestLinksChanged: pullRequestTones.Refresh);
+            commands: commands, drafts: drafts, inputSending: attention.ReplySending,
+            resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
+            pullRequestLinksChanged: pullRequestTones.Refresh);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -682,7 +686,7 @@ public partial class App : Application {
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
-                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts,
+                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestLinksChanged: pullRequestTones.Refresh)
                 : null;
 
@@ -1042,7 +1046,9 @@ public partial class App : Application {
             DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv, _localRoot)?.DaemonName,
             Time: _time,
             ShutdownToken: _shutdown.Token,
-            AlreadyAuthenticated: alreadyAuthenticated));
+            AlreadyAuthenticated: alreadyAuthenticated,
+            ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
+            HeldDaemonNames: HeldDaemonNamesAsync));
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
@@ -1058,7 +1064,7 @@ public partial class App : Application {
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
         var quiesced = await HandoffAfterWizardAsync(
-            graph.Auth, () => lane.QuiescedAsync(CancellationToken.None), QuiesceShutdownCap, channel, _time);
+            graph.Auth, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
         _wizardWindow = null;
@@ -1070,6 +1076,13 @@ public partial class App : Application {
         }
 
         return quiesced;
+    }
+
+    // The enabler first: its name save and status reads run outside the lane, and the mutation it
+    // ends in enters the lane only after them.
+    static async Task DaemonThenLaneQuiescedAsync(DaemonEnabler daemon, DaemonMutationLane lane) {
+        await daemon.QuiescedAsync().ConfigureAwait(false);
+        await lane.QuiescedAsync(CancellationToken.None).ConfigureAwait(false);
     }
 
     // Avoid a shell spawn when no PATH installer or absolute CLI path is available.
@@ -1258,6 +1271,10 @@ public partial class App : Application {
         errorWindow.Show();
     }
 
+    /// The app theme's brush, or null before the theme has loaded, which leaves the default.
+    static IBrush? KcapBrush(string key) =>
+        Current?.TryGetResource(key, null, out var brush) == true ? brush as IBrush : null;
+
     // Last-resort UI for a startup failure: Console.Error above is invisible on a normal GUI
     // launch (OutputType=WinExe has no console), so this window is the only channel that
     // actually reaches the user. SelectableTextBlock (not TextBlock) keeps the stack trace
@@ -1268,6 +1285,8 @@ public partial class App : Application {
             Icon = ProductIcon.WindowIcon,
             Width = 640,
             Height = 400,
+            Background = KcapBrush("KcapCanvasBrush"),
+            Foreground = KcapBrush("KcapTextBrush"),
             Content = new ScrollViewer {
                 Content = new SelectableTextBlock {
                     Text = $"The app failed to start. Details:\n{ex}",
@@ -1460,6 +1479,44 @@ public partial class App : Application {
         var daemonName = DaemonNameResolver.Resolve([], resolved.Profile?.Daemon?.Name);
 
         return (profileName, canonicalServer, daemonName);
+    }
+
+    /// The daemon name the resolved profile carries, or null when it never saved one.
+    internal static string? ResolveConfiguredDaemonName(ConfigRoot root, ProfileOverrides env, LocalRoot local) {
+        if (!ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var config)) return null;
+
+        var resolved = new ProfileResolver(
+            config, cliServerUrl: null, env.Url, env.Profile,
+            repoConfig: null, repoRemoteUrls: [], repoPath: null, LocalEndpoints.Read(local)).Resolve();
+
+        return resolved.Profile?.Daemon?.Name is { Length: > 0 } name ? name : null;
+    }
+
+    // A throwaway lane over a fresh resolution: the cached ServerLane is bound to the first profile it
+    // saw, and the wizard has only just signed in.
+    async Task<IReadOnlyDictionary<string, DaemonNameHolding>> HeldDaemonNamesAsync(CancellationToken ct) {
+        try {
+            var (_, profiles) = await ResolveAndEvaluateGateAsync(
+                _config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, ct).ConfigureAwait(false);
+            if (profiles?.Resolution.ServerUrl is not { Length: > 0 } url) return FrozenDictionary<string, DaemonNameHolding>.Empty;
+
+            await using var lane = new ServiceCollection()
+                .AddSingleton(_config)
+                .AddSingleton(profiles)
+                .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
+                .AddCapacitorHttp(_serverEnv, _machineEnv)
+                .BuildValidated();
+
+            var (client, status, _, _) = await lane.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(ct).ConfigureAwait(false);
+            using (client) {
+                if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return FrozenDictionary<string, DaemonNameHolding>.Empty;
+
+                return await DaemonNameHolder.HeldElsewhereAsync(client, url, _config, ct).ConfigureAwait(false);
+            }
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: daemon name lookup failed — offering the configured name: {ex.Message}");
+            return FrozenDictionary<string, DaemonNameHolding>.Empty;
+        }
     }
 
     // Delegates to the ONE shared validator: must agree with OnboardingGate on what counts as a
@@ -1789,24 +1846,18 @@ public partial class App : Application {
         return tcs.Task;
     }
 
-    // Plain code-built Window (same style as BuildStartupErrorWindow above) rather than a XAML
-    // view — this dialog has no ViewModel, no data binding, and exists only to resolve `tcs`.
-    // "Stop anyway" is IsDefault (Enter-triggered, styled as the destructive default);
-    // "Cancel" is IsCancel (Esc-triggered). Closing via the titlebar/Esc without clicking either
-    // button also resolves false — TrySetResult is idempotent, so whichever path runs first wins
-    // and the other is a no-op.
+    // "Stop anyway" is destructive, so Enter does not press it; Esc cancels. Closing via the
+    // titlebar without clicking either button also resolves false — TrySetResult is idempotent,
+    // so whichever path runs first wins and the other is a no-op.
     internal static Window BuildConfirmForceStopWindow(string label, TaskCompletionSource<bool> tcs) {
-        var cancelButton = new Button { Content = "Cancel", IsCancel = true };
-        var stopButton = new Button {
-            Content = "Stop anyway",
-            IsDefault = true,
-            Background = new SolidColorBrush(Color.Parse("#D32F2F")),
-            Foreground = Brushes.White,
-        };
+        var cancelButton = new Button { Content = "Cancel", IsCancel = true, Classes = { "kcapChip" } };
+        var stopButton = new Button { Content = "Stop anyway", Classes = { "kcapDangerFill" } };
 
         var window = new Window {
             Title = "Stop review participant?",
             Icon = ProductIcon.WindowIcon,
+            Background = KcapBrush("KcapCanvasBrush"),
+            Foreground = KcapBrush("KcapTextBrush"),
             Width = 420,
             SizeToContent = SizeToContent.Height,
             CanResize = false,

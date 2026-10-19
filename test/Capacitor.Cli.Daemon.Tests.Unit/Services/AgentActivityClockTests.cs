@@ -106,7 +106,7 @@ public class AgentActivityClockTests {
     public async Task A_turns_falling_edge_marks_awaiting_input_and_the_next_rising_edge_clears_it() {
         var clock = new AgentActivityClock(new FakeTimeProvider());
         var seen  = new List<bool>();
-        clock.OnAwaitingInputChanged = v => seen.Add(v);
+        clock.OnAwaitingInputChanged = seen.Add;
 
         await Assert.That(clock.AwaitingInput).IsFalse();
         clock.SetTurnInFlight(true);

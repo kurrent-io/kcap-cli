@@ -15,7 +15,7 @@ static class RuntimeRid {
         return IsMusl() ? $"linux-musl-{arch}" : $"linux-{arch}";
     }
 
-    static bool IsMusl() {
+    internal static bool IsMusl() {
         try {
             return Directory.Exists("/etc/apk")
                 || File.Exists("/lib/ld-musl-x86_64.so.1")

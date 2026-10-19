@@ -135,6 +135,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     /// implementation, or a test double, is equally valid and would defeat one.</summary>
     public bool SupportsModelSelection => descriptor.ModelSelector.CanSelectModel;
 
+    public bool SupportsRestartResume(string? runtimeTransport) => descriptor.SupportsRestartResume;
+
     public string CliPath => config.PathSlot(descriptor.Harness).Read();
 
     public bool IsAvailable() => config.Binaries.Finds(CliPath);
@@ -142,6 +144,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         LogLaunching(ctx.AgentId, Vendor, ctx.Worktree.Path);
         AcpMetrics.Launches.Add(1);
+
+        var resumeSessionId = RestartResumeSessionId(ctx);
 
         ValidateBorrowedArtifact(ctx, _policy);
 
@@ -288,7 +292,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 policyJudge: policyJudge,
                 journal: ctx.Journal,
                 sessionNewMeta: descriptor.SessionNewMeta,
-                turnUsageReader: descriptor.TurnUsageReader
+                turnUsageReader: descriptor.TurnUsageReader,
+                subagentReader: descriptor.SubagentReader
             );
 
             // MUST precede StartAsync below: the handshake's SetLaunchStage stamps are no-ops against
@@ -378,7 +383,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
                 launchDeadline?.Token ?? ct,
                 ResolveRequestedModel(descriptor, config, ctx),
                 mcpServers,
-                ModelOwedAnExplanation(ctx)
+                ModelOwedAnExplanation(ctx),
+                resumeSessionId
             ).ConfigureAwait(false);
         } catch (OperationCanceledException ex) when (launchDeadline is { IsCancellationRequested: true }
                                                 && !ct.IsCancellationRequested) {
@@ -438,6 +444,19 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         // IAcpTranscriptSource directly) — hand it back on HostedRuntimeStart so the orchestrator can
         // bind + forward without downcasting Runtime.
         return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
+    }
+
+    /// <summary>The session a restart resume reopens, or null for a fresh launch. A resume this
+    /// vendor cannot honour fails here, before any spawn: a fresh session in its place would fork the
+    /// conversation under the old agent id.</summary>
+    string? RestartResumeSessionId(RuntimeStartContext ctx) {
+        if (ctx.ResumeSessionId is not { } resume) return null;
+
+        if (!descriptor.SupportsRestartResume || ctx.IsReviewFlow || string.IsNullOrWhiteSpace(resume))
+            throw new InvalidOperationException(
+                $"{descriptor.Vendor} cannot reopen session '{resume}' for this launch; refusing to start a fresh session in its place.");
+
+        return resume;
     }
 
     /// <summary>

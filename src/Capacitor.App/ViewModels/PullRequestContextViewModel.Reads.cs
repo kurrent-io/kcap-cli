@@ -69,6 +69,7 @@ public sealed partial class PullRequestContextViewModel {
                     if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") {
                         ForgetChoices(); ClearProtected();
                         _stopped = links.Reason == "retries_stopped";
+                        if (_stopped) _queuedRefresh = false;
                         _notice = _stopped ? "This session's pull requests are unavailable. Use Retry to check again."
                             : links.Kind == PullRequestReadKind.SignedOut ? "Sign in to see pull requests." : "Couldn't refresh the linked pull requests.";
                     } else {

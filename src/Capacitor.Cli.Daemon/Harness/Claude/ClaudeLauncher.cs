@@ -106,6 +106,8 @@ internal sealed partial class ClaudeLauncher(
         }
     }
 
+    public bool SupportsResume => true;
+
     public LaunchArgs BuildArgs(LauncherContext ctx) {
         var args = new List<string>();
         string? mcpConfigPath = null;
@@ -130,6 +132,14 @@ internal sealed partial class ClaudeLauncher(
             // prompts (writes stay confined to the daemon-owned, throwaway worktree) and NO
             // MCP servers, so the reviewer can't recursively start a nested review flow.
             // Interactive (Default) agents keep prompts + their configured MCP servers.
+            if (ctx.ResumeSessionId is { Length: > 0 } resumeId) {
+                args.Add("--resume");
+                args.Add(resumeId);
+            } else if (ctx.PinnedSessionId is { Length: > 0 } pinnedId) {
+                args.Add("--session-id");
+                args.Add(pinnedId);
+            }
+
             if (ctx.IsReviewFlow) {
                 // A borrowed reviewer runs in the user's REAL checkout (not a daemon-owned,
                 // throwaway worktree) — bypassPermissions would auto-approve writes there.

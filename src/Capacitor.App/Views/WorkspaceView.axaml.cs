@@ -108,6 +108,21 @@ public sealed class TerminalDetachedOrFailedVisibleConverter : IValueConverter {
         throw new NotSupportedException();
 }
 
+/// Why the daemon could not bring the agent back after a restart, and how to retry it.
+public sealed class TerminalInterruptedMessageConverter : IValueConverter {
+    public static readonly TerminalInterruptedMessageConverter Instance = new();
+
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is TerminalSessionState { Phase: TerminalSessionPhase.Interrupted } state
+            ? "This session was not resumed after the daemon restarted" +
+              (string.IsNullOrEmpty(state.Detail) ? "." : $" ({state.Detail}).") +
+              " Retry it with `kcap agent resume`, or stop it to discard it."
+            : "";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 /// The combined banner's message: the failure detail when Failed, a fixed line for a plain
 /// (non-error) Detached.
 public sealed class TerminalDetachedOrFailedMessageConverter : IValueConverter {

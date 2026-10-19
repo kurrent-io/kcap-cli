@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -217,6 +218,32 @@ public class ClaudeHookCommandTests {
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-end|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
         await Assert.That(body!["policy_pass_through_count"]!.GetValue<long>()).IsEqualTo(1L);
+    }
+
+    [Test, NotInParallel]
+    public async Task Session_end_for_a_resuming_hosted_agent_posts_nothing() {
+        using var daemons = new TempDaemonStore();
+        ResumeLedgerStore.For(daemons.Store, "daemon-1").Write(ResumeLedgerEntries.For("agent-1", ResumeState.Resuming));
+        using var dir = EnvScope.Exclusive("KCAP_DAEMONS_DIR", daemons.Directory);
+        using var fx  = new Fixture(Config.Root) { Hosted = new HostedAgent("agent-1", false, DaemonBridge.None) };
+
+        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","cwd":"/tmp"}""");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.Sent.Any(s => s.StartsWith("/hooks/session-end|", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test, NotInParallel]
+    public async Task Session_end_for_a_running_hosted_agent_still_posts() {
+        using var daemons = new TempDaemonStore();
+        ResumeLedgerStore.For(daemons.Store, "daemon-1").Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        using var dir = EnvScope.Exclusive("KCAP_DAEMONS_DIR", daemons.Directory);
+        using var fx  = new Fixture(Config.Root) { Hosted = new HostedAgent("agent-1", false, DaemonBridge.None) };
+
+        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","cwd":"/tmp"}""");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.Sent.Any(s => s.StartsWith("/hooks/session-end|", StringComparison.Ordinal))).IsTrue();
     }
 
     /// <summary>Session-end is the only eviction the policy directories get, so what it leaves

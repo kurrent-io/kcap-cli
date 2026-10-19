@@ -61,7 +61,9 @@ public static class FrameCodec {
             or FrameType.SendText or FrameType.SendTextAck or FrameType.SendTextWithAttachments
             or FrameType.DaemonSettingsPut or FrameType.DaemonSettingsAck
             or FrameType.AdmissionFenceAcquire or FrameType.AdmissionFenceCommit or FrameType.AdmissionFenceAbort
-            or FrameType.AdmissionFenceAck => Encoding.UTF8.GetBytes(f.Text),
+            or FrameType.AdmissionFenceAck
+            or FrameType.Shutdown or FrameType.ShutdownAck
+            or FrameType.AgentResume or FrameType.AgentResumeAck => Encoding.UTF8.GetBytes(f.Text),
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => f.Bytes, // pre-encoded by the helpers below
         _ => throw new InvalidDataException($"unencodable frame {f.Type}"),
@@ -86,7 +88,9 @@ public static class FrameCodec {
             or FrameType.SendText or FrameType.SendTextAck or FrameType.SendTextWithAttachments
             or FrameType.DaemonSettingsPut or FrameType.DaemonSettingsAck
             or FrameType.AdmissionFenceAcquire or FrameType.AdmissionFenceCommit or FrameType.AdmissionFenceAbort
-            or FrameType.AdmissionFenceAck => new(t) { Text = Encoding.UTF8.GetString(p) },
+            or FrameType.AdmissionFenceAck
+            or FrameType.Shutdown or FrameType.ShutdownAck
+            or FrameType.AgentResume or FrameType.AgentResumeAck => new(t) { Text = Encoding.UTF8.GetString(p) },
         FrameType.Attached or FrameType.Spawn
             or FrameType.StopV2 or FrameType.AttachedReadOnly => new(t) { Bytes = p },
         _ => throw new InvalidDataException($"undecodable frame {t}"),

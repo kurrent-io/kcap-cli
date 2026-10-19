@@ -81,6 +81,75 @@ public class PullRequestContextViewModelTests {
         }
     });
 
+    /// A list read before the work context named the primary repository described the session
+    /// without one; the hint arriving lists again, inside the 30-second poll.
+    [Test]
+    public Task The_primary_repository_arriving_lists_again_with_it() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+
+            h.Vm.PrimaryRepositoryChanged();
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+
+            await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "the second list");
+            await Assert.That(h.Source.Descriptions.Select(d => d.Repository)).IsEquivalentTo(new[] { null, repository });
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A refresh queued behind the short gap cannot run while the pane is in the background, so
+    /// hiding the pane drops it; the return lists afresh with the current repository.
+    [Test]
+    public Task A_refresh_queued_when_the_pane_is_hidden_is_dropped_until_it_returns() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+            h.Vm.PrimaryRepositoryChanged();
+            await Assert.That(h.Vm.IsReading).IsTrue();
+
+            h.Vm.SetForeground(false);
+            await Assert.That(h.Vm.IsReading).IsFalse();
+
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 2, what: "the list on return");
+            await Assert.That(h.Source.Descriptions[^1].Repository).IsEqualTo(repository);
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A refresh queued behind a list read that then stops retries has nothing left to run it, so
+    /// it must not keep the card reading.
+    [Test]
+    public Task A_refresh_queued_behind_a_read_that_stops_retries_is_dropped() => RunOnUiAsync(async () => {
+        var h = new Harness(primary: () => new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        try {
+            h.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Source.ListFailure = "retries_stopped";
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 1, what: "the list read");
+
+            h.Vm.PrimaryRepositoryChanged();
+            h.Source.ListGate.SetResult();
+
+            await WaitUntilAsync(() => h.Vm.Notice.StartsWith("This session's pull requests are unavailable", StringComparison.Ordinal), what: "retries stopped");
+            await Assert.That(h.Vm.IsReading).IsFalse();
+        } finally {
+            await h.Dispose();
+        }
+    });
+
     [Test]
     public Task Teardown_does_not_wait_for_a_stalled_branch_lookup_or_publish_its_result() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
@@ -862,6 +931,8 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task A_default_that_merges_while_shown_hands_over_on_its_next_overview() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
+        // Settling the read arms its renewal timer after the overview becomes visible.
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial overview settled");
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
         h.Source.Lifecycles[2] = "merged";
         h.Time.Advance(TimeSpan.FromSeconds(26)); Dispatcher.UIThread.RunJobs();

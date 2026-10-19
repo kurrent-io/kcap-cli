@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -275,6 +276,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     AcpUpdateKind?  _openRunKind;
     StringBuilder?  _openRunText;
+    string?         _openRunAgent; // the subagent the open run belongs to; null for the hosted agent
 
     Task    _turnWorkerTask    = Task.CompletedTask;
     string? _sessionId;
@@ -300,6 +302,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     readonly TranscriptJournal? _journal;
     readonly Func<bool, JsonObject>? _sessionNewMeta;
     readonly Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>? _turnUsageReader;
+    readonly Func<AcpNotification, AcpSubagentSignal?>? _subagentReader;
+
+    // A subagent's ACP sessionId → the agent id its events carry. Entries stay after it finishes, so a
+    // straggling update is still not mistaken for the hosted agent's own.
+    readonly ConcurrentDictionary<string, string> _subagentAgentIds = new(StringComparer.Ordinal);
+    readonly HashSet<string>                      _completedSubagents = new(StringComparer.Ordinal); // under _aggregationLock
 
     readonly ReapVerdictGate _gate;
 
@@ -514,10 +522,12 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             PolicyJudgeGateway?                                                             policyJudge = null,
             Func<bool, JsonObject>?                                                         sessionNewMeta = null,
             Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null,
-            Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>?                         turnUsageReader = null
+            Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>?                         turnUsageReader = null,
+            Func<AcpNotification, AcpSubagentSignal?>?                                      subagentReader = null
         ) {
         _sessionNewMeta = sessionNewMeta;
         _turnUsageReader = turnUsageReader;
+        _subagentReader  = subagentReader;
         _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
@@ -829,7 +839,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// </summary>
     public async Task StartAsync(
             string cwd, string? initialPrompt, CancellationToken ct, string? requestedModel = null,
-            IReadOnlyList<AcpMcpServerSpec>? mcpServers = null, string? modelOwedAnExplanation = null) {
+            IReadOnlyList<AcpMcpServerSpec>? mcpServers = null, string? modelOwedAnExplanation = null,
+            string? resumeSessionId = null) {
         _cwd            = cwd;
         _requestedModel = requestedModel;
         // Captured for session/load: a resume must hand the agent the SAME server list the
@@ -907,21 +918,40 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // not a throw — the reconnect eligibility gate reads loadSession off this.
             _negotiatedCapabilities = initializeResult.AgentCapabilities ?? new AgentCapabilities(LoadSession: false);
 
-            var sessionNewParams = JsonSerializer.SerializeToElement(
-                new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke(_isReviewFlow)),
-                CapacitorJsonContext.Default.SessionNewParams);
+            if (resumeSessionId is not null) {
+                // A session/new here would answer the resume with a fresh conversation under the old agent id.
+                if (!_negotiatedCapabilities.LoadSession)
+                    throw new InvalidOperationException(
+                        $"{DiagnosticBinary} does not advertise loadSession, so session {resumeSessionId} cannot be reopened.");
 
-            sessionNewResult = await RunHandshakeStageAsync(
-                    "session_created", stageCt => connection.RequestAsync("session/new", sessionNewParams, stageCt), ct)
-                .ConfigureAwait(false);
+                // Before the session id, which is what admits user input: no turn may slip past the hold.
+                Volatile.Write(ref _turnsHeld, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                _reopened = true;
+                // Set before the load so its updates are recognised as this session's.
+                _sessionId = resumeSessionId;
 
-            if (!sessionNewResult.TryGetProperty("sessionId", out var sessionIdElement) || sessionIdElement.GetString() is not { Length: > 0 } sessionId)
-                throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
+                sessionNewResult = await RunHandshakeStageAsync(
+                        "session_created", stageCt => LoadForRestartResumeAsync(connection, resumeSessionId, cwd, stageCt), ct)
+                    .ConfigureAwait(false);
 
-            _sessionId = sessionId;
+                LogSessionLoaded(_agentId, resumeSessionId);
+            } else {
+                var sessionNewParams = JsonSerializer.SerializeToElement(
+                    new SessionNewParams(Cwd: cwd, McpServers: mcpServers?.ToArray() ?? NoMcpServers, Meta: _sessionNewMeta?.Invoke(_isReviewFlow)),
+                    CapacitorJsonContext.Default.SessionNewParams);
 
-            LogSessionStarted(_agentId, sessionId);
-            AcpMetrics.SessionsStarted.Add(1);
+                sessionNewResult = await RunHandshakeStageAsync(
+                        "session_created", stageCt => connection.RequestAsync("session/new", sessionNewParams, stageCt), ct)
+                    .ConfigureAwait(false);
+
+                if (!sessionNewResult.TryGetProperty("sessionId", out var sessionIdElement) || sessionIdElement.GetString() is not { Length: > 0 } sessionId)
+                    throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
+
+                _sessionId = sessionId;
+
+                LogSessionStarted(_agentId, sessionId);
+                AcpMetrics.SessionsStarted.Add(1);
+            }
         } catch (AcpProtocolVersionException) {
             // Already actionable and NOT an auth issue — rethrow verbatim, without the auth hint.
             // Failure already recorded above, at the point the version mismatch was detected.
@@ -942,7 +972,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             // failure is unverified, so this does NOT pattern-match specific error text (a live
             // logged-out probe is a follow-up). Never masks the original error, only annotates it.
             throw new AcpHandshakeFailedException(
-                "initialize/session-new", SanitizeForForward(ex.Message), DiagnosticAuthHint, ex);
+                resumeSessionId is null ? "initialize/session-new" : "initialize/session-load",
+                SanitizeForForward(ex.Message), DiagnosticAuthHint, ex);
         }
 
         // Select the requested model (if any) BEFORE the first prompt fires. Awaited, but never
@@ -990,7 +1021,19 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // awaiting it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
-        if (!string.IsNullOrEmpty(initialPrompt)) {
+        if (_reopened) {
+            // The note is the event whose acceptance proves the server records this session. Every turn,
+            // the nudge first, queues behind the hold, so a session nothing would record never acts.
+            EmitEnvelope(new AcpEventEnvelope(
+                Seq: 0, Kind: AcpEventKind.SystemNote, Text: "Session reopened after a kcap daemon restart.", TimestampIso: NowIso()));
+
+            if (!string.IsNullOrEmpty(initialPrompt)) {
+                try { _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false); }
+                catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "ACP: initial prompt not queued — the runtime is already being torn down."); }
+            } else {
+                _firstTurnSettled.TrySetResult();
+            }
+        } else if (!string.IsNullOrEmpty(initialPrompt)) {
             // A dispose racing the tail of this handshake can already have completed
             // _pendingTurns by the time this runs — the only reachable refusal here, since a
             // fresh queue can't be full, so it is Debug rather than Warning.
@@ -1044,6 +1087,39 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         ActivityClock?.SetLaunchStage(stage);
 
         return result;
+    }
+
+    bool                  _reopened;
+    TaskCompletionSource? _turnsHeld;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.Reopened"/>
+    public bool Reopened => _reopened;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.ReleaseFirstTurn"/>
+    public void ReleaseFirstTurn() {
+        if (Volatile.Read(ref _turnsHeld) is not { } held || !held.TrySetResult()) return;
+
+        ArmFirstOutputWatchdog();
+    }
+
+    /// <summary>Reopens a session for a restart resume. Everything the load replays is dropped: the server
+    /// already holds that history, and the load response is the vendor's barrier after the last replayed
+    /// update.</summary>
+    async Task<JsonElement> LoadForRestartResumeAsync(AcpConnection connection, string sessionId, string cwd, CancellationToken ct) {
+        var loadParams = JsonSerializer.SerializeToElement(
+            new SessionLoadParams(SessionId: sessionId, Cwd: cwd, McpServers: _mcpServersForResume),
+            CapacitorJsonContext.Default.SessionLoadParams);
+
+        _suppressNotifications = true;
+
+        try {
+            var result = await connection.RequestAsync("session/load", loadParams, ct).ConfigureAwait(false);
+            AcpMetrics.SessionsLoaded.Add(1);
+
+            return result;
+        } finally {
+            _suppressNotifications = false;
+        }
     }
 
     /// <summary>
@@ -1153,6 +1229,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
                     if (!_pendingTurns.Reader.TryRead(out turn!))
                         continue;
+                }
+
+                if (Volatile.Read(ref _turnsHeld) is { } turnsHeld) {
+                    try {
+                        await turnsHeld.Task.WaitAsync(ct).ConfigureAwait(false);
+                    } catch (OperationCanceledException) {
+                        turn.Written?.TrySetException(new InvalidOperationException(
+                            "ACP session ended while this input was pending delivery."));
+                        throw;
+                    }
                 }
 
                 // Pre-gate admission: decide park-or-register under the reconnect lock. This turn's
@@ -1440,24 +1526,50 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     }
 
     public async Task RequestGracefulStopAsync() {
-        if (_sessionId is not { Length: > 0 } sessionId) {
-            _logger.LogDebug("ACP runtime RequestGracefulStopAsync called before a session was established; nothing to cancel.");
-            return;
+        // Marked intentional before anything is sent: the agent may exit on the cancel alone, and that
+        // exit must not read as a crash and open a reconnect.
+        AcpConnection            connection;
+        CancellationTokenSource? reconnectOwner;
+        lock (_reconnectLock) {
+            _intentionalStop = true;
+            connection       = _installed.Connection;
+            reconnectOwner   = _ownerCts;
         }
 
-        var cancelParams = JsonSerializer.SerializeToElement(
-            new SessionCancelParams(SessionId: sessionId),
-            CapacitorJsonContext.Default.SessionCancelParams);
-
+        // A reconnect in flight cannot commit any more; ending it now spares its candidate the wait for
+        // the terminate that follows.
         try {
-            await _installed.Connection.NotifyAsync("session/cancel", cancelParams).ConfigureAwait(false);
-        } catch (Exception ex) when (Phase != RuntimePhase.Running) {
-            // A graceful-stop notify against a dead or mid-swap connection is expected while
-            // reconnecting/terminal — swallow and log (reconnect spec §9); the hard stop path
-            // (TerminateAsync) is what actually ends the incident.
-            _logger.LogDebug(ex, "ACP: session/cancel against a non-running connection; ignoring.");
+            reconnectOwner?.Cancel();
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: cancelling the reconnect owner during graceful stop failed.");
+        }
+
+        if (_sessionId is { Length: > 0 } sessionId) {
+            var cancelParams = JsonSerializer.SerializeToElement(
+                new SessionCancelParams(SessionId: sessionId),
+                CapacitorJsonContext.Default.SessionCancelParams);
+
+            // Bounded: a write stuck on an agent that stopped reading must not hold back the EOF below.
+            var cancel = connection.NotifyAsync("session/cancel", cancelParams);
+            try {
+                await cancel.WaitAsync(GracefulCancelSendBound, _timeProvider).ConfigureAwait(false);
+            } catch (Exception ex) {
+                _ = cancel.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                _logger.LogDebug(ex, "ACP: session/cancel during graceful stop did not complete; closing stdin anyway.");
+            }
+        }
+
+        // session/cancel ends the turn, not the process, and a stop during startup has no turn at all:
+        // the agent exits on stdin EOF.
+        try {
+            await connection.CloseInputAsync().ConfigureAwait(false);
+        } catch (Exception ex) {
+            _logger.LogDebug(ex, "ACP: closing stdin during graceful stop failed; falling through to terminate.");
         }
     }
+
+    static readonly TimeSpan GracefulCancelSendBound = TimeSpan.FromSeconds(1);
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => _installed.Process.WaitForExitAsync(timeout);
 
@@ -1496,8 +1608,17 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         }
 
         if (notification.Method != "session/update") {
-            if (_turnUsageReader is { } readUsage && !_suppressNotifications && IsThisSession(notification))
-                EmitTurnUsage(readUsage(notification));
+            if (!_suppressNotifications) {
+                var mine = IsThisSession(notification);
+
+                // A subagent's own usage is already in the hosted agent's turn.
+                if (mine && _turnUsageReader is { } readUsage)
+                    EmitTurnUsage(readUsage(notification));
+
+                // A subagent can start subagents of its own, announced under its sessionId.
+                if ((mine || SubagentOf(notification) is not null) && _subagentReader?.Invoke(notification) is { } signal)
+                    HandleSubagentSignal(signal);
+            }
             return;
         }
 
@@ -1509,6 +1630,15 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // path and the owner's own emissions are not suppressed.
         if (_suppressNotifications) {
             Interlocked.Increment(ref _suppressedUpdates);
+
+            // Not transcript: a vendor's command list can trail the load response while suppression is
+            // still on, and dropping it would leave the resumed session with no commands.
+            if (notification.Params is { } suppressed
+             && suppressed.TryGetProperty("update", out var suppressedUpdate)
+             && suppressedUpdate.Str("sessionUpdate") == "available_commands_update"
+             && IsThisSession(notification))
+                PublishCommands(AcpAvailableCommands.Extract(suppressedUpdate.Clone()));
+
             return;
         }
 
@@ -1517,11 +1647,21 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             return;
         }
 
+        var agentId = SubagentOf(notification);
+
+        // Another session's update is never the hosted agent's: one the vendor never announced as a
+        // subagent is dropped rather than recorded under the wrong agent.
+        if (agentId is null && IsForeignSession(notification)) {
+            _logger.LogDebug("ACP: dropped a session/update for an unannounced session.");
+            return;
+        }
+
         var reduced = Reduce(updateElement.Clone());
 
         // The command list is not transcript content (the translator still drops it), so capture it
-        // here and hand it to the picker path rather than emitting an envelope.
-        if (reduced.Kind == AcpUpdateKind.AvailableCommands)
+        // here and hand it to the picker path rather than emitting an envelope. A subagent's own list
+        // is not the hosted agent's.
+        if (reduced.Kind == AcpUpdateKind.AvailableCommands && agentId is null)
             PublishCommands(AcpAvailableCommands.Extract(reduced.Raw));
 
         // Only an update that carries actual TURN OUTPUT disarms the watchdog.
@@ -1536,18 +1676,48 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                          or AcpUpdateKind.ToolCall or AcpUpdateKind.ToolCallUpdate
                          or AcpUpdateKind.Plan)
             Interlocked.Exchange(ref _sawFirstUpdate, 1);
-        if (!_updates.Writer.TryWrite(reduced))
+        if (agentId is null && !_updates.Writer.TryWrite(reduced))
             _logger.LogDebug("ACP: dropped a session/update — updates channel already completed.");
 
         // Fed synchronously, on THIS notification callback's own thread — AcpConnection.RunAsync's
         // single read loop calls HandleNotification directly (never concurrently with itself), so
         // every update this runtime ever sees is aggregated in strict arrival order without needing
         // its own queue/consumer loop.
-        AggregateUpdate(reduced);
+        AggregateUpdate(reduced, agentId);
     }
 
     bool IsThisSession(AcpNotification notification) =>
         _sessionId is { Length: > 0 } sessionId && notification.Params?.Str("sessionId") == sessionId;
+
+    bool IsForeignSession(AcpNotification notification) =>
+        _sessionId is { Length: > 0 } sessionId
+     && notification.Params?.Str("sessionId") is { Length: > 0 } other
+     && other != sessionId;
+
+    string? SubagentOf(AcpNotification notification) =>
+        notification.Params?.Str("sessionId") is { } sessionId && _subagentAgentIds.TryGetValue(sessionId, out var agentId)
+            ? agentId
+            : null;
+
+    void HandleSubagentSignal(AcpSubagentSignal signal) {
+        var agentId = signal.AgentId;
+
+        lock (_aggregationLock) {
+            // Its start and finish are ordered against whatever text was streaming around them.
+            FlushOpenRunLocked();
+
+            if (signal.Started) {
+                if (!_subagentAgentIds.TryAdd(signal.ChildSessionId, agentId)) return;
+                EmitEnvelope(new AcpEventEnvelope(
+                    Kind: AcpEventKind.SubagentStarted, TimestampIso: NowIso(), AgentId: agentId, AgentType: signal.AgentType));
+            } else if (_subagentAgentIds.ContainsKey(signal.ChildSessionId) && _completedSubagents.Add(signal.ChildSessionId)) {
+                EmitEnvelope(new AcpEventEnvelope(Kind: AcpEventKind.SubagentCompleted, TimestampIso: NowIso(), AgentId: agentId));
+            }
+        }
+    }
+
+    static AcpEventEnvelope For(AcpEventEnvelope envelope, string? agentId) =>
+        agentId is null ? envelope : envelope with { AgentId = agentId };
 
     // Standalone, like a usage_update: metadata, so it must not close an open chunk run.
     void EmitTurnUsage(IReadOnlyList<AcpEventEnvelope> usage) {
@@ -1686,18 +1856,23 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// flush from the worker (see the lock field's remarks for why that matters even though the two
     /// call sites are serialized in practice).
     /// </summary>
-    void AggregateUpdate(AcpSessionUpdate update) {
+    void AggregateUpdate(AcpSessionUpdate update, string? agentId = null) {
         lock (_aggregationLock) {
             switch (update.Kind) {
                 case AcpUpdateKind.AgentMessageChunk:
                 case AcpUpdateKind.AgentThoughtChunk:
-                    if (_openRunKind == update.Kind) {
+                    if (_openRunKind == update.Kind && _openRunAgent == agentId) {
                         _openRunText!.Append(update.Text);
                     } else {
                         FlushOpenRunLocked();
-                        _openRunKind = update.Kind;
-                        _openRunText = new StringBuilder(update.Text ?? "");
+                        _openRunKind  = update.Kind;
+                        _openRunAgent = agentId;
+                        _openRunText  = new StringBuilder(update.Text ?? "");
                     }
+                    break;
+
+                // A subagent's title and context occupancy are its own session's, not the hosted agent's.
+                case AcpUpdateKind.SessionInfo or AcpUpdateKind.UsageUpdate when agentId is not null:
                     break;
 
                 case AcpUpdateKind.SessionInfo:
@@ -1719,7 +1894,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     FlushOpenRunLocked(); // kind-transition — the open run (if any) ends here
                     var envelope = AcpEventTranslator.Translate(update, seq: 0, NowIso(), logger: _logger, debugFrames: _debugFrames);
                     if (envelope is { } e)
-                        EmitEnvelope(e);
+                        EmitEnvelope(For(e, agentId));
                     break;
             }
         }
@@ -1748,14 +1923,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         if (_openRunKind is not { } kind)
             return;
 
-        var text = _openRunText!.ToString();
-        _openRunKind = null;
-        _openRunText = null;
+        var text  = _openRunText!.ToString();
+        var agent = _openRunAgent;
+        _openRunKind  = null;
+        _openRunText  = null;
+        _openRunAgent = null;
 
         var representative = new AcpSessionUpdate(kind);
         var envelope        = AcpEventTranslator.Translate(representative, seq: 0, NowIso(), aggregatedText: text, logger: _logger, debugFrames: _debugFrames);
         if (envelope is { } e)
-            EmitEnvelope(e);
+            EmitEnvelope(For(e, agent));
     }
 
     /// <summary>
@@ -1915,6 +2092,14 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 await _turnWorkerTask.WaitAsync(TimeSpan.FromSeconds(5), _timeProvider).ConfigureAwait(false);
             } catch {
                 // Best-effort — a stuck turn worker must never hang dispose.
+            }
+
+            // The channel's single reader is gone and its writer completed, so nothing still queued will
+            // ever be sent: a caller awaiting a turn's write would otherwise wait forever.
+            if (_turnWorkerTask.IsCompleted) {
+                while (_pendingTurns.Reader.TryRead(out var undelivered))
+                    undelivered.Written?.TrySetException(new InvalidOperationException(
+                        "ACP session ended while this input was pending delivery."));
             }
 
             // Session-end flush: a belt-and-suspenders flush of any still-open aggregation run. In the
@@ -2860,6 +3045,9 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP session started: agentId={AgentId} acpSessionId={AcpSessionId}")]
     partial void LogSessionStarted(string agentId, string acpSessionId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "ACP session reopened for a restart resume: agentId={AgentId} sessionId={SessionId}")]
+    partial void LogSessionLoaded(string agentId, string sessionId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP handshake OK: agentId={AgentId} protocolVersion={ProtocolVersion} loadSession={LoadSession} resolvedModel={ResolvedModel}")]
     partial void LogHandshakeOk(string agentId, int protocolVersion, bool loadSession, string? resolvedModel);

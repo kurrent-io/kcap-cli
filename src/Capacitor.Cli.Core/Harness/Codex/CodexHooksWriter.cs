@@ -10,6 +10,9 @@ public static class CodexHooksWriter {
     const int DefaultHookTimeout       = 30;
 
     public static SettingsEdit Install(string hooksPath) {
+        // Rewriting drops the mark, which Codex would otherwise reject the file for.
+        var rewrite = CodexHooksInstaller.StartsWithByteOrderMark(hooksPath);
+
         var result = JsonSettingsFile.Edit(hooksPath, root => {
             var hooks = root["hooks"] as JsonObject ?? [];
             root["hooks"] = hooks;
@@ -33,7 +36,7 @@ public static class CodexHooksWriter {
                 hooks[evt] = kept;
             }
 
-            return hooks.ToJsonString() != before;
+            return rewrite || hooks.ToJsonString() != before;
         });
 
         if (result is SettingsEdit.Changed or SettingsEdit.Unchanged) CodexHooksInstaller.WriteMarker(hooksPath);

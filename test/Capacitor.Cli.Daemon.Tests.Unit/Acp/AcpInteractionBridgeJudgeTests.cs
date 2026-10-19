@@ -51,7 +51,7 @@ public class AcpInteractionBridgeJudgeTests : IDisposable {
     }
 
     sealed class Harness {
-        public AcpInteractionBridge        Bridge    { get; init; } = null!;
+        public AcpInteractionBridge        Bridge    { get; set; } = null!;
         public List<PolicyDecisionEventV1> Decisions { get; } = [];
         public List<AcpAutoApprovalNotice> Notices   { get; } = [];
         public int                         Forwarded { get; set; }
@@ -74,25 +74,23 @@ public class AcpInteractionBridgeJudgeTests : IDisposable {
         var gateway = new PolicyJudgeGateway(
             () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)), _server.Url, TimeProvider.System);
 
-        Harness harness = null!;
-        harness = new Harness {
-            Bridge = new AcpInteractionBridge(
-                requestInteraction: (_, _) => {
-                    harness.Forwarded++;
-                    return Task.FromResult(harness.HumanAnswer);
-                },
-                agentId: AgentId,
-                logger: NullLogger.Instance,
-                time: TimeProvider.System,
-                preset: preset,
-                notifyAutoApproval: n => harness.Notices.Add(n),
-                policySnapshot: snapshot,
-                policyVendor: "cursor",
-                notifyPolicyDecision: e => harness.Decisions.Add(e),
-                policyCwd: "/wt",
-                policyJudge: withJudge ? gateway : null,
-                judgeBudget: budget ?? TimeSpan.FromSeconds(30)),
-        };
+        var harness = new Harness();
+        harness.Bridge = new AcpInteractionBridge(
+            requestInteraction: (_, _) => {
+                harness.Forwarded++;
+                return Task.FromResult(harness.HumanAnswer);
+            },
+            agentId: AgentId,
+            logger: NullLogger.Instance,
+            time: TimeProvider.System,
+            preset: preset,
+            notifyAutoApproval: harness.Notices.Add,
+            policySnapshot: snapshot,
+            policyVendor: "cursor",
+            notifyPolicyDecision: harness.Decisions.Add,
+            policyCwd: "/wt",
+            policyJudge: withJudge ? gateway : null,
+            judgeBudget: budget ?? TimeSpan.FromSeconds(30));
 
         return harness;
     }

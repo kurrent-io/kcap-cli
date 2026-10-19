@@ -336,17 +336,28 @@
                             <ItemsControl ItemsSource="{Binding QueuedMessages}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:QueuedChatMessage">
-                                        <StackPanel Margin="0,2" Spacing="2">
-                                            <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="13.5"
-                                                       TextTrimming="CharacterEllipsis" MaxLines="1"
-                                                       Foreground="{StaticResource KcapMutedBrush}" />
-                                            <TextBlock Text="{x:Static vm:QueuedChatMessage.AwaitingPickupNote}" IsVisible="{Binding IsAwaitingPickup}"
-                                                       FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                            <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
-                                                       FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
-                                            <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
-                                                       FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
-                                        </StackPanel>
+                                        <Grid Margin="0,2" ColumnDefinitions="*,Auto">
+                                            <StackPanel Spacing="2">
+                                                <TextBlock Text="{Binding DisplayText}" ToolTip.Tip="{Binding DisplayText}" FontSize="13.5"
+                                                           TextTrimming="CharacterEllipsis" MaxLines="1"
+                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                                <TextBlock Text="{Binding PickupNote}"
+                                                           IsVisible="{Binding PickupNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                           FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                                <TextBlock Text="Delivery unconfirmed" IsVisible="{Binding IsUnconfirmed}"
+                                                           FontSize="11" Foreground="{StaticResource KcapMutedBrush}" />
+                                                <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
+                                                           FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
+                                            </StackPanel>
+                                            <Button x:Name="SendQueuedButton" Grid.Column="1" Classes="kcapPrimary" Content="Send"
+                                                    Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    IsVisible="{Binding CanSendNow}"
+                                                    Height="24" Padding="12,0" Margin="12,0,0,0"
+                                                    VerticalAlignment="Center" VerticalContentAlignment="Center"
+                                                    FontSize="13" FontWeight="SemiBold" CornerRadius="7"
+                                                    AutomationProperties.Name="Send queued message" />
+                                        </Grid>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -422,7 +433,7 @@
                             <TextBlock Text="{Binding ReadOnlyNotice, StringFormat='Read-only: {0}'}"
                                        Foreground="{StaticResource KcapWarningBrush}" TextWrapping="Wrap" />
                         </Border>
-                        <Grid ColumnDefinitions="Auto,*,Auto">
+                        <Grid ColumnDefinitions="Auto,*,Auto,Auto">
                             <!-- The hint exists only while the gate is shut, which is exactly when a tooltip
                                  is suppressed by default. -->
                             <Button x:Name="AttachButton" IsVisible="{Binding ShowsComposer}"
@@ -436,7 +447,12 @@
                             </Button>
                             <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <Button x:Name="SendButton" Grid.Column="2" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="12,0,0,0"
+                            <Button x:Name="InterruptButton" Grid.Column="2" Classes="kcapChip" Content="Interrupt (Esc)"
+                                    Command="{Binding InterruptCommand}" IsVisible="{Binding ShowsInterrupt}"
+                                    ToolTip.Tip="Interrupt the current turn without ending the session" Margin="12,0,0,0"
+                                    BorderThickness="1" Height="24" Padding="10,0" VerticalContentAlignment="Center"
+                                    FontSize="13" FontWeight="SemiBold" CornerRadius="7" Cursor="Hand" />
+                            <Button x:Name="SendButton" Grid.Column="3" Classes="kcapPrimary" Content="Send" Command="{Binding SendCommand}" Margin="8,0,0,0"
                                     Height="24" Padding="12,0" VerticalContentAlignment="Center" FontSize="13" FontWeight="SemiBold" CornerRadius="7"
                                     Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                                     IsVisible="{Binding ShowsComposer}" />

@@ -19,11 +19,26 @@ sealed class LocalServerSystemdService(
     const int UnitNotLoadedExit = 5;
 
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _run = run ?? ServiceProcess.Run;
-    readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+    readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
 
     public string Describe => "systemd --user unit";
 
-    public bool IsInstalled(LocalServerUnit unit) => File.Exists(LocalServerSystemdUnit.UnitPath(home, unit));
+    public string UnitFile(LocalServerUnit unit) => LocalServerSystemdUnit.UnitPath(home, unit);
+
+    public bool IsInstalled(LocalServerUnit unit) => File.Exists(UnitFile(unit));
+
+    public UnitOwner Owner(LocalServerUnit unit) {
+        var (exit, stdout, stderr) = _run("systemctl", LocalServerSystemdUnit.ShowArgs(unit));
+
+        return new(LocalServerOwnerReader.FromShow(exit, stdout, stderr),
+            LocalServerOwnerReader.FromUnitFile(LocalServerSystemdUnit.UnitPath(home, unit)));
+    }
+
+    public UnitActivity Activity(LocalServerUnit unit) {
+        var (exit, stdout, stderr) = _run("systemctl", LocalServerSystemdUnit.ActivityArgs(unit));
+
+        return LocalServerActivityReader.FromShow(exit, stdout, stderr);
+    }
 
     public void Install(LocalServerUnit unit) {
         unit.PrepareLogDirectory();
@@ -58,6 +73,7 @@ sealed class LocalServerSystemdService(
         if (File.Exists(path)) {
             await StopAsync(unit, ct);
             File.Delete(path);
+            FaultPoints.Hit($"unlink:{path}");
         } else {
             // systemd can still run a unit whose file is gone; there is nothing left to disable, but it must stop.
             // Only "not loaded" means there was nothing to stop: a server that has not yet taken its lock would

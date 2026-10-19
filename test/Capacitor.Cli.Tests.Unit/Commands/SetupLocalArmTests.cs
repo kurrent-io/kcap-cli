@@ -1,0 +1,373 @@
+using TUnit.Core.Enums;
+using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
+using Capacitor.Cli.LocalEdition;
+using Capacitor.Cli.PrDetection;
+using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
+using Spectre.Console;
+using TUnit.Assertions.Enums;
+using Profile = Capacitor.Cli.Core.Config.Profile;
+
+namespace Capacitor.Cli.Tests.Unit.Commands;
+
+/// <summary>
+/// <c>kcap setup --local</c> through <see cref="SetupCommand.HandleAsync"/>, over a real installer whose unit, server
+/// and bundle are fakes. Console, the Spectre singleton, <c>KCAP_URL</c> and the interrupt seam are process-global.
+/// </summary>
+[NotInParallel, ExcludeOn(OS.Windows)]
+internal sealed class SetupLocalArmTests {
+    const string Version = "1.3.0";
+
+    static readonly LocalPlatform MacArm = new(true, false, false, Architecture.Arm64);
+
+    [TempHome] public required TempHome Home { get; init; }
+
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    readonly List<string> _log = [];
+
+    LocalRoot Root => field ??= LocalRoot.Resolve(null, Home);
+
+    FakeLocalServer Server => field ??= new(_log, Root);
+
+    FakeBundle Bundle => field ??= new(Tmp.PathTo("bundle.tar.gz"), Version);
+
+    [Before(Test)]
+    public void WriteConfig() =>
+        File.WriteAllText(AppConfig.GetConfigPath(Config.Root), """{"version":2,"active_profile":"default","profiles":{"default":{}}}""");
+
+    /// <param name="wrap">Wraps <see cref="Server"/> as the installer's transport.</param>
+    SetupCommand Command(Func<HttpMessageHandler, HttpMessageHandler>? wrap) {
+        var factory = new FakeLocalInstallerFactory(() => {
+            var service = new FakeLocalServerService(_log, Home);
+            var local   = new HttpClient(wrap?.Invoke(Server) ?? Server);
+
+            return new LocalInstaller(Root, Config.Root, Home, service, Bundle.Client(), local, Bundle.Key, MacArm, TimeProvider.System,
+                installer => [new LocalSetupRecovery(service, Home, local, TimeProvider.System, installer.Progress, installer.RolledForward)]) {
+                Version     = Version,
+                SocketLimit = int.MaxValue,
+            };
+        });
+
+        var http = new PlainHttpClientFactory();
+
+        return new SetupCommand(
+            Config.Root, Resolutions.None(Config.Root),
+            AuthFixtures.NewTokenStore(Config.Root),
+            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
+            new TenantProvisioningClient(new HttpClient(), ClientAgent.Cli),
+            new AuthProviderDiscovery(http, TimeProvider.System), NoTelemetry.Facade, AuthEndpoints.Defaults,
+            new FakeFacadeFactory(_ => throw new InvalidOperationException("a local setup signs in nowhere")),
+            FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")),
+            FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(),
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root),
+            router: new GitProviderRouter(), workdir: new WorkingDirectory(Config.Directory), TimeProvider.System,
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root,
+            factory) {
+            PickHandoffVendor = _ => "Skip"
+        };
+    }
+
+    Task<(int Exit, string[] Stdout, string Spectre, string Stderr)> Run(params string[] args) => RunWith(null, null, args);
+
+    /// <param name="console">Reads the Spectre console the caller swapped in; null swaps in a capture here.</param>
+    async Task<(int Exit, string[] Stdout, string Spectre, string Stderr)> RunWith(
+            Func<HttpMessageHandler, HttpMessageHandler>? wrap, Func<string>? console, params string[] args) {
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var spectre = console is null ? new SpectreCapture() : null;
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        var exit = await Command(wrap).HandleAsync(args);
+
+        return (exit, capture.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries), console?.Invoke() ?? spectre!.Text,
+            capture.GetCapturedError());
+    }
+
+    static string[] Events(string[] stdout) => [.. stdout.Select(l => JsonNode.Parse(l)!["event"]!.GetValue<string>())];
+
+    static async Task AssertAllJson(string[] lines) {
+        foreach (var line in lines) {
+            var node = JsonNode.Parse(line);
+            await Assert.That(node?["v"]?.GetValue<int>()).IsEqualTo(1).Because(line);
+        }
+    }
+
+    Profile ActiveProfile() {
+        var cfg = ConfigMutator.LoadPure(AppConfig.GetConfigPath(Config.Root));
+        return cfg.Profiles[cfg.ActiveName];
+    }
+
+    [Test]
+    public async Task Json_without_single_user_fails_with_answer_required_line() {
+        var (exit, stdout, spectre, _) = await Run("setup", "--local", "--json", "--yes");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await AssertAllJson(stdout);
+        await Assert.That(spectre).IsEmpty();
+
+        var last = JsonNode.Parse(stdout[^1])!;
+        await Assert.That(last["event"]?.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(last["code"]?.GetValue<string>()).IsEqualTo("answer_required");
+        await Assert.That(last["message"]?.GetValue<string>()).Contains("--single-user");
+        await Assert.That(_log).DoesNotContain("install");
+    }
+
+    [Test]
+    public async Task Json_success_ends_with_committed_and_exit_0() {
+        // The visibility step under --no-prompt would write org_public over it.
+        File.WriteAllText(AppConfig.GetConfigPath(Config.Root),
+            """{"version":2,"active_profile":"default","profiles":{"default":{"default_visibility":"private"}}}""");
+
+        var (exit, stdout, spectre, _) = await Run("setup", "--local", "--json", "--single-user", "--yes");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await AssertAllJson(stdout);
+        await Assert.That(spectre).IsEmpty();
+
+        var events = stdout.Select(l => JsonNode.Parse(l)!["event"]!.GetValue<string>()).ToArray();
+        await Assert.That(events[0]).IsEqualTo("preflight_passed");
+        await Assert.That(events).Contains("committing");
+
+        var last = JsonNode.Parse(stdout[^1])!;
+        await Assert.That(last["event"]?.GetValue<string>()).IsEqualTo("committed");
+        await Assert.That(last["version"]?.GetValue<string>()).IsEqualTo(Version);
+
+        var profile = ActiveProfile();
+        await Assert.That(profile.ServerUrl).IsEqualTo(last["server_url"]!.GetValue<string>());
+        await Assert.That(profile.DefaultVisibility).IsEqualTo("private");
+        await Assert.That(profile.Daemon).IsNull();
+    }
+
+    [Test]
+    public async Task Json_with_discover_fails_with_invalid_arguments_line() {
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--discover", "--json");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(stdout.Length).IsEqualTo(1);
+
+        var line = JsonNode.Parse(stdout[0])!;
+        await Assert.That(line["code"]?.GetValue<string>()).IsEqualTo("invalid_arguments");
+        await Assert.That(line["message"]?.GetValue<string>()).Contains("--discover");
+    }
+
+    [Test]
+    public async Task Json_interrupt_before_the_commit_ends_with_cancelled_and_exits_130() {
+        var exits    = new List<int>();
+        var original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = exits.Add;
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            run = await RunWith(inner => new InterruptOnReady(inner), null, "setup", "--local", "--json", "--single-user", "--yes");
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        await AssertAllJson(run.Stdout);
+
+        var last = JsonNode.Parse(run.Stdout[^1])!;
+        await Assert.That(last["code"]?.GetValue<string>()).IsEqualTo("cancelled");
+        await Assert.That(run.Stdout.Select(l => JsonNode.Parse(l)!["event"]!.GetValue<string>())).Contains("rolled_back");
+        await Assert.That(exits).IsEquivalentTo([130]);
+        await Assert.That(ActiveProfile().ServerUrl).IsNull();
+    }
+
+    /// <summary>The roll-forward ignores the interrupt and commits; the setup must report that commit rather than the
+    /// cancellation a later step would observe.</summary>
+    [Test]
+    public async Task Json_interrupt_during_a_roll_forward_ends_with_committed_and_exits_130() {
+        using (FaultPoints.Arm(point => { if (point == "setup:after-committing") throw new SimulatedCrash(); })) {
+            var crashed = await Run("setup", "--local", "--json", "--single-user", "--yes");
+            await Assert.That(crashed.Exit).IsEqualTo(1);
+        }
+
+        await Assert.That(LocalStateFiles.ReadJournal(Root) is StateRead<LifecycleJournalEntry>.Present).IsTrue();
+
+        var exits    = new List<int>();
+        var original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = exits.Add;
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            run = await Run("setup", "--local", "--json", "--single-user", "--yes");
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        await AssertAllJson(run.Stdout);
+        await Assert.That(Events(run.Stdout)).Contains("recovered");
+        await Assert.That(Events(run.Stdout)[^1]).IsEqualTo("committed").Because(string.Join('\n', run.Stdout));
+        await Assert.That(exits).IsEquivalentTo([130]);
+        await Assert.That(LocalStateFiles.ReadJournal(Root) is StateRead<LifecycleJournalEntry>.Absent).IsTrue();
+    }
+
+    [Test]
+    public async Task No_prompt_without_yes_fails() {
+        var (exit, _, _, stderr) = await Run("setup", "--local", "--single-user", "--no-prompt");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(stderr).Contains("Pass --yes");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(ActiveProfile().ServerUrl).IsNull();
+    }
+
+    [Test]
+    public async Task Terminal_arm_hands_the_local_url_and_none_to_later_steps() {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout) + spectre + stderr);
+
+        var registry = (LocalStateFiles.ReadRegistry(Root) as StateRead<InstallRegistry>.Present)!.Value.Active!;
+        var profile  = ActiveProfile();
+
+        await Assert.That(profile.ServerUrl).IsEqualTo(registry.ServerUrl);
+        await Assert.That(profile.AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, registry.ServerUrl));
+        await Assert.That(string.Join('\n', stdout) + spectre).Contains("No sign-in needed for a local installation.");
+    }
+
+    [Test]
+    public async Task Plain_setup_refuses_json() {
+        var (exit, stdout, spectre, _) = await Run("setup", "--json");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(stdout.Length).IsEqualTo(1);
+        await Assert.That(spectre).IsEmpty();
+        await Assert.That(JsonNode.Parse(stdout[0])!["code"]?.GetValue<string>()).IsEqualTo("invalid_arguments");
+    }
+
+    [Test]
+    public async Task Json_reuse_without_yes_ends_reused_then_committed() {
+        var first = await Run("setup", "--local", "--json", "--single-user", "--yes");
+        await Assert.That(first.Exit).IsEqualTo(0);
+
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--json", "--single-user");
+
+        await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout));
+        await Assert.That(Events(stdout)[^2..]).IsEquivalentTo(["reused", "committed"], CollectionOrdering.Matching);
+        await Assert.That(Events(stdout)).DoesNotContain("downloading");
+    }
+
+    /// <summary>The registry says reuse when the terminal reads the plan, and is gone by the time the installer
+    /// rechecks it under the lease; skipping the question on a reuse must not count as a confirmed install.</summary>
+    [Test]
+    public async Task A_reuse_that_becomes_an_install_under_the_lease_needs_yes() {
+        Directory.CreateDirectory(Root.Directory);
+        LocalStateFiles.PublishRegistry(Root, new(new("0123456789abcdef0123456789abcdef", 9473, "http://localhost:9473", Version), []));
+
+        var text     = new StringBuilder();
+        var original = AnsiConsole.Console;
+        AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings {
+            Ansi        = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out         = new AnsiConsoleOutput(new TriggerWriter(text, "one user", () => File.Delete(Root.RegistryPath))),
+        });
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            run = await RunWith(null, text.ToString, "setup", "--local", "--single-user", "--no-prompt");
+        } finally {
+            AnsiConsole.Console = original;
+        }
+
+        await Assert.That(run.Exit).IsEqualTo(1);
+        await Assert.That(run.Stderr).Contains("--yes");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(Directory.Exists(Path.Combine(Root.Directory, "bin"))).IsFalse();
+    }
+
+    [Test]
+    public async Task Terminal_decline_cancels_and_exits_0() {
+        using var console = new ScriptedConsole().Line("n");
+
+        var (exit, _, spectre, _) = await RunWith(null, () => console.Text, "setup", "--local");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(spectre).Contains("Setup cancelled.");
+        await Assert.That(_log).DoesNotContain("install");
+    }
+
+    [Test]
+    public async Task Terminal_interrupt_after_the_commit_exits_130_before_step_2() {
+        var exits    = new List<int>();
+        var original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = exits.Add;
+
+        (int Exit, string[] Stdout, string Spectre, string Stderr) run;
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            run = await Run(["setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags]);
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        await Assert.That(exits).IsEquivalentTo([130]);
+        await Assert.That(run.Exit).IsEqualTo(130);
+        await Assert.That(run.Spectre).Contains("Committed");
+        await Assert.That(run.Spectre).DoesNotContain("Step 2/6");
+        await Assert.That(ActiveProfile().AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, ActiveProfile().ServerUrl!));
+    }
+
+    /// <summary>Interrupts at the first readiness probe and holds it until the interrupt has cancelled the install,
+    /// so the cancellation lands before the commit whatever the scheduling.</summary>
+    sealed class InterruptOnReady(HttpMessageHandler inner) : DelegatingHandler(inner) {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (request.RequestUri!.AbsolutePath == "/healthz/ready") {
+                InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+
+            return await base.SendAsync(request, ct);
+        }
+    }
+
+    /// <summary>Runs <paramref name="onMarker"/> once, as soon as the text written so far contains
+    /// <paramref name="marker"/>.</summary>
+    sealed class TriggerWriter(StringBuilder text, string marker, Action onMarker) : StringWriter(text, CultureInfo.InvariantCulture) {
+        bool _fired;
+
+        public override void Write(char value) {
+            base.Write(value);
+            Check();
+        }
+
+        public override void Write(string? value) {
+            base.Write(value);
+            Check();
+        }
+
+        public override void Write(char[] buffer, int index, int count) {
+            base.Write(buffer, index, count);
+            Check();
+        }
+
+        void Check() {
+            if (_fired || !GetStringBuilder().ToString().Contains(marker, StringComparison.Ordinal)) return;
+
+            _fired = true;
+            onMarker();
+        }
+    }
+}

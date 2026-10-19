@@ -10,6 +10,7 @@ using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.MuseAssistant;
+using Capacitor.Cli.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -61,7 +62,7 @@ public static class CommandServices {
                 sp.GetRequiredService<BinaryProbe>(),
                 sp.GetRequiredService<AccountStore>()));
 
-        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
+        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles, localRoot));
         services.AddCapacitorHttp(env, machine);
         services.AddCapacitorTelemetry(config, telemetryStartup);
 
@@ -108,6 +109,8 @@ public static class CommandServices {
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
+        services.AddTransient<IOutgoingRecorders, OutgoingRecorders>();
+        services.AddTransient<LocalCommand>();
         services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
@@ -129,6 +132,10 @@ public static class CommandServices {
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddTransient<ILocalInstallerFactory, LocalInstallerFactory>();
+        services.AddTransient<ILocalStackFactory, LocalStackFactory>();
+        services.AddTransient<LocalUpgradeCommand>();
+        services.AddTransient<LocalCommand>();
         services.AddSingleton<ChosenServerHttp>();
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();

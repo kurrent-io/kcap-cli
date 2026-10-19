@@ -15,7 +15,7 @@ public static class DaemonHttpServices {
     public static IServiceCollection AddDaemonHttp(
             this IServiceCollection services, ConfigRoot configRoot, DaemonConfig config,
             ProfileOverrides env, MachineAuth machine) {
-        services.AddSingleton(_ => new CapacitorServer(config.ServerUrl, configRoot, config.Profiles));
+        services.AddSingleton(_ => new CapacitorServer(config.ServerUrl, configRoot, config.Profiles, config.LocalRoot));
         services.AddCapacitorHttp(env, machine);
 
         return services;

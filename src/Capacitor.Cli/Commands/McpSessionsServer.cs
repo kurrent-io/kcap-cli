@@ -4,8 +4,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
-using Capacitor.Cli.Continuation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
@@ -137,7 +137,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         "Use these tools to recall prior work — 'have we done X before', 'why did we', 'who decided Y', " +
         "'when did we work on Z'. Search here before grepping the code or git log — they search the reasoning " +
         "across past sessions, not just the code. Also use them to find an unfinished plan a session left " +
-        "behind (list_repo_plans) or to read a plan's task ledger (get_declared_plans).";
+        "behind (list_repo_plans) or to read a plan's task ledger (get_declared_plans). " +
+        "The server checks every read against the signed-in user's session permissions: a session the user " +
+        "may not see is never returned, so these tools cannot expose another user's private session.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -1071,7 +1073,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_summary",
-            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Also lists `work_items` the session is attached to. To take over a session's work items and unfinished plans — continuing a session whose agent is gone — call `continue_session` in kcap-handoff, or run `kcap recap <id> --continue`. Use this to orient yourself before drilling into the full transcript.",
+            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Also lists `work_items` the session is attached to. To take over a session's work items and unfinished plans — continuing a session whose agent is gone — call `continue_session` in kcap-handoff, or run `kcap recap <id> --continue`. Use this to orient yourself before drilling into the full transcript. The server returns only sessions the signed-in user may see; another user's private session is refused, never revealed.",
             new(
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },
@@ -1081,7 +1083,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_transcript",
-            "Get speaker-tagged transcript excerpts from a past session. Use `around_event` (paired with `agent_id` for subagent hits) returned by search_sessions to fetch the exact decision context. Default window is 50 events from the beginning; with `around_event` it's ±5/15 by default.",
+            "Get speaker-tagged transcript excerpts from a past session. Use `around_event` (paired with `agent_id` for subagent hits) returned by search_sessions to fetch the exact decision context. Default window is 50 events from the beginning; with `around_event` it's ±5/15 by default. The server returns only sessions the signed-in user may read in full; another user's private session is refused, never revealed.",
             new(
                 "object",
                 new() {

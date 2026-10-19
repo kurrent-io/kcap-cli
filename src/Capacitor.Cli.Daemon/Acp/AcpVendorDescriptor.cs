@@ -155,6 +155,12 @@ internal sealed record AcpVendorDescriptor {
     /// </summary>
     public bool                        SupportsReconnectResume { get; }
 
+    /// <summary>Whether a daemon restart may reopen this vendor's session with <c>session/load</c>
+    /// instead of falling back to kcap continue. Set only for a vendor that passes the graceful-stop probe
+    /// in <c>docs/probes/2026-10-19-acp-restart-resume/</c>: a vendor persists its session differently on a
+    /// graceful stop than on a crash, so this is decided apart from <see cref="SupportsReconnectResume"/>.</summary>
+    public bool                        SupportsRestartResume { get; }
+
     /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c> for an interactive (false) or review
     /// (true) launch, fresh per launch so no launch can alter another's. Null sends none.</summary>
     public Func<bool, JsonObject>?      SessionNewMeta { get; }
@@ -166,6 +172,11 @@ internal sealed record AcpVendorDescriptor {
     /// <summary>Reads a turn's token usage from a notification other than <c>session/update</c>, for a
     /// vendor that reports it on its own extension method. Null for every vendor that does not.</summary>
     public Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>? TurnUsageReader { get; }
+
+    /// <summary>Reads a subagent's start or finish from a vendor notification, for a vendor that runs
+    /// subagents as child sessions on the same connection. Null for every vendor that does not, whose
+    /// updates all belong to the hosted agent.</summary>
+    public Func<Core.Acp.AcpNotification, AcpSubagentSignal?>? SubagentReader { get; }
 
     public AcpVendorDescriptor(
             HarnessId                   Harness,
@@ -179,12 +190,15 @@ internal sealed record AcpVendorDescriptor {
             AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled,
             AcpBorrowedReviewContainment BorrowedReviewContainment = AcpBorrowedReviewContainment.None,
             bool                        SupportsReconnectResume = false,
+            bool                        SupportsRestartResume = false,
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
                                         UnattendedTrustArgvBuilder = null,
             Func<bool, JsonObject>?     SessionNewMeta = null,
             UnattendedToolAdmitter?     ToolAdmitter = null,
             Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>?
-                                        TurnUsageReader = null
+                                        TurnUsageReader = null,
+            Func<Core.Acp.AcpNotification, AcpSubagentSignal?>?
+                                        SubagentReader = null
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -240,9 +254,11 @@ internal sealed record AcpVendorDescriptor {
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
         this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.SupportsReconnectResume = SupportsReconnectResume;
+        this.SupportsRestartResume   = SupportsRestartResume;
         this.SessionNewMeta = SessionNewMeta;
         this.ToolAdmitter   = ToolAdmitter;
         this.TurnUsageReader = TurnUsageReader;
+        this.SubagentReader  = SubagentReader;
 
         if (UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove && ToolAdmitter is null)
             throw new ArgumentException(
@@ -282,7 +298,9 @@ internal static class AcpVendorDescriptors {
         // prompts normally. Note the same probe found Cursor's replay REWRITES toolCallIds and
         // drops the interrupted turn — both irrelevant to the suppress-the-replay resume, but they
         // are why per-envelope replay matching stays impossible for this vendor.
-        SupportsReconnectResume: true
+        SupportsReconnectResume: true,
+        // Ignores stdin EOF, so a restart always SIGKILLs it after the grace; session/load works across that.
+        SupportsRestartResume: true
     );
 
     /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
@@ -324,7 +342,8 @@ internal static class AcpVendorDescriptors {
         // across a SIGKILLed owner, the barrier holds, toolCallIds are stable, and — unlike
         // Cursor — Copilot PERSISTS a mid-turn-killed prompt agent-side, which is why the
         // interrupted-turn disposition keys on local send facts, never on replay content.
-        SupportsReconnectResume: true
+        SupportsReconnectResume: true,
+        SupportsRestartResume: true
     );
 
     /// <summary>AWS Kiro CLI as an ACP hosted agent (<c>kiro-cli acp</c>). Hosted interactively and as
@@ -487,7 +506,8 @@ internal static class AcpVendorDescriptors {
         // Borrowed review is deliberately NOT declared: nothing here has established a containment
         // boundary for a reviewer running in the caller's live checkout. The default fails closed to an
         // owned worktree, which is the safe direction.
-        SupportsReconnectResume: false
+        SupportsReconnectResume: false,
+        SupportsRestartResume: true
     );
 
     /// <summary>
@@ -537,7 +557,8 @@ internal static class AcpVendorDescriptors {
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
         SupportsReconnectResume: false,
         SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
-        TurnUsageReader:     GrokTurnUsage.Read
+        TurnUsageReader:     GrokTurnUsage.Read,
+        SubagentReader:      GrokSubagentSignals.Read
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).

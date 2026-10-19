@@ -79,7 +79,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "";
 
-    internal const string RestartPendingMessage = "Daemon update pending — it restarts once no agents are running.";
+    internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
     // attached to it: a passive marker only, the restart is the daemon's own.

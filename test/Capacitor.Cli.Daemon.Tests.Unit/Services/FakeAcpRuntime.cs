@@ -26,6 +26,12 @@ internal sealed class FakeAcpRuntime : IHostedAgentRuntime, IAcpTranscriptSource
     public string  AcpSessionId  { get; init; } = "acp-sess-1";
     public string  Cwd           { get; init; } = "/tmp/acp-wt";
     public string? ResolvedModel { get; init; } = "gpt-x";
+    public string? VendorResumeToken { get; init; }
+
+    public bool Reopened { get; init; }
+    int _releaseFirstTurnCalls;
+    public int  ReleaseFirstTurnCalls => Volatile.Read(ref _releaseFirstTurnCalls);
+    public void ReleaseFirstTurn() => Interlocked.Increment(ref _releaseFirstTurnCalls);
 
     public ChannelReader<AcpEventEnvelope> Envelopes       => _envelopes.Reader;
     public ChannelWriter<AcpEventEnvelope> EnvelopesWriter => _envelopes.Writer;

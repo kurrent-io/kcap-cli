@@ -212,12 +212,17 @@ public class UpdateCoordinatorTests {
         await Assert.That(UpdateCoordinator.TryApplyPendingAtStartup(updater, updateRelaunch: false)).IsFalse();
     }
 
-    /// Velopack kills the daemon when it applies an update on Windows, so the prompt must not
-    /// promise that running agents survive there.
+    /// Velopack kills the daemon when it applies an update on Windows, so the prompt there warns
+    /// that agents stop mid-turn; elsewhere the daemon waits for a turn boundary. Neither promises
+    /// that agents keep running or that the daemon waits for idle.
     [Test]
-    public async Task Ready_disclosure_warns_on_Windows_that_installing_ends_running_agents() {
-        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).Contains("ends any running agents");
-        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).DoesNotContain("keep running");
-        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: false)).Contains("Running agents keep running");
+    public async Task Ready_disclosure_says_how_agents_are_stopped_and_resumed() {
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: true)).Contains("interrupts any running agents mid-turn");
+        await Assert.That(UpdateCoordinator.ReadyDisclosure(windows: false)).Contains("once its agents finish their current turn");
+        foreach (var windows in new[] { true, false }) {
+            await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).Contains("resumes them");
+            await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).DoesNotContain("keep running");
+            await Assert.That(UpdateCoordinator.ReadyDisclosure(windows)).DoesNotContain("idle");
+        }
     }
 }

@@ -199,6 +199,8 @@ public sealed class ConfigCommand(
             "daemon.claude_path" => throw new ArgumentException("Invalid value for daemon.claude_path: must not be empty."),
             "daemon.codex_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { CodexPath = value } },
             "daemon.codex_path" => throw new ArgumentException("Invalid value for daemon.codex_path: must not be empty."),
+            "daemon.auto_resume" when bool.TryParse(value, out var b) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { AutoResume = b } },
+            "daemon.auto_resume" => throw new ArgumentException($"Invalid value for daemon.auto_resume: '{value}'. Must be true or false."),
             "update_check" when bool.TryParse(value, out var b) => profile with { UpdateCheck = b },
             "update_check" => throw new ArgumentException($"Invalid value for update_check: '{value}'. Must be true or false."),
             "disable_session_guidelines" when bool.TryParse(value, out var b) => profile with { DisableSessionGuidelines = b },
@@ -241,6 +243,7 @@ public sealed class ConfigCommand(
         key switch {
             "flows.reviewer_vendor" => profile with { Flows = (profile.Flows ?? new FlowsSettings()) with { ReviewerVendor = null } },
             "skills.auto_sync" => profile with { Skills = (profile.Skills ?? new SkillsSettings()) with { AutoSync = null } },
+            "daemon.auto_resume" => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { AutoResume = null } },
             _ => throw new ArgumentException($"Unknown or non-unsettable config key: {key}")
         };
 
@@ -253,6 +256,7 @@ public sealed class ConfigCommand(
         Console.Error.WriteLine("  daemon.max_agents           Max concurrent hosted coding agents (0 = unlimited)");
         Console.Error.WriteLine("  daemon.claude_path          Path to claude binary (default: claude)");
         Console.Error.WriteLine("  daemon.codex_path           Path to codex binary (default: codex)");
+        Console.Error.WriteLine("  daemon.auto_resume          Resume hosted agents after a daemon restart (true/false, default true)");
         Console.Error.WriteLine("  update_check                All kcap update nudging: stderr hint, server headers (banner/notification), in-agent nudge (true/false)");
         Console.Error.WriteLine("  default_visibility          Default session visibility (private, project, org_public, public)");
         Console.Error.WriteLine("  disable_session_guidelines  Skip injecting recurring-lessons context at SessionStart (true/false)");

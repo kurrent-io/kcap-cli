@@ -26,6 +26,10 @@ public sealed class UpdateCommand(
     /// <summary>Runs <c>kcap refresh</c> with the newly installed binary, so its own refresh list applies.</summary>
     internal Func<string, Task<int>> RunRefresh { get; init; } = RunRefreshAsync;
 
+    /// <summary>Runs <c>kcap local upgrade</c> with the newly installed binary: the stack moves to the new version, and
+    /// only the new binary knows how.</summary>
+    internal Func<string, Task<int>> RunLocalUpgrade { get; init; } = RunLocalUpgradeAsync;
+
     /// <summary>A script install checks the installer's channel manifest; anything else checks npm.</summary>
     IReleaseFeed Feed => _kind == InstallKind.Script && releases is not null ? releases : npm;
 
@@ -113,7 +117,7 @@ public sealed class UpdateCommand(
         var probe             = channel == "latest" ? ServerProbe.SendAsync(server, http, time) : Task.CompletedTask;
         var checkResult       = await CheckForUpdateAsync(forceCheck: true, channel, root, Feed, time);
         await probe;
-        var advisory          = UpdateAdvisoryResolver.Resolve(checkResult, channel, profiles.Resolution.ServerUrl, root);
+        var advisory          = UpdateAdvisoryResolver.Resolve(checkResult, channel, profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint, root);
         var (latest, current) = (advisory.Target, advisory.Current);
 
         if (checkOnly) {
@@ -170,9 +174,28 @@ public sealed class UpdateCommand(
         await Console.Out.WriteLineAsync($"kcap updated to {target}.");
         await Console.Out.WriteLineAsync(OperatingSystem.IsWindows()
             ? "Run `kcap daemon restart` if you run the daemon."
-            : "A running daemon restarts on the new version once it is idle.");
+            : "A running daemon restarts on the new version; its agents are stopped and resumed.");
 
-        return 0;
+        return await RunLocalUpgrade(exe) is LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo or LocalUpgradeCommand.NotPublished ? 0 : 1;
+    }
+
+    /// <summary>Inherits the console, so its progress and any error reach the user as it happens.</summary>
+    static async Task<int> RunLocalUpgradeAsync(string exe) {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe) {
+            ArgumentList    = { "local", "upgrade", "--if-installed", "--no-update-check" },
+            UseShellExecute = false,
+        });
+
+        if (process is null) return LocalUpgradeCommand.Failed;
+
+        await process.WaitForExitAsync();
+
+        if (process.ExitCode == LocalUpgradeCommand.NotPublished)
+            await Console.Error.WriteLineAsync("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+        else if (process.ExitCode is not (LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo))
+            await Console.Error.WriteLineAsync("The local server was not upgraded; run `kcap local upgrade` to retry.");
+
+        return process.ExitCode;
     }
 
     static async Task<int> RunRefreshAsync(string exe) {

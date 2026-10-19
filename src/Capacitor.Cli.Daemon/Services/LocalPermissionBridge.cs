@@ -688,6 +688,7 @@ internal sealed partial class LocalPermissionBridge(
                             _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
                             // No Register: a call the policy answered raises no card, and the
                             // decision log plus the run event are its audit trail.
+                            if (behavior == PermissionSettlements.Allow && pending is not null) _broker.OweCall(pending, SubagentIdOf(node));
                             await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
 
                             return;
@@ -988,8 +989,19 @@ internal sealed partial class LocalPermissionBridge(
             return;
         }
 
+        // Only a match key, never a scope: a name or input past the prompt's own caps was never
+        // held, so it is dropped and the notice still retires by id.
+        var toolName  = Str(node, "tool_name") is { Length: > 0 } name
+                     && Encoding.UTF8.GetByteCount(name) <= PermissionWire.MaxToolNameBytes ? name : null;
+        var toolInput = toolName is not null && ExtractElement(node, "tool_input") is { } input
+                     && Encoding.UTF8.GetByteCount(input.GetRawText()) <= PermissionWire.MaxElementBytes ? input : (JsonElement?)null;
+
+        var sentAt = node["sent_at"] is JsonValue stamp && stamp.TryGetValue<long>(out var ms) && ms > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : (DateTimeOffset?)null;
+
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
+        if (attributed is { } agent)
+            ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId, toolName, toolInput, sentAt));
 
         Close(context, 204);
     }

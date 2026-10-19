@@ -131,7 +131,7 @@ static class InlineBuilder {
     static void TrimStart(ContainerInline container) {
         while (container.FirstChild is { } first) {
             if (first is LiteralInline literal) {
-                var trimmed = literal.Content.ToString().TrimStart();
+                var trimmed = literal.Content.ToString().TrimStart(' ');
                 if (trimmed.Length == 0) { literal.Remove(); continue; }
                 literal.Content = new StringSlice(trimmed);
                 return;
@@ -147,7 +147,7 @@ static class InlineBuilder {
         while (container.LastChild is { } last) {
             if (last is LineBreakInline) { last.Remove(); continue; }
             if (last is LiteralInline literal) {
-                var trimmed = literal.Content.ToString().TrimEnd();
+                var trimmed = literal.Content.ToString().TrimEnd(' ');
                 if (trimmed.Length == 0) { literal.Remove(); continue; }
                 literal.Content = new StringSlice(trimmed);
                 return;

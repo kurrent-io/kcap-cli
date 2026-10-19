@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Services;
@@ -45,9 +46,12 @@ public sealed class StatusCommand(
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
 
-        var line = BuildHooksStatusLine(harnesses.Select(h => (h.Id, h.Signals.IsWired)));
+        var codexRefused = CodexRefusedHooks(harnesses);
+        var line         = BuildHooksStatusLine(harnesses.Select(h => (h.Id, HooksRun(h.Id, h.Signals.IsWired, codexRefused))));
 
         await Console.Out.WriteLineAsync(line);
+
+        if (codexRefused is not null) await Console.Out.WriteLineAsync($"           {CodexHooksDetailLine(codexRefused)}");
 
         var accountLines = BuildAccountLines(
             accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
@@ -66,7 +70,7 @@ public sealed class StatusCommand(
 
         var activity = new HookActivity(config, time);
 
-        foreach (var h in harnesses.Where(h => h.Signals.IsWired))
+        foreach (var h in harnesses.Where(h => HooksRun(h.Id, h.Signals.IsWired, codexRefused)))
             await Console.Out.WriteLineAsync(
                 $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
 
@@ -102,13 +106,14 @@ public sealed class StatusCommand(
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
 
-        var activity = new HookActivity(config, time);
+        var activity     = new HookActivity(config, time);
+        var codexRefused = CodexRefusedHooks(harnesses);
 
         var payload = BuildPayload(
             profiles.Name, server, auth, current, advisory, bundled,
             [.. harnesses.Select(h => {
                 var installed = harnesses.Detected(h.Id);
-                var wired     = h.Signals.IsWired;
+                var wired     = HooksRun(h.Id, h.Signals.IsWired, codexRefused);
 
                 return new StatusHarnessJson(
                     h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null,
@@ -273,7 +278,7 @@ public sealed class StatusCommand(
         var channel = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result  = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
-        return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config), false);
+        return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint, config), false);
     }
 
     internal static string FormatExpiry(TimeSpan remaining) =>
@@ -325,7 +330,7 @@ public sealed class StatusCommand(
         var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         // Cap the recommendation at the connected server's version (min(npm latest, server)).
-        var advisory = UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config);
+        var advisory = UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint, config);
 
         await Console.Out.WriteLineAsync(FormatVersionLine(current, advisory));
 
@@ -530,6 +535,23 @@ public sealed class StatusCommand(
             ? null
             : $"{HarnessRegistry.LabelOf(HarnessId.Muse)}: hooks missing for {string.Join(", ", missing)}. Run `kcap plugin install --muse`";
     }
+
+    /// <summary>The Codex hooks file kcap is wired into but Codex refuses for its byte-order mark, or
+    /// null. Read once per status run, so the Hooks line, the detail line and the recording lines
+    /// cannot disagree.</summary>
+    internal static string? CodexRefusedHooks(HarnessRegistry harnesses) =>
+        harnesses.ById(HarnessId.Codex) is CodexHarness { Signals.IsWired: true } codex
+     && CodexHooksInstaller.StartsWithByteOrderMark(codex.Paths.UserHooksJson)
+            ? codex.Paths.UserHooksJson
+            : null;
+
+    /// <summary>Whether a harness's hooks actually run: a Codex file Codex refuses is wired to kcap
+    /// yet runs nothing, so it reads as unwired.</summary>
+    internal static bool HooksRun(HarnessId id, bool wired, string? codexRefused) =>
+        wired && !(id == HarnessId.Codex && codexRefused is not null);
+
+    internal static string CodexHooksDetailLine(string hooksPath) =>
+        $"{HarnessRegistry.LabelOf(HarnessId.Codex)}: {hooksPath} starts with a UTF-8 byte-order mark, so Codex ignores every hook in it. Run `kcap plugin install --codex` to rewrite it without one";
 
     /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
     /// claim every event is missing, and re-running the install cannot fix it. It is reported for an

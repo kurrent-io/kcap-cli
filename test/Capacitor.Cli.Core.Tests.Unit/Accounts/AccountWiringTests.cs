@@ -144,6 +144,22 @@ public class AccountWiringTests {
         await Assert.That(AccountWiring.State(b, Home)).IsEqualTo(RecordingState.Installed);
     }
 
+    /// Codex runs none of a hooks file that starts with a byte-order mark, so the account is broken,
+    /// and rewiring it rewrites the file without the mark.
+    [Test]
+    public async Task Codex_hooks_with_a_byte_order_mark_report_broken_until_rewired() {
+        var b     = Account(HarnessId.Codex, ".codex-b");
+        AccountWiring.Wire(b, Home, Options());
+        var hooks = Home.PathTo(".codex-b", "hooks.json");
+        Home.CreateFile(".codex-b/hooks.json", "\uFEFF" + File.ReadAllText(hooks));
+
+        await Assert.That(AccountWiring.State(b, Home)).IsEqualTo(RecordingState.Broken);
+
+        AccountWiring.Wire(b, Home, Options());
+
+        await Assert.That(AccountWiring.State(b, Home)).IsEqualTo(RecordingState.Installed);
+    }
+
     [Test]
     [Arguments("[1,2]")]
     [Arguments("null")]

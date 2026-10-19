@@ -10,7 +10,11 @@ namespace Capacitor.Cli.Core.LocalIpc;
 public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> Agents,
     // Launches whose runtime is still starting, before an agent exists to list under Agents. Null
     // from an older daemon, which a client reads as unknown, never as "nothing starting".
-    List<PendingLaunchDto>? Pending = null);
+    List<PendingLaunchDto>? Pending = null,
+    // Whether any agent is running or starting, admitted launches included, observed at once: the two lists, read one
+    // after the other, cannot promise that. A yes, not a count, since one launch can be admitted and published at
+    // once. Null from an older daemon, which a client reads as unknown.
+    bool? Busy = null);
 
 /// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).
@@ -95,7 +99,10 @@ public sealed record AgentStatusDto(
     UsageLimitNoticeDto? UsageLimit = null,
     // A select dialog on the agent's terminal, while it is on screen. Null from an older daemon
     // and whenever none shows.
-    TerminalDialogDto? TerminalDialog = null);
+    TerminalDialogDto? TerminalDialog = null,
+    // Why the daemon could not resume an agent a restart stopped, on a row whose Status is
+    // "Interrupted". Such a row and a "Resuming" one have no process, only a resume ledger entry.
+    string? Interruption = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

@@ -50,6 +50,9 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) => bind().ServiceStatusAsync(ct);
 
+    public Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) =>
+        bind().ServiceStatusAsync(daemonName, ct);
+
     public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => bind().SupportsServiceRetireAsync(ct);
 
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) => bind().ServiceStartVerifiedAsync(ct);

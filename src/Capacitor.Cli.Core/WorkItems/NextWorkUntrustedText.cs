@@ -12,6 +12,15 @@ public static partial class NextWorkUntrustedText {
     [GeneratedRegex(@"\s+")]
     private static partial Regex Whitespace();
 
+    [GeneratedRegex(@"^[a-z0-9_]{1,64}\z")]
+    private static partial Regex CodePattern();
+
+    public const string DataOpen  = "<next-work-data>";
+    public const string DataClose = "</next-work-data>";
+
+    /// <summary>A server error or failure code: short snake-case, nothing else.</summary>
+    public static bool IsCode(string value) => CodePattern().IsMatch(value);
+
     public static string Render(string? text, int cap) {
         if (string.IsNullOrEmpty(text)) return string.Empty;
         if (cap <= 0) return string.Empty;

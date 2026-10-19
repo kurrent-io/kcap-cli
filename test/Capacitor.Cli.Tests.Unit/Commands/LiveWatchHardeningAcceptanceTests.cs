@@ -8,6 +8,7 @@ using WireMock.Server;
 using Capacitor.Cli.Core.Harness.Cursor;
 
 using Capacitor.Cli.Core.Http;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -223,8 +224,8 @@ public class LiveWatchHardeningAcceptanceTests {
     /// isolation, including a growth-after-probe TOCTOU case. This test's value-add is combining
     /// the bounded PROBE (<see cref="WatchCommand.WaitForFinalLineCompletionAsync"/>) with the
     /// actual CONSUMING read (<see cref="WatchCommand.ReadNewCompleteLinesAsync"/>) against one
-    /// real file that genuinely grows on a background writer — the full shutdown final-drain
-    /// flow, not either half alone.</para>
+    /// real file that grows while the probe is parked between reads — the full shutdown
+    /// final-drain flow, not either half alone.</para>
     /// </summary>
     [Test]
     public async Task ShutdownFinalDrain_RealGrowingFile_HeldUntilComplete_ThenSentAndAdvanced() {
@@ -241,15 +242,16 @@ public class LiveWatchHardeningAcceptanceTests {
         await Assert.That(early.NextPosition).IsEqualTo(1);
         await Assert.That(early.HeldIncompleteFinalLine).IsTrue();
 
-        // The writer finishes the record shortly after, inside the probe's bounded window.
-        var writer = Task.Run(async () => {
-            await Task.Delay(60);
-            await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
-        });
+        // The writer finishes the record while the probe is parked between reads, inside its window.
+        var clock  = new FakeTimeProvider();
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probe  = WatchCommand.WaitForFinalLineCompletionAsync(path, new DelayObservingTime(clock, parked), attempts: 8, delayMs: 25);
+        await parked.Task;
 
-        var completed = await WatchCommand.WaitForFinalLineCompletionAsync(path, TimeProvider.System, attempts: 8, delayMs: 25);
-        await writer;
-        await Assert.That(completed).IsTrue();
+        await File.WriteAllTextAsync(path, "{\"a\":1}\n{\"b\":\"still writing\"}\n");
+        clock.Advance(TimeSpan.FromMilliseconds(25));
+
+        await Assert.That(await probe).IsTrue();
 
         // NOW the consuming read — gated on the same policy the shutdown path uses — sends
         // the completed line and advances past it.

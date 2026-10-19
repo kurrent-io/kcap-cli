@@ -19,6 +19,27 @@ public class ConfigCommandTests {
     public async Task ApplySet_DaemonMaxAgents_ZeroIsUnlimited() =>
         await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.max_agents", "0").Daemon!.MaxAgents).IsEqualTo(0);
 
+    // ── daemon.auto_resume ───────────────────────────────────────────────────
+
+    [Test]
+    public async Task ApplySet_accepts_daemon_auto_resume_booleans_only() {
+        await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "false").Daemon!.AutoResume).IsFalse();
+        await Assert.That(ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "true").Daemon!.AutoResume).IsTrue();
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "off")).Throws<ArgumentException>();
+        await Assert.That(() => ConfigCommand.ApplySet(new Profile(), "daemon.auto_resume", "")).Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task ApplyUnset_daemon_auto_resume_clears_it_and_keeps_the_other_daemon_settings() {
+        var set = ConfigCommand.ApplySet(new Profile { Daemon = new DaemonSettings { Name = "bot", MaxAgents = 3 } }, "daemon.auto_resume", "false");
+
+        var cleared = ConfigCommand.ApplyUnset(set, "daemon.auto_resume");
+
+        await Assert.That(cleared.Daemon!.AutoResume).IsNull();
+        await Assert.That(cleared.Daemon.Name).IsEqualTo("bot");
+        await Assert.That(cleared.Daemon.MaxAgents).IsEqualTo(3);
+    }
+
     // ── daemon.claude_path ───────────────────────────────────────────────────
 
     [Test]

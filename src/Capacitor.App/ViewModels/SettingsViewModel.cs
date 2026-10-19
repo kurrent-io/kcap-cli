@@ -37,6 +37,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     bool _notifyOnPermissions = true;
     bool _notifyOnQuestions = true;
     bool _notifyOnIdle = true;
+    bool _autoResume;
+    readonly SemaphoreSlim _autoResumeSaves = new(1, 1);
+    string? _autoResumeMessage;
     string? _message;
     string? _notificationMessage;
     DesktopNotificationAccess _access;
@@ -73,6 +76,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         var saved = settings.Load();
         _name = saved.Name ?? service.DaemonName;
         _capacity = _savedCapacity = saved.MaxAgents;
+        _autoResume = saved.AutoResume ?? true;
 
         Observable.FromAsync(startupSettled.WaitAsync).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => Refresh(), _ => Refresh()).DisposeWith(_subscriptions);
@@ -105,6 +109,40 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public decimal? Capacity {
         get => _capacity;
         set { this.RaiseAndSetIfChanged(ref _capacity, value); Refresh(); }
+    }
+
+    /// <c>daemon.auto_resume</c>: whether a starting daemon brings back the agents a restart stopped.
+    /// Saved on change; the daemon reads it only when it starts.
+    public bool AutoResume {
+        get => _autoResume;
+        set {
+            if (value == _autoResume) return;
+            this.RaiseAndSetIfChanged(ref _autoResume, value);
+            _ = SaveAutoResumeAsync();
+        }
+    }
+
+    public string? AutoResumeMessage {
+        get => _autoResumeMessage;
+        private set => this.RaiseAndSetIfChanged(ref _autoResumeMessage, value);
+    }
+
+    // Saves run one at a time and each writes the selection current when it starts, so the last one
+    // to finish holds the latest selection whatever order the toggles' writes were scheduled in. A
+    // save outlives the window: closing Settings right after a toggle must not drop the choice.
+    async Task SaveAutoResumeAsync() {
+        string? message;
+        await _autoResumeSaves.WaitAsync(CancellationToken.None);
+        try {
+            var value = Volatile.Read(ref _autoResume);
+            await _settings.SaveAutoResumeAsync(value, CancellationToken.None);
+            message = value == Volatile.Read(ref _autoResume) ? "Saved. The daemon reads this when it starts." : null;
+        } catch (Exception ex) {
+            message = $"Could not save the setting: {ex.Message}";
+        } finally {
+            _autoResumeSaves.Release();
+        }
+        if (message is not null && !_lifetime.IsCancellationRequested) AutoResumeMessage = message;
     }
 
     public bool IsBusy {

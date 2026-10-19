@@ -304,6 +304,11 @@ record SessionTitlePayload {
 
     [JsonPropertyName("cache_write_tokens")]
     public long CacheWriteTokens { get; init; }
+
+    /// <summary>The server's title-source tag. Absent, it records the title as a raw placeholder that
+    /// its backfill may regenerate.</summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; init; }
 }
 
 record WhatsDonePayload {
@@ -1178,6 +1183,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
 [JsonSerializable(typeof(StatusReportRequest))]
+[JsonSerializable(typeof(ResumingAgentClaim))]
+[JsonSerializable(typeof(ResumingAgentClaim[]))]
 // Surface 3 (new-harness detection): per-machine coding-agent inventory carried on the status report.
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventory))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventoryEntry))]
@@ -1454,6 +1461,14 @@ public static class AcpEventKind {
     /// existing additive folds (session totals, per-model attribution, cost) count them unchanged. An
     /// older server treats it as an unrecognised Kind (dropped, cursor still advances).</summary>
     public const string TokenUsage         = "token_usage";
+
+    /// <summary>A subagent the hosted agent started: <see cref="AcpEventEnvelope.AgentId"/> names it,
+    /// <see cref="AcpEventEnvelope.AgentType"/> its role. Its own events then carry that
+    /// <see cref="AcpEventEnvelope.AgentId"/>. An older server treats it as an unrecognised Kind.</summary>
+    public const string SubagentStarted    = "subagent_started";
+
+    /// <summary>The subagent named by <see cref="AcpEventEnvelope.AgentId"/> finished.</summary>
+    public const string SubagentCompleted  = "subagent_completed";
 }
 
 /// <summary>
@@ -1548,7 +1563,12 @@ public readonly record struct AcpEventEnvelope(
         string? RepoOwner     = null,
         string? RepoName      = null,
         string? RepoRemoteUrl = null,
-        string? RepoBranch    = null
+        string? RepoBranch    = null,
+
+        // The subagent an event belongs to, and on subagent_started its role; null for the hosted
+        // agent's own events. A server without these fields records a subagent's events as the parent's.
+        string? AgentId   = null,
+        string? AgentType = null
     );
 
 /// <summary>
@@ -1905,7 +1925,8 @@ public readonly record struct DaemonStatusReport(
         // Echo of the nonce from a server-sent StatusReportRequest (RequestStatusReport2), null on
         // every unsolicited report. The server's idle-marker coordinator confirms a claim only
         // against the report carrying ITS nonce — an unechoed report can never confirm one.
-        string?                       EchoNonce                     = null
+        string?                       EchoNonce                     = null,
+        ResumingAgentClaim[]?         ResumingAgents                = null
     );
 
 /// <summary>The server's correlated status-report request (hub method <c>RequestStatusReport2</c>,
@@ -2248,7 +2269,8 @@ public readonly record struct DaemonConnect(
         // A launch's base ref may name a local branch, which the daemon resolves on its own machine
         // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
         // cannot see a branch that exists only here.
-        bool                                        SupportsBranchBaseRef = false
+        bool                                        SupportsBranchBaseRef = false,
+        ResumingAgentClaim[]?                       ResumingAgents = null
     );
 
 public sealed record UnattendedVendorCapability(

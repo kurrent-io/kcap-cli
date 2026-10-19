@@ -154,25 +154,27 @@ sealed partial class LaunchdServiceManager(
     /// refresh wrapper's 60s kill.</summary>
     public static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(7);
 
-    /// <summary>The longest a reload can take once the daemon is asked: the idle-restart request, then
+    /// <summary>How long a reload waits for the daemon to exit once asked to stop.</summary>
+    public static readonly TimeSpan ReloadExitWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>The longest a reload can take once the daemon is asked: the stop request and its exit, then
     /// bootout, bootstrap and the rollback bootstrap, each with at most one follow-up probe. A reload is
     /// not started with less than this left, because a kill between bootout and bootstrap leaves the job
     /// unloaded.</summary>
-    public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + 6 * RefreshCtlTimeout;
+    public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + ReloadExitWait + 6 * RefreshCtlTimeout;
 
     /// <summary>
     /// Brings an installed job up to the unit this version writes: off the Adaptive process type, and
     /// onto the stable <c>current</c> path when <paramref name="stabilize"/> maps its binary there (a
     /// script install's version directory is never updated in place). The plist is rewritten whenever
-    /// it is out of date, but launchd reads it only when the job loads, and the reload kills whatever
-    /// the daemon hosts. So a running job is reloaded only once <paramref name="requestRestart"/>
-    /// reports that the daemon accepted an idle-only restart. A busy daemon refuses that restart, and
-    /// the reload waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
+    /// it is out of date, but launchd reads it only when the job loads. So a running job is reloaded only
+    /// once <paramref name="stopForReload"/> reports that the daemon has accepted being stopped; one that
+    /// does not waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
     /// <see cref="ReloadBudget"/>. A job that is not stale counts as <see cref="UnitRefresh.Current"/>
     /// whatever its spawn type unless <paramref name="requirePositiveSpawnType"/> asks for a positive one.
     /// </summary>
     public UnitRefresh RefreshUnit(
-            string serviceId, Func<bool> requestRestart, Func<TimeSpan> timeLeft, out string? error,
+            string serviceId, Func<bool> stopForReload, Func<TimeSpan> timeLeft, out string? error,
             Func<string, string>? stabilize = null, bool requirePositiveSpawnType = false) {
         error = null;
         var path = LaunchdUnit.PlistPath(home, serviceId);
@@ -186,7 +188,7 @@ sealed partial class LaunchdServiceManager(
         if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return UnitRefresh.UnitUnsupported;
 
         try {
-            return RefreshValidatedUnit(serviceId, path, original!, upgraded, requestRestart, timeLeft, stabilize, requirePositiveSpawnType, out error);
+            return RefreshValidatedUnit(serviceId, path, original!, upgraded, stopForReload, timeLeft, stabilize, requirePositiveSpawnType, out error);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
                                       or System.ComponentModel.Win32Exception) {
             error = ex.Message;
@@ -196,7 +198,7 @@ sealed partial class LaunchdServiceManager(
 
     UnitRefresh RefreshValidatedUnit(
             string serviceId, string path, string original, string? upgraded,
-            Func<bool> requestRestart, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType, out string? error) {
+            Func<bool> stopForReload, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType, out string? error) {
         error = null;
         var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
         var probe = printTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(printExit, printOut, printErr);
@@ -221,10 +223,8 @@ sealed partial class LaunchdServiceManager(
 
         // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
         var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
-        if (running && !requestRestart()) return UnitRefresh.Deferred;
+        if (running && !stopForReload()) return UnitRefresh.Deferred;
 
-        // The accepted restart is already exiting the daemon. Booting out now unloads the job before
-        // launchd can relaunch it from the definition it cached at load.
         var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
         if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
             error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";

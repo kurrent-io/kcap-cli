@@ -518,4 +518,41 @@ public class MarkdownViewTests {
             } finally { window.Close(); }
         });
     }
+
+    /// Pins the degrade for text Markdig refuses to parse (128 nested quotes): the source as plain
+    /// text, in either flavor, and the next parseable text renders as markdown again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(MarkdownFlavor.Chat)]
+    [Arguments(MarkdownFlavor.GitHub)]
+    public async Task Text_too_deeply_nested_to_parse_shows_as_plain_text(MarkdownFlavor flavor) {
+        await RunOnUiAsync(async () => {
+            var deep = string.Concat(Enumerable.Repeat("> ", 128)) + "x";
+            var (window, root, _) = Show(deep, flavor);
+            try {
+                var view = (MarkdownView)root;
+                await Assert.That(All<MarkdownViewer>(root)).IsEmpty();
+                await Assert.That(All<TextBlock>(root).Select(Reads)).IsEquivalentTo([deep]);
+                var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+                All<SelectableTextBlock>(root).Single().Focus();
+                view.SelectAll();
+                await Assert.That(view.HasSelection).IsTrue();
+                await clipboard.SetTextAsync("stale");
+                var copy = Application.Current!.PlatformSettings!.HotkeyConfiguration.Copy[0];
+                window.KeyPressQwerty(PhysicalKey.C, (RawInputModifiers)copy.KeyModifiers);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                await clipboard.SetTextAsync("stale");
+                await view.CopySelectionAsync();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                view.Flavor = flavor == MarkdownFlavor.Chat ? MarkdownFlavor.GitHub : MarkdownFlavor.Chat;
+                view.Text = "**bold**";
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await Assert.That(Spans<Bold>(Paragraphs(root).Single().Inlines!).Count()).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
 }
