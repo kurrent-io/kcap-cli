@@ -159,11 +159,12 @@ class McpFlowsServer(
         return 0;
     }
 
-    /// <summary>The repository a PR-shaped <c>target_ref</c> names (<c>owner/repo#N</c> or a PR or merge-request
+    /// <summary>The repository a PR target's <c>target_ref</c> names (<c>owner/repo#N</c> or a PR or merge-request
     /// URL) when the session has no checkout of it to borrow. A checkout whose own repository is unknown keeps
     /// the borrow: it may be that repository.</summary>
     internal static RepositoryPayload? OtherRepository(JsonObject? arguments, string? repoRoot, RepositoryPayload? session) {
-        if (arguments?["target_ref"] is not JsonValue value || !value.TryGetValue<string>(out var targetRef)
+        if (!string.Equals(McpToolArguments.OptionalString(arguments, "target_kind"), "pr", StringComparison.OrdinalIgnoreCase)
+            || McpToolArguments.OptionalString(arguments, "target_ref") is not { } targetRef
             || !PrRefParser.TryParse(targetRef, out var owner, out var repo, out _)) return null;
         var target = new RepositoryPayload { Owner = owner, RepoName = repo };
         if (repoRoot is null) return target;
@@ -2543,7 +2544,7 @@ class McpFlowsServer(
                 new() {
                     ["kind"]         = new("string", "Review flow kind. Valid values: 'spec-review' (for specs and design documents), 'code-review' (for code changes and PRs)."),
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
-                    ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.). A PR URL or owner/repo#N in a repository other than this session's, with no repo_path, is reviewed on a daemon that hosts that repository, without a local checkout: uncommitted work is not seen."),
+                    ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.). With target_kind 'pr' and no repo_path, a PR URL or owner/repo#N in a repository other than this session's runs on a daemon that hosts that repository, in a worktree of its checkout rather than the PR's branch: say which commits to review in context."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["session_title"] = new("string", SessionTitleDescription("reviewer's", "'Review PR #1302: deliver flow results through a server restart'")),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of THIS SESSION's project directory (or of repo_path when given), not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your checkout was NOT borrowed, so inline anything uncommitted that matters."),
@@ -2618,7 +2619,7 @@ class McpFlowsServer(
                     ["definition_id"]   = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition). Provide exactly one of definition_id or definition_yaml — never both, never neither."),
                     ["definition_yaml"] = new("string", "Inline flow-definition YAML document for a dynamic (non-catalog) flow — the full definition, same schema as catalog definitions. Provide exactly one of definition_id or definition_yaml — never both, never neither. Requires a server with dynamic flows enabled. Every participant MUST declare 'workspace: none' (the parser rejects a missing workspace) and a concrete model id (no 'default')."),
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
-                    ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.). A PR URL or owner/repo#N in a repository other than this session's, with no repo_path, is reviewed on a daemon that hosts that repository, without a local checkout: uncommitted work is not seen."),
+                    ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.). With target_kind 'pr' and no repo_path, a PR URL or owner/repo#N in a repository other than this session's runs on a daemon that hosts that repository, in a worktree of its checkout rather than the PR's branch: say which commits to review in context."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["session_title"]  = new("string", SessionTitleDescription("participant agent's", "'Test the hook spool drain against a 401'")),
                     ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of THIS SESSION's project directory (or of repo_path when given), not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs."),
