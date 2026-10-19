@@ -274,7 +274,8 @@ public sealed class ClaudeHookCommand(
         // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
         // ending says nothing about a background subagent's.
         if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget.Remaining, toolName, toolInput);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget.Remaining, toolName, toolInput,
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "stop" && agentId is null)
             await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);

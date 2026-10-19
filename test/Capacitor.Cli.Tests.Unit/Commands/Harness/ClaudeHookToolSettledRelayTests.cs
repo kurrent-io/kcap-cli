@@ -87,6 +87,7 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(body["cwd"]!.GetValue<string>()).IsEqualTo("/tmp");
         await Assert.That(body["tool_name"]!.GetValue<string>()).IsEqualTo("Bash");
         await Assert.That(body["tool_input"]!.ToJsonString()).IsEqualTo("""{"command":"ls"}""");
+        await Assert.That(body["sent_at"]!.GetValue<long>()).IsGreaterThan(0);
     }
 
     /// A subagent's tool call runs the same hook with the parent's environment. Its id is unique

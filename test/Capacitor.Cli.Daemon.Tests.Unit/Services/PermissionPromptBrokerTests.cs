@@ -237,6 +237,36 @@ public class PermissionPromptBrokerTests {
         await Assert.That(later.IsCompleted).IsTrue();
     }
 
+    /// A prompt registered after the hook sent its notice is a later call's, whatever its name and
+    /// input, so a notice that arrives late cannot retire it.
+    [Test]
+    public async Task A_notice_retires_only_a_prompt_registered_before_it_was_sent() {
+        var broker = new PermissionPromptBroker();
+        var held = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        var input = Json("""{"command":"ls"}""");
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(-1))).IsFalse();
+        await Assert.That(held.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsTrue();
+    }
+
+    /// A turn that outgrows the bound on what it is owed stops matching by name and input until it
+    /// ends, rather than forgetting an owed call and retiring the wrong prompt.
+    [Test]
+    public async Task A_turn_past_its_bound_matches_nothing_by_name_and_input() {
+        var broker = new PermissionPromptBroker();
+        for (var i = 0; i <= 64; i++) {
+            _ = broker.Register(Dto($"r{i}", input: $$"""{"command":"c{{i}}"}"""));
+            broker.TrySettle($"r{i}", Allow, "allow", "app");
+        }
+        var waiting = broker.Register(Dto("w", input: """{"command":"c64"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_x", toolName: "Bash", toolInput: Json("""{"command":"c64"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
     /// A denied prompt runs no call, and a finished turn has run all of its own, so neither leaves
     /// a call owed that would keep a later prompt from being retired.
     [Test]

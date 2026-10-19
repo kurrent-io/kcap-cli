@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
@@ -35,9 +36,11 @@ internal sealed class PermissionPromptBroker {
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
     // A Claude prompt allowed before its call finished: that call's notice is its own, and must not
     // retire an identical prompt still waiting. Kept until the notice or the turn's end, and only
-    // for Claude, whose hook sends both; bounded in case a notice never arrives.
+    // for Claude, whose hook sends both. A turn that outgrows the bound stops matching by name and
+    // input until it ends, rather than forgetting what it owes.
     readonly List<AllowedCall> _allowedCalls = [];
-    const int MaxAllowedCalls = 64;
+    readonly HashSet<(string AgentId, string SessionId, string? SubagentId)> _overflowed = [];
+    const int MaxAllowedCallsPerTurn = 64;
     readonly object _gate = new();
     long _seq;
 
@@ -100,6 +103,7 @@ internal sealed class PermissionPromptBroker {
         lock (_gate) {
             _withdrawnAgents.Add(agentId);
             _allowedCalls.RemoveAll(c => c.AgentId == agentId);
+            _overflowed.RemoveWhere(s => s.AgentId == agentId);
             foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId).ToList())
                 SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone);
         }
@@ -111,8 +115,10 @@ internal sealed class PermissionPromptBroker {
     /// without a tool id (Claude's hook sends none) matches the same subagent's call by tool name and
     /// input instead, the oldest first, so one finished call retires one prompt. A call that an
     /// allowed prompt is still owed is that prompt's, and retires nothing.
+    /// <param name="sentAt">When the hook sent the notice: a prompt registered after it is a later
+    /// call's, whatever its name and input.</param>
     public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId,
-            string? subagentId = null, string? toolName = null, JsonElement? toolInput = null) {
+            string? subagentId = null, string? toolName = null, JsonElement? toolInput = null, DateTimeOffset? sentAt = null) {
         lock (_gate) {
             var entry = _pending.Values.FirstOrDefault(e =>
                 e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
@@ -125,9 +131,11 @@ internal sealed class PermissionPromptBroker {
                     _allowedCalls.RemoveAt(owed);
                     return false;
                 }
+                if (_overflowed.Contains((agentId, sessionId, subagentId))) return false;
                 entry = _pending.Values
                     .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
                              && e.SubagentId == subagentId && e.Dto.ToolName == toolName
+                             && (sentAt is null || RequestedBy(e.Dto, sentAt.Value))
                              && e.Dto.ToolInput is { } held && JsonElement.DeepEquals(held, input))
                     .MinBy(e => e.Seq);
             }
@@ -143,6 +151,7 @@ internal sealed class PermissionPromptBroker {
     public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
         lock (_gate) {
             _allowedCalls.RemoveAll(c => c.AgentId == agentId && c.SessionId == sessionId && c.SubagentId == subagentId);
+            _overflowed.Remove((agentId, sessionId, subagentId));
             var settled = 0;
             foreach (var e in _pending.Values.Where(e =>
                          e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
@@ -161,14 +170,19 @@ internal sealed class PermissionPromptBroker {
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
         // The call runs with the input the answer gave it, when it gave one.
         if (decision.Behavior == PermissionSettlements.Allow && entry.Dto.Vendor == "claude") {
-            _allowedCalls.Add(new AllowedCall(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolUseId,
+            var turn = (entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId);
+            if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
+            else _allowedCalls.Add(new AllowedCall(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolUseId,
                 entry.Dto.ToolName, decision.UpdatedInput ?? entry.Dto.ToolInput));
-            if (_allowedCalls.Count > MaxAllowedCalls) _allowedCalls.RemoveAt(0);
         }
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;
     }
+
+    // An unparsed stamp is no ordering, so such a prompt is left to the turn's end.
+    static bool RequestedBy(PermissionPendingDto dto, DateTimeOffset sentAt) =>
+        DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) && at <= sentAt;
 
     void Broadcast(PermissionStreamItem item) {
         foreach (var ch in _subscribers.Values) ch.Writer.TryWrite(item);

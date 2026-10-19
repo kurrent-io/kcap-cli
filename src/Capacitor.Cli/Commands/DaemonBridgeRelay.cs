@@ -47,7 +47,7 @@ internal static class DaemonBridgeRelay {
     /// </summary>
     public static Task NotifyToolSettledAsync(
             HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget,
-            string? toolName = null, JsonNode? toolInput = null) {
+            string? toolName = null, JsonNode? toolInput = null, long? sentAtMs = null) {
         var payload = new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd };
         if (toolUseId is not null) payload["tool_use_id"] = toolUseId;
         if (subagentId is not null) payload["subagent_id"] = subagentId;
@@ -58,6 +58,7 @@ internal static class DaemonBridgeRelay {
          && Encoding.UTF8.GetByteCount(toolInput.ToJsonString()) <= PermissionWire.MaxElementBytes) {
             payload["tool_name"]  = toolName;
             payload["tool_input"] = toolInput;
+            if (sentAtMs is { } sent) payload["sent_at"] = sent;
         }
 
         return PostAsync(hosted, vendor, "tool-settled", payload, budget);

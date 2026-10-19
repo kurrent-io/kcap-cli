@@ -46,7 +46,7 @@ public class LocalPermissionBridgeToolSettledTests {
     }
 
     /// Claude's prompt carries no tool id, so the notice also hands on the call's name and input,
-    /// and the subagent that ran it.
+    /// the subagent that ran it, and when the hook sent it.
     [Test, NotInParallel(nameof(LocalPermissionBridgeToolSettledTests))]
     public async Task A_settled_tool_hands_on_its_name_input_and_subagent() {
         await using var h = new Harness();
@@ -54,12 +54,13 @@ public class LocalPermissionBridgeToolSettledTests {
 
         var response = await h.PostAsync(new {
             session_id = Session, agent_id = "agent-1", tool_use_id = "toolu_1", subagent_id = "sub-1",
-            tool_name = "Bash", tool_input = new { command = "ls" },
+            tool_name = "Bash", tool_input = new { command = "ls" }, sent_at = 1_760_000_000_000L,
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NoContent);
         var notice = h.Seen.Single().Notice;
         await Assert.That((notice.ToolUseId, notice.SubagentId, notice.ToolName)).IsEqualTo(("toolu_1", "sub-1", "Bash"));
+        await Assert.That(notice.SentAt).IsEqualTo(DateTimeOffset.FromUnixTimeMilliseconds(1_760_000_000_000L));
         await Assert.That(notice.ToolInput is { } input && JsonElement.DeepEquals(input, JsonDocument.Parse("""{"command":"ls"}""").RootElement)).IsTrue();
     }
 

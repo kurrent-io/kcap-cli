@@ -995,9 +995,12 @@ internal sealed partial class LocalPermissionBridge(
         var toolInput = toolName is not null && ExtractElement(node, "tool_input") is { } input
                      && Encoding.UTF8.GetByteCount(input.GetRawText()) <= PermissionWire.MaxElementBytes ? input : (JsonElement?)null;
 
+        var sentAt = node["sent_at"] is JsonValue stamp && stamp.TryGetValue<long>(out var ms) && ms > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : (DateTimeOffset?)null;
+
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
         if (attributed is { } agent)
-            ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId, toolName, toolInput));
+            ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId, toolName, toolInput, sentAt));
 
         Close(context, 204);
     }
