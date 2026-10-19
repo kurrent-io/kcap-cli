@@ -137,7 +137,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                     : ex.Message);
                 return;
             } catch (Exception ex) {
-                LogOnce($"remote transcript: {ex.Message}");
+                LogOnce(attempt, $"remote transcript: {ex.Message}");
             }
             // The tail ended without a cancel: the connection dropped, or a newer subscribe on the
             // same stream replaced it. A superseded attempt stops; the current one waits and resumes.
@@ -219,9 +219,10 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         Changed?.Invoke();
     }
 
-    void LogOnce(string reason) {
+    /// A superseded attempt's failure would mark a reason the current attempt has not hit.
+    void LogOnce(int attempt, string reason) {
         bool first;
-        lock (_lock) first = _logged.Add(reason);
+        lock (_lock) first = _attempt == attempt && _logged.Add(reason);
         if (first) _log(reason);
     }
 
