@@ -293,6 +293,40 @@ public class TerminalTabResumeTests {
         });
     }
 
+    /// The resumed runtime's own start is not a later recovery: when it finishes normally the tab shows
+    /// the exit, whichever side of the attach its Running row lands on.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    public async Task A_resumed_agent_that_finishes_normally_shows_its_exit(bool runningBeforeAttached, bool removedBeforeExit) {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.AttachAsync();
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Entry = Ledger(ResumeState.Resuming);
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+            rig.Entry = Ledger(ResumeState.Running);
+            await rig.TickAsync();
+            var resumed = rig.Factory.Created[^1];
+
+            if (runningBeforeAttached) rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await resumed.TriggerAttached("ring"u8.ToArray());
+            if (!runningBeforeAttached) rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Completed" });
+            rig.Entry = null;
+            if (removedBeforeExit) rig.Daemon.Agents.RemoveKey("a1");
+            await rig.DropAsync(resumed, new AttachOutcome.Exited(0));
+            await rig.TickAsync();
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
     /// An agent that simply finished keeps its exit, whatever stale status the cache still shows.
     [Test]
     [NotInParallel("AvaloniaSession")]

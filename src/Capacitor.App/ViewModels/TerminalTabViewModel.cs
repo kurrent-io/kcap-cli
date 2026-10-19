@@ -743,9 +743,10 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// counted whatever the tab is doing, so a row and an attach outcome can arrive in either order and
     /// replaying an unchanged row renews nothing.
     void NoteResumeTransition(string? previous, AgentStatusDto dto) {
+        // Resuming to live is a resume finishing, which the wait that saw Resuming already covers;
+        // counting it would leave the successor's own start pending as a later recovery.
         if (previous == dto.Status) return;
-        if (dto.Status is "Resuming" or "Interrupted"
-            || previous is "Resuming" or "Interrupted" || SessionStatusDots.IsTerminal(previous))
+        if (dto.Status is "Resuming" or "Interrupted" || previous == "Interrupted" || SessionStatusDots.IsTerminal(previous))
             Interlocked.Increment(ref _transitions);
     }
 
@@ -753,6 +754,11 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// already waiting on a resume, is left to it.
     void ReconcileResumeStatus() {
         if (_lastDto is not { } dto || Volatile.Read(ref _resolveState) != ResolveDtoWon) return;
+        // An agent the cache shows finished or gone has nothing left to come back to.
+        if (SessionStatusDots.IsTerminal(dto.Status) || !_daemon.Agents.Lookup(_agentId).HasValue) {
+            ConsumeTransitions(Volatile.Read(ref _transitions));
+            return;
+        }
         if (State.Phase is not (TerminalSessionPhase.Exited or TerminalSessionPhase.Failed
                 or TerminalSessionPhase.SessionEnded or TerminalSessionPhase.Interrupted)) return;
 
