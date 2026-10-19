@@ -47,6 +47,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     readonly Action<Action>          _post;
     readonly string?                 _committedDetail;
     readonly TimeProvider            _time;
+    readonly Func<bool>?             _passThrough;
     readonly Func<Func<string, CancellationToken, Task<AvailabilityResponse?>>?> _provisionerCheck;
     string? _workspace;
     public string ConnectionStatus => Uri.TryCreate(_workspace, UriKind.Absolute, out var uri)
@@ -108,8 +109,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             IUrlOpener           urlOpener,
             // Shown under the success headline. The re-auth dialog supplies its own; the wizard does not.
             string?              committedDetail = null,
-            TimeProvider?        time = null) {
+            TimeProvider?        time = null,
+            // True while this run is on the local path, where there is nothing to sign in to.
+            Func<bool>?          passThrough = null) {
         _time            = time ?? TimeProvider.System;
+        _passThrough     = passThrough;
         _service         = service;
         _connect         = connect;
         _picker          = bridges.Picker;
@@ -279,6 +283,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     /// quarantine notice is still up.
     public bool OwnsPrimaryAction => !Satisfied || QuarantineNotice is not null;
     public bool Skippable => false;
+    public bool PassThrough => _passThrough?.Invoke() ?? false;
 
     public ConnectChoiceViewModel Connect => _connect;
 

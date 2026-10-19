@@ -1042,9 +1042,12 @@ public partial class App : Application {
             DefaultDaemonName: ResolveWizardIdentity(_config, _serverEnv, _localRoot)?.DaemonName,
             Time: _time,
             ShutdownToken: _shutdown.Token,
+            LocalRoot: _localRoot,
+            IsMacOs: OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64,
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
-            HeldDaemonNames: HeldDaemonNamesAsync));
+            HeldDaemonNames: HeldDaemonNamesAsync,
+            ProfileOverride: _serverEnv.Profile));
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;

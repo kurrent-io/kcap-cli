@@ -1,9 +1,13 @@
 using System.Collections.Frozen;
+using System.Reactive;
 using System.Reactive.Linq;
 using Capacitor.Cli.Core.Telemetry;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
@@ -32,11 +36,13 @@ internal sealed record WizardFacadeSpec(
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
 /// (including ones the shell filtered out as inapplicable — the summary still names them), the
-/// History step by name — its import outlives the wizard, and shutdown cancels it directly — and the
-/// daemon enabler, which runs beside the steps rather than as one.
+/// History step by name — its import outlives the wizard, and shutdown cancels it directly — the
+/// daemon enabler, which runs beside the steps rather than as one, and the local install's controller,
+/// whose child outlives the Install page.
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
-    HistoryStepViewModel History, ConnectChoiceViewModel Connect, DaemonEnabler Daemon);
+    HistoryStepViewModel History, ConnectChoiceViewModel Connect, DaemonEnabler Daemon,
+    LocalInstallController Install);
 
 /// <summary>Everything wizard-first mode is composed from; the daemon-facing entries are factories so a call never lands on a stale daemon.</summary>
 internal sealed record WizardGraphOptions(
@@ -72,11 +78,16 @@ internal sealed record WizardGraphOptions(
     string?                                                                      DefaultDaemonName,
     TimeProvider                                                                 Time,
     CancellationToken                                                            ShutdownToken,
+    LocalRoot                                                                    LocalRoot,
+    // The local edition ships for macOS on Apple silicon only.
+    bool                                                                         IsMacOs,
     bool                                                                         AlreadyAuthenticated = false,
     // The name the profile already carries, or null when none was ever saved.
     Func<string?>?                                                               ConfiguredDaemonName = null,
     // Names other machines' daemons hold on this account; best-effort, empty when unknown.
-    Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>>? HeldDaemonNames = null);
+    Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>>? HeldDaemonNames = null,
+    // KCAP_PROFILE, which the app honours and the local installer does not.
+    string?                                                                      ProfileOverride = null);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
@@ -117,11 +128,36 @@ internal static class WizardComposition {
         var auth   = new WizardAuthService(BuildOperation(options.Root, options.TokenStore, options.HttpFactory, options.Proxy,
         options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
-        var edition  = new EditionStepViewModel(options.Bridges.Telemetry.Funnel);
+        var root = options.LocalRoot;
+        // Read live: the profile, the journal and the user's choice all change during a run.
+        bool CommittedLocal() =>
+            !LocalSetupState.Pending(root)
+         && options.ResolveIdentity() is { } id
+         && LocalEndpoints.Read(root).Classify(id.Server) is LocalEndpointClass.Local;
+
+        var install = new LocalInstallController(
+            () => cli, root, CommittedLocal, options.Bridges.Post, options.Bridges.Telemetry.Funnel);
+        bool Installed() => install.Outcome is LocalInstallOutcome.Installed;
+
+        var edition = new EditionStepViewModel(
+            options.Bridges.Telemetry.Funnel,
+            () => LocalUnavailableReason(options.IsMacOs, options.Root, root),
+            locked: () => Installed() || LocalSetupState.Pending(root) || CommittedLocal());
+        bool OnLocalPath() => edition.Choice == EditionChoice.Local || LocalSetupState.Pending(root) || CommittedLocal();
+        var installStep = new InstallStepViewModel(
+            install,
+            appProfile: () => options.ResolveIdentity()?.Profile ?? options.ProfileOverride,
+            configActiveProfile: () => ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(options.Root), out var config)
+                ? config.ActiveName
+                : null,
+            // A committed machine has nothing left to install.
+            onLocalPath: () => OnLocalPath() && !CommittedLocal());
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
-            auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time);
-        if (options.AlreadyAuthenticated) signIn.RestoreCommitted();
+            auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time,
+            passThrough: OnLocalPath);
+        var committedLocalAtStart = CommittedLocal();
+        if (options.AlreadyAuthenticated && !committedLocalAtStart) signIn.RestoreCommitted();
         var pathFix  = options.ShimApplicable && options.ShimInstaller is { } installer
             ? new PathFixViewModel(installer, options.AppState, options.ShimTarget)
             : null;
@@ -144,8 +180,8 @@ internal static class WizardComposition {
             cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time);
         var daemon = new DaemonEnabler(
             cli, options.RunMutation,
-            // Gated on a committed sign-in and resolved fresh per call, never the startup-cached profile.
-            () => signIn.Satisfied ? options.ResolveIdentity() : null,
+            // Gated on a committed sign-in or local install and resolved fresh per call, never the startup-cached profile.
+            () => Connected() ? options.ResolveIdentity() : null,
             options.Observation,
             // The step's own gate above keeps the socket un-dialed: a null resolution never reaches ResolveOps.
             new LateBoundLocalControlOps(() => options.ResolveOps(options.ResolveIdentity() is { } id
@@ -160,6 +196,11 @@ internal static class WizardComposition {
         signIn.WhenAnyValue(x => x.Satisfied)
             .Where(satisfied => satisfied)
             .Subscribe(signedIn => _ = daemon.EnsureAsync(options.ShutdownToken));
+        // Only the settled outcome counts: a progress line is not an installed server.
+        install.Settled += outcome => {
+            if (outcome is LocalInstallOutcome.Installed) _ = daemon.EnsureAsync(options.ShutdownToken);
+        };
+        if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);
 
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => {
@@ -172,15 +213,33 @@ internal static class WizardComposition {
                 history.Run,
                 daemon.Satisfied,
                 machine,
-                signIn.Satisfied ? options.ResolveIdentity()?.Server : null,
+                Connected() ? options.ResolveIdentity()?.Server : null,
                 daemon.Problem);
         }, options.UrlOpener);
-        IWizardStep[] steps = [edition, signIn, harnesses, history, done];
+        IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
 
-        var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface,
-            startAt: options.AlreadyAuthenticated ? WizardStepId.Harnesses : null);
+        var startAt = LocalSetupState.Pending(root) ? WizardStepId.Install
+            : options.AlreadyAuthenticated || committedLocalAtStart ? WizardStepId.Harnesses
+            : (WizardStepId?)null;
+        var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
+            .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
+            .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
+        var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface, startAt, canFinishLater);
 
-        return new WizardGraph(wizard, auth, steps, history, connect, daemon);
+        return new WizardGraph(wizard, auth, steps, history, connect, daemon, install);
+
+        bool Connected() => signIn.Satisfied || Installed() || CommittedLocal();
+    }
+
+    /// Why this machine cannot take the local edition, or null when it can. A cloud profile anywhere
+    /// in the config is the CLI's own refusal, so the card says so before the install would.
+    internal static string? LocalUnavailableReason(bool isMacOs, ConfigRoot config, LocalRoot root) {
+        if (!isMacOs) return EditionStepViewModel.UnsupportedPlatform;
+
+        return ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var profiles)
+            && LocalSetupState.HasForeignServerProfile(profiles, LocalEndpoints.Read(root))
+            ? EditionStepViewModel.CloudProfilePresent
+            : null;
     }
 
     /// The configured name, or this machine's, moved to the first free numbered variant when another

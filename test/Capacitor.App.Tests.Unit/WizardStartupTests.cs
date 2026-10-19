@@ -15,6 +15,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 using TUnit.Assertions.Enums;
@@ -142,9 +143,13 @@ static class WizardFixtures {
         public TimeProvider Time = TimeProvider.System;
         // Matches DefaultDaemonName, so a sign-in keeps the name and writes no config of its own.
         public Func<string?> ConfiguredDaemonName = () => "daemon-a";
+        public LocalRoot LocalRoot;
+        public bool IsMacOs = true;
+        public string? ProfileOverride;
 
         public GraphHarness(ConfigRoot root) {
-            Root    = root;
+            Root      = root;
+            LocalRoot = new LocalRoot(_config.PathTo("local"));
             Claims  = new ConsentFlipClaims(_config.Root);
             Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
             Surface = new WizardLifecycleSurface((prompt, _) => {
@@ -201,7 +206,10 @@ static class WizardFixtures {
             DefaultDaemonName: "daemon-a",
             Time: Time,
             ShutdownToken: CancellationToken.None,
-            ConfiguredDaemonName: ConfiguredDaemonName);
+            LocalRoot: LocalRoot,
+            IsMacOs: IsMacOs,
+            ConfiguredDaemonName: ConfiguredDaemonName,
+            ProfileOverride: ProfileOverride);
 
         public void Dispose() => _config.Dispose();
     }
@@ -634,7 +642,7 @@ public class WizardStartupTests {
             var graph = WizardComposition.BuildGraph(harness.Options());
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
-                WizardStepId.Edition, WizardStepId.SignIn,
+                WizardStepId.Edition, WizardStepId.Install, WizardStepId.SignIn,
                 WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.

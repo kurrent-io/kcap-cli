@@ -21,9 +21,9 @@
                         </StackPanel>
                     </Grid>
                 </Button>
-                <Border Classes="frCallout" IsVisible="{Binding LocalPending}">
+                <Border Classes="frCallout" IsVisible="{Binding LocalUnavailableVisible}">
                     <TextBlock x:Name="LocalUnavailableText" Classes="frBody"
-                               Text="{x:Static vm:EditionStepViewModel.LocalUnavailable}" />
+                               Text="{Binding LocalUnavailableReason}" />
                 </Border>
 
                 <Button x:Name="CloudEditionButton" Classes="frEditionCard" Command="{Binding ChooseCloudCommand}"
