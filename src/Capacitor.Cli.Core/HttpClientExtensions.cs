@@ -40,6 +40,17 @@ public static class HttpClientExtensions {
     /// <summary>Wire header naming the installed CLI's display version (see <see cref="CapacitorVersion.CurrentDisplay"/>).</summary>
     public const string CliVersionHeader = "X-Kcap-Cli-Version";
 
+    /// <summary>The <see cref="CliVersionHeader"/> value this process sends, or null when it has none to send.</summary>
+    public static string? CliVersion => ObservationHeaderHandler.ProcessVersion;
+
+    /// <summary>
+    /// Adds <see cref="CliVersionHeader"/> to a hub connection's headers, which SignalR sends on negotiation. A local
+    /// server refuses a hub negotiation without it, since that is how a kcap below its client floor arrives.
+    /// </summary>
+    public static void TagCliVersion(IDictionary<string, string> headers) {
+        if (CliVersion is { } version) headers[CliVersionHeader] = version;
+    }
+
     /// <summary>Response header carrying the connected server's own version, captured by
     /// <see cref="ServerVersionCaptureHandler"/> so the passive update notice can cap its
     /// recommendation at <c>min(npm latest, server version)</c>.</summary>

@@ -48,6 +48,23 @@ public class ServerConnectionServiceTests {
         await Assert.That(daemons![0].Name).IsEqualTo("work-mac");
     }
 
+    /// A local server refuses a hub negotiation that names no kcap version at or above its client floor.
+    [Test]
+    public async Task The_negotiation_carries_the_cli_version() {
+        string? negotiated = null;
+        await using var host = await HubTestHost.StartAsync(inspect: request => {
+            if (request.Path.Value?.EndsWith("/negotiate", StringComparison.Ordinal) == true)
+                negotiated = request.Headers[Capacitor.Cli.Core.HttpClientExtensions.CliVersionHeader].ToString();
+        });
+        await using var lane = Lane(host);
+        lane.Start();
+
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        await Assert.That(Capacitor.Cli.Core.HttpClientExtensions.CliVersion).IsNotNull();
+        await Assert.That(negotiated).IsEqualTo(Capacitor.Cli.Core.HttpClientExtensions.CliVersion);
+    }
+
     [Test]
     public async Task BroadcastsSurfaceAsObservables() {
         await using var host = await HubTestHost.StartAsync();

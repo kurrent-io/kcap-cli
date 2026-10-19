@@ -34,6 +34,9 @@ sealed class LocalInstaller(
     /// <summary>How long it waits for another root's hold on the per-user unit lock.</summary>
     public TimeSpan UnitLockWait { get; init; } = LocalUnitLock.Wait;
 
+    /// <summary>The other copies of kcap the preflight holds to the client floor; none are looked for when null.</summary>
+    public ILocalClientCopies? ClientCopies { get; init; }
+
     /// <summary>Required when the answers carry an embedding answer.</summary>
     public OllamaClient? Ollama { get; init; }
 
@@ -66,7 +69,7 @@ sealed class LocalInstaller(
         return done;
     }
 
-    LocalPreflight Checks => new(root, config, platform, service, SocketLimit);
+    LocalPreflight Checks => new(root, config, platform, service, SocketLimit, ClientCopies);
 
     /// <summary>No lock, no network, no writes.</summary>
     public LocalPlan Preflight() => Checks.Check(Version);

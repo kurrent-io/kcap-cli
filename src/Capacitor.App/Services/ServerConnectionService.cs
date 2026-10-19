@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Net.WebSockets;
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
@@ -288,6 +289,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         var builder = new HubConnectionBuilder()
             .WithUrl($"{_serverUrl}/hubs/sessions", o => {
                 o.AccessTokenProvider = _token;
+                HttpClientExtensions.TagCliVersion(o.Headers);
                 // Every negotiation and every WebSocket upgrade, reconnects included.
                 // The guard follows redirects itself, so it can check each hop; the handler under it follows none.
                 o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal, followRedirects: true) {

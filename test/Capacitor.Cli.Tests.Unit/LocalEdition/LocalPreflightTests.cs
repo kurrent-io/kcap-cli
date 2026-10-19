@@ -33,8 +33,13 @@ public class LocalPreflightTests {
 
     // A temp directory on macOS is already ~85 bytes, so tests off the socket subject lift the limit; the
     // socket tests use the platform's own limit on a root under /tmp.
-    LocalPreflight Preflight(LocalRoot? root = null, LocalPlatform? platform = null, ILocalServerService? service = null, bool realLimit = false) =>
-        new(root ?? Root, Config, platform ?? MacArm, service ?? new FakeService(), realLimit ? null : int.MaxValue);
+    LocalPreflight Preflight(LocalRoot? root = null, LocalPlatform? platform = null, ILocalServerService? service = null, bool realLimit = false,
+        params ClientCopy[] copies) =>
+        new(root ?? Root, Config, platform ?? MacArm, service ?? new FakeService(), realLimit ? null : int.MaxValue, new FakeCopies(copies));
+
+    sealed class FakeCopies(ClientCopy[] copies) : ILocalClientCopies {
+        public IReadOnlyList<ClientCopy> Find() => copies;
+    }
 
     static async Task<LocalInstallFailure> Refusal(Func<LocalPlan> run) {
         try {
@@ -277,5 +282,71 @@ public class LocalPreflightTests {
         var failure = await Refusal(() => Preflight().Check(version));
 
         await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.InvalidArguments);
+    }
+
+    [Test]
+    public async Task Copies_newer_than_the_floor_pass() {
+        var plan = Preflight(copies: [
+            new(ClientCopyKind.OnPath, "/usr/local/bin/kcap", "1.3.1-alpha.0.1"),
+            new(ClientCopyKind.DesktopApp, "/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", "9.0.0"),
+        ]).Check(Version);
+
+        await Assert.That(plan.Hint).IsEqualTo(PlanHint.Install);
+    }
+
+    [Test]
+    public async Task A_kcap_on_path_below_the_floor_is_refused_naming_it() {
+        var failure = await Refusal(() => Preflight(copies: new ClientCopy(ClientCopyKind.OnPath, "/usr/local/bin/kcap", "1.2.0")).Check(Version));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
+        await Assert.That(failure.Message).IsEqualTo(
+            "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
+    }
+
+    [Test]
+    public async Task The_desktop_apps_kcap_below_the_floor_is_refused_naming_the_app() {
+        var failure = await Refusal(() => Preflight(copies:
+            new ClientCopy(ClientCopyKind.DesktopApp, "/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", "1.3.0")).Check(Version));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
+        await Assert.That(failure.Message).IsEqualTo(
+            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.3.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
+    }
+
+    [Test]
+    public async Task A_copy_that_reports_no_version_is_refused() {
+        var failure = await Refusal(() => Preflight(copies: new ClientCopy(ClientCopyKind.OnPath, "/usr/local/bin/kcap", null)).Check(Version));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
+        await Assert.That(failure.Message).IsEqualTo(
+            "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
+    }
+
+    [Test]
+    public async Task A_reuse_is_refused_too() {
+        ActiveRegistry(Root);
+        WriteConfig("""{"version":2,"active_profile":"default","profiles":{"default":{"server_url":"http://127.0.0.1:51234"}}}""");
+
+        var failure = await Refusal(() => Preflight(copies: new ClientCopy(ClientCopyKind.OnPath, "/usr/local/bin/kcap", "1.2.0")).Check(Version));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
+    }
+
+    [Test]
+    public async Task A_refused_platform_asks_no_copy() {
+        var copies = new CountingCopies();
+
+        await Refusal(() => new LocalPreflight(Root, Config, new(true, false, false, Architecture.X64), new FakeService(), int.MaxValue, copies).Check(Version));
+
+        await Assert.That(copies.Calls).IsEqualTo(0);
+    }
+
+    sealed class CountingCopies : ILocalClientCopies {
+        public int Calls { get; private set; }
+
+        public IReadOnlyList<ClientCopy> Find() {
+            Calls++;
+            return [];
+        }
     }
 }

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Commands;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -64,5 +65,14 @@ public class WatcherHubCredentialTests : IDisposable {
         var negotiate = await NegotiateAfterConnectAsync(null);
 
         await Assert.That(negotiate.RequestMessage.Headers!.ContainsKey("Authorization")).IsFalse();
+    }
+
+    /// <summary>A local server refuses a hub negotiation that names no kcap version at or above its client floor.</summary>
+    [Test]
+    public async Task The_hub_negotiates_with_this_kcaps_version() {
+        var negotiate = await NegotiateAfterConnectAsync(null);
+
+        await Assert.That(HttpClientExtensions.CliVersion).IsNotNull();
+        await Assert.That(negotiate.RequestMessage.Headers![HttpClientExtensions.CliVersionHeader].Single()).IsEqualTo(HttpClientExtensions.CliVersion);
     }
 }
