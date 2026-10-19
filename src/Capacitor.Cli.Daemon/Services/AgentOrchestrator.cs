@@ -4074,9 +4074,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         lock (_ledgerLock) {
             agent.StopRequested = true;
             if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
+            Interlocked.Increment(ref agent.StopsInFlight);
         }
-
-        Interlocked.Increment(ref agent.StopsInFlight);
 
         try {
             LogStopping(agentId);
