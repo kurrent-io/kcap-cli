@@ -172,6 +172,74 @@ public class LocalInstallControllerTests {
         await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("no_failure_line");
     }
 
+    /// A child that dies after a line of progress is not ranWithoutOutput, so the stderr tail is the
+    /// only account of why it stopped.
+    [Test]
+    public async Task A_nonzero_exit_without_a_failed_line_keeps_the_stderr_tail() {
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = (onLine, _, _) => {
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, """{"v":1,"event":"downloading","bytes":100}"""));
+                return Task.FromResult(new StreamingResult(3, false, [new StreamedLine(ProcessStreamKind.Stderr, "Unhandled exception: disk full")]));
+            },
+        };
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+
+        await controller.StartAsync(CancellationToken.None);
+        await controller.SettleAsync();
+
+        await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Message).IsEqualTo("Unhandled exception: disk full");
+    }
+
+    /// A failed line wins over stderr: it is the CLI's own account.
+    [Test]
+    public async Task A_failed_line_is_not_replaced_by_stderr() {
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = (onLine, _, _) => {
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("download_failed", "The download stalled.")));
+                return Task.FromResult(new StreamingResult(1, false, [new StreamedLine(ProcessStreamKind.Stderr, "noise")]));
+            },
+        };
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+
+        await controller.StartAsync(CancellationToken.None);
+        await controller.SettleAsync();
+
+        await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Message).IsEqualTo("The download stalled.");
+    }
+
+    [Test]
+    public async Task A_failed_run_stops_every_running_row() {
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = LocalSetupScript.Prints(1,
+                """{"v":1,"event":"unpacked"}""", """{"v":1,"event":"starting"}""",
+                LocalSetupScript.Failed("start_failed")),
+        };
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+        RowState? firstStartWhenSettled = null;
+        controller.Settled += _ => firstStartWhenSettled = controller.Progress.FirstStart.State;
+
+        await controller.StartAsync(CancellationToken.None);
+        await controller.SettleAsync();
+
+        await Assert.That(controller.Progress.Install.State).IsEqualTo(RowState.Done);
+        await Assert.That(controller.Progress.FirstStart.State).IsEqualTo(RowState.Pending);
+        await Assert.That(firstStartWhenSettled).IsEqualTo(RowState.Pending);
+    }
+
+    [Test]
+    public async Task A_failed_download_hides_the_download_bar() {
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = LocalSetupScript.Prints(1,
+                """{"v":1,"event":"downloading","bytes":100}""", LocalSetupScript.Failed("download_failed")),
+        };
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+
+        await controller.StartAsync(CancellationToken.None);
+        await controller.SettleAsync();
+
+        await Assert.That(controller.Progress.Download.State).IsEqualTo(RowState.Pending);
+    }
+
     [Test]
     public async Task Started_per_attempt_and_committed_once_with_its_plan() {
         var probe = Probe();

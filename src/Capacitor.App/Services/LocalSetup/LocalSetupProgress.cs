@@ -126,6 +126,12 @@ public sealed class LocalSetupProgress : ReactiveObject {
         this.RaisePropertyChanged(nameof(Plan));
     }
 
+    /// A run that settled without success leaves nothing in flight.
+    public void Halt() {
+        foreach (var row in new[] { Download, Verify, Install, FirstStart })
+            if (row.State == RowState.Running) row.State = RowState.Pending;
+    }
+
     double? Fraction(long received) => _bytes > 0 ? Math.Clamp((double)received / _bytes, 0, 1) : null;
 
     void StartFirstStart() {

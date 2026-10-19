@@ -79,7 +79,6 @@ public sealed class LocalInstallController(
     }
 
     async Task RunAsync(LocalSetupProgress progress, CancellationToken interrupt, TaskCompletionSource exited, CancellationToken ct) {
-        var sawLine = false;
         var kcap = cli();
         var unexplained = kcap.CliPath is null ? "cli_missing" : "no_failure_line";
         StreamingResult result;
@@ -87,7 +86,6 @@ public sealed class LocalInstallController(
             result = await kcap.SetupLocalAsync(line => {
                 if (line.Kind != ProcessStreamKind.Stdout || LocalSetupLine.Parse(line.Text) is not { } parsed) return;
 
-                sawLine = true;
                 post(() => progress.Apply(parsed));
             }, interrupt, ct).ConfigureAwait(false);
         } catch (Exception ex) {
@@ -95,17 +93,20 @@ public sealed class LocalInstallController(
             unexplained = "spawn_failed";
         }
 
-        var ranWithoutOutput = result.ExitCode == -1 && !sawLine;
-        post(() => Finish(progress, result, ranWithoutOutput, unexplained, ct.IsCancellationRequested, exited));
+        post(() => Finish(progress, result, unexplained, ct.IsCancellationRequested, exited));
     }
 
     void Finish(
-            LocalSetupProgress progress, StreamingResult result, bool ranWithoutOutput, string unexplained, bool quitting,
+            LocalSetupProgress progress, StreamingResult result, string unexplained, bool quitting,
             TaskCompletionSource exited) {
         var durable = new LocalSetupSnapshot(LocalSetupState.Pending(root), committedLocal());
         var outcome = LocalInstallOutcome.Settle(progress, result.ExitCode, durable.Pending || durable.CommittedLocal);
-        if (outcome is LocalInstallOutcome.Failed failed && ranWithoutOutput && StderrText(result) is { } stderr)
-            outcome = failed with { Message = stderr };
+        if (outcome is LocalInstallOutcome.Failed failed) {
+            // Without a failed line the stderr tail is the only account of why the child stopped.
+            if (progress is { FailedCode: null, FailedMessage: null } && StderrText(result) is { } stderr)
+                outcome = failed with { Message = stderr };
+            progress.Halt();
+        }
 
         Settling?.Invoke(durable);
         _interrupt = null;
