@@ -274,6 +274,18 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
     }
 
+    /// Even an id match honours the notice's stamp: a prompt registered after the hook sent it is
+    /// not its call's, and a withdrawal would deny it.
+    [Test]
+    public async Task An_id_match_retires_only_a_prompt_registered_before_the_notice_was_sent() {
+        var broker = new PermissionPromptBroker();
+        var held = broker.Register(Dto("r1", toolUseId: "toolu_1"));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", sentAt: DateTimeOffset.UtcNow.AddMinutes(-1))).IsFalse();
+        await Assert.That(held.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsTrue();
+    }
+
     /// A turn's end that reaches the daemon late can find the next turn's prompt already waiting,
     /// so it retires only what was registered before the hook sent it.
     [Test]

@@ -135,9 +135,11 @@ internal sealed class PermissionPromptBroker {
             string? subagentId = null, string? toolName = null, JsonElement? toolInput = null, DateTimeOffset? sentAt = null) {
         lock (_gate) {
             var entry = _pending.Values.FirstOrDefault(e =>
-                e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
+                e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId
+             && (sentAt is null || RequestedBy(e.Dto, sentAt.Value)));
             if (entry is null) {
-                var paid = _allowedCalls.FindIndex(c => c.AgentId == agentId && c.SessionId == sessionId && c.ToolUseId == toolUseId);
+                var paid = _allowedCalls.FindIndex(c => c.AgentId == agentId && c.SessionId == sessionId && c.ToolUseId == toolUseId
+                    && (sentAt is null || RequestedBy(c.Dto, sentAt.Value)));
                 if (paid >= 0) {
                     _allowedCalls.RemoveAt(paid);
                     return false;
