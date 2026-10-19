@@ -112,9 +112,9 @@ public sealed class KcapCli : IKcapCli {
     static readonly TimeSpan DetachedStartTimeout = TimeSpan.FromSeconds(75);
     // Sits above the CLI's ten-minute readiness budget so the CLI reports its own failure first.
     static readonly TimeSpan LocalStartTimeout = TimeSpan.FromMinutes(11);
-    // An interrupted setup rolls back on its own budgets (a 105 s service stop, up to ten minutes in commit);
-    // killing it sooner leaves a partial install behind.
-    static readonly TimeSpan SetupInterruptGrace = TimeSpan.FromMinutes(11);
+    // A cancelled setup still finishes recovery and commit, which may run back to back: two 10 min readiness waits,
+    // a 210 s service stop, two 60 s unit-lock waits, two 10 s lift polls and a 10 s lease wait, 26 min in all.
+    static readonly TimeSpan SetupInterruptGrace = TimeSpan.FromMinutes(30);
 
     // Overlay variable names every app-initiated spawn carries — the lane and KcapCliTests reference these.
     public const string SpawnNoTelemetryVar   = "KCAP_APP_SPAWN_NO_TELEMETRY";

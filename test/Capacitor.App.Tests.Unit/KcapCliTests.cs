@@ -646,8 +646,8 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
         await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
         await Assert.That(runner.SeenOptions!.Timeout).IsNull();
-        // Rollback stops the service on a 105 s budget and the commit can wait ten minutes.
-        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(11));
+        // Above the 26 min a recovery and commit can spend back to back after the interrupt.
+        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(30));
     }
 
     /// The caller's token bounds only the work before the spawn: a running setup stops through its
