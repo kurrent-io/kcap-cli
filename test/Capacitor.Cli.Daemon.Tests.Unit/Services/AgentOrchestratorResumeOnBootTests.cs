@@ -145,6 +145,7 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(after.State).IsEqualTo(ResumeState.Running);
         await Assert.That(after.Launch.Prompt).IsEqualTo("build the thing");
         await Assert.That(after.DaemonInstanceId).IsEqualTo("instance-now");
+        await Assert.That(after.StartedAt?.UtcDateTime).IsEqualTo(agent!.CreatedAt);
         await Assert.That(agent!.ResumePending).IsFalse();
 
         var buffered = System.Text.Encoding.UTF8.GetString(agent!.OutputBuffer.Snapshot());

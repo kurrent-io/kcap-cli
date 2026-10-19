@@ -320,6 +320,7 @@ internal partial class AgentOrchestrator {
 
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
             HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
+            StartedAt = StartedAtOf(agent),
         };
     }
 
@@ -1122,6 +1123,8 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Rewrites a resumed agent's entry as running under this daemon, keeping the original
     /// launch descriptor: the agent's own prompt is the nudge.</summary>
+    static DateTimeOffset StartedAtOf(AgentInstance agent) => new(DateTime.SpecifyKind(agent.CreatedAt, DateTimeKind.Utc));
+
     void WriteResumedLedger(AgentInstance agent, ResumeLedgerEntry entry) {
         if (ResumeLedger is null) return;
 
@@ -1135,6 +1138,7 @@ internal partial class AgentOrchestrator {
                 Transport             = agent.RuntimeTransport,
                 HasTerminal           = agent.Runtime.EmitsTerminalOutput,
                 TranscriptFormat      = TranscriptFormatOf(agent),
+                StartedAt             = StartedAtOf(agent),
                 SessionId             = agent.SessionId ?? entry.SessionId,
                 VendorSession         = agent.VendorSession ?? entry.VendorSession,
                 State                 = ResumeState.Running,

@@ -48,7 +48,10 @@ public class TerminalTabResumeTests {
         }
     }
 
-    static ResumeLedgerEntry Ledger(ResumeState state, string? lastError = null) {
+    static readonly DateTimeOffset FirstStart = DateTimeOffset.UnixEpoch.AddHours(1);
+    static readonly DateTimeOffset SecondStart = DateTimeOffset.UnixEpoch.AddHours(2);
+
+    static ResumeLedgerEntry Ledger(ResumeState state, string? lastError = null, DateTimeOffset? startedAt = null) {
         var at = DateTimeOffset.UnixEpoch;
         var launch = new ResumeLaunchDescriptor(
             Prompt: null, Model: null, Effort: null, RepoPath: "/repo", WorktreePath: "/repo/wt", Work: WorkLocation.OwnedWorktree,
@@ -57,7 +60,8 @@ public class TerminalTabResumeTests {
             ConsentSource: null, ConsentAt: null, FlowRunId: null, FlowRole: null);
         return new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, "a1", "daemon", at, at, "claude", "pty", null, null, launch, state,
-            Attempts: 0, LastError: lastError, PredecessorInstanceId: null, ResumingAt: null);
+            Attempts: 0, LastError: lastError, PredecessorInstanceId: null, ResumingAt: null,
+            StartedAt: startedAt ?? (state == ResumeState.Running ? FirstStart : null));
     }
 
     [Test]
@@ -203,6 +207,7 @@ public class TerminalTabResumeTests {
 
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
             await rig.DropAsync(client, new AttachOutcome.Exited(1));
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
@@ -282,9 +287,11 @@ public class TerminalTabResumeTests {
             Dispatcher.UIThread.RunJobs();
             await (rig.Vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
             var client = rig.Factory.Created.Single();
+            await client.RunStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)); // the attempt has read the first start
 
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
             await client.TriggerAttached("old"u8.ToArray());
             await rig.DropAsync(client, new AttachOutcome.Exited(1));
@@ -320,6 +327,36 @@ public class TerminalTabResumeTests {
             rig.Entry = null;
             if (removedBeforeExit) rig.Daemon.Agents.RemoveKey("a1");
             await rig.DropAsync(resumed, new AttachOutcome.Exited(0));
+            await rig.TickAsync();
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// The status stream can lag the ledger: the restart's own Resuming row arriving after the replacement
+    /// attached, and the replacement's exit arriving before its Completed row, still read as that
+    /// runtime finishing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_lagging_status_stream_leaves_a_resumed_agents_normal_exit_alone() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.AttachAsync();
+            rig.Entry = Ledger(ResumeState.Resuming);
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            await rig.TickAsync();
+            var resumed = rig.Factory.Created[^1];
+            await resumed.RunStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await resumed.TriggerAttached("ring"u8.ToArray());
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await rig.DropAsync(resumed, new AttachOutcome.Exited(0));
+            rig.Entry = null;
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Completed" });
+            await rig.TickAsync();
             await rig.TickAsync();
 
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
