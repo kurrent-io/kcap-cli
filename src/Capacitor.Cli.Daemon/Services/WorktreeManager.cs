@@ -663,10 +663,16 @@ public partial class WorktreeManager(
         return WorktreeRemoval.Removed;
     }
 
+    /// <summary>Files the daemon itself deletes or writes in an owned worktree: the MCP configs it removes
+    /// at creation, the <c>.mcp.json</c> Claude's launch writes, and the local settings it merges.</summary>
+    static bool IsDaemonWritten(string path) =>
+        path == ".claude/settings.local.json" || WorkspaceMcpConfigPaths.Contains(path);
+
     /// <summary>Why the worktree holds work that would be lost with it, or null when it holds none: a
     /// change or untracked file, or a commit no other branch, remote or fetched ref has. The daemon's
-    /// own edits are not work — the MCP config it deletes, and an untracked file identical to the
-    /// source checkout's (a copied overlay). A state that cannot be read counts as work.</summary>
+    /// own edits are not work — an unstaged change to a file it writes, and an untracked file identical
+    /// to the source checkout's (a copied overlay); anything staged is. A state that cannot be read
+    /// counts as work.</summary>
     internal static async Task<string?> UnsavedWorkAsync(WorktreeInfo worktree, TimeProvider time) {
         if (!Directory.Exists(worktree.Path)) return null;
 
@@ -689,7 +695,7 @@ public partial class WorktreeManager(
     }
 
     static bool IsDaemonEdit(WorktreeInfo worktree, (string Code, string Path) entry) {
-        if (entry.Code.Contains('D') && WorkspaceMcpConfigPaths.Contains(entry.Path)) return true;
+        if (IsDaemonWritten(entry.Path) && (entry.Code[0] == ' ' || entry.Code == "??")) return true;
         if (entry.Code != "??") return false;
 
         // Ordinary files only: a link is the entry itself, and would be lost even if its target matched.
@@ -1500,10 +1506,10 @@ public partial class WorktreeManager(
         return false;
     }
 
-    public Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null) {
+    public async Task CleanupOrphanedAsync(IEnumerable<string>? activeWorktreePaths = null) {
         // Legacy global root — clean up any leftover worktrees from before the per-repo change
         var worktreePaths = activeWorktreePaths as string[] ?? [..activeWorktreePaths ?? []];
-        CleanupDirectory(config.WorktreeRoot, worktreePaths, "borrowed-snapshots");
+        await CleanupDirectoryAsync(config.WorktreeRoot, worktreePaths, "borrowed-snapshots");
         var borrowedSnapshotsRoot = Path.Combine(config.WorktreeRoot, "borrowed-snapshots");
         // This name is a daemon-owned routing entry. Never enumerate through a pre-existing link:
         // doing so would turn orphan cleanup into deletion of directories outside WorktreeRoot.
@@ -1514,22 +1520,22 @@ public partial class WorktreeManager(
             try { DeleteTreeNoFollow(borrowedSnapshotsRoot); }
             catch (Exception ex) { LogCleanupFailed(ex, borrowedSnapshotsRoot); }
         } else {
-            CleanupDirectory(borrowedSnapshotsRoot, worktreePaths);
+            await CleanupDirectoryAsync(borrowedSnapshotsRoot, worktreePaths, keepUnsavedWork: false);
         }
 
         // Per-repo roots — scan each allowed repo for .capacitor/worktrees/
         foreach (var repoPath in config.AllowedRepoPaths) {
             var cleanPath   = repoPath.TrimEnd('/', '*');
             var perRepoRoot = Path.Combine(cleanPath, ".capacitor", "worktrees");
-            CleanupDirectory(perRepoRoot, worktreePaths);
+            await CleanupDirectoryAsync(perRepoRoot, worktreePaths);
         }
-
-        return Task.CompletedTask;
     }
 
-    void CleanupDirectory(
+    /// <param name="keepUnsavedWork">False for borrowed snapshots, which are the daemon's own copies.
+    /// Otherwise a left-behind worktree holding work that exists nowhere else is kept, as at teardown.</param>
+    async Task CleanupDirectoryAsync(
             string root, IEnumerable<string>? activeWorktreePaths,
-            string? reservedDirectoryName = null) {
+            string? reservedDirectoryName = null, bool keepUnsavedWork = true) {
         if (!Directory.Exists(root)) return;
 
         var activePaths = activeWorktreePaths?.Select(Path.GetFullPath).ToArray() ?? [];
@@ -1557,9 +1563,28 @@ public partial class WorktreeManager(
                 IsActive(fullDir[..^ReviewContextSuffix.Length], activePaths))
                 continue;
 
+            if (keepUnsavedWork && await LeftWorktreeAsync(dir) is { } left && await UnsavedWorkAsync(left, time) is { } unsaved) {
+                LogOrphanKept(dir, unsaved);
+                continue;
+            }
+
             LogCleaningUp(dir);
             try { DeleteTreeNoFollow(dir); } catch (Exception ex) { LogCleanupFailed(ex, dir); }
         }
+    }
+
+    /// <summary>The git worktree a left-behind directory is, or null when it is not one. Its source is
+    /// read from the worktree's own common git dir.</summary>
+    async Task<WorktreeInfo?> LeftWorktreeAsync(string dir) {
+        if (!Path.Exists(Path.Combine(dir, ".git"))) return null;
+
+        var common = await RunGitCaptureResultUnproven(
+            dir, GitTimeout, time, sourceReadOnly: true, [], "rev-parse", "--path-format=absolute", "--git-common-dir");
+        var branch = await RunGitCaptureResultUnproven(
+            dir, GitTimeout, time, sourceReadOnly: true, [], "branch", "--show-current");
+        var source = common.ExitCode == 0 ? Path.GetDirectoryName(common.Stdout.Trim().TrimEnd('/', '\\')) : null;
+
+        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source ?? dir);
     }
 
     /// <summary>Whether <paramref name="candidate"/> is, or contains, an active worktree.</summary>
@@ -1819,6 +1844,9 @@ public partial class WorktreeManager(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to clean up {Path}")]
     partial void LogCleanupFailed(Exception ex, string path);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Kept left-behind worktree {Path}: it holds {Reason}. Remove it with `git worktree remove` once the work is saved")]
+    partial void LogOrphanKept(string path, string reason);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Worktree {Path} starts from {BaseRef} via {Source}")]
     partial void LogWorktreeBase(string path, string baseRef, string source);

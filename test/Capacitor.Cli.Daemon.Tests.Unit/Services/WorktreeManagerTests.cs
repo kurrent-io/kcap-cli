@@ -187,12 +187,13 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
-    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay }
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, StagedConfigChange }
 
     /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
     /// file or a commit no other ref has keeps the worktree and its branch. The daemon's own edits (the
-    /// MCP config it deletes at creation, a file identical to the source checkout's) are not work; a link
-    /// is, even to an identical file, since the link itself would be lost.</summary>
+    /// MCP config it deletes at creation, the config a launch writes, a file identical to the source
+    /// checkout's) are not work; a staged change to that config is, and so is a link, even to an
+    /// identical file, since the link itself would be lost.</summary>
     [Test]
     [Arguments(WorktreeState.Clean, false)]
     [Arguments(WorktreeState.ChangedFile, true)]
@@ -201,6 +202,8 @@ public class WorktreeManagerTests {
     [Arguments(WorktreeState.CommitOnAnotherBranch, false)]
     [Arguments(WorktreeState.DaemonEditsOnly, false)]
     [Arguments(WorktreeState.LinkToOverlay, true)]
+    [Arguments(WorktreeState.LaunchWrittenConfig, false)]
+    [Arguments(WorktreeState.StagedConfigChange, true)]
     public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
         var source = repo.Clone;
@@ -233,6 +236,14 @@ public class WorktreeManagerTests {
             case WorktreeState.DaemonEditsOnly:
                 tree.CreateFile("notes.txt", "overlay");
                 break;
+            case WorktreeState.LaunchWrittenConfig:
+                tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{}}}""");
+                tree.CreateFile(".claude/settings.local.json", """{"permissions":{"allow":["Bash"]}}""");
+                break;
+            case WorktreeState.StagedConfigChange:
+                tree.CreateFile(".mcp.json", """{"mcpServers":{"mine":{}}}""");
+                tree.Do("add", ".mcp.json");
+                break;
             case WorktreeState.LinkToOverlay:
                 Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI lacks");
                 File.CreateSymbolicLink(Path.Combine(worktree.Path, "notes.txt"), source.PathTo("notes.txt"));
@@ -248,6 +259,28 @@ public class WorktreeManagerTests {
         } finally {
             source.Try("worktree", "remove", "--force", worktree.Path);
             source.Try("branch", "-D", worktree.Branch);
+        }
+    }
+
+    /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
+    /// still clears one that holds none.</summary>
+    [Test]
+    public async Task CleanupOrphaned_keeps_a_left_behind_worktree_holding_work() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+        var manager = new WorktreeManager(new DaemonConfig { AllowedRepoPaths = [repo.Clone.Path] },
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var working = await manager.CreateAsync(repo.Clone, name: "working");
+        var clean   = await manager.CreateAsync(repo.Clone, name: "clean");
+        GitRepo.At(working.Path).CreateFile("new.txt", "work");
+
+        try {
+            await manager.CleanupOrphanedAsync([]);
+
+            await Assert.That(Directory.Exists(working.Path)).IsTrue();
+            await Assert.That(Directory.Exists(clean.Path)).IsFalse();
+        } finally {
+            repo.Clone.Try("worktree", "remove", "--force", working.Path);
+            repo.Clone.Try("worktree", "prune");
         }
     }
 
