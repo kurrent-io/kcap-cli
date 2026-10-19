@@ -202,10 +202,10 @@ internal partial class AgentOrchestrator {
 
             if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
 
-            // A launch queued under the same id would otherwise start under the id just stopped.
-            foreach (var launch in starting) launch.Cancel();
-            var ok = await StopAgentCoreAsync(agent);
-            if (starting.Length > 0) ok &= await CancelStartingLaunchesAsync(agentId, starting);
+            // A launch under the same id would otherwise start under the id just stopped; the one that
+            // published this agent may still be finishing, so the agent is stopped once they settle.
+            var settled = await SettleCancelledLaunchesAsync(starting);
+            var ok      = await StopAgentCoreAsync(agent) && settled;
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
             return;
@@ -297,13 +297,18 @@ internal partial class AgentOrchestrator {
         return true;
     }
 
-    /// <summary>Cancels the launches for this id; one still queued is refused when the lane reaches it, and
-    /// one already started is waited for. True once none is left running and any agent one published anyway,
-    /// past its last cancellation point, is stopped; false when one outlasts the wait, which then stops
-    /// whatever it publishes itself.</summary>
-    async Task<bool> CancelStartingLaunchesAsync(string agentId, CancellableLaunch[] launches) {
+    /// <summary>Cancels the launches for this id and stops any agent one published anyway, past its last
+    /// cancellation point.</summary>
+    async Task<bool> CancelStartingLaunchesAsync(string agentId, CancellableLaunch[] launches) =>
+        await SettleCancelledLaunchesAsync(launches)
+        && (_agents.GetValueOrDefault(agentId) is not { } published || await StopAgentCoreAsync(published));
+
+    /// <summary>Cancels launches: one still queued is refused when the lane reaches it, and one already
+    /// started is waited for. False when one outlasts the wait; it then stops whatever it publishes itself.</summary>
+    async Task<bool> SettleCancelledLaunchesAsync(CancellableLaunch[] launches) {
         foreach (var launch in launches) launch.Cancel();
         var started = launches.Where(l => l.HasStarted).ToArray();
+        if (started.Length == 0) return true;
 
         try {
             await Task.WhenAll(started.Select(l => l.Settled)).WaitAsync(LaunchCancelSettleWait, _time);
@@ -313,7 +318,7 @@ internal partial class AgentOrchestrator {
             if (outlasted) return false;
         }
 
-        return _agents.GetValueOrDefault(agentId) is not { } published || await StopAgentCoreAsync(published);
+        return true;
     }
 
     /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can
