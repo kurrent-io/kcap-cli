@@ -275,6 +275,18 @@ public class PermissionPromptBrokerTests {
         await Assert.That(later.IsCompleted).IsFalse();
     }
 
+    /// Only Codex's shell prompt adds the justification; another tool's <c>description</c> is its
+    /// own argument, so a call that differs in it is another call.
+    [Test]
+    public async Task A_codex_tools_own_description_still_tells_its_calls_apart() {
+        var broker = new PermissionPromptBroker();
+        var held = broker.Register(Dto("r1", input: """{"title":"t","description":"first"}""") with { Vendor = "codex", ToolName = "mcp__notes__add" });
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "call_1", toolName: "mcp__notes__add",
+            toolInput: Json("""{"title":"t","description":"second"}"""))).IsFalse();
+        await Assert.That(held.IsCompleted).IsFalse();
+    }
+
     /// Only the description is set aside: a Codex call whose other input differs is another call.
     [Test]
     public async Task A_codex_prompt_is_not_matched_by_a_call_with_other_input() {

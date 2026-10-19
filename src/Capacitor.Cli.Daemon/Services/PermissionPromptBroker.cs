@@ -66,7 +66,7 @@ internal sealed class PermissionPromptBroker {
 
             // Completed while the gate is held: a continuation running inline would re-enter it.
             var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId, ++_seq,
-                MatchKey(dto.Vendor, dto.ToolInput));
+                MatchKey(dto.Vendor, dto.ToolName, dto.ToolInput));
             if (!_pending.TryAdd(dto.RequestId, entry))
                 throw new InvalidOperationException($"permission request {dto.RequestId} is already pending");
             Broadcast(new PermissionStreamItem.Pending(dto));
@@ -139,7 +139,7 @@ internal sealed class PermissionPromptBroker {
                     && (sentAt is null || RequestedBy(c.Dto, sentAt.Value))
                     && (c.ToolUseId == toolUseId
                      || c.ToolUseId is null && c.SubagentId == subagentId && c.ToolName == toolName
-                        && c.Input is { } ran && JsonElement.DeepEquals(ran, MatchKey(c.Dto.Vendor, input)!.Value)));
+                        && c.Input is { } ran && JsonElement.DeepEquals(ran, MatchKey(c.Dto.Vendor, toolName, input)!.Value)));
                 if (owed >= 0) {
                     _allowedCalls.RemoveAt(owed);
                     return false;
@@ -149,7 +149,7 @@ internal sealed class PermissionPromptBroker {
                     .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
                              && e.SubagentId == subagentId && e.Dto.ToolName == toolName
                              && (sentAt is null || RequestedBy(e.Dto, sentAt.Value))
-                             && e.MatchInput is { } held && JsonElement.DeepEquals(held, MatchKey(e.Dto.Vendor, input)!.Value))
+                             && e.MatchInput is { } held && JsonElement.DeepEquals(held, MatchKey(e.Dto.Vendor, toolName, input)!.Value))
                     .MinBy(e => e.Seq);
             }
             return entry is not null
@@ -190,7 +190,7 @@ internal sealed class PermissionPromptBroker {
         if (owesCall)
             OweLocked(entry.Dto, entry.SubagentId,
                 decision.Behavior == PermissionSettlements.Allow && TakesUpdatedInput(entry.Dto.Vendor) && decision.UpdatedInput is { } updated
-                    ? MatchKey(entry.Dto.Vendor, updated) : entry.MatchInput);
+                    ? MatchKey(entry.Dto.Vendor, entry.Dto.ToolName, updated) : entry.MatchInput);
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;
@@ -199,7 +199,7 @@ internal sealed class PermissionPromptBroker {
     /// A call allowed without a prompt (by the agent's policy) is owed its notice just the same, so
     /// the notice does not retire an identical prompt still waiting for the user.
     public void OweCall(PermissionPendingDto dto, string? subagentId) {
-        lock (_gate) OweLocked(dto, subagentId, MatchKey(dto.Vendor, dto.ToolInput));
+        lock (_gate) OweLocked(dto, subagentId, MatchKey(dto.Vendor, dto.ToolName, dto.ToolInput));
     }
 
     // Caller holds _gate.
@@ -217,8 +217,8 @@ internal sealed class PermissionPromptBroker {
     static bool TakesUpdatedInput(string vendor) => vendor == "claude";
 
     // What a prompt's input is matched on, taken the same way from the call that ran.
-    static JsonElement? MatchKey(string vendor, JsonElement? input) =>
-        vendor == "codex" && input is { } held ? CodexPermissionInput.MatchKey(held) : input;
+    static JsonElement? MatchKey(string vendor, string toolName, JsonElement? input) =>
+        vendor == "codex" && input is { } held ? CodexPermissionInput.MatchKey(toolName, held) : input;
 
     // An unparsed stamp is no ordering, so such a prompt is left to the turn's end.
     static bool RequestedBy(PermissionPendingDto dto, DateTimeOffset sentAt) =>
