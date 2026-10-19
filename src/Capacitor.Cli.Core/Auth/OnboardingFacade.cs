@@ -28,6 +28,49 @@ static class CommitBoundary {
             CommitRequest                                               request,
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
             IAuthProgress                                               progress,
+            CancellationToken                                           ct) =>
+        (await CommitOnceAsync(root, request, beforeCommit, progress, stillNamed: null, ct))!;
+
+    const int NamingAttempts = 3;
+
+    /// <summary>
+    /// Commits discovered tenants under the profile names the config gives them. The names are
+    /// chosen from a read taken before the lock, so the commit re-checks them against the config it
+    /// writes and, when a profile written in between changed them, prepares the request again.
+    /// </summary>
+    internal static async Task<AuthResult> CommitNamedAsync(
+            ConfigRoot                                                  root,
+            DiscoveredTenant[]                                          tenants,
+            DiscoveredTenant                                            picked,
+            Func<DiscoveredTenant[], DiscoveredTenant, CommitRequest>   prepare,
+            Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
+            IAuthProgress                                               progress,
+            CancellationToken                                           ct) {
+        for (var attempt = 0; attempt < NamingAttempts; attempt++) {
+            var snapshot = ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var current) ? current : new ProfileConfig();
+            var (named, namedPicked) = TenantDiscovery.NameProfiles(snapshot, tenants, picked);
+
+            var result = await CommitOnceAsync(
+                root, prepare(named, namedPicked), beforeCommit, progress,
+                config => TenantDiscovery.NamesHold(config, tenants, picked, named, namedPicked), ct);
+
+            if (result is not null) return result;
+        }
+
+        const string changed = "the profiles kept changing during sign-in; nothing saved.";
+        progress.Error($"Error: {changed}");
+
+        return new AuthResult.Failed(changed);
+    }
+
+    /// <summary>Null when <paramref name="stillNamed"/> refused the config under the lock: nothing
+    /// was written and the caller may prepare the request again.</summary>
+    static async Task<AuthResult?> CommitOnceAsync(
+            ConfigRoot                                                  root,
+            CommitRequest                                               request,
+            Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
+            IAuthProgress                                               progress,
+            Func<ProfileConfig, bool>?                                  stillNamed,
             CancellationToken                                           ct) {
         if (ct.IsCancellationRequested) return new AuthResult.Cancelled();
 
@@ -45,10 +88,17 @@ static class CommitBoundary {
 
         // A token-only arm has no config commit to make the boundary durable, so what landed is tracked rather than assumed.
         var configPublished = request.ConfigMutation is not null || request.WriteStamp || request.Precondition is not null;
+        var renamed         = false;
 
         if (configPublished) {
             try {
                 ProfileConfig Mutation(ProfileConfig config) {
+                    if (stillNamed?.Invoke(config) == false) {
+                        renamed = true;
+
+                        return config;
+                    }
+
                     request.Precondition?.Check(config, request.ActiveProfile);
                     // Profile write and stamp are ONE mutation: no window where a profile exists unstamped.
                     return Stamp(request.ConfigMutation?.Invoke(config) ?? config, request);
@@ -73,6 +123,8 @@ static class CommitBoundary {
 
                 return new AuthResult.Failed(ex.Message);
             }
+
+            if (renamed) return null;
         }
 
         string? username   = null;
@@ -503,28 +555,25 @@ public sealed class OnboardingFacade(
                 : Fail(outcome.ErrorMessage, ct, reason);
         }
 
-        var identities = new List<AuthIdentity>();
+        var canonicalByOrigin = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var tenant in outcome.Tenants) {
             if (!ServerIdentity.TryCanonicalizeForStamping(tenant.Origin, out var canonical, out var identityError)) {
                 return Fail($"Error: {identityError}", identityError, ct);
             }
 
-            identities.Add(new(tenant.ProfileName, canonical));
+            canonicalByOrigin[tenant.Origin] = canonical;
         }
-
-        var picked = outcome.Picked!;
 
         if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError)
             return Fail(settleError, settleError, ct);
 
-        var request = new CommitRequest(
-            identities, AuthProvider.GitHubApp, picked.ProfileName,
-            identities.First(i => i.Profile == picked.ProfileName).CanonicalServer,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, outcome.Tenants, picked),
-            PublishTokens: saved => ExchangeEveryTenantAsync(outcome.Tenants, picked, accessToken, saved));
-
-        return await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
+        return await CommitBoundary.CommitNamedAsync(root, outcome.Tenants, outcome.Picked!, (tenants, picked) => new CommitRequest(
+                [.. tenants.Select(t => new AuthIdentity(t.ProfileName, canonicalByOrigin[t.Origin]))],
+                AuthProvider.GitHubApp, picked.ProfileName, canonicalByOrigin[picked.Origin],
+                ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
+                PublishTokens: saved => ExchangeEveryTenantAsync(tenants, picked, accessToken, saved)),
+            beforeCommit, progress, ct);
     }
 
     // Inside the boundary: each tenant's exchange is network-then-save, and ANY failure — mapped or

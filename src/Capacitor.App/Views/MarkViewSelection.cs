@@ -25,10 +25,11 @@ static class MarkViewSelection {
     static readonly FieldInfo LayerField = Private(typeof(MarkdownViewer), "_selectionLayer");
     static readonly FieldInfo EntriesField = Private(LayerField.FieldType, "_entries");
 
-    public static void Attach(Control host, MarkdownViewer viewer) {
+    /// The copy shortcut runs the host's own copy, which knows whether the viewer is what it shows.
+    public static void Attach(Control host, MarkdownViewer viewer, Func<Task> copy) {
         host.AddHandler(InputElement.PointerPressedEvent, (_, e) => OnPressed(viewer, e), RoutingStrategies.Bubble, handledEventsToo: true);
         host.AddHandler(InputElement.PointerMovedEvent, (_, e) => OnMoved(viewer, e), RoutingStrategies.Bubble, handledEventsToo: true);
-        host.AddHandler(InputElement.KeyDownEvent, (_, e) => OnKeyDown(viewer, e), RoutingStrategies.Tunnel);
+        host.AddHandler(InputElement.KeyDownEvent, (_, e) => OnKeyDown(copy, e), RoutingStrategies.Tunnel);
     }
 
     public static bool HasSelection(MarkdownViewer viewer) =>
@@ -87,10 +88,10 @@ static class MarkViewSelection {
         if (Nearest(layer, point) is { } inside) MoveFocus(layer, inside);
     }
 
-    static void OnKeyDown(MarkdownViewer viewer, KeyEventArgs e) {
+    static void OnKeyDown(Func<Task> copy, KeyEventArgs e) {
         var hotkeys = Application.Current?.PlatformSettings?.HotkeyConfiguration;
         if (hotkeys is null || !hotkeys.Copy.Any(g => g.Matches(e))) return;
-        _ = CopyAsync(viewer);
+        _ = copy();
         e.Handled = true;
     }
 

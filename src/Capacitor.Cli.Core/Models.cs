@@ -304,6 +304,11 @@ record SessionTitlePayload {
 
     [JsonPropertyName("cache_write_tokens")]
     public long CacheWriteTokens { get; init; }
+
+    /// <summary>The server's title-source tag. Absent, it records the title as a raw placeholder that
+    /// its backfill may regenerate.</summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; init; }
 }
 
 record WhatsDonePayload {

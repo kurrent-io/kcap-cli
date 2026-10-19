@@ -1,0 +1,8 @@
+kcap local — Run the local installation that `kcap setup --local` made
+
+Usage: kcap local <subcommand> [options]
+
+Subcommands:
+  help                      Show this help
+
+The installation lives in ~/.config/kcap/local, or in KCAP_LOCAL_ROOT when it is set.

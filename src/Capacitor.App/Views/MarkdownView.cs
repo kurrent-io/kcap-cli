@@ -2,6 +2,8 @@ using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input.Platform;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
@@ -55,22 +57,44 @@ public sealed class MarkdownView : ContentControl {
             e.Handled = true;
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
-        MarkViewSelection.Attach(this, _viewer);
+        MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
 
-    public bool HasSelection => MarkViewSelection.HasSelection(_viewer);
+    public bool HasSelection => Content is SelectableTextBlock plain
+        ? !string.IsNullOrEmpty(plain.SelectedText)
+        : MarkViewSelection.HasSelection(_viewer);
 
-    public Task CopySelectionAsync() => MarkViewSelection.CopyAsync(_viewer);
+    /// The fallback's own Copy is fire-and-forget, so its clipboard write is awaited here instead.
+    public async Task CopySelectionAsync() {
+        if (Content is not SelectableTextBlock plain) {
+            await MarkViewSelection.CopyAsync(_viewer);
+            return;
+        }
+        if (plain.SelectedText is not { Length: > 0 } text || TopLevel.GetTopLevel(plain)?.Clipboard is not { } clipboard) return;
+        await clipboard.SetTextAsync(text);
+    }
 
-    public void SelectAll() => _viewer.SelectAll();
+    public void SelectAll() {
+        if (Content is SelectableTextBlock plain) plain.SelectAll();
+        else _viewer.SelectAll();
+    }
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
     /// a change, and the markdown it already holds is not one.
+    /// Markdig throws from the parse for text nested past its depth limit, with no type of its own to
+    /// catch; that text shows as plain source, and the viewer is left holding nothing so a pipeline
+    /// change cannot re-throw.
     void Render() {
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
-        _viewer.Markdown = Text;
+        try {
+            _viewer.Markdown = Text;
+            Content = _viewer;
+        } catch (ArgumentException e) when (e.Message.Contains("too deeply nested", StringComparison.Ordinal)) {
+            _viewer.Markdown = null;
+            Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
+        }
     }
 
     public string? Text {

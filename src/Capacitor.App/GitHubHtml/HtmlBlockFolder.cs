@@ -34,6 +34,8 @@ static class HtmlBlockFolder {
         /// The levels the element occupies, itself included.
         public int Reach { get; set; } = HtmlContainers.HasNode(tag.Name) ? 1 : 0;
         public List<Block> Children { get; } = [];
+        /// Nothing has arrived in the element yet, so a summary may still take its header.
+        public bool Fresh { get; set; } = true;
     }
 
     /// Returns the reach of the container's children.
@@ -156,7 +158,11 @@ static class HtmlBlockFolder {
                         break;
                     }
                     case HtmlBlockPartKind.Summary: {
-                        var frame = frames.Peek();
+                        if (!frames.TryPeek(out var frame) || frame.Name != "details" || !frame.Fresh) {
+                            if (!apply) RejectItem(item);
+                            break;
+                        }
+                        frame.Fresh = false;
                         if (apply) ((DetailsBlock)frame.Node!).Summary = InlineBuilder.Build(part.Tokens, InlineBuildMode.Summary);
                         frame.Reach = Math.Max(frame.Reach, frame.Levels + part.Reach);
                         break;
@@ -203,8 +209,12 @@ static class HtmlBlockFolder {
         }
 
         void Note(int levels) {
-            if (frames.Count > 0) frames.Peek().Reach = Math.Max(frames.Peek().Reach, frames.Peek().Levels + levels);
-            else reach = Math.Max(reach, levels);
+            if (frames.TryPeek(out var frame)) {
+                frame.Reach = Math.Max(frame.Reach, frame.Levels + levels);
+                frame.Fresh = false;
+            } else {
+                reach = Math.Max(reach, levels);
+            }
         }
 
         void RejectPair(Pair pair) {

@@ -346,6 +346,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// Set by the workspace hosting this chat; the card's fallback sends the user there.
     public Action? ShowTerminal { get; set; }
+    /// Called with the session id as a prompt goes out; the action it returns runs only if the
+    /// channel accepts the prompt. A reply answers the session's open questions, and no permission
+    /// response will ever say so.
+    public Func<string, Action>? InputSending { get; init; }
+    volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
     public string TerminalMenuSummary {
@@ -584,6 +589,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
+        // A local session's id names an app-server session only while the local daemon reports
+        // that server; otherwise a match is another session's.
+        var onAppServer = origin == AgentOrigin.Remote ? Observable.Return(true) : localDaemonOnAppServer ?? Observable.Return(true);
+        sessionId?.CombineLatest(onAppServer, (id, admitted) => admitted ? id : null)
+            .Subscribe(id => _sessionId = id).DisposeWith(_disposables);
         Cards = new PendingCardsViewModel(
             agentId, origin, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
             localDaemonOnAppServer);
@@ -728,6 +738,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _sending = queued;
             _unechoed.Add(queued);
             if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
+            var delivered = _sessionId is { Length: > 0 } sid ? InputSending?.Invoke(sid) : null;
             ChatSendOutcome outcome;
             try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
             catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
@@ -738,7 +749,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             finally { _sending = null; }
             if (_lifetimeToken.IsCancellationRequested) {
                 // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
-                if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
+                if (outcome == ChatSendOutcome.Accepted) {
+                    _drafts?.ClearDelivered(draftRevision);
+                    delivered?.Invoke();
+                }
                 return;
             }
             if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
@@ -752,7 +766,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _queuedMessages.Add(queued);
             }
             RefreshQueue();
-            if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
+            if (outcome == ChatSendOutcome.Accepted) {
+                ClearSentDraft(queued);
+                Tray.RemoveAll(chipIds);
+                delivered?.Invoke();
+            }
             if (queued.Acknowledged) ConfirmDelivery(queued);
         }, canSend);
         _disposables.Add(SendCommand);

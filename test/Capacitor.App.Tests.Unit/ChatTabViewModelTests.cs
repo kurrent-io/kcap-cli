@@ -1488,6 +1488,79 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// The session is captured as each prompt goes out, and only a prompt the channel accepted can
+    /// have answered its open questions, whether or not its tab outlived the send.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_an_accepted_send_reports_its_session_as_answered() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput { HonoursCancellation = false };
+            var time = new FakeTimeProvider();
+            var sending = new List<string>();
+            var answered = new List<string>();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
+                new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                sessionId: new BehaviorSubject<string?>("s1")) {
+                InputSending = sid => { sending.Add(sid); return () => answered.Add(sid); },
+            };
+
+            chat.ComposerText = "refused";
+            var send = chat.SendCommand.Execute().ToTask();
+            await Assert.That(sending).IsEquivalentTo(["s1"]);
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
+            await send;
+            await Assert.That(answered).IsEmpty();
+
+            chat.ComposerText = "delivered";
+            send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(answered).IsEquivalentTo(["s1"]);
+
+            chat.ComposerText = "delivered after the tab closed";
+            send = chat.SendCommand.Execute().ToTask();
+            var pending = input.Pending!;
+            await chat.TeardownAsync();
+            pending.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(answered).IsEquivalentTo(["s1", "s1"]);
+        });
+    }
+
+    /// While the local daemon reports another server, its session ids name that server's sessions,
+    /// so a reply there answers nothing the app's tracker holds.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_send_reports_its_session_only_while_the_daemon_is_on_the_app_server() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var time = new FakeTimeProvider();
+            var onAppServer = new BehaviorSubject<bool>(false);
+            var sending = new List<string>();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Local, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
+                new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                sessionId: new BehaviorSubject<string?>("s1"), localDaemonOnAppServer: onAppServer) {
+                InputSending = sid => { sending.Add(sid); return () => { }; },
+            };
+
+            chat.ComposerText = "elsewhere";
+            var send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(sending).IsEmpty();
+
+            onAppServer.OnNext(true);
+            chat.ComposerText = "here";
+            send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(sending).IsEquivalentTo(["s1"]);
+            await chat.TeardownAsync();
+        });
+    }
+
     /// Pins that a draft outlives its tab, which navigation tears down, and that a sent one does not.
     [Test]
     [NotInParallel("AvaloniaSession")]

@@ -1088,7 +1088,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// the vendor's own terminal. Keyed on the broker alone, so a request outliving its agent's
     /// table entry is still retired.
     void HandleToolSettled(string agentId, ToolSettledNotice notice) {
-        if (notice.ToolUseId is { } toolUseId) _permissionBroker.TryWithdrawTool(agentId, notice.SessionId, toolUseId);
+        if (notice.ToolUseId is { } toolUseId)
+            _permissionBroker.TryWithdrawTool(agentId, notice.SessionId, toolUseId, notice.SubagentId, notice.ToolName, notice.ToolInput, notice.SentAt);
         else _permissionBroker.WithdrawTurn(agentId, notice.SessionId, notice.SubagentId);
     }
 

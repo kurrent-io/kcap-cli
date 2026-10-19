@@ -23,8 +23,8 @@ namespace Capacitor.Cli.Commands;
 /// Cursor / Gemini hook files, deletes the kcap-owned Copilot hooks file, the
 /// kcap Kiro agent (~/.kiro/agents/kcap.json) — restoring the default agent it
 /// replaced — and the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts),
-/// removes agent skills (and legacy Codex skills), deletes the kcap config
-/// directory and, last, the vendor account registry.
+/// removes agent skills (and legacy Codex skills), deletes the daemon state
+/// directory, the kcap config directory and, last, the vendor account registry.
 ///
 /// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
@@ -82,6 +82,15 @@ public sealed class UninstallCommand(
         if (!keepConfig) {
             await Console.Out.WriteLineAsync($"  • Delete the kcap config directory ({configDir})");
         }
+
+        // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
+        // A link there could lead anywhere, so only the real directory counts as kcap's. A linked
+        // ~/.config is allowed: dotfile managers link it, and kcap/ inside it is still kcap's.
+        var ownsDaemonDir = PathsEqual(store.Directory, DaemonStore.DefaultDirectory(home))
+                         && new DirectoryInfo(store.Directory).LinkTarget is null
+                         && new DirectoryInfo(Path.GetDirectoryName(store.Directory)!).LinkTarget is null;
+        if (ownsDaemonDir)
+            await Console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
 
         if (!skipPrompt) {
             await Console.Out.WriteAsync("Proceed? [y/N] ");
@@ -223,6 +232,26 @@ public sealed class UninstallCommand(
             CodexHooksInstaller.DeleteMarker(codexProject);
         }
 
+        // Holds the daemons' locks and their granted consent. It goes before the config directory, which
+        // holds it by default, so a lock still held keeps both. Kept after a failure for the same reason
+        // as the registry: a re-run has to find and stop what is still running. A directory
+        // KCAP_DAEMONS_DIR moved, or a link, may be shared, so nothing in it is assumed to be kcap's.
+        if (!ownsDaemonDir) {
+            await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
+        } else if (!hadFailures && Directory.Exists(store.Directory)) {
+            try {
+                if (store.DeleteAll()) {
+                    await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+                } else {
+                    await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
+                    hadFailures = true;
+                }
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
+                hadFailures = true;
+            }
+        }
+
         if (!keepConfig) {
             if (hadFailures) {
                 await Console.Error.WriteLineAsync(
@@ -263,6 +292,10 @@ public sealed class UninstallCommand(
 
         return 0;
     }
+
+    static bool PathsEqual(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
     /// Deletes every <c>kcap-*</c> directory directly under

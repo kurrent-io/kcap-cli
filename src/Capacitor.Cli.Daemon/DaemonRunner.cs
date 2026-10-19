@@ -296,12 +296,8 @@ public static partial class DaemonRunner {
         // reviewer-home sweeps. Computed once here so every consumer agrees on the exact same directory.
         var coverageStateDir = config.Store.StateDirectory(config.Name);
 
-        // Best-effort, never throws: on a brand-new daemon name nothing has created this directory yet
-        // (LaunchConsentStore's ctor — the previous sole creator — only runs below, and not at all on
-        // the expectation-mismatch arm), so without this an expectation-mismatch refusal on a fresh
-        // name would have nowhere to write its marker. Same fail-soft posture as BootRefusalMarker.TryWrite
-        // itself — a failure here just means that call's own containment swallows the write too.
-        try { Directory.CreateDirectory(coverageStateDir); } catch { /* best-effort */ }
+        // Before the boot checks: an expectation-mismatch refusal on a fresh name writes its marker here.
+        PrepareStateDirectory(coverageStateDir, Console.Error);
 
         // Pre-host boot checks — see RunBootChecksAsync. Both refusal arms return BEFORE the host is
         // built, before any ServerConnection/token use of any kind, so a misdirected or un-consented
@@ -1194,6 +1190,18 @@ public static partial class DaemonRunner {
     /// </summary>
     internal static int LockRefusalExit(bool supervised) => supervised ? 0 : 2;
 
+    /// <summary>Makes the state directory owner-only, warning instead of refusing: a refusal would brick a
+    /// daemon whose state sits where no ACL or mode can be set.</summary>
+    internal static void PrepareStateDirectory(string stateDir, TextWriter warnings) {
+        try {
+            OwnerOnlyDirectory.Ensure(stateDir);
+        } catch (Exception ex) {
+            warnings.WriteLine(
+                $"kcap-daemon: warning: could not make the state directory {stateDir} owner-only ({ex.GetType().Name}: {ex.Message}); "
+                + "its contents keep the access its location grants.");
+        }
+    }
+
     /// <summary>Same rationale as <see cref="LockRefusalExit"/>, for the server's <c>NameInUse</c>
     /// rejection (manual daemons keep 3).</summary>
     internal static int NameInUseExit(bool supervised) => supervised ? 0 : 3;
@@ -1479,7 +1487,9 @@ public static partial class DaemonRunner {
             timedOut: new UnattendedSupport(false, null));
 
         return installed
-            .Select(f => new UnattendedVendorStatus(f.Vendor, support[f.Vendor].Supported, support[f.Vendor].WithheldReason))
+            .Select(f => support[f.Vendor] is { Supported: true } && LauncherPolicyVersion(f.Vendor, codexAppServer: false) is null
+                ? new UnattendedVendorStatus(f.Vendor, false, $"no launcher policy is defined for {f.Vendor}")
+                : new UnattendedVendorStatus(f.Vendor, support[f.Vendor].Supported, support[f.Vendor].WithheldReason))
             .OrderBy(s => s.Vendor, StringComparer.Ordinal)
             .ToArray();
     }
@@ -1520,6 +1530,29 @@ public static partial class DaemonRunner {
     internal const string GrokLauncherPolicyVersion = "grok-unattended-v1";
     internal const string PiLauncherPolicyVersion = "pi-unattended-v1";
     internal const string MuseLauncherPolicyVersion = "muse-unattended-v1";
+    internal const string GeminiLauncherPolicyVersion = "gemini-unattended-v1";
+    internal const string KiroLauncherPolicyVersion = "kiro-unattended-v1";
+
+    /// <summary>The launcher policy a vendor's unattended launches follow, or null for a vendor with
+    /// none: that vendor is withheld from unattended work rather than advertised under a token nobody
+    /// wrote. A switch over every harness, so a new one does not compile until its policy is decided.
+    /// </summary>
+    internal static string? LauncherPolicyVersion(string vendor, bool codexAppServer) =>
+        HarnessNames.From(vendor) switch {
+            HarnessId.Claude      => ClaudeLauncherPolicyVersion,
+            HarnessId.Cursor      => CursorLauncherPolicyVersion,
+            HarnessId.Codex       => codexAppServer ? CodexAppServerLauncherPolicyVersion : CodexLauncherPolicyVersion,
+            HarnessId.Copilot     => CopilotLauncherPolicyVersion,
+            HarnessId.Gemini      => GeminiLauncherPolicyVersion,
+            HarnessId.Kiro        => KiroLauncherPolicyVersion,
+            HarnessId.Pi          => PiLauncherPolicyVersion,
+            HarnessId.OpenCode    => OpenCodeLauncherPolicyVersion,
+            HarnessId.Antigravity => AntigravityLauncherPolicyVersion,
+            HarnessId.Grok        => GrokLauncherPolicyVersion,
+            HarnessId.Muse        => MuseLauncherPolicyVersion,
+            HarnessId.MistralVibe => null,
+            null                  => null,
+        };
 
     /// <summary>The one vendor token this daemon knows agy by. Never <c>agy</c> — that is a binary
     /// name, and the server routes on the vendor.</summary>
@@ -1551,21 +1584,9 @@ public static partial class DaemonRunner {
         var capabilities = new List<UnattendedVendorCapability>();
         foreach (var vendor in unattended) {
             var factory = byVendor[vendor];
-            var policyVersion = vendor switch {
-                "claude"  => ClaudeLauncherPolicyVersion,
-                "cursor"  => CursorLauncherPolicyVersion,
-                // Chosen from the SAME resolved field the launch router uses
-                // (config.CodexAppServerActive), so the certified policy and the transport actually
-                // launched can never diverge.
-                "codex"   => config.CodexAppServerActive ? CodexAppServerLauncherPolicyVersion : CodexLauncherPolicyVersion,
-                "copilot" => CopilotLauncherPolicyVersion,
-                AntigravityVendor => AntigravityLauncherPolicyVersion,
-                "opencode" => OpenCodeLauncherPolicyVersion,
-                "grok"    => GrokLauncherPolicyVersion,
-                PiVendor  => PiLauncherPolicyVersion,
-                MuseVendor => MuseLauncherPolicyVersion,
-                _         => $"{vendor}-unattended-v1"
-            };
+            // Codex's policy follows the same resolved field the launch router uses, so the certified
+            // policy and the transport actually launched cannot diverge.
+            if (LauncherPolicyVersion(vendor, config.CodexAppServerActive) is not { } policyVersion) continue;
             // Trust-by-default: a vendor's borrowed-review capability is a property of its FACTORY,
             // never of the installed build's identity. Gating this on an exact-build match made an
             // ordinary vendor auto-update silently withdraw the capability (and the server then

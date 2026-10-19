@@ -161,7 +161,7 @@ public class SessionTakeoverTests {
     [Test]
     public async Task Work_items_outside_the_plan_are_reported_and_plans_are_still_adopted() {
         var routes = Server(Ended(), items: null, plans: $"[{Plan("p1", true, $"[{Task("t1", 1, "in_progress")}]")}]");
-        routes.Get($"/api/work-items/session/{Previous}", 403, """{"code":"work_items_not_in_plan","message":"Work Items require the Team or Enterprise plan."}""");
+        routes.Get($"/api/work-items/session/{Previous}", 403, """{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.4","title":"Forbidden","status":403,"error":"work_items_not_in_plan","message":"Work Items require the Team or Enterprise plan."}""");
         routes.Post("/api/plans/p1/tasks/t1", 200, "{}");
 
         var r = await Run(routes);
@@ -431,7 +431,7 @@ public class SessionTakeoverTests {
     [Test]
     public async Task Claim_adoption_runs_even_when_work_items_are_not_in_the_plan() {
         var routes = Server(Ended(), items: null);
-        routes.Get($"/api/work-items/session/{Previous}", 403, """{"code":"work_items_not_in_plan"}""");
+        routes.Get($"/api/work-items/session/{Previous}", 403, """{"error":"work_items_not_in_plan","message":"Work Items require the Team or Enterprise plan."}""");
         routes.Post("/api/loose-ends/adopt", 200, """{"results":[{"outcome":"transferred","attempted_claim_id":"old","claim":{"claim_id":"new","session_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}]}""");
         var result = (TakeoverResult.Completed)await Run(routes);
         var adoption = routes.Posts.Single(p => p.Path == "/api/loose-ends/adopt");

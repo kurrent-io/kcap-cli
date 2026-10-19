@@ -13,8 +13,6 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
     /// <summary>The server's own threshold for treating an active session as stale.</summary>
     static readonly TimeSpan StaleAfter = TimeSpan.FromHours(1);
 
-    const string NotInPlanCode = "work_items_not_in_plan";
-
     const string MalformedResponse = "malformed response";
 
     /// <summary>The plans endpoint returns at most this many, the most recently touched, with no paging.</summary>
@@ -104,7 +102,7 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
         var body = await read.Content.ReadAsStringAsync(ct);
 
-        if (read.StatusCode == HttpStatusCode.Forbidden && Str(ParseObject(body)?["code"]) == NotInPlanCode)
+        if (read.StatusCode == HttpStatusCode.Forbidden && WorkContextReader.IsPlanGate((int)read.StatusCode, ParseWorkItemError(body)))
             return new JsonObject { ["status"] = "not_in_plan", ["items"] = new JsonArray() };
 
         if (!read.IsSuccessStatusCode)
@@ -289,6 +287,10 @@ public sealed class SessionTakeover(ISessionLivenessSource local, TimeProvider t
 
     static JsonObject? ParseObject(string text) {
         try { return JsonNode.Parse(text) as JsonObject; } catch { return null; }
+    }
+
+    static WorkItemErrorDto? ParseWorkItemError(string text) {
+        try { return JsonSerializer.Deserialize(text, CapacitorJsonContext.Default.WorkItemErrorDto); } catch (JsonException) { return null; }
     }
 
     static JsonArray? ParseArray(string text) {

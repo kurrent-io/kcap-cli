@@ -17,7 +17,7 @@ description: >-
   last session working through".
 ---
 
-> **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`) for retrieving past sessions and the plans they declared. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed.
+> **For agents:** When the `kcap-sessions` MCP server is available, prefer its tools (`search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`) for retrieving past sessions and the plans they declared. This CLI-wrapped skill remains a fallback for shell use and when MCP isn't installed. These reads are safe to run unattended: the server checks each one against the signed-in user's session permissions, so they return only sessions the user may already see and cannot expose another user's private session.
 
 # Session Recap
 
