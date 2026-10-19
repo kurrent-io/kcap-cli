@@ -49,25 +49,35 @@ the app's main window connected to the local server.
 ## Which edition a wizard run is on
 
 The edition is not only the button pressed in this run. A run is **on the local path** when either the
-user chose Local in this run, or the resolved profile's server classifies as
-`LocalEndpointClass.Local` (the registered active installation, not merely a loopback or no-auth
-server). Everything below that says "local path" uses this one predicate, so a forced `--setup` on a
+user chose Local in this run, or there is pending local setup, or the resolved profile's server
+classifies as `LocalEndpointClass.Local` (the registered active installation, not merely a loopback
+or no-auth server). Both of the last two are defined under Durable local state. Everything below that says "local path" uses this one predicate, so a forced `--setup` on a
 committed local machine gets local presentation and no route to cloud, and a cloud machine's forced
 setup behaves as today.
 
-## Onboarding gate and an unfinished install
+## Durable local state, and the gate
 
-`kcap setup --local` publishes the registry and the `AuthProvider.None` profile before it lifts the
-server's fence and clears its lifecycle journal. A crash or failed confirmation in between leaves a
-profile the gate reads as Complete today, although setup never finished.
+`kcap setup --local` writes its lifecycle journal before it commits anything, and moves through
+`committing`, registry publication, profile publication and the fence lift before clearing it. A run
+can stop at any of those points, including before the profile exists (`commit_failed` straight after
+the `committing` write). So the app decides whether a local install is in progress from the journal,
+not from the profile.
 
-The gate gains one rule: a resolved profile that classifies as `Local` while the local root's lifecycle
-journal (`LocalStateFiles.ReadJournal`) holds a `setup` entry is **Incomplete**, with a reason that
-says a local install is unfinished. The wizard then opens on the local path at Install, which re-runs
-`kcap setup --local --json`; the CLI's recovery rolls the entry forward or back (`recovering` /
-`recovered` lines). Daemon enablement and the main-window graph never start while that entry stands.
-A journal entry for another operation (an upgrade, an uninstall) leaves the gate as it is; the
-install reports `lifecycle_busy` if one is still running.
+**Pending local setup** means the local root's journal (`LocalStateFiles.ReadJournal`) either holds a
+`setup` entry, in any phase, or is `Unreadable` (malformed, inaccessible or a newer schema: the app
+cannot prove setup finished). **Committed local** means no pending setup and the resolved profile
+classifies as `LocalEndpointClass.Local`.
+
+The gate gains one rule, ahead of its profile checks: pending local setup is **Incomplete**, with a
+reason saying a local install is unfinished, whatever the profile says. The wizard then opens on the
+local path at Install, which re-runs `kcap setup --local --json`; the CLI's recovery rolls the entry
+forward or back, or refuses with its own code (an unreadable journal or registry surfaces as the CLI's
+`registry_unreadable` or similar, and the Install page shows that code's affordance). A journal entry
+for another operation (an upgrade, an uninstall) leaves the gate as it is; an install started meanwhile
+reports `lifecycle_busy`.
+
+While pending local setup stands, the app never builds the normal main graph and never enables the
+daemon (see Closing the wizard).
 
 ## The flow
 
@@ -82,9 +92,10 @@ my calls, from the project's milestones:*
 
 - **Not macOS.** On other platforms the card keeps a "not available on this platform yet" line rather
   than running an untested flow. The CLI would accept glibc Linux, so this gate is the app's.
-- **The machine already has a cloud profile** (the resolved profile names an `Ordinary` server). The
-  wizard can reopen for one (an expired token, or `--setup`), and the CLI would refuse with
-  `other_server`. The card says this Mac is set up for a cloud workspace and that moving it to local
+- **The machine already has a cloud profile**: any configured profile, active or not, has a nonblank
+  server that does not classify as `Local`, which is the CLI's own preflight rule
+  (`LocalPreflight.CheckProfiles`). The wizard can reopen for one (an expired token, or `--setup`),
+  and the CLI would refuse with `other_server`. The card says this Mac is set up for a cloud workspace and that moving it to local
   comes later.
 
 ### Install (new step)
@@ -120,24 +131,28 @@ The page shows four rows, each with a state, and a progress bar for the download
   `reused` and `failed`.
 
 **The settled result.** Progress lines only drive the rows. The step's outcome is decided once, after
-the child has exited, from three facts: whether a `committed` or `reused` line was seen, the `failed`
-code if any, and whether the resolved profile now classifies as `Local`.
+the child has exited, on two separate axes.
 
-| Settled as | When | The page |
-|---|---|---|
-| **Installed** | `committed` or `reused` was seen, whatever the exit code (a cancel that arrives after the commit boundary exits 130 after `committed`) | Moves to Agents by itself |
-| **Unfinished** | no success line, but the profile now classifies as `Local` (e.g. `commit_failed`, or a failure after the profile was published) | Says the install did not finish and offers **Try again**, which re-runs the command so the CLI's journal recovery completes it. No Back. |
-| **Failed** | no success line and no local profile | Grouped by code, below |
+*Success:* the install is **Installed** when a `committed` or `reused` line was seen, whatever the exit
+code (a cancel that arrives after the commit boundary exits 130 after `committed`). It then moves to
+Agents by itself. Otherwise it failed, and the two axes below decide the page.
 
-Failed, by code:
+*Navigation lock:* after a failure the app re-reads durable local state. If there is pending local
+setup or committed local, the run is **locked to local**: no Back to Edition, and the page says the
+install did not finish. Otherwise Back is offered.
+
+*Affordance, from the failure code alone:*
 
 | Group | Codes | The page |
 |---|---|---|
-| Transient | `download_failed`, `start_failed`, `verification_failed`, `recovery_failed`, `cancelled`, and a non-zero exit with no `failed` line | Says what went wrong in plain words, offers **Try again** and Back |
-| Another setup running | `lifecycle_busy` | Says another kcap setup, upgrade or uninstall is running on this Mac, offers Back only |
-| Permanent | every other code (`unsupported_platform`, `musl_unsupported`, `socket_path_too_long`, `unsafe_root`, `registry_unreadable`, `config_unreadable`, `other_server`, `leftover_state`, `bundle_not_published`, `not_our_server`, `answer_required`, `invalid_arguments`) | Shows the CLI's message, offers Back only |
+| Retryable | `download_failed`, `start_failed`, `verification_failed`, `recovery_failed`, `commit_failed`, `cancelled`, and a non-zero exit with no `failed` line | Says what went wrong in plain words and offers **Try again**, which re-runs the command (the CLI recovers a pending entry first) |
+| Another setup running | `lifecycle_busy` | Says another kcap setup, upgrade or uninstall is running on this Mac. No Try again |
+| Permanent | every other code (`unsupported_platform`, `musl_unsupported`, `socket_path_too_long`, `unsafe_root`, `registry_unreadable`, `config_unreadable`, `other_server`, `leftover_state`, `bundle_not_published`, `not_our_server`, `answer_required`, `invalid_arguments`) | Shows the CLI's message. No Try again |
 
-*My call:* `verification_failed` is transient because a retry re-downloads.
+So a locked run that hits `lifecycle_busy` or a permanent refusal shows that message with neither
+Try again nor Back; the user can only close the app, and the next launch re-evaluates the gate.
+*My calls:* `verification_failed` is retryable because a retry re-downloads; `commit_failed` is
+retryable because its own message tells the user to run setup again, which is what recovery needs.
 
 `lifecycle_busy` can occur although the app never runs two setups at once: a terminal
 `kcap setup --local` or `kcap local uninstall`, a `kcap local upgrade`, or a previous app instance's
@@ -160,20 +175,23 @@ cancellation; it gains a graceful mode. *Grace period is the builder's call.*
 
 ### Closing the wizard during an install
 
-Closing the wizard is not quitting the app: the titlebar close, **Finish later** and app Quit all hand
-over to the main graph. Every one of them goes through the install controller first:
+The wizard closes three ways: app **Quit**, the titlebar close, and **Finish later**. Today the last
+two hand over to the main graph, which is built even when the re-evaluated gate is Incomplete. On the
+local path every close goes through the install controller first:
 
-- If no install is running, nothing changes.
-- If one is running, the close is held: the controller sends its one interrupt (a second request,
-  such as Cancel then Quit, reuses the interrupt already sent), waits for the child to exit and settles
-  the result. Only then does the close proceed, the gate is re-evaluated and the graph built. A close
-  during an install that settles Installed or Unfinished therefore lands on the gate's verdict for the
-  committed or journalled state.
-- Finish later is disabled while the install runs, so the only close paths are the titlebar and Quit.
-  *My call.*
+1. **Settle.** If an install is running, the controller sends its one interrupt (a second request,
+   such as Cancel then Quit, reuses the interrupt already sent), waits for the child to exit and
+   settles the result.
+2. **Quit** then exits the app. No graph is built.
+3. **A non-quit close** re-reads durable local state, whether or not a child was running (an install
+   that already failed counts too). If there is pending local setup, the normal graph is not built:
+   the wizard window stays open on Install showing the settled state, so the user can retry, read the
+   message, or quit. Otherwise the close proceeds as today.
+
+Finish later is disabled on the local path until the install has settled Installed. *My call.*
 
 If the app dies outright, the CLI's parent-liveness watchdog rolls back, and the next launch's gate
-sees either no local profile or the outstanding journal entry.
+sees either no pending setup or the outstanding journal entry.
 
 ### Agents
 
@@ -231,7 +249,9 @@ Already works for a committed local installation (checked in the code):
 
 Has to change:
 
-- **Gate.** The unfinished-install rule above.
+- **Gate.** The pending-local-setup rule above.
+- **Startup handoff.** A non-quit wizard close with pending local setup keeps the wizard instead of
+  building the main graph.
 - **Composition.** `Applicable` is read before the user chooses, so the per-edition steps use
   `PassThrough` keyed on the local-path predicate. Back skips pass-through steps. A forced setup on a
   committed local machine starts at Agents on the local path, with Edition and Install locked.
@@ -250,7 +270,7 @@ Has to change:
 
 New setup-funnel events, emitted by the app (its CLI children run with telemetry off):
 `cli_setup_local_install_started`, `cli_setup_local_install_committed` (plan: fresh, reused, recovered),
-`cli_setup_local_install_failed` (code, or `unfinished`), `cli_setup_local_install_retried`. The
+`cli_setup_local_install_failed` (code, and whether the run was locked to local), `cli_setup_local_install_retried`. The
 existing edition events stay. *My call on the names; they follow the existing `cli_setup_*` pattern
 and never change once shipped.*
 
@@ -258,8 +278,16 @@ and never change once shipped.*
 
 Beyond the happy path, tests cover:
 
-- A failure injected after the profile is published and before the journal clears: relaunch reopens
-  the wizard at Install on the local path, Try again finishes it, and nothing reads as set up before.
+- A failure injected at each commit point (right after the `committing` write, after the registry,
+  after the profile, before the journal clears): relaunch reopens the wizard at Install on the local
+  path with no route to cloud, Try again finishes it, and nothing reads as set up before.
+- An unreadable journal beside a published local profile: the gate reads Incomplete and Install shows
+  the CLI's refusal.
+- A locked run that fails with `lifecycle_busy`, and one with a permanent recovery refusal: the CLI's
+  message, no Try again, no Back.
+- A non-quit close that settles with pending setup builds no main graph and keeps Install on screen;
+  Quit builds none and exits; a close after a settled Installed builds exactly one graph.
+- An inactive profile naming a cloud server makes the Local card unavailable.
 - Cancel before the commit boundary (rolls back, Try again and Back offered), during a fresh commit and
   during recovery (settles Installed), and `reused` followed by `committed` counted once.
 - Titlebar close and Quit during the install and during rollback; Cancel then Quit sends one interrupt.
