@@ -195,7 +195,9 @@ public class WizardAuthServiceTests {
         var service = new WizardAuthService(
             (_, ct) => ScriptedCommitAsync(WizardAuthService.ArmingHook(claims), [Acme], () => { }, ct));
 
-        var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result.WaitAsync(TimeSpan.FromSeconds(5));
+        // No deadline: the arm is real disk IO with two flushes, which a loaded Windows runner
+        // has stretched past five seconds.
+        var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result;
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
         await Assert.That(claims.Pending()).IsEquivalentTo([new ConsentFlipClaim(Acme.Profile, Acme.CanonicalServer)]);
