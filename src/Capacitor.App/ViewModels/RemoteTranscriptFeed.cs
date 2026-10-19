@@ -126,12 +126,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         while (!ct.IsCancellationRequested && IsCurrent(attempt)) {
             try {
                 if (!await EnsureSeededAsync(attempt, ct).ConfigureAwait(false)) return;
-                if (await TailAsync(attempt, ct).ConfigureAwait(false)) {
-                    failures = 0;
-                    // Once per outage: a reason seen before the stream came back is logged again. A
-                    // superseded attempt's tail says nothing about the current one's outage.
-                    lock (_lock) if (_attempt == attempt) _logged.Clear();
-                }
+                if (await TailAsync(attempt, ct).ConfigureAwait(false)) failures = 0;
             } catch (OperationCanceledException) {
                 return;
             } catch (HubException ex) {
@@ -191,10 +186,12 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         lock (_lock) from = _position is >= 0 ? (ulong)_position : null;
         var received = false;
         await foreach (var envelope in _lane.TailStreamAsync(StreamNames.AgentSession(_sessionId), from, ct).ConfigureAwait(false)) {
-            received = true;
             var line = Project(envelope.EventType, envelope.JsonPayload, (long)envelope.StreamPosition, envelope.Timestamp);
             lock (_lock) {
                 if (_attempt != attempt) return received;
+                // Once per outage: the stream delivering again ends it, however this tail later ends.
+                if (!received) _logged.Clear();
+                received = true;
                 _position = (long)envelope.StreamPosition;
                 if (line is { } l) _pending.Add(l);
             }
