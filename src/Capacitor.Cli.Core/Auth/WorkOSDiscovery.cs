@@ -50,7 +50,8 @@ public static class WorkOSDiscovery {
             CancellationToken                               ct = default,
             IAuthProgress?                                  progress = null,
             TenantPickContext?                              pickContext = null,
-            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
+            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null,
+            bool confirmPick = false) {
         progress ??= ConsoleAuthProgress.Instance;
 
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
@@ -84,7 +85,7 @@ public static class WorkOSDiscovery {
                 proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
-        var picked = tenants.Length == 1
+        var picked = tenants.Length == 1 && !confirmPick
             ? tenants[0]
             : await picker.PickAsync(
                 tenants,

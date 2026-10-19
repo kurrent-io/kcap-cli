@@ -119,7 +119,7 @@ public static class WizardSignInOperation {
             ConnectIntent.Paste paste => await facade.LoginAsync(
                 ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true, precondition: precondition),
             ConnectIntent.Discover discover =>
-                await facade.DiscoverAsync(AuthProvider.WorkOS, discover.ForceDevice, ct),
+                await facade.DiscoverAsync(AuthProvider.WorkOS, discover.ForceDevice, ct, discover.ConfirmPick),
             _ => new AuthResult.Failed("No connection was chosen.")
         };
 

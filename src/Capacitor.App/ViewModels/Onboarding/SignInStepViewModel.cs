@@ -176,6 +176,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             "continue here and setup carries on.",
         SignInPhase.Start or SignInPhase.Waiting =>
             "Use your work account. It finds the kcap workspaces you belong to.",
+        SignInPhase.PickWorkspace when Tenants.Count == 1 =>
+            "Check this is the workspace you just created, then use it on this machine.",
         SignInPhase.PickWorkspace =>
             "Your account belongs to more than one. Pick the one this machine records into.",
         _ => null,
@@ -420,6 +422,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
             return;
         }
+
+        // A browser sign-up's new workspace is left out until it is live, so a lone workspace found
+        // now may be another the account belongs to.
+        if (_signingUp() && intent is ConnectIntent.Discover discover) intent = discover with { ConfirmPick = true };
 
         ResetForRun(intent);
         Busy = true;

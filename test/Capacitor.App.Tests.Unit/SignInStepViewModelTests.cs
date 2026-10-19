@@ -495,6 +495,25 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task The_existing_workspace_path_takes_a_single_workspace_without_confirming() {
+        var intent = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            ConnectIntent? seen = null;
+            h.Operation = (i, _) => {
+                seen = i;
+                return Task.FromResult<AuthResult>(Committed(AuthProvider.WorkOS));
+            };
+
+            await h.Vm.ContinueWithWorkAccountCommand.Execute().ToTask();
+
+            return seen;
+        });
+
+        await Assert.That(intent).IsEqualTo(new ConnectIntent.Discover());
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_existing_workspace_path_opens_no_sign_up() {
         var (opened, phase) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
@@ -525,7 +544,8 @@ public class SignInStepViewModelTests {
             return (seen, h.Vm.Satisfied);
         });
 
-        await Assert.That(intent).IsEqualTo(new ConnectIntent.Discover());
+        // The new workspace is not listed until it is live, so the one found must be confirmed, not taken.
+        await Assert.That(intent).IsEqualTo(new ConnectIntent.Discover(ConfirmPick: true));
         await Assert.That(satisfied).IsTrue();
     }
 
