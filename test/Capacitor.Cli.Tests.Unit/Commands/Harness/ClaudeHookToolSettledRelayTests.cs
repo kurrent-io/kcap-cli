@@ -56,10 +56,11 @@ public class ClaudeHookToolSettledRelayTests {
         return entry is null ? null : JsonNode.Parse(entry.RequestMessage.Body!);
     }
 
-    async Task<(int Exit, int ServerPosts)> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
+    async Task<(int Exit, int ServerPosts)> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "",
+            string toolInput = """{"command":"ls"}""") {
         var handler = new CountingHandler();
         using var client = new HttpClient(handler);
-        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
+        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{{{toolInput}}}{{{extraFields}}}}""";
         var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
         return (exit, handler.Posts);
@@ -99,6 +100,23 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Relayed(bridge)!["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_02Y");
         await Assert.That(Relayed(bridge)!["subagent_id"]!.GetValue<string>()).IsEqualTo(Sub);
+    }
+
+    /// An input past the prompt's cap was never held, and sending it would push the notice past the
+    /// bridge's body cap, so it is left out and the id still goes.
+    [Test, NotInParallel]
+    public async Task An_oversized_input_is_left_out_and_the_id_still_relayed() {
+        using var bridge = Bridge();
+        var big = new string('x', 64 * 1024);
+
+        var (exit, _) = await RunAsync(HostedOn(bridge), "PostToolUse",
+            extraFields: ",\"tool_use_id\":\"toolu_03Z\"", toolInput: $"{{\"command\":\"{big}\"}}");
+
+        await Assert.That(exit).IsEqualTo(0);
+        var body = Relayed(bridge)!;
+        await Assert.That(body["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_03Z");
+        await Assert.That(body["tool_name"]).IsNull();
+        await Assert.That(body["tool_input"]).IsNull();
     }
 
     /// A tool that ran without its id cannot be named; the turn's end still retires its prompt.

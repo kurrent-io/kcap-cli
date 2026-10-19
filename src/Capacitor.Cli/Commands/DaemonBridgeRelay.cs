@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Commands;
 
@@ -50,7 +51,10 @@ internal static class DaemonBridgeRelay {
         var payload = new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd };
         if (toolUseId is not null) payload["tool_use_id"] = toolUseId;
         if (subagentId is not null) payload["subagent_id"] = subagentId;
-        if (toolUseId is not null && toolName is not null && toolInput is not null) {
+        // An input past the prompt's own cap was never held, and would push the notice past the
+        // bridge's body cap, losing the id match too.
+        if (toolUseId is not null && toolName is not null && toolInput is not null
+         && Encoding.UTF8.GetByteCount(toolInput.ToJsonString()) <= PermissionWire.MaxElementBytes) {
             payload["tool_name"]  = toolName;
             payload["tool_input"] = toolInput;
         }
