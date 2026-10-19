@@ -149,6 +149,57 @@ public class SetupUnattendedSignInTests {
         await Assert.That(capture.GetCapturedError()).Contains("401");
     }
 
+    /// <summary>A minted token the server never confirmed is not a sign-in: with --skip-import nothing later would
+    /// check it, and the script would be told it succeeded.</summary>
+    [Test]
+    [Arguments(500)]
+    [Arguments(503)]
+    public async Task A_machine_credential_the_server_cannot_confirm_fails(int status) {
+        using var server = WorkOSServer(MachineToken);
+        Mints(server, 200);
+        server.Given(Request.Create().WithPath(WhoamiCommand.ProbePath).UsingGet())
+            .AtPriority(0)
+            .RespondWith(Response.Create().WithStatusCode(status));
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        var exit = await Command(Machine(server)).HandleAsync(Args(server));
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Failed);
+        await Assert.That(capture.GetCapturedError()).Contains("could not confirm");
+        await Assert.That((await ActiveProfileAsync()).ServerUrl).IsNull();
+    }
+
+    [Test]
+    public async Task A_machine_credential_the_server_does_not_answer_for_fails() {
+        using var server = WorkOSServer(MachineToken);
+        Mints(server, 200);
+        server.Given(Request.Create().WithPath(WhoamiCommand.ProbePath).UsingGet())
+            .AtPriority(0)
+            .RespondWith(Response.Create().WithStatusCode(200).WithDelay(UnattendedCredential.ProbeTimeout + TimeSpan.FromSeconds(1)));
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        var exit = await Command(Machine(server)).HandleAsync(Args(server));
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Failed);
+        await Assert.That(capture.GetCapturedError()).Contains("could not confirm");
+    }
+
+    /// <summary>A server without the probe endpoint cannot be asked, and that is no reason to refuse a credential
+    /// its token endpoint accepted.</summary>
+    [Test]
+    public async Task A_machine_credential_on_a_server_without_the_probe_is_accepted() {
+        using var server = WorkOSServer(MachineToken);
+        Mints(server, 200);
+        server.Given(Request.Create().WithPath(WhoamiCommand.ProbePath).UsingGet())
+            .AtPriority(0)
+            .RespondWith(Response.Create().WithStatusCode(404));
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        var exit = await Command(Machine(server)).HandleAsync(Args(server));
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(capture.GetCapturedError());
+    }
+
     [Test]
     public async Task A_token_stored_for_this_server_is_used_instead_of_signing_in_again() {
         using var server = WorkOSServer("stored-bearer");

@@ -232,8 +232,9 @@ changes.
   * except to reuse an installation  ** while Ollama runs and nothing is recorded
 
   Signing in: a machine credential (KCAP_CLIENT_ID and KCAP_CLIENT_SECRET, from
-  kcap machine create) is checked with the server and used; if it does not
-  work the run fails rather than waiting for a person. A daemon service cannot
+  kcap machine create) is checked with the server and used; if the server
+  refuses it or does not answer the check (no response or a 5xx), the run
+  fails rather than waiting for a person. A daemon service cannot
   carry the secret, so none is installed: run `kcap daemon start -d` where the
   variables are set. Without one, a token stored for that server by an earlier
   `kcap login` is used. Otherwise setup signs in as it does interactively, with

@@ -25,7 +25,7 @@ sealed class UnattendedCredential(ChosenServerHttp http) {
         public sealed record SignInNeeded : Outcome;
     }
 
-    static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
+    internal static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
 
     public async Task<Outcome> ProbeAsync(string serverUrl, ProfileContext chosen, TimeProvider time, CancellationToken ct = default) {
         var machine = http.Machine.Intended;
@@ -51,15 +51,20 @@ sealed class UnattendedCredential(ChosenServerHttp http) {
                 answer = null;
             }
 
-            // Only a 401 or 403 is the server's verdict on the credential; anything else failed to ask, and the
-            // steps after this one report their own trouble with the server.
-            var refused = answer is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+            // A 401 or 403 is the server's verdict on the credential. A machine run must also get an answer: with no
+            // response or a 5xx nothing confirmed the token, and nothing later in an unattended run is sure to. A 404
+            // is a server without the probe, which cannot be asked.
+            var refused     = answer is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+            var unconfirmed = answer is null || (int)answer.Value >= 500;
 
-            return (machine, refused) switch {
-                (true, true)  => new Outcome.Rejected($"{serverUrl} refused the machine's token (HTTP {(int)answer!.Value})"),
-                (true, false) => new Outcome.Machine(),
-                (false, true) => new Outcome.SignInNeeded(),
-                _             => new Outcome.Stored(),
+            return (machine, refused, unconfirmed) switch {
+                (true, true, _)  => new Outcome.Rejected($"{serverUrl} refused the machine's token (HTTP {(int)answer!.Value})"),
+                (true, _, true)  => new Outcome.Rejected(answer is { } code
+                    ? $"{serverUrl} could not confirm the machine's token (HTTP {(int)code}); run setup again once it answers"
+                    : $"{serverUrl} could not confirm the machine's token (no response); run setup again once it answers"),
+                (true, _, _)     => new Outcome.Machine(),
+                (false, true, _) => new Outcome.SignInNeeded(),
+                _                => new Outcome.Stored(),
             };
         }
     }

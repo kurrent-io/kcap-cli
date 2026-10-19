@@ -365,7 +365,7 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 
 **Signing in with no one at the machine.** Against a server that needs a sign-in, `--no-prompt` tries, in order:
 
-1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If it does not work, the run fails (exit 1) rather than falling back to a person. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
+1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If the server refuses it, or does not answer the check (no response or a 5xx), the run fails (exit 1) rather than falling back to a person. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
 2. A token already stored for that server, from an earlier `kcap login` on this machine (`kcap login --device` signs in from a browser elsewhere).
 3. Otherwise the sign-in as today: a device code (or the browser, on a machine that has one) that someone has to approve.
 
