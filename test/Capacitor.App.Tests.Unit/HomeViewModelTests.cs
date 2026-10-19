@@ -1009,7 +1009,7 @@ public class HomeViewModelTests {
             await vm.SelectMachineAsync("home-pc", isLocal: false);
 
             await Assert.That(local.Visible).IsFalse();
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.LocalServerLostNotice);
         });
     }
 
@@ -1035,6 +1035,44 @@ public class HomeViewModelTests {
             await Assert.That(vm.ConnectionNotice ?? "").DoesNotContain("Sign in");
             await Assert.That(vm.BannerMessage ?? "").DoesNotContain("Sign in");
             await Assert.That(vm.ConnectionNotice).IsNotNull();
+        });
+    }
+
+    /// A local server takes no sign-in, so no state of its connection may ask for one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task No_local_server_notice_asks_for_a_sign_in() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var time = new FakeTimeProvider();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999", time: time);
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+            var shown = new List<string>();
+            void Record() => shown.AddRange(new[] { vm.ConnectionNotice, vm.BannerMessage }.OfType<string>());
+
+            Connect(daemon, "disconnected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+            Record();
+            time.Advance(HomeViewModel.CatchUpLimit);
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Dormant));
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            Record();
+
+            await Assert.That(shown).IsNotEmpty();
+            await Assert.That(shown.Where(t => t.Contains("sign in", StringComparison.OrdinalIgnoreCase))).IsEmpty();
         });
     }
 

@@ -80,6 +80,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart Capacitor.";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. Capacitor keeps trying to reconnect.";
 
     const string IncompatibleReason = "daemon_incompatible";
 
@@ -848,13 +849,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
 
     /// While a local server is down its Start banner is the whole story, so the generic connecting
-    /// and lost-session lines would contradict it; the daemon's own notices and a remote machine's
-    /// still stand. A local server takes no sign-in, so a refusal from it names a restart instead.
-    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown) => notice switch {
-        SignInExpiredNotice when localServer                                    => LocalServerRefusedNotice,
-        ConnectingNotice or ServerLostNotice when localServer && localServerDown => null,
-        _                                                                       => notice,
-    };
+    /// and lost-session lines would contradict it; the daemon's own notices still stand. A local
+    /// server takes no sign-in, so its lost and refused lines name the local recovery instead.
+    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown) =>
+        !localServer ? notice : notice switch {
+            ConnectingNotice or ServerLostNotice when localServerDown => null,
+            ServerLostNotice                                          => LocalServerLostNotice,
+            SignInExpiredNotice                                       => LocalServerRefusedNotice,
+            _                                                         => notice,
+        };
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>
