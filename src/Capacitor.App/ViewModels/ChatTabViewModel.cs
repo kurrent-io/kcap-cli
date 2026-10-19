@@ -678,9 +678,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 this.WhenAnyValue(x => x.IsReadOnlyParticipant),
                 this.WhenAnyValue(x => x.HasTerminalMenu),
                 this.WhenAnyValue(x => x.AgentStatus),
-                (can, readOnly, menu, status) => can && !readOnly && !menu && status.Kind == AgentStatusKind.Working)
+                (can, readOnly, menu, status) => can && !readOnly && !menu
+                    && (status.Kind == AgentStatusKind.Working || status.IsRunningUnknownTurn))
             .ToProperty(this, x => x.ShowsInterrupt,
-                initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasTerminalMenu && AgentStatus.Kind == AgentStatusKind.Working)
+                initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasTerminalMenu
+                    && (AgentStatus.Kind == AgentStatusKind.Working || AgentStatus.IsRunningUnknownTurn))
             .DisposeWith(_disposables);
 
         // The banner carries the read-only explanation for a flow participant, so the hint

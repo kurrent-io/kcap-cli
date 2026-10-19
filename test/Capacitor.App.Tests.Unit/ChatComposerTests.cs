@@ -246,6 +246,7 @@ public class ChatComposerTests {
     public async Task Working_turn_surfaces_interrupt_and_escape_from_chat_list_preserves_the_draft() {
         await RunOnUiAsync(async () => {
             var (daemon, _, _, chat, client, _) = await BuildAttachedAsync();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true, repoPath: "/repo") with { Status = "Running", AwaitingInput = true });
             var view = new ChatTabView { DataContext = chat };
             var window = new Window { Content = view, Width = 550, Height = 600 };
             try {
