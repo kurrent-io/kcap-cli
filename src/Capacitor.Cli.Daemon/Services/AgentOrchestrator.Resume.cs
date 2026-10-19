@@ -318,7 +318,10 @@ internal partial class AgentOrchestrator {
             PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
             InactivityBoundSeconds: agent.InactivityBoundSeconds);
 
-        return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior);
+        return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
+            HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
+            StartedAt = StartedAtOf(agent),
+        };
     }
 
     /// The entry an admitted server launch records before its runtime starts, from the command and
@@ -575,10 +578,17 @@ internal partial class AgentOrchestrator {
     ];
 
     /// <summary>Ledger entries with no live agent, as <c>kcap agent ls</c> shows them: the candidates the
-    /// resume lane still holds, then the interrupted entries with their reason.</summary>
-    internal IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgents() {
+    /// resume lane still holds, then the interrupted entries with their reason. <paramref name="includeLive"/>
+    /// keeps the entries of agents live right now, for a caller reconciling against its own live observation.</summary>
+    internal IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgents(bool includeLive = false) {
+        // Under the lock a retry takes to write its entry and add its candidate, so no entry is caught
+        // between the two and missing from both.
+        lock (_ledgerLock) return LedgerOnlyAgentsLocked(includeLive);
+    }
+
+    IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgentsLocked(bool includeLive) {
         var rows = _resumeCandidates.Values
-            .Where(e => !_agents.ContainsKey(e.AgentId))
+            .Where(e => includeLive || !_agents.ContainsKey(e.AgentId))
             .OrderBy(e => e.CreatedAt)
             .Select(e => (e, "Resuming", "resuming"))
             .ToList();
@@ -593,7 +603,7 @@ internal partial class AgentOrchestrator {
         }
 
         rows.AddRange(entries
-            .Where(e => e.State == ResumeState.Interrupted && !_agents.ContainsKey(e.AgentId) && !_resumeCandidates.ContainsKey(e.AgentId))
+            .Where(e => e.State == ResumeState.Interrupted && (includeLive || !_agents.ContainsKey(e.AgentId)) && !_resumeCandidates.ContainsKey(e.AgentId))
             .OrderBy(e => e.CreatedAt)
             .Select(e => (e, "Interrupted", e.LastError is { Length: > 0 } reason ? $"interrupted ({reason})" : "interrupted")));
 
@@ -643,6 +653,7 @@ internal partial class AgentOrchestrator {
         }
 
         attempt?.Cancel();
+        _statusNotifier.Pulse();
 
         return new ResumeDiscard(entry, attempt is not null, null);
     }
@@ -752,6 +763,8 @@ internal partial class AgentOrchestrator {
                 discarded = attempt?.Discarded == true;
             }
 
+            _statusNotifier.Pulse();
+
             // Whatever the attempt had started is ended by now, so nothing still runs in the worktree.
             if (discarded) await RemoveDiscardedResourcesAsync(entry);
 
@@ -782,6 +795,7 @@ internal partial class AgentOrchestrator {
             _resumeCandidates[agentId] = resuming;
         }
 
+        _statusNotifier.Pulse();
         _ = RunResumeThroughLaneAsync(resuming, _shutdownCts.Token);
 
         return Task.FromResult("resuming");
@@ -1109,6 +1123,8 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Rewrites a resumed agent's entry as running under this daemon, keeping the original
     /// launch descriptor: the agent's own prompt is the nudge.</summary>
+    static DateTimeOffset StartedAtOf(AgentInstance agent) => new(DateTime.SpecifyKind(agent.CreatedAt, DateTimeKind.Utc));
+
     void WriteResumedLedger(AgentInstance agent, ResumeLedgerEntry entry) {
         if (ResumeLedger is null) return;
 
@@ -1120,6 +1136,9 @@ internal partial class AgentOrchestrator {
                 DaemonInstanceId      = _config.InstanceId,
                 UpdatedAt             = _time.GetUtcNow(),
                 Transport             = agent.RuntimeTransport,
+                HasTerminal           = agent.Runtime.EmitsTerminalOutput,
+                TranscriptFormat      = TranscriptFormatOf(agent),
+                StartedAt             = StartedAtOf(agent),
                 SessionId             = agent.SessionId ?? entry.SessionId,
                 VendorSession         = agent.VendorSession ?? entry.VendorSession,
                 State                 = ResumeState.Running,
@@ -1151,6 +1170,8 @@ internal partial class AgentOrchestrator {
                 LogResumeLedgerFailed(ex, "interrupting", agentId);
             }
         }
+
+        _statusNotifier.Pulse();
     }
 
     Task ReportResumeFailedAsync(ResumeLedgerEntry entry, string reason, int? exitCode, CancellationToken ct) =>

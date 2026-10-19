@@ -33,7 +33,7 @@
                                 </Border>
                             </Grid>
                             <TextBlock Classes="kcapSubtitle"
-                                       Text="Hosted agents and reviews run through this daemon. Rename and capacity each save on their own."
+                                       Text="Hosted agents and reviews run through this daemon. Rename, capacity and resume each save on their own."
                                        TextWrapping="Wrap" />
                         </StackPanel>
 
@@ -74,6 +74,26 @@
                                            IsVisible="{Binding CapacityError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                 <Button x:Name="SaveButton" Classes="kcapPrimary" Content="Save" Command="{Binding SaveCommand}"
                                         HorizontalAlignment="Left" />
+                            </StackPanel>
+                        </Border>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                    <StackPanel Spacing="5">
+                                        <TextBlock Classes="kcapLabel" Text="Resume agents after a restart" />
+                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                   Text="A restart or update stops running agents. When this is on, the daemon resumes them as it starts; when off, they wait as interrupted until you run kcap agent resume." />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="AutoResumeToggle" Grid.Column="1" Classes="kcapSwitch"
+                                                  IsChecked="{Binding AutoResume, Mode=TwoWay}"
+                                                  AutomationProperties.Name="Resume agents after a restart"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
+                                <TextBlock x:Name="AutoResumeMessageText" Classes="kcapHint" Text="{Binding AutoResumeMessage}"
+                                           TextWrapping="Wrap"
+                                           IsVisible="{Binding AutoResumeMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             </StackPanel>
                         </Border>
                     </StackPanel>

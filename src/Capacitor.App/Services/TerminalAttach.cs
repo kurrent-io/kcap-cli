@@ -32,7 +32,7 @@ public sealed class CoreTerminalAttachClient(AgentAttachClient inner) : ITermina
 
 /// Deliberately NOT named *Attach*State — AttachStatus/AttachState already
 /// describe the daemon status subscription.
-public enum TerminalSessionPhase { Resolving, NoTerminal, NotFound, Connecting, Attached, Detached, Exited, Failed, SessionEnded }
+public enum TerminalSessionPhase { Resolving, NoTerminal, NotFound, Connecting, Attached, Detached, Exited, Failed, SessionEnded, Resuming, Interrupted }
 
 /// What the composer can do right now, folding the send gate into the terminal state so a hint
 /// built from it is true in every window — including the ones where State still reads Attached
@@ -49,4 +49,8 @@ public sealed record TerminalSessionState(TerminalSessionPhase Phase, string? De
     public static TerminalSessionState Exited(int code) => new(TerminalSessionPhase.Exited, ExitCode: code);
     public static TerminalSessionState Failed(string message) => new(TerminalSessionPhase.Failed, message);
     public static readonly TerminalSessionState SessionEnded = new(TerminalSessionPhase.SessionEnded);
+    /// The daemon restarted and the agent is being brought back on its successor.
+    public static readonly TerminalSessionState Resuming = new(TerminalSessionPhase.Resuming);
+    /// The daemon could not bring the agent back after a restart; Detail is the ledger's reason.
+    public static TerminalSessionState Interrupted(string? reason) => new(TerminalSessionPhase.Interrupted, reason);
 }

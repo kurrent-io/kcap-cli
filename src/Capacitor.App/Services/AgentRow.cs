@@ -24,7 +24,9 @@ public sealed record AgentRow(
         // A usage-limit question or notice from the local daemon. Null on a remote or pending row.
         UsageLimitNoticeDto? UsageLimit = null,
         // The select dialog on the local agent's terminal. Null on a remote or pending row.
-        TerminalDialogDto? TerminalDialog = null) {
+        TerminalDialogDto? TerminalDialog = null,
+        // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
+        string? Interruption = null) {
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -34,7 +36,7 @@ public sealed record AgentRow(
         MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
         CheckoutKey: ViewModels.SessionRailViewModel.WorktreeKeyFor(dto), CheckoutLabel: "",
         AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents, UsageLimit: dto.UsageLimit,
-        TerminalDialog: dto.TerminalDialog);
+        TerminalDialog: dto.TerminalDialog, Interruption: dto.Interruption);
 
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";

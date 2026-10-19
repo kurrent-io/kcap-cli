@@ -49,6 +49,8 @@
                            VerticalAlignment="Center" IsVisible="{Binding ShowsAsk}" />
             <views:AppIcon Kind="CircleAlert" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
                            VerticalAlignment="Center" IsVisible="{Binding ShowsBang}" />
+            <views:AppIcon Kind="CirclePause" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" IsVisible="{Binding ShowsPause}" />
             <views:AppIcon Kind="X" Size="12" IsVisible="{Binding ShowsCross}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                            Foreground="{StaticResource KcapDangerBrush}" />
             <views:AppIcon Kind="Minus" Size="12" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding ShowsDash}" />
