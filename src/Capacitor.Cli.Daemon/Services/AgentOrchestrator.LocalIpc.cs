@@ -200,7 +200,12 @@ internal partial class AgentOrchestrator {
                 return;
             }
 
+            if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
+
+            // A launch queued under the same id would otherwise start under the id just stopped.
+            foreach (var launch in starting) launch.Cancel();
             var ok = await StopAgentCoreAsync(agent);
+            if (starting.Length > 0) ok &= await CancelStartingLaunchesAsync(agentId, starting);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
             return;
@@ -208,12 +213,7 @@ internal partial class AgentOrchestrator {
 
         // A launch queued or starting has no agent yet: cancel it, and answer once it has settled. Before
         // the resume discard below, which would otherwise remove a starting launch's worktree under it.
-        if (!force && starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is { } protectedLaunch) {
-            await FrameCodec.WriteAsync(stream, LocalFrame.Error(
-                $"{agentId} is a starting {protectedLaunch.Kind} launch. Pass --force to cancel it anyway."), ct);
-
-            return;
-        }
+        if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
 
         if (starting.Length > 0) {
             var ok = await CancelStartingLaunchesAsync(agentId, starting);
@@ -285,6 +285,17 @@ internal partial class AgentOrchestrator {
     /// <summary>How long a local stop waits for a cancelled launch to settle: a handshake stage cancels at
     /// once, but worktree creation takes no token and finishes first.</summary>
     static readonly TimeSpan LaunchCancelSettleWait = TimeSpan.FromSeconds(60);
+
+    /// <summary>Refuses a stop without force that would cancel a protected launch, as its agent would be.</summary>
+    static async Task<bool> RefuseProtectedStartingAsync(
+            bool force, string agentId, CancellableLaunch[] starting, Stream stream, CancellationToken ct) {
+        if (force || starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is not { } protectedLaunch) return false;
+
+        await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+            $"{agentId} is a starting {protectedLaunch.Kind} launch. Pass --force to cancel it anyway."), ct);
+
+        return true;
+    }
 
     /// <summary>Cancels the launches for this id; one still queued is refused when the lane reaches it, and
     /// one already started is waited for. True once none is left running and any agent one published anyway,
