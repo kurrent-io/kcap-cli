@@ -14,6 +14,7 @@ public class SpecialKeyMapperTests {
     [Arguments(new byte[] { 0x1b, 0x5b, 0x41 }, "ArrowUp")]
     [Arguments(new byte[] { 0x1b, 0x4f, 0x41 }, "ArrowUp")]
     [Arguments(new byte[] { 0x1b, 0x5b, 0x42 }, "ArrowDown")]
+    [Arguments(new byte[] { 0x1b, 0x4f, 0x42 }, "ArrowDown")]
     [Arguments(new byte[] { 0x1b, 0x5b, 0x5a }, "ShiftTab")]
     public async Task Each_wire_key_has_its_terminal_bytes(byte[] bytes, string key) =>
         await Assert.That(SpecialKeyMapper.Map(bytes)).IsEqualTo(key);

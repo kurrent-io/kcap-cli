@@ -415,5 +415,29 @@ public class PullRequestToneCacheTests {
         await WaitUntilAsync(() => source.Lists == 2, what: "read on return");
     }
 
+    /// A read still in flight when its session leaves the list and returns belongs to the old listing:
+    /// its result is dropped, and the returning session's own read starts only once it ends.
+    [Test]
+    public async Task A_read_from_before_a_session_left_and_returned_publishes_nothing() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        var oldRead = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.Links = [FakePullRequestSource.Link(1)];
+        source.OverviewResponses.Enqueue((_, ct) => oldRead.Task.WaitAsync(ct));
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => source.Overviews == 1, "old read started");
+
+        directory.Rows.Remove(Row("a1", "s1").Key);
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        source.Links = [FakePullRequestSource.Link(2)];
+        oldRead.SetResult(source.Overview(PullRequestWire.Subject(FakePullRequestSource.Link(1))));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "the returning session's own read");
+        await Assert.That(cache.CurrentSummaries["s1"].Subject!.Number).IsEqualTo(2);
+        await Assert.That(source.Lists).IsEqualTo(2);
+    }
+
     static Task WaitUntilAsync(Func<bool> condition, string what) => WorkspaceFixtures.WaitUntilAsync(condition, what: what);
 }
