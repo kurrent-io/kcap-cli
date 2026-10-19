@@ -27,8 +27,27 @@
                                IsVisible="{Binding StatusDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
 
-                <Button x:Name="ReopenSignUpButton" Classes="frLink" HorizontalAlignment="Left"
-                        Content="Open the sign-up page again" Command="{Binding ReopenSignUpCommand}" />
+                <WrapPanel Orientation="Horizontal">
+                    <Button x:Name="ReopenSignUpButton" Classes="frLink" Margin="0,0,24,0"
+                            Content="Open the sign-up page again" Command="{Binding ReopenSignUpCommand}" />
+                    <Button x:Name="SignUpUseCodeButton" Classes="frLink" Margin="0,0,24,0" Content="Use a sign-in code"
+                            Command="{Binding UseCodeCommand}" />
+                    <Button x:Name="SignUpWorkspaceUrlButton" Classes="frLink" Content="Use a workspace URL"
+                            Command="{Binding ToggleUrlPanelCommand}" />
+                </WrapPanel>
+
+                <StackPanel Spacing="8" IsVisible="{Binding UrlPanelVisible}">
+                    <TextBlock Classes="frLabel" Text="Workspace name or URL" />
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                        <TextBox x:Name="SignUpServerInputBox" Classes="frField" PlaceholderText="acme  ·  https://acme.kcap.ai"
+                                 AutomationProperties.Name="Workspace name or URL"
+                                 Text="{Binding Connect.ServerInputText, Mode=TwoWay}" />
+                        <Button Grid.Column="1" x:Name="SignUpContinueWithUrlButton" Classes="frSecondary" Content="Continue"
+                                Command="{Binding ContinueWithUrlCommand}" />
+                    </Grid>
+                    <TextBlock Classes="frError" Text="{Binding Connect.InputError}"
+                               IsVisible="{Binding Connect.InputError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                </StackPanel>
             </StackPanel>
         </Border>
 

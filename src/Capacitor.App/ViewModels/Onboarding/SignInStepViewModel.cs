@@ -133,7 +133,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         ToggleUrlPanelCommand          = ReactiveCommand.Create(() => { UrlPanelVisible = !UrlPanelVisible; });
         ContinueWithUrlCommand         = ReactiveCommand.CreateFromTask(() => StartAsync(ConnectChoice.Paste, device: false));
         ContinueAfterSignUpCommand     = ReactiveCommand.CreateFromTask(() => StartAsync(ConnectChoice.Discover, device: false));
-        ReopenSignUpCommand            = ReactiveCommand.Create(() => Open(_signUpUrl));
+        ReopenSignUpCommand            = ReactiveCommand.Create(OpenSignUp);
         CancelCommand = ReactiveCommand.Create(() => _attempt?.Cancel());
 
         OpenSignInUrlCommand      = ReactiveCommand.Create(() => Open(BrowserUrl));
@@ -320,7 +320,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(StatusLineVisible));
 
             if (_signingUp()) {
-                Open(_signUpUrl);
+                OpenSignUp();
                 StartSignUpClock();
             }
         }
@@ -332,6 +332,19 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     /// kcap-web's Team sign-up; <c>via=desktop</c> is what it records as the desktop setup path.
     internal static string SignUpUrl(string signupBase) => $"{signupBase.TrimEnd('/')}/get-started?tier=team&via=desktop";
+
+    void OpenSignUp() {
+        try {
+            _urlOpener.Open(_signUpUrl);
+        } catch (Exception ex) {
+            Append($"Couldn't open the browser: {ex.Message}");
+            SetStatus("Couldn't open your browser.", isError: true,
+                $"Open {_signUpUrl} to create your workspace, then continue here.");
+        }
+    }
+
+    /// The wizard closed: nothing is left to return to the edition screen.
+    internal void EndSignUpWait() => StopSignUpClock();
 
     void StartSignUpClock() {
         StopSignUpClock();
@@ -354,9 +367,14 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
         _post(() => {
             if (ct.IsCancellationRequested || Satisfied) return;
-            // A Continue in flight decides first: its commit ends the wait, its failure expires it.
-            if (Busy) _expireAfterRun = true;
-            else SignUpExpired?.Invoke();
+            // A Continue in flight is cancelled and decides first: a commit already past its boundary
+            // still ends the wait, anything else expires it.
+            if (Busy) {
+                _expireAfterRun = true;
+                _attempt?.Cancel();
+            } else {
+                SignUpExpired?.Invoke();
+            }
         });
     }
 

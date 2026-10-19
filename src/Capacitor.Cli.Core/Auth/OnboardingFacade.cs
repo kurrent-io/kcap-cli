@@ -271,7 +271,7 @@ public sealed class OnboardingFacade(
     /// Only a <see cref="WorkspaceAnswer.Gone"/> leaves one out; an outage keeps it. Unset, every listed
     /// workspace is offered.
     /// </summary>
-    internal Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
+    public Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
 
     /// <param name="adoptServer">
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the

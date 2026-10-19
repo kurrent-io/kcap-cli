@@ -628,8 +628,53 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_shows_the_browser_wait_with_its_continue() {
-        var (continueShown, workAccountShown) = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task A_sign_up_page_that_cannot_open_shows_its_address() {
+        var (visible, isError, detail) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            h.Opener.ThrowOnOpen = new InvalidOperationException("no browser");
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.StatusLineVisible, h.Vm.StatusIsError, h.Vm.StatusDetail);
+        });
+
+        await Assert.That(visible).IsTrue();
+        await Assert.That(isError).IsTrue();
+        await Assert.That(detail).Contains(DesktopSignUp);
+    }
+
+    /// A Continue whose browser authorization is abandoned would otherwise hold the wait open for as
+    /// long as the attempt runs.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_expired_wait_cancels_a_stalled_continue_and_expires() {
+        var (expired, busy) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            var expired = 0;
+            h.Vm.SignUpExpired += () => expired++;
+            h.Operation = async (_, ct) => {
+                await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+                return Committed();
+            };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            var run = h.Vm.ContinueAfterSignUpCommand.Execute().ToTask();
+            await WaitUntil(() => h.Vm.Busy, "the continue to start");
+
+            h.Time.Advance(SignInStepViewModel.SignUpWait);
+            await WaitUntil(() => expired > 0, "the stalled wait to expire");
+            await run.WaitAsync(Bounded);
+
+            return (expired, h.Vm.Busy);
+        });
+
+        await Assert.That(expired).IsEqualTo(1);
+        await Assert.That(busy).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pane_shows_the_browser_wait_with_its_continue_and_fallbacks() {
+        var (continueShown, workAccountShown, codeShown, urlShown) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness { SigningUp = true };
             var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
             var vm = new OnboardingViewModel([edition, h.Vm]);
@@ -647,7 +692,9 @@ public class SignInStepViewModelTests {
                 window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
 
             var shown = (Named<Button>("ContinueAfterSignUpButton")?.IsEffectivelyVisible,
-                Named<Button>("WorkAccountButton")?.IsEffectivelyVisible);
+                Named<Button>("WorkAccountButton")?.IsEffectivelyVisible,
+                Named<Button>("SignUpUseCodeButton")?.IsEffectivelyVisible,
+                Named<Button>("SignUpWorkspaceUrlButton")?.IsEffectivelyVisible);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -657,6 +704,9 @@ public class SignInStepViewModelTests {
 
         await Assert.That(continueShown).IsTrue();
         await Assert.That(workAccountShown).IsFalse();
+        // The fallbacks stay reachable: a browser that cannot hand back, or a workspace better pasted.
+        await Assert.That(codeShown).IsTrue();
+        await Assert.That(urlShown).IsTrue();
     }
 
     // ── step transitions across the boundary ─────────────────────────────────

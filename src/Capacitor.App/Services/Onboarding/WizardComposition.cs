@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.App.Services.Onboarding;
 
@@ -32,6 +33,7 @@ internal sealed record WizardFacadeSpec(
     AuthEndpoints                                              Endpoints,
     TimeProvider                                               Time,
     Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit,
+    Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace,
     CommitPrecondition?                                        Precondition = null);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
@@ -105,7 +107,7 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, null, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit), spec.Profile, spec.Precondition);
+            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition);
 
     /// The ONE façade a wizard run signs in through, with the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.
@@ -118,7 +120,17 @@ internal static class WizardComposition {
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
             bridges.Telemetry, bridges.Endpoints, time,
-            WizardAuthService.ArmingHook(claims), precondition));
+            WizardAuthService.ArmingHook(claims), ProbeWorkspace(httpFactory, time), precondition));
+
+    /// kcap-web adds the owner to a workspace's organization before the workspace is live, so discovery
+    /// can list one still provisioning. Its host 404s until then, and discovery leaves it out.
+    static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
+            IHttpClientFactory httpFactory, TimeProvider time) =>
+        async (tenant, _, ct) => {
+            using var client = httpFactory.CreateClient(CapacitorClients.Anonymous);
+
+            return await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
+        };
 
     internal static LocalInstallController NewInstallController(WizardGraphOptions options) {
         var cli = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
@@ -254,6 +266,7 @@ internal static class WizardComposition {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
         };
+        wizard.CloseRequested += signIn.EndSignUpWait;
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
             install.Settling -= OnSettling;
