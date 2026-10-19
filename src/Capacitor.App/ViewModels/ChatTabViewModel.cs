@@ -493,9 +493,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : working && _workingSince is { } since
                     ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
         ShowsActivityNote = _failureNote is not null && Phase != ChatTabPhase.Failed && ActivityNote.Length > 0;
+        if (working && Dispatcher.UIThread.CheckAccess()) {
+            _activityClock ??= new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Background, (_, _) => RefreshActivityNote());
+            if (!_activityClock.IsEnabled) _activityClock.Start();
+        } else if (!working) {
+            _activityClock?.Stop();
+        }
         RefreshAgentStatus();
         RefreshQueuedSend();
     }
+
+    DispatcherTimer? _activityClock;
 
     bool AgentIsIdle => !_ended && !SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
 
@@ -519,12 +527,31 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var elapsed = ActivityNote.StartsWith("Working for ", StringComparison.Ordinal) ? ActivityNote : null;
         var stage = ActivityNote.StartsWith("Starting ", StringComparison.Ordinal) ? ActivityNote : null;
         var answerExpected = Cards.PendingCards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
-        AgentStatus = SessionStatusDots.Present(
+        var presented = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
             answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount,
             terminalDialog: _terminalDialog is not null, interruption: _interruption, agentId: _agentId);
+        if (presented.Kind == AgentStatusKind.Working && _workingSince is { } since) {
+            var running = _pendingTools.Values.Where(static call => call.IsRunning).ToList();
+            presented = presented with { Label = ForegroundLabel(running, _worked + _time.GetElapsedTime(since)) };
+        }
+        AgentStatus = presented;
         StatusText = AgentStatus.Label;
+    }
+
+    /// Header word while a turn is in flight. A running tool names itself; otherwise the gap
+    /// between transcript blocks is thinking, with the time already on the clock.
+    internal static string ForegroundLabel(IReadOnlyList<ToolCallItem> running, TimeSpan elapsed) {
+        if (running.Count == 1) {
+            var call = running[0];
+            var subject = call.HasDetail ? call.Detail : call.HasLabel ? call.Label! : call.Name;
+            if (subject.Length > 42) subject = subject[..41] + "…";
+            return "Running: " + subject;
+        }
+        if (running.Count > 1) return $"Running {running.Count} tools…";
+        var seconds = Math.Max(0, (long)elapsed.TotalSeconds);
+        return $"Thinking… {seconds / 60}m {seconds % 60}s";
     }
 
     static string WorkingNote(TimeSpan elapsed) {
