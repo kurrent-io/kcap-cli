@@ -21,12 +21,9 @@ public sealed class LastReads<T>(int capacity = 64) where T : class {
         long generation;
         lock (_lock) generation = _generation;
         var result = await read().ConfigureAwait(false);
-        lock (_lock) {
-            if (generation != _generation) return result;
-            switch (remember(result)) {
-                case true: Put(key, result); break;
-                case false: _reads.Remove(key); break;
-            }
+        switch (remember(result)) {
+            case true: Set(key, result, generation); break;
+            case false: Forget(key); break;
         }
         return result;
     }

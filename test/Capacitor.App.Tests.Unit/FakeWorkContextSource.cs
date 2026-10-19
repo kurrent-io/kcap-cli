@@ -24,9 +24,7 @@ sealed class FakeWorkContextSource : IWorkContextSource {
         return gate;
     }
 
-    /// What Cached answers, per session; a test fills it to stand in for an earlier pane's read.
-    public readonly Dictionary<string, WorkContextRead> Last = new(StringComparer.Ordinal);
-    public WorkContextRead? Cached(string sessionId) => Last.GetValueOrDefault(sessionId);
+    public WorkContextRead? Cached(string sessionId) => null;
 
     public async Task<WorkContextRead> ReadAsync(string sessionId, CancellationToken ct) {
         Requested.Add(sessionId);

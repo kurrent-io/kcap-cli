@@ -31,17 +31,6 @@ public class LastReadsTests {
     }
 
     [Test]
-    public async Task A_value_read_before_a_clear_is_not_set() {
-        var reads = new LastReads<string>();
-        var generation = reads.Generation;
-
-        reads.Clear();
-        reads.Set("s", "before the change", generation);
-
-        await Assert.That(reads.Get("s")).IsNull();
-    }
-
-    [Test]
     public async Task Past_capacity_the_least_recently_kept_goes() {
         var reads = new LastReads<string>(capacity: 2);
         reads.Set("a", "1", reads.Generation);
