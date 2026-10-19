@@ -1401,10 +1401,11 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
-    public async Task Disclosure_names_the_count_and_what_else_ends() {
+    public async Task Disclosure_names_the_count_and_says_the_agents_resume() {
         var text = DaemonLifecycleController.ReloadDisclosure(2);
-        await Assert.That(text).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
-        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1)).Contains("1 agent now");
+        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, mid-turn if need be, and resumed on the new daemon. A review or evaluation still running when it exits may end.");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1)).Contains("Its 1 running agent is stopped");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(0)).IsEqualTo("Reloading restarts the daemon now. A review or evaluation still running when it exits may end.");
     }
 
     [Test]

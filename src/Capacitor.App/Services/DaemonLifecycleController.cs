@@ -146,8 +146,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     public IObservable<bool> IsReloading => _isReloading.DistinctUntilChanged();
 
     internal static string ReloadDisclosure(int activeAgents) =>
-        $"Reloading restarts the daemon and ends everything it hosts: {activeAgents} agent{(activeAgents == 1 ? "" : "s")} now, " +
-        "plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.";
+        "Reloading restarts the daemon now. " +
+        (activeAgents == 0 ? ""
+            : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, mid-turn if need be, and resumed on the new daemon. ") +
+        "A review or evaluation still running when it exits may end.";
 
     /// Subscribes to the attach stream. MUST be called before the host calls
     /// IDaemonClientService.Start() — the host owns pumping the attach loop; a subscription that
