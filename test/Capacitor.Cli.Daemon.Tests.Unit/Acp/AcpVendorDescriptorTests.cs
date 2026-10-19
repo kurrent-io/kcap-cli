@@ -368,6 +368,19 @@ public class AcpVendorDescriptorTests {
         await Assert.That(AcpVendorDescriptors.Grok.SupportsReconnectResume).IsFalse();
     }
 
+    /// <summary>Restart resume is enabled on its own probe (docs/probes/2026-10-19-acp-restart-resume/),
+    /// a graceful stop rather than a crash, so it is pinned apart from reconnect: OpenCode passes one and
+    /// not the other.</summary>
+    [Test]
+    public async Task Restart_resume_is_probe_verified_per_vendor() {
+        await Assert.That(AcpVendorDescriptors.Cursor.SupportsRestartResume).IsTrue();
+        await Assert.That(AcpVendorDescriptors.Copilot.SupportsRestartResume).IsTrue();
+        await Assert.That(AcpVendorDescriptors.OpenCode.SupportsRestartResume).IsTrue();
+        await Assert.That(AcpVendorDescriptors.Kiro.SupportsRestartResume).IsFalse();
+        await Assert.That(AcpVendorDescriptors.Gemini.SupportsRestartResume).IsFalse();
+        await Assert.That(AcpVendorDescriptors.Grok.SupportsRestartResume).IsFalse();
+    }
+
     /// <summary>
     /// Kiro aliases (its MCP tripwire compares launch-unique names) but carries NO exact-name MCP
     /// allowlist argv. One predicate used to gate both, so turning aliasing on for Kiro without this
