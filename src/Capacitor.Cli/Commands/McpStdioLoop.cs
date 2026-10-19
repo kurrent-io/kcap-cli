@@ -68,7 +68,9 @@ static class McpStdioLoop {
                     inFlight.RemoveAll(t => t.IsCompletedSuccessfully);
                     foreach (var done in tails.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList()) tails.Remove(done);
 
-                    if (!TryOrderKey(orderKey, request, out var key)) {
+                    if (!TryOrderKey(orderKey, request, out var key, out var failure)) {
+                        await Console.Error.WriteLineAsync(
+                            $"kcap mcp {serverName}: refused a tools/call whose order key could not be read: {failure!.Message}");
                         await WriteAsync(Error(id, -32600, "Invalid request"));
                         continue;
                     }
@@ -115,12 +117,14 @@ static class McpStdioLoop {
     /// <summary>Reads the call's order key, null when it has none. False when reading fails: a malformed nested
     /// property throws on its first read, and such a call can be placed in no order, so it is refused rather
     /// than run alongside the call it should wait for.</summary>
-    static bool TryOrderKey(Func<JsonObject, string?>? orderKey, JsonObject request, out string? key) {
+    static bool TryOrderKey(Func<JsonObject, string?>? orderKey, JsonObject request, out string? key, out Exception? failure) {
         try {
-            key = orderKey?.Invoke(request);
+            key     = orderKey?.Invoke(request);
+            failure = null;
             return true;
-        } catch {
-            key = null;
+        } catch (Exception ex) {
+            key     = null;
+            failure = ex;
             return false;
         }
     }
