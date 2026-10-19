@@ -12,6 +12,12 @@ public sealed partial class PullRequestContextViewModel {
     public string RepositoryLabel => _selected is { } choice ? $"{choice.Link.Owner}/{choice.Link.RepoName}" : "";
     public string NumberLabel => _selected is { } choice ? "#" + choice.Link.Number.ToString(CultureInfo.InvariantCulture) : "";
     public bool HasNumberLabel => NumberLabel.Length > 0;
+    /// The repository GitHub references in a body are read against; none off github.com, where the
+    /// reader cannot tell a reference from text.
+    public string? ReferenceBase => _selected?.Subject is { } subject && PullRequestWire.IsGitHub(subject)
+        ? $"https://github.com/{Uri.EscapeDataString(subject.Owner)}/{Uri.EscapeDataString(subject.RepoName)}"
+        : null;
+
     public string ProviderLabel => _selected?.Subject.Provider switch { "github" => "GitHub", "gitlab" => "GitLab", _ => "Source" };
     public bool CanOpenSource => _selected is { IsAvailable: true };
     /// Host exit beside status/repo once the card has settled on an overview or a legacy list.
@@ -97,6 +103,7 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(NumberLabel);
         NotifyValue(HasNumberLabel);
         NotifyValue(ProviderLabel);
+        NotifyValue(ReferenceBase);
         NotifyValue(CanOpenSource);
         NotifyValue(ShowsOpenSource);
         NotifyValue(IsChecks);
