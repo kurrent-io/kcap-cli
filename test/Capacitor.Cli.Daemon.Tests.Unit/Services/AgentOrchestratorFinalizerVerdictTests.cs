@@ -410,6 +410,25 @@ public class AgentOrchestratorFinalizerVerdictTests {
         await Assert.That(agent.Status).IsEqualTo("Completed");
     }
 
+    /// <summary>A stop reports Completed only once the agent is gone. One whose process outlives the
+    /// terminate is reported Failed, here and on the server, so a live agent never reads as stopped.</summary>
+    [Test]
+    public async Task Stop_of_an_agent_that_never_exits_reports_failed_not_completed() {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = orch.SeedAgentForTest("stop-stuck-1", status: "Running", pty: new RecordingPtyProcess());
+
+        await orch.HandleStopAgentForTest("stop-stuck-1");
+
+        await Assert.That(server.StatusChangedCalls.Where(c => c.AgentId == "stop-stuck-1").Select(c => c.Status))
+            .IsEquivalentTo(["Failed"]);
+        await Assert.That(agent.Status).IsEqualTo("Failed");
+        await Assert.That(server.RunEvents.Single(e => e.AgentId == "stop-stuck-1").Event)
+            .IsEqualTo(new AgentRunStopped("failed", null));
+    }
+
     /// <summary>Part A final-review fix wave, item 2: the publish→report race. A same-tick
     /// TTL/idle/stuck-Starting sweep can reach StopAgentCoreAsync in the instant AFTER
     /// TryStartReap has published the verdict but BEFORE the finalizer's CAS has set

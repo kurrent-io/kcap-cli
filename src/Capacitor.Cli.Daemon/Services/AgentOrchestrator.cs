@@ -78,6 +78,13 @@ internal record AgentInstance(
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
 
+    /// 1 while a stop owes the server its report, sent once the stop knows whether the agent is gone.
+    public int                  StopReportOwed;
+
+    /// Completes once a stop has terminated the agent and sent its report, so the finalizer ends the
+    /// session only after it.
+    public TaskCompletionSource StopSettled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     int _reopenedTranscript;
 
     /// Whether the server records the ACP session this agent reopened. Pending until it accepts the
@@ -3531,6 +3538,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         LogCleanupStepFailed(ex, "recording the run's stop", agent.Id);
                     }
                 }
+            } else if (agent.StopRequested) {
+                // The read loop ends as soon as a stop cancels it, before the stop has terminated the
+                // agent and reported it; the session ends only after that report.
+                try { await agent.StopSettled.Task.WaitAsync(StopSettleWait, _time); } catch (TimeoutException) { /* report what is known */ }
+
+                await SendOwedStopReportAsync(agent);
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -4086,6 +4099,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // the Completed send below. No-op in production.
             StopGateAfterSnapshotHookForTest?.Invoke();
 
+            // The server hears of the stop only once termination is confirmed or refuted, below. An
+            // unregistered agent has no server-side row.
+            if (!agent.IsPrivate) Volatile.Write(ref agent.StopReportOwed, 1);
+
             // Set status BEFORE cancelling ReadCts so the read loop's finally
             // block sees "Completed" and skips its own status change / event append.
             if (!suppressCompleted) SetAgentStatus(agent, "Completed");
@@ -4096,18 +4113,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
             // default, so server-side attribution can tell a TTL/idle reap from a user stop.
             if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
-
-            // An unregistered agent has no server-side row to update.
-            if (!agent.IsPrivate) {
-                // Atomic check + send-INITIATION under the runtime's own gate: the round-1 second
-                // check narrowed but did not CLOSE the check-to-send race — a verdict could publish
-                // between the check and this send. The gate holds the publication lock across BOTH,
-                // so a Completed frame, if sent at all, is initiated before publication and is
-                // therefore ordered-before any LaunchFailed on the single hub connection.
-                if (agent.Runtime is ITerminationVerdictSource || !suppressCompleted)
-                    TrySendAgentStatus(agent, "Completed", null, out _);
-                _ = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
-            }
 
             // Try a graceful shutdown first: send /exit so claude can fire its own
             // session-end hook (drains transcript, writes SessionEnded + summary,
@@ -4185,11 +4190,49 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // child is usually not reaped yet; poll briefly before calling the stop a failure.
             if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(2));
 
+            await SendOwedStopReportAsync(agent);
+
             return agent.Runtime.HasExited;
         } catch (Exception ex) {
             LogStopError(ex, agentId);
 
             return false;
+        } finally {
+            agent.StopSettled.TrySetResult();
+        }
+    }
+
+    /// <summary>How long the finalizer waits for a stop still terminating: the graceful window, the
+    /// terminate grace and the post-kill poll, with room to spare.</summary>
+    static readonly TimeSpan StopSettleWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>The report a stop owes the server, sent at most once: Completed and a user stop when the
+    /// agent is confirmed gone, Failed when it is not, since a live agent must never read as stopped. A
+    /// published launch-failure verdict has already reported Failed, so only the stop event follows it.
+    /// The finalizer sends it only when a stop stalled past its wait. Never throws.</summary>
+    async Task SendOwedStopReportAsync(AgentInstance agent) {
+        if (Interlocked.Exchange(ref agent.StopReportOwed, 0) == 0) return;
+
+        var gone = agent.Runtime.HasExited;
+        if (!gone) {
+            LogStopUnconfirmed(agent.Id);
+            SetAgentStatus(agent, "Failed");
+        }
+
+        try {
+            if (!gone) {
+                if (TrySendAgentStatus(agent, "Failed", null, out var failed)) await failed;
+            } else if (!VerdictForbidsNonFailureStatus(agent) && TrySendAgentStatus(agent, "Completed", null, out var completed)) {
+                await completed;
+            }
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "reporting the stop", agent.Id);
+        }
+
+        try {
+            await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(gone ? "user" : "failed", null));
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "recording the stop", agent.Id);
         }
     }
 
@@ -6188,6 +6231,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Agent {AgentId} did not exit after a stop; reporting it Failed rather than Completed")]
+    partial void LogStopUnconfirmed(string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
