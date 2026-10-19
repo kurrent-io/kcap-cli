@@ -480,11 +480,7 @@ internal partial class AgentOrchestrator {
     const string StoppedDuringResume     = "stopped";
     const string TranscriptRefusedReason = "acp_binding_unavailable";
 
-    /// <summary>Whether the server takes no events for the ACP session this agent reopened. A binding it
-    /// holds as terminal shows only when it drops the first new event and the forwarder stops: the vendor
-    /// conversation survived, but nothing it says from here would be recorded.</summary>
-    static bool TranscriptRefused(AgentInstance agent) =>
-        agent.ReopenedTranscriptRefused || agent.AcpForwarder?.Forwarder.IsTerminal == true;
+    static bool TranscriptRefused(AgentInstance agent) => agent.ReopenedTranscript == ReopenedTranscript.Refused;
 
     static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
@@ -871,7 +867,8 @@ internal partial class AgentOrchestrator {
         if (agent.StopRequested) return (StoppedDuringResume, null);
 
         if (!survived && TranscriptRefused(agent)) {
-            // Still pending its resume, so the teardown this starts keeps the worktree for kcap continue.
+            // Its first turn was never sent, so kcap continue repeats nothing; still pending its resume,
+            // the teardown this starts keeps the worktree for it.
             await agent.Runtime.TerminateAsync(ShutdownTerminateGrace);
 
             return (TranscriptRefusedReason, null);
@@ -888,15 +885,15 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Whether the resumed runtime is still running, and still this agent, once the readiness
-    /// window has passed since it published. <paramref name="judgeTranscript"/> also fails it when the
-    /// server takes no events for the session it reopened.</summary>
+    /// window has passed since it published. <paramref name="judgeTranscript"/> also fails it unless the
+    /// server has accepted the session it reopened by then.</summary>
     async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct, bool judgeTranscript = false) {
         var started = _time.GetTimestamp();
 
         while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)
             && !(judgeTranscript && TranscriptRefused(agent))) {
             var left = _config.ResumeReadinessWindow - _time.GetElapsedTime(started);
-            if (left <= TimeSpan.Zero) return true;
+            if (left <= TimeSpan.Zero) return !(judgeTranscript && agent.TryRefuseReopenedTranscript());
 
             await Task.Delay(left < ReadinessPoll ? left : ReadinessPoll, _time, ct);
         }

@@ -156,9 +156,9 @@ internal sealed record AcpVendorDescriptor {
     public bool                        SupportsReconnectResume { get; }
 
     /// <summary>Whether a daemon restart may reopen this vendor's session with <c>session/load</c>
-    /// instead of falling back to kcap continue. Probe-verified after the stop a restart performs
-    /// (<c>docs/probes/2026-10-19-acp-restart-resume/</c>), which is not the crash
-    /// <see cref="SupportsReconnectResume"/> was measured on, so the two flags flip independently.</summary>
+    /// instead of falling back to kcap continue. Set only for a vendor that passes the graceful-stop probe
+    /// in <c>docs/probes/2026-10-19-acp-restart-resume/</c>: a vendor persists its session differently on a
+    /// graceful stop than on a crash, so this is decided apart from <see cref="SupportsReconnectResume"/>.</summary>
     public bool                        SupportsRestartResume { get; }
 
     /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c> for an interactive (false) or review

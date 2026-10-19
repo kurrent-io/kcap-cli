@@ -108,6 +108,13 @@ internal sealed class AcpTranscriptForwarder {
     /// </summary>
     public bool IsTerminal { get; private set; }
 
+    readonly long _firstCanonicalSeq;
+    readonly TaskCompletionSource<bool> _firstAccepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>True once the server has accepted the first canonical envelope; false when the forwarder
+    /// stops first, a rejected or terminal binding among the reasons.</summary>
+    public Task<bool> FirstEventAccepted => _firstAccepted.Task;
+
     /// <summary>Test-only visibility into the unacked buffer's current size.</summary>
     internal int UnackedCount => _unacked.Count;
 
@@ -148,6 +155,7 @@ internal sealed class AcpTranscriptForwarder {
         } else {
             _initialEnvelope = (initialEnvelope ?? throw new ArgumentNullException(nameof(initialEnvelope))) with { Seq = 0 };
         }
+        _firstCanonicalSeq      = _initialEnvelope is null ? _nextSeq : 0;
         _initialSendRetryDelay  = initialSendRetryDelay ?? DefaultInitialSendRetryDelay;
         _maxSendRetryDelay      = maxSendRetryDelay ?? DefaultMaxSendRetryDelay;
         _maxStalledGapResends   = maxStalledGapResends ?? DefaultMaxStalledGapResends;
@@ -276,9 +284,13 @@ internal sealed class AcpTranscriptForwarder {
 
                 foreach (var seq in _unacked.Keys.Where(seq => seq <= ack.AcceptedSeq).ToArray())
                     _unacked.Remove(seq);
+
+                if (ack.AcceptedSeq >= _firstCanonicalSeq) _firstAccepted.TrySetResult(true);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // normal shutdown — see this method's remarks.
+        } finally {
+            _firstAccepted.TrySetResult(false);
         }
     }
 

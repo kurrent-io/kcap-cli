@@ -40,4 +40,11 @@ internal interface IAcpTranscriptSource {
     /// downstream of this reader may reorder it.
     /// </summary>
     ChannelReader<AcpEventEnvelope> Envelopes { get; }
+
+    /// <summary>A session reopened for a restart resume: the server already holds its history, and its
+    /// first turn waits for <see cref="ReleaseFirstTurn"/>.</summary>
+    bool Reopened => false;
+
+    /// <summary>Sends a reopened session's held first turn, once the server has accepted an event of it.</summary>
+    void ReleaseFirstTurn() { }
 }

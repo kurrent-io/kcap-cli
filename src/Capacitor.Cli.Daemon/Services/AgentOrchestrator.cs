@@ -78,14 +78,24 @@ internal record AgentInstance(
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
 
-    bool _reopenedTranscriptRefused;
+    int _reopenedTranscript;
 
-    /// Set when the bind or the cursor read of an ACP session this agent reopened was refused: the server
-    /// will record nothing it says, so a native resume judged with this set has failed.
-    public bool ReopenedTranscriptRefused {
-        get => Volatile.Read(ref _reopenedTranscriptRefused);
-        set => Volatile.Write(ref _reopenedTranscriptRefused, value);
-    }
+    /// Whether the server records the ACP session this agent reopened. Pending until it accepts the
+    /// session's first event or refuses it; one transition wins, so a held first turn is released only
+    /// when the resume has not already been judged failed.
+    public ReopenedTranscript ReopenedTranscript => (ReopenedTranscript)Volatile.Read(ref _reopenedTranscript);
+
+    public void MarkReopenedTranscriptPending() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Pending, (int)ReopenedTranscript.None);
+
+    public bool TryAcceptReopenedTranscript() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Accepted, (int)ReopenedTranscript.Pending)
+            == (int)ReopenedTranscript.Pending;
+
+    /// True when the transcript is refused, whether by this call or an earlier one.
+    public bool TryRefuseReopenedTranscript() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Refused, (int)ReopenedTranscript.Pending)
+            is (int)ReopenedTranscript.Pending or (int)ReopenedTranscript.Refused;
 
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
@@ -2906,6 +2916,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // StartAcpForwardingAsync itself still enforces the load-bearing ordering (bind strictly
             // after RegisterAgentAsync above, strictly before any AcpSessionEvents) by awaiting the
             // bind before constructing the forwarder.
+            // A private agent records nothing, so there is no acceptance to wait for.
+            if (isPrivate && start.Transcript is { Reopened: true } privateTranscript) privateTranscript.ReleaseFirstTurn();
+
             if (!isPrivate && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
                 // FinalizeAgentRunAsync to cancel even if the agent finalizes before the bind below
@@ -2920,9 +2933,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (start.Runtime.RequiresSourceClaimBeforeFirstTurn)
                     _ = StartEnvelopeSourcedSessionAsync(agent, start.Runtime, transcript, cmd.Vendor, acpCts);
                 else
-                    _ = StartAcpForwardingAsync(
-                        agent, transcript, cmd.Vendor, acpCts,
-                        reopened: resume is not null && cmd.ResumeSessionId == transcript.AcpSessionId);
+                    _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor, acpCts);
             }
 
             // Reconnect PID-record seam (reconnect spec §6.2 step 1): a resume candidate's pid is
@@ -4895,13 +4906,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
     /// immediately below the bind await closes that race.
     /// </summary>
-    /// <remarks>A <paramref name="reopened"/> session already has events on the server, and a forwarder
-    /// numbering from 0 would have each new one deduplicated away until it passed the server's cursor.
-    /// <c>AcpSessionStarted</c> reports no cursor, so it is read with an empty <c>AcpSessionEvents</c>
-    /// batch, which the server answers without appending, and the forwarder resumes after it.</remarks>
-    async Task StartAcpForwardingAsync(
-            AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts,
-            bool reopened = false) {
+    /// <remarks>A <see cref="IAcpTranscriptSource.Reopened"/> session already has events on the server,
+    /// and a forwarder numbering from 0 would have each new one deduplicated away until it passed the
+    /// server's cursor. <c>AcpSessionStarted</c> reports no cursor, so it is read with an empty
+    /// <c>AcpSessionEvents</c> batch, which the server answers without appending. Neither call reveals a
+    /// terminal binding, which only drops the next event, so the session's first turn is held until the
+    /// server has accepted the event before it.</remarks>
+    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
+        var reopened = transcript.Reopened;
+        if (reopened) agent.MarkReopenedTranscriptPending();
+
         try {
             await _server.AcpSessionStartedAsync(
                 agent.Id,
@@ -4919,8 +4933,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var cursor = await _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, [], acpCts.Token);
 
                 if (cursor.Rejected) {
-                    agent.ReopenedTranscriptRefused = true;
-                    LogReopenedCursorRejected(agent.Id);
+                    agent.TryRefuseReopenedTranscript();
+                    LogReopenedTranscriptRefused(agent.Id);
 
                     return;
                 }
@@ -4929,8 +4943,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
 
             StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq);
+
+            if (!reopened) return;
+
+            if (agent.AcpForwarder is { } forwarder
+             && await forwarder.Forwarder.FirstEventAccepted.WaitAsync(acpCts.Token)
+             && agent.TryAcceptReopenedTranscript()) {
+                transcript.ReleaseFirstTurn();
+
+                return;
+            }
+
+            agent.TryRefuseReopenedTranscript();
+            LogReopenedTranscriptRefused(agent.Id);
         } catch (Exception ex) {
-            if (reopened && !acpCts.IsCancellationRequested) agent.ReopenedTranscriptRefused = true;
+            if (reopened) agent.TryRefuseReopenedTranscript();
             LogAcpBindFailed(ex, agent.Id);
         }
     }
@@ -6216,8 +6243,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
     partial void LogAcpBindFailed(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Warning, Message = "The server refused the transcript cursor of the ACP session agent {AgentId} reopened")]
-    partial void LogReopenedCursorRejected(string agentId);
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server records nothing of the ACP session agent {AgentId} reopened; its first turn stays held")]
+    partial void LogReopenedTranscriptRefused(string agentId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
     partial void LogAcpBindAbortedAgentGone(string agentId);

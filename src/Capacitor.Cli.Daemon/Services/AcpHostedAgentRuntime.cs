@@ -924,11 +924,13 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     throw new InvalidOperationException(
                         $"{DiagnosticBinary} does not advertise loadSession, so session {resumeSessionId} cannot be reopened.");
 
+                // Set before the load so its updates are recognised as this session's.
+                _sessionId = resumeSessionId;
+                _reopened  = true;
+
                 sessionNewResult = await RunHandshakeStageAsync(
                         "session_created", stageCt => LoadForRestartResumeAsync(connection, resumeSessionId, cwd, stageCt), ct)
                     .ConfigureAwait(false);
-
-                _sessionId = resumeSessionId;
 
                 LogSessionLoaded(_agentId, resumeSessionId);
             } else {
@@ -1017,7 +1019,14 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // awaiting it: a real ACP turn can run arbitrarily long, and blocking StartAsync on it would
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
-        if (!string.IsNullOrEmpty(initialPrompt)) {
+        if (_reopened) {
+            // The note is the event whose acceptance proves the server records this session; the
+            // nudge waits for it, so a session nothing would record never acts.
+            EmitEnvelope(new AcpEventEnvelope(
+                Seq: 0, Kind: AcpEventKind.SystemNote, Text: "Session reopened after a kcap daemon restart.", TimestampIso: NowIso()));
+            _heldFirstPrompt = string.IsNullOrEmpty(initialPrompt) ? null : initialPrompt;
+            if (_heldFirstPrompt is null) _firstTurnSettled.TrySetResult();
+        } else if (!string.IsNullOrEmpty(initialPrompt)) {
             // A dispose racing the tail of this handshake can already have completed
             // _pendingTurns by the time this runs — the only reachable refusal here, since a
             // fresh queue can't be full, so it is Debug rather than Warning.
@@ -1071,6 +1080,21 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         ActivityClock?.SetLaunchStage(stage);
 
         return result;
+    }
+
+    bool    _reopened;
+    string? _heldFirstPrompt;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.Reopened"/>
+    public bool Reopened => _reopened;
+
+    /// <inheritdoc cref="IAcpTranscriptSource.ReleaseFirstTurn"/>
+    public void ReleaseFirstTurn() {
+        if (Interlocked.Exchange(ref _heldFirstPrompt, null) is not { } prompt) return;
+
+        try { _ = EnqueueTurn(prompt, acknowledgeWrite: false); }
+        catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "ACP: held first turn not queued — the runtime is already being torn down."); }
+        ArmFirstOutputWatchdog();
     }
 
     /// <summary>Reopens a session for a restart resume. Everything the load replays is dropped: the server
@@ -1591,6 +1615,15 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // path and the owner's own emissions are not suppressed.
         if (_suppressNotifications) {
             Interlocked.Increment(ref _suppressedUpdates);
+
+            // Not transcript: a vendor's command list can trail the load response while suppression is
+            // still on, and dropping it would leave the resumed session with no commands.
+            if (notification.Params is { } suppressed
+             && suppressed.TryGetProperty("update", out var suppressedUpdate)
+             && suppressedUpdate.Str("sessionUpdate") == "available_commands_update"
+             && IsThisSession(notification))
+                PublishCommands(AcpAvailableCommands.Extract(suppressedUpdate.Clone()));
+
             return;
         }
 
