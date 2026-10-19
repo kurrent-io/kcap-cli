@@ -779,9 +779,6 @@ public partial class WorktreeManager(
     }
 
     static bool IsDaemonEdit(WorktreeInfo worktree, Dictionary<string, string>? baseline, (string Code, string Path) entry) {
-        // Attachments the daemon fetched for the agent are copies of uploads, not work.
-        if (entry.Code == "??" && entry.Path.StartsWith(".attached/", StringComparison.Ordinal)) return true;
-
         // Unstaged and still exactly as the daemon left it; anything staged is the agent's.
         if (baseline?.GetValueOrDefault(entry.Path) is { } recorded)
             return (entry.Code[0] == ' ' || entry.Code == "??") && SafeStamp(Path.Combine(worktree.Path, entry.Path)) == recorded;
