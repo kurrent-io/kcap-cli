@@ -148,6 +148,44 @@ public class TerminalTabResumeTests {
         });
     }
 
+    /// A resumed runtime that fails its readiness window exits under an attached tab before the daemon
+    /// marks it interrupted, so the tab follows the later status rather than staying exited.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_exit_during_the_readiness_window_is_followed_to_interrupted_and_back() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.AttachAsync();
+            await rig.DropAsync(client, new AttachOutcome.Exited(3));
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            rig.Entry = Ledger(ResumeState.Interrupted, "readiness_failed");
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted", Interruption = "readiness_failed" });
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Interrupted);
+            await Assert.That(rig.Vm.State.Detail).IsEqualTo("readiness_failed");
+
+            rig.Entry = Ledger(ResumeState.Resuming);
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+        });
+    }
+
+    /// An agent that simply finished keeps its exit, whatever stale status the cache still shows.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_ordinary_exit_stays_exited() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig();
+            var client = await rig.AttachAsync();
+            await rig.DropAsync(client, new AttachOutcome.Exited(0));
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Title = "still running in the cache" });
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_resume_that_outlasts_the_window_fails_as_a_lost_connection() {

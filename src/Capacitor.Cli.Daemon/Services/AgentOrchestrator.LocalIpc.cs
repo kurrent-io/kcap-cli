@@ -83,11 +83,11 @@ internal partial class AgentOrchestrator {
                 || _agents.Values.Any(a => a.Status is "Starting" or "Running");
     }
 
-    /// <summary>The live agents, then the ledger entries with no live agent. The ledger is read first and
-    /// then filtered against the live rows, so an agent whose resume publishes in between is listed once,
-    /// live, rather than in neither part.</summary>
+    /// <summary>The live agents, then the ledger entries with no live agent. The ledger is read whole, before
+    /// the live agents, and reconciled against that one live observation, so an agent that is published or
+    /// cleaned up in between is listed once rather than in neither part.</summary>
     internal List<AgentStatusDto> SnapshotAgentsForStatus() {
-        var ledger = LedgerOnlyAgents();
+        var ledger = LedgerOnlyAgents(includeLive: true);
         var live   = LiveStatusRows();
         var listed = live.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
 

@@ -397,6 +397,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     }
 
     void HandleDtoObserved(AgentStatusDto dto) {
+        var previous = _lastStatus;
+        _lastStatus = dto.Status;
         // Claim pending → dto-won, or recover timeout-won → dto-won when a late agent row lands
         // after NotFound. A concurrent TeardownAsync's disposed state loses neither CAS.
         for (;;) {
@@ -417,11 +419,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             }
             // Later updates only matter once resolved: Completed/Failed stay in the cache until
             // teardown removes them.
-            if (state == ResolveDtoWon && SessionStatusDots.IsTerminal(dto.Status))
-                HandleAgentEnded();
-            // An interrupted agent retried with `kcap agent resume` comes back under the same id.
-            else if (state == ResolveDtoWon && State.Phase == TerminalSessionPhase.Interrupted && dto.Status != "Interrupted")
-                AwaitRetriedResume();
+            if (state != ResolveDtoWon) return;
+            if (SessionStatusDots.IsTerminal(dto.Status)) HandleAgentEnded();
+            else ReconcileResumeStatus(previous, dto);
             return;
         }
     }
@@ -711,6 +711,27 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             Console.Error.WriteLine($"kcap: terminal resume ledger read failed: {ex.Message}");
             return null;
         }
+    }
+
+    // The status the Agents cache last showed; UI thread only.
+    string? _lastStatus;
+
+    /// A tab that settled on an end can still see its agent come back: a resumed runtime that fails its
+    /// readiness window exits and is then interrupted, and an interrupted one retried with
+    /// `kcap agent resume` returns under the same id. A tab with an attempt in flight is left to it.
+    void ReconcileResumeStatus(string? previous, AgentStatusDto dto) {
+        if (State.Phase is not (TerminalSessionPhase.Exited or TerminalSessionPhase.Failed
+                or TerminalSessionPhase.SessionEnded or TerminalSessionPhase.Interrupted)) return;
+
+        if (dto.Status == "Interrupted") {
+            if (State.Phase != TerminalSessionPhase.Interrupted || State.Detail != dto.Interruption)
+                Publish(TerminalSessionState.Interrupted(dto.Interruption), null);
+            return;
+        }
+
+        var cameBack = dto.Status == "Resuming" && previous != "Resuming"
+                    || previous is "Interrupted" or "Resuming" || SessionStatusDots.IsTerminal(previous);
+        if (cameBack) AwaitRetriedResume();
     }
 
     void AwaitRetriedResume() {

@@ -409,6 +409,29 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A resume brings an agent back under its id after its row ended or vanished, and an interrupted
+    /// agent can still be stopped, so neither leaves the workspace latched as ended.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_resume_row_clears_an_ended_session() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            await Assert.That(vm.SessionEnded).IsTrue();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            daemon.Agents.RemoveKey("a1");
+            await Assert.That(vm.SessionEnded).IsTrue();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A resume row from an entry that never recorded the runtime's metadata cannot choose the reader or
     /// the input channel, and the chat is built only once, so it waits for a row that can.
     [Test]

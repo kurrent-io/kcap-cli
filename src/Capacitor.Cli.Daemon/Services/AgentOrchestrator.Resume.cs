@@ -577,10 +577,11 @@ internal partial class AgentOrchestrator {
     ];
 
     /// <summary>Ledger entries with no live agent, as <c>kcap agent ls</c> shows them: the candidates the
-    /// resume lane still holds, then the interrupted entries with their reason.</summary>
-    internal IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgents() {
+    /// resume lane still holds, then the interrupted entries with their reason. <paramref name="includeLive"/>
+    /// keeps the entries of agents live right now, for a caller reconciling against its own live observation.</summary>
+    internal IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgents(bool includeLive = false) {
         var rows = _resumeCandidates.Values
-            .Where(e => !_agents.ContainsKey(e.AgentId))
+            .Where(e => includeLive || !_agents.ContainsKey(e.AgentId))
             .OrderBy(e => e.CreatedAt)
             .Select(e => (e, "Resuming", "resuming"))
             .ToList();
@@ -595,7 +596,7 @@ internal partial class AgentOrchestrator {
         }
 
         rows.AddRange(entries
-            .Where(e => e.State == ResumeState.Interrupted && !_agents.ContainsKey(e.AgentId) && !_resumeCandidates.ContainsKey(e.AgentId))
+            .Where(e => e.State == ResumeState.Interrupted && (includeLive || !_agents.ContainsKey(e.AgentId)) && !_resumeCandidates.ContainsKey(e.AgentId))
             .OrderBy(e => e.CreatedAt)
             .Select(e => (e, "Interrupted", e.LastError is { Length: > 0 } reason ? $"interrupted ({reason})" : "interrupted")));
 

@@ -312,6 +312,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             if (change.Reason == ChangeReason.Remove) { ended = true; continue; } // dto stays frozen
             dto = change.Current;
             if (SessionStatusDots.IsTerminal(dto.Status)) ended = true;
+            // A resume brings an ended agent back under its id, and an interrupted one can still be stopped.
+            else if (dto.Status is "Resuming" or "Interrupted") ended = false;
         }
         return new AgentPresence(dto, ended);
     }
