@@ -21,7 +21,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
 
             LocalStackState.Interrupted(var operation, var phase) => new(false,
                 $"An interrupted {operation} of the local installation stopped at \"{phase}\".", [new("Root", root)],
-                ["The next kcap local start, stop or restart, or kcap setup --local, finishes or undoes it first."]),
+                ["The next kcap local start, stop, restart or upgrade, or kcap setup --local, finishes or undoes it first."]),
 
             LocalStackState.Installed installed => await InstalledAsync(installed, ct),
 
@@ -34,9 +34,10 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
         var service = stack.Service;
         var notes   = new List<string>();
 
-        if (SemverCompare.IsNewer(cliVersion, installation.Version)) {
-            notes.Add($"The stack is behind this kcap ({cliVersion}); upgrades arrive with kcap local upgrade.");
-        }
+        if (PrereleaseSemver.IsNewer(cliVersion, installation.Version))
+            notes.Add($"The stack is behind this kcap ({cliVersion}). Run kcap local upgrade to upgrade it.");
+        else if (PrereleaseSemver.IsNewer(installation.Version, cliVersion))
+            notes.Add($"The stack is newer than this kcap ({cliVersion}); this kcap keeps working with it, and kcap local upgrade leaves it as it is.");
 
         var fields = new List<KeyValuePair<string, string>> {
             new("URL", installation.ServerUrl),

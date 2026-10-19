@@ -278,7 +278,7 @@ public sealed class StatusCommand(
         var channel = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
         var result  = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
-        return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config), false);
+        return (current, UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint, config), false);
     }
 
     internal static string FormatExpiry(TimeSpan remaining) =>
@@ -330,7 +330,7 @@ public sealed class StatusCommand(
         var result   = await UpdateNotice.GetSharedCheckAsync(channel, config, npm, time);
 
         // Cap the recommendation at the connected server's version (min(npm latest, server)).
-        var advisory = UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, config);
+        var advisory = UpdateAdvisoryResolver.Resolve(result, channel, profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint, config);
 
         await Console.Out.WriteLineAsync(FormatVersionLine(current, advisory));
 

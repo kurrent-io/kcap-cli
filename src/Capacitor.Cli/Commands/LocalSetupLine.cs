@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>One line of <c>kcap setup --local --json</c>. Every event shares this shape and carries only its own
+/// <summary>One line of <c>kcap setup --local --json</c> or <c>kcap local upgrade --json</c>. Every event shares this shape and carries only its own
 /// fields; the property order is the wire order.</summary>
 sealed record LocalSetupLine {
     [JsonPropertyOrder(-2)] public int V { get; init; } = 1;
@@ -24,6 +24,8 @@ sealed record LocalSetupLine {
     public string? Version { get; init; }
 
     public string? InstalledVersion { get; init; }
+
+    public string? FromVersion { get; init; }
 
     public string? Root { get; init; }
 
@@ -52,4 +54,7 @@ sealed record LocalSetupLine {
     public string? Code { get; init; }
 
     public string? Message { get; init; }
+
+    /// <summary>On an upgrade's failure: whether the new version is selected.</summary>
+    public bool? Switched { get; init; }
 }

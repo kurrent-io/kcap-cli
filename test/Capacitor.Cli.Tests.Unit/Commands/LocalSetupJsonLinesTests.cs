@@ -40,6 +40,18 @@ internal sealed class LocalSetupJsonLinesTests {
             """{"v":1,"event":"rolled_back"}""");
         yield return () => (new LocalInstallEvent.Committed("http://localhost:9473", Id, 9473, "1.3.0"),
             $$"""{"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"{{Id}}","port":9473,"version":"1.3.0"}""");
+        yield return () => (new LocalInstallEvent.UpgradePlanned("1.2.0", "1.3.0"),
+            """{"v":1,"event":"upgrade_planned","version":"1.3.0","from_version":"1.2.0"}""");
+        yield return () => (new LocalInstallEvent.Stopping(), """{"v":1,"event":"stopping"}""");
+        yield return () => (new LocalInstallEvent.Stopped(), """{"v":1,"event":"stopped"}""");
+        yield return () => (new LocalInstallEvent.Switched("1.3.0"), """{"v":1,"event":"switched","version":"1.3.0"}""");
+        yield return () => (new LocalInstallEvent.Restarting("1.2.0"), """{"v":1,"event":"restarting","version":"1.2.0"}""");
+        yield return () => (new LocalInstallEvent.Upgraded("http://localhost:9473", "1.2.0", "1.3.0"),
+            """{"v":1,"event":"upgraded","server_url":"http://localhost:9473","version":"1.3.0","from_version":"1.2.0"}""");
+        yield return () => (new LocalInstallEvent.NothingToDo(UpgradeSkip.StackNewer, "1.2.0", "1.3.0"),
+            """{"v":1,"event":"nothing_to_do","version":"1.2.0","installed_version":"1.3.0","reason":"stack_newer"}""");
+        yield return () => (new LocalInstallEvent.NothingToDo(UpgradeSkip.NotInstalled, "1.3.0", null),
+            """{"v":1,"event":"nothing_to_do","version":"1.3.0","reason":"not_installed"}""");
         yield return () => (new LocalInstallEvent.EmbeddingOllamaFound("http://localhost:11434", "0.12.3"),
             """{"v":1,"event":"embeddings_ollama_found","version":"0.12.3","url":"http://localhost:11434"}""");
         yield return () => (new LocalInstallEvent.EmbeddingModelPulling("mxbai-embed-large"),
@@ -65,6 +77,11 @@ internal sealed class LocalSetupJsonLinesTests {
     public async Task A_failure_renders_its_code_and_message() =>
         await Assert.That(LocalSetupJsonLines.Failed(LocalInstallFailureCode.AnswerRequired, "Pass --single-user."))
                     .IsEqualTo("""{"v":1,"event":"failed","code":"answer_required","message":"Pass --single-user."}""");
+
+    [Test]
+    public async Task An_upgrade_failure_says_whether_the_new_version_is_selected() =>
+        await Assert.That(LocalSetupJsonLines.Failed(LocalInstallFailureCode.StartFailed, "It did not start.", switched: true))
+                    .IsEqualTo("""{"v":1,"event":"failed","code":"start_failed","message":"It did not start.","switched":true}""");
 
     public static IEnumerable<Func<(Exception Error, LocalInstallFailureCode Code)>> Failures() {
         yield return () => (new LocalInstallFailure(LocalInstallFailureCode.NotOurServer, "x"), LocalInstallFailureCode.NotOurServer);

@@ -2697,6 +2697,10 @@ sealed class SetupCommand(
         var bundlePluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "Resources", "kcap"));
         if (Directory.Exists(bundlePluginPath)) return bundlePluginPath;
 
+        // The Windows app ships the plugin beside kcap.exe; on Unix this name is the binary itself.
+        var siblingPluginPath = Path.Combine(exeDir, "kcap");
+        if (Directory.Exists(siblingPluginPath)) return siblingPluginPath;
+
         // npm optional dependencies: <wrapper>/node_modules/@kurrent/<platform>/bin/kcap.
         var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kcap"));
 

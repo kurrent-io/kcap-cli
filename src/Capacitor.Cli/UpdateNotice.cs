@@ -2,6 +2,7 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli;
 
@@ -77,14 +78,27 @@ internal static class UpdateNotice {
     /// <see cref="MarkReported"/> this invocation. Never throws — an update notice must never break
     /// the command it's attached to.
     /// </summary>
+    /// <param name="localRoot">Read again here, so a stack an upgrade in this process moved is not reported behind.</param>
     public static async Task FlushAsync(
             string command, string[] args, ProfileContext profiles, ConfigRoot config, Func<IReleaseFeed> npm,
-            TimeProvider time) {
+            TimeProvider time, LocalRoot? localRoot = null) {
         try {
             if (_reported || !IsHumanFacing(command, args)) return;
 
             var profile = profiles.Effective;
             if (profile?.UpdateCheck == false) return;
+
+            // Re-read when the startup resolution named no server: this runs at exit, and `kcap
+            // setup` points a previously-unconfigured machine at its first one. Capping against
+            // nothing would recommend a CLI newer than the server the user just connected to.
+            var serverUrl = profiles.Resolution.ServerUrl ?? await CurrentServerUrlAsync(config, profiles.Name);
+            var endpoint  = localRoot is null ? profiles.Resolution.Endpoint : LocalEndpoints.Read(localRoot).Classify(serverUrl);
+
+            // `kcap local` and `kcap setup` say so themselves.
+            if (command is not ("local" or "setup") && StackBehind(endpoint, CapacitorVersion.CurrentDisplay()) is { } behind) {
+                await Console.Error.WriteLineAsync();
+                await Console.Error.WriteLineAsync(behind);
+            }
 
             var channel  = UpdateCommand.ResolveChannel(args, UpdateCommand.ConfiguredChannel(profile?.UpdateChannel));
             // Asked for only once the notice is going to happen: this runs on the way out of EVERY
@@ -94,11 +108,7 @@ internal static class UpdateNotice {
 
             // Cap the recommendation at the connected server's version (min(npm latest, server)) so we
             // never steer a user to a CLI newer than the server they talk to. Uncapped ⇒ today's copy.
-            // Re-read when the startup resolution named no server: this runs at exit, and `kcap
-            // setup` points a previously-unconfigured machine at its first one. Capping against
-            // nothing would recommend a CLI newer than the server the user just connected to.
-            var serverUrl = profiles.Resolution.ServerUrl ?? await CurrentServerUrlAsync(config, profiles.Name);
-            var advisory  = UpdateAdvisoryResolver.Resolve(result, channel, serverUrl, config);
+            var advisory = UpdateAdvisoryResolver.Resolve(result, channel, serverUrl, endpoint, config);
 
             // Re-check after the await: `kcap status` may have won the race and already reported
             // while this was in flight (both may share the same in-flight task via GetSharedCheckAsync).
@@ -116,6 +126,13 @@ internal static class UpdateNotice {
             // Best effort — an update notice must never break the command it's attached to.
         }
     }
+
+    /// <summary>The line naming <c>kcap local upgrade</c> when the machine records to a local installation older than
+    /// this kcap, or null.</summary>
+    internal static string? StackBehind(LocalEndpointClass endpoint, string cliVersion) =>
+        endpoint is LocalEndpointClass.Local(var installation) && PrereleaseSemver.IsNewer(cliVersion, installation.Version)
+            ? $"The local server runs Capacitor local {installation.Version}, behind this kcap ({cliVersion}). Run `kcap local upgrade` to upgrade it."
+            : null;
 
     /// <summary>The server the cap is computed against when the startup resolution named none —
     /// this runs at exit, and <c>kcap setup</c> points a previously-unconfigured machine at its

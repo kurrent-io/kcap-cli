@@ -41,14 +41,16 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
             _ => throw new InvalidOperationException($"Unexpected state {state} under the lifecycle lease."),
         };
 
-    async Task<string> StartAsync(LocalStackState.Installed state, Action<string> say, CancellationToken ct) {
+    /// <summary>For a caller already holding the lifecycle lease. With <paramref name="rewriteUnit"/> an installed unit
+    /// is written again, so a new version runs under the unit this kcap renders.</summary>
+    public async Task<string> StartAsync(LocalStackState.Installed state, Action<string> say, CancellationToken ct, bool rewriteUnit = false) {
         var unit = state.Unit;
 
         if (!File.Exists(unit.ServerBinary))
             throw Failed($"The server's files are missing ({unit.ServerBinary}). Run kcap setup --local to restore them.");
 
         using (await LocalUnitLock.AcquireAsync(stack.Home, LocalUnitLock.Wait, stack.Time, ct)) {
-            LocalOwnUnit.Ensure(stack.Root, unit, stack.Service, () => NotOurs(unit), startPresent: true);
+            LocalOwnUnit.Ensure(stack.Root, unit, stack.Service, () => NotOurs(unit), startPresent: true, replace: rewriteUnit);
         }
 
         say($"Starting the local server on {unit.BaseUrl}…");
@@ -62,7 +64,8 @@ sealed class LocalStackControl(LocalStack stack, Func<int, PortHolder?> findHold
         };
     }
 
-    async Task<string> StopAsync(LocalStackState.Installed state, Action<string> say, CancellationToken ct) {
+    /// <summary>For a caller already holding the lifecycle lease.</summary>
+    public async Task<string> StopAsync(LocalStackState.Installed state, Action<string> say, CancellationToken ct) {
         var unit = state.Unit;
 
         using (await LocalUnitLock.AcquireAsync(stack.Home, LocalUnitLock.Wait, stack.Time, ct)) {

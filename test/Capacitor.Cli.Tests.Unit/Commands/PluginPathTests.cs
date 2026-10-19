@@ -10,10 +10,12 @@ public class PluginPathTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     [Test]
-    public async Task Bundled_CLI_finds_and_installs_the_resource_plugin_without_npm() {
-        var plugin = Tmp.CreateDir("Capacitor.app", "Contents", "Resources", "kcap");
+    [Arguments("Capacitor.app/Contents/MacOS/kcap", "Capacitor.app/Contents/Resources/kcap")]
+    [Arguments("KurrentCapacitor/current/kcap.exe", "KurrentCapacitor/current/kcap")]
+    public async Task Bundled_CLI_finds_and_installs_the_app_plugin_without_npm(string executablePath, string pluginPath) {
+        var plugin = Tmp.CreateDir(pluginPath.Split('/'));
         plugin.CreateFile([".claude-plugin", "marketplace.json"], """{"name":"kcap","plugins":[{"name":"kcap","source":"./"}]}""");
-        var executable = Tmp.PathTo("Capacitor.app", "Contents", "MacOS", "kcap");
+        var executable = Tmp.CreateFile(executablePath.Split('/'), "binary");
         var resolved = SetupCommand.ResolvePluginPathForExecutable(executable);
         await Assert.That(resolved).IsEqualTo(plugin.Path);
 
