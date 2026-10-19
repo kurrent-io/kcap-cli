@@ -657,12 +657,17 @@ public class WizardStartupTests {
         }
     }
 
-    // RunWizardModeAsync over the harness: show, let the test drive, wait for the close, hand off.
+    // RunWizardModeAsync over the harness: one install controller across every wizard shown, then
+    // show, let the test drive, wait for the close, hand off.
     static Func<GateResult, ProfileContext?, Task<bool>> WizardRuns(
             WizardFixtures.GraphHarness harness, List<(WizardGraph Graph, WizardStepId StartedAt)> shown,
-            Func<WizardGraph, Task> drive, CancellationToken shutdown) =>
-        async (_, _) => {
-            var graph = WizardComposition.BuildGraph(harness.Options());
+            Func<WizardGraph, Task> drive, CancellationToken shutdown) {
+        LocalInstallController? install = null;
+
+        return async (_, _) => {
+            var options = harness.Options();
+            install ??= WizardComposition.NewInstallController(options);
+            var graph = WizardComposition.BuildGraph(options with { Install = install });
             await graph.ViewModel.PendingEnterForTesting;
             shown.Add((graph, graph.ViewModel.Current.Id));
             await drive(graph);
@@ -671,6 +676,7 @@ public class WizardStartupTests {
             return await AppUnderTest.HandoffAfterWizardAsync(
                 graph.Auth, graph.Install, () => Task.CompletedTask, Cap, new OutcomeChannel(), TimeProvider.System);
         };
+    }
 
     Func<Task<(GateResult Gate, ProfileContext? Profiles)>> Reevaluate(WizardFixtures.GraphHarness harness) =>
         () => AppUnderTest.ResolveAndEvaluateGateAsync(
@@ -682,11 +688,13 @@ public class WizardStartupTests {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
         harness.LocalRoot = LocalSetupScript.PendingSetup(Config);
         // An install that already failed leaves the journal standing, which is what the close re-reads.
-        harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed"));
+        const string message = "The download stalled.";
+        harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed", message));
         using var shutdown = new CancellationTokenSource();
         var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
         var builds = 0;
         var buildsWhenReopened = -1;
+        string? reopenedMessage = null;
 
         await AvaloniaSession.DispatchAsync(async () => {
             var runs = WizardRuns(harness, shown, graph => {
@@ -694,6 +702,7 @@ public class WizardStartupTests {
                     graph.ViewModel.RequestClose();
                 } else {
                     buildsWhenReopened = builds;
+                    reopenedMessage = graph.Steps.OfType<InstallStepViewModel>().Single().FailureMessage;
                     shutdown.Cancel(); // ends the test's loop; a quit builds nothing either
                 }
 
@@ -711,6 +720,9 @@ public class WizardStartupTests {
         await Assert.That(shown.Select(s => s.StartedAt).ToList()).IsEquivalentTo([WizardStepId.Install, WizardStepId.Install]);
         await Assert.That(buildsWhenReopened).IsEqualTo(0);
         await Assert.That(builds).IsEqualTo(0);
+        // The reopened wizard shows the settled failure; it does not start a second child unasked.
+        await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(1);
+        await Assert.That(reopenedMessage).IsEqualTo(message);
     }
 
     [Test]

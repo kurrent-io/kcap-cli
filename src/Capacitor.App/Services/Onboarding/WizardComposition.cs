@@ -87,7 +87,9 @@ internal sealed record WizardGraphOptions(
     // Names other machines' daemons hold on this account; best-effort, empty when unknown.
     Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>>? HeldDaemonNames = null,
     // KCAP_PROFILE, which the app honours and the local installer does not.
-    string?                                                                      ProfileOverride = null);
+    string?                                                                      ProfileOverride = null,
+    // The app's one install controller, shared by every wizard it shows; null builds a graph-local one.
+    LocalInstallController?                                                      Install = null);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
@@ -122,6 +124,20 @@ internal static class WizardComposition {
             bridges.Provisioner, bridges.Telemetry, bridges.Endpoints, time,
             WizardAuthService.ArmingHook(claims), precondition));
 
+    internal static LocalInstallController NewInstallController(WizardGraphOptions options) {
+        var cli = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
+
+        return new LocalInstallController(
+            () => cli, options.LocalRoot, () => IsCommittedLocal(options), options.Bridges.Post,
+            options.Bridges.Telemetry.Funnel);
+    }
+
+    // Read live: the profile, the journal and the user's choice all change during a run.
+    static bool IsCommittedLocal(WizardGraphOptions options) =>
+        !LocalSetupState.Pending(options.LocalRoot)
+     && options.ResolveIdentity() is { } id
+     && LocalEndpoints.Read(options.LocalRoot).Classify(id.Server) is LocalEndpointClass.Local;
+
     internal static WizardGraph BuildGraph(WizardGraphOptions options) {
         var claims = options.Claims;
         var cli    = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
@@ -129,14 +145,9 @@ internal static class WizardComposition {
         options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
         var root = options.LocalRoot;
-        // Read live: the profile, the journal and the user's choice all change during a run.
-        bool CommittedLocal() =>
-            !LocalSetupState.Pending(root)
-         && options.ResolveIdentity() is { } id
-         && LocalEndpoints.Read(root).Classify(id.Server) is LocalEndpointClass.Local;
+        bool CommittedLocal() => IsCommittedLocal(options);
 
-        var install = new LocalInstallController(
-            () => cli, root, CommittedLocal, options.Bridges.Post, options.Bridges.Telemetry.Funnel);
+        var install = options.Install ?? NewInstallController(options);
         bool Installed() => install.Outcome is LocalInstallOutcome.Installed;
 
         var edition = new EditionStepViewModel(
@@ -198,9 +209,10 @@ internal static class WizardComposition {
             .Where(satisfied => satisfied)
             .Subscribe(signedIn => _ = daemon.EnsureAsync(options.ShutdownToken));
         // Only the settled outcome counts: a progress line is not an installed server.
-        install.Settled += outcome => {
+        void OnInstallSettled(LocalInstallOutcome outcome) {
             if (outcome is LocalInstallOutcome.Installed) _ = daemon.EnsureAsync(options.ShutdownToken);
-        };
+        }
+        install.Settled += OnInstallSettled;
         if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);
 
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
@@ -229,6 +241,11 @@ internal static class WizardComposition {
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
             .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface, startAt, canFinishLater);
+        // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
+        wizard.CloseRequested += () => {
+            install.Settled -= OnInstallSettled;
+            installStep.Detach();
+        };
 
         return new WizardGraph(wizard, auth, steps, history, connect, daemon, install);
 

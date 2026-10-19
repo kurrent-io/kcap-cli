@@ -193,7 +193,8 @@ public partial class App : Application {
     WizardAuthService? _wizardAuth;
     // The History step, kept past the handoff: its import outlives onboarding and only shutdown stops it.
     HistoryStepViewModel? _historyImport;
-    // The open wizard's local install, which every close and a quit settle before moving on.
+    // One per app run, shared by every wizard so a reopened one shows the settled outcome; every
+    // close and a quit settle it before moving on.
     LocalInstallController? _localInstall;
     Window? _wizardWindow;
     // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
@@ -1032,7 +1033,7 @@ public partial class App : Application {
             _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
-        var graph = WizardComposition.BuildGraph(new WizardGraphOptions(
+        var options = new WizardGraphOptions(
             _config,
             _foreignHttp.GetRequiredService<TokenStore>(),
             _foreignHttp.GetRequiredService<IHttpClientFactory>(),
@@ -1068,11 +1069,12 @@ public partial class App : Application {
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,
-            ProfileOverride: _serverEnv.Profile));
+            ProfileOverride: _serverEnv.Profile);
+        _localInstall ??= WizardComposition.NewInstallController(options);
+        var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
-        _localInstall = graph.Install;
         var window = ShowWizardWindow(desktop, graph.ViewModel, _appState);
         _wizardWindow = window;
 
@@ -1088,7 +1090,6 @@ public partial class App : Application {
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
-        _localInstall = null;
         _wizardWindow = null;
         // A finished onboarding leaves its window up for the main surface to take over; a window the
         // user closed is gone, and the main surface builds its own.

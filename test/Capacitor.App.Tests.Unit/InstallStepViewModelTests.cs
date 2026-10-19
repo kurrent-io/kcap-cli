@@ -86,6 +86,28 @@ public class InstallStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Re_entry_after_a_failed_outcome_does_not_start_a_second_run() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed")) };
+
+        var (failureVisible, tryAgain) = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            await Step(controller).OnEnterAsync(CancellationToken.None);
+
+            // A reopened wizard builds a new page over the same controller.
+            var reopened = Step(controller);
+            await reopened.OnEnterAsync(CancellationToken.None);
+            await reopened.OnEnterAsync(CancellationToken.None);
+
+            return (reopened.FailureVisible, reopened.TryAgainVisible);
+        });
+
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(1);
+        await Assert.That(failureVisible).IsTrue();
+        await Assert.That(tryAgain).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Locked_lifecycle_busy_offers_neither_retry_nor_back() {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("lifecycle_busy")) };
 

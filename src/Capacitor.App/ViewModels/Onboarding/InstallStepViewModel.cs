@@ -104,7 +104,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
 
-        if (_controller.Running) return;
+        // A settled failure stays on screen until Try again: re-entry never starts a run of its own.
+        if (_controller.Running || _controller.Outcome is not null) return;
 
         // The installer writes the config's active profile; the app reads KCAP_PROFILE first.
         if (_appProfile() is { } app && _configActiveProfile() is { } active && !string.Equals(app, active, StringComparison.Ordinal)) {
@@ -124,6 +125,17 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             WizardNavigation.Next => _controller.Outcome is LocalInstallOutcome.Installed,
             _                     => false,
         });
+
+    /// Stops following the controller, which outlives this page and the wizard that showed it.
+    public void Detach() {
+        _controller.PropertyChanged -= OnControllerChanged;
+        _controller.Settled         -= OnSettled;
+        if (_watched is not null) {
+            _watched.PropertyChanged          -= OnProgressChanged;
+            _watched.Download.PropertyChanged -= OnProgressChanged;
+            _watched = null;
+        }
+    }
 
     Task TryAgainAsync() => TryAgainVisible ? _controller.RetryAsync(_lifetime) : Task.CompletedTask;
 
