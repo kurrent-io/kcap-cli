@@ -19,10 +19,14 @@ sealed class FakeWizardStep(WizardStepId id, string? title = null) : IWizardStep
     public bool PassThrough { get; set; }
     public int EnterCount { get; private set; }
     public bool ThrowOnEnter { get; init; }
+    public bool AdvanceOnEnter { get; init; }
     public Func<WizardNavigation, CancellationToken, Task<bool>>? CanLeave { get; init; }
+
+    public event Action? AdvanceRequested;
 
     public Task OnEnterAsync(CancellationToken ct) {
         EnterCount++;
+        if (AdvanceOnEnter) AdvanceRequested?.Invoke();
         if (ThrowOnEnter) throw new InvalidOperationException("boom: enter failed");
         return Task.CompletedTask;
     }
@@ -92,7 +96,7 @@ public class OnboardingViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Next_steps_over_a_pass_through_step_and_back_still_lands_on_it() {
+    public async Task Next_steps_over_a_pass_through_step_and_back_skips_it_too() {
         var (afterNext, entered, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
             var history = new FakeWizardStep(WizardStepId.Import) { PassThrough = true };
             var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Harnesses), history, new FakeWizardStep(WizardStepId.Done)]);
@@ -108,7 +112,77 @@ public class OnboardingViewModelTests {
 
         await Assert.That(afterNext).IsEqualTo(WizardStepId.Done);
         await Assert.That(entered).IsEqualTo(0);
-        await Assert.That(afterBack).IsEqualTo(WizardStepId.Import);
+        await Assert.That(afterBack).IsEqualTo(WizardStepId.Harnesses);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_advance_raised_during_entry_is_not_lost() {
+        var (current, entered) = await AvaloniaSession.DispatchAsync(async () => {
+            var last = new FakeWizardStep(WizardStepId.Done);
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition),
+                new FakeWizardStep(WizardStepId.Import) { AdvanceOnEnter = true },
+                last]);
+            await vm.PendingEnterForTesting;
+
+            await vm.NextCommand.Execute().ToTask();
+            await vm.PendingAdvanceForTesting;
+            return (vm.Current.Id, last.EnterCount);
+        });
+
+        await Assert.That(current).IsEqualTo(WizardStepId.Done);
+        await Assert.That(entered).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Back_skips_pass_through_steps() {
+        var current = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition),
+                new FakeWizardStep(WizardStepId.Import) { PassThrough = true },
+                new FakeWizardStep(WizardStepId.Done)], startAt: WizardStepId.Done);
+            await vm.PendingEnterForTesting;
+
+            await vm.BackCommand.Execute().ToTask();
+            return vm.Current.Id;
+        });
+
+        await Assert.That(current).IsEqualTo(WizardStepId.Edition);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Back_is_hidden_when_every_earlier_step_passes_through() {
+        var (visible, canBack) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Import) { PassThrough = true },
+                new FakeWizardStep(WizardStepId.Done)], startAt: WizardStepId.Done);
+            await vm.PendingEnterForTesting;
+
+            return (vm.BackVisible, CanExecute(vm.BackCommand));
+        });
+
+        await Assert.That(visible).IsFalse();
+        await Assert.That(canBack).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Finish_later_follows_its_gate() {
+        var (open, closed) = await AvaloniaSession.DispatchAsync(async () => {
+            var gate = new System.Reactive.Subjects.BehaviorSubject<bool>(true);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Done)], canFinishLater: gate);
+            await vm.PendingEnterForTesting;
+
+            var open = CanExecute(vm.FinishLaterCommand);
+            gate.OnNext(false);
+            return (open, CanExecute(vm.FinishLaterCommand));
+        });
+
+        await Assert.That(open).IsTrue();
+        await Assert.That(closed).IsFalse();
     }
 
     [Test]

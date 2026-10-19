@@ -79,6 +79,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart Capacitor.";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. Capacitor keeps trying to reconnect.";
+
+    internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
     const string IncompatibleReason = "daemon_incompatible";
 
@@ -248,6 +252,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly BehaviorSubject<bool> _awaitingServerAfterSignIn = new(false);
     /// True once a Connecting/Finishing notice has lasted CatchUpLimit — Sign in is then the remaining affordance.
     readonly BehaviorSubject<bool> _catchUpTimedOut = new(false);
+    // A local server takes no sign-in: its recovery is the Start banner.
+    readonly BehaviorSubject<bool> _localServer = new(false);
+    readonly BehaviorSubject<bool> _localServerDown = new(false);
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -635,7 +642,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp);
+        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -657,7 +666,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
-            .CombineLatest(_catchUpTimedOut, (t, timedOut) => !t.Awaiting && (t.Expired || timedOut || (
+            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || timedOut || (
                 t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
@@ -721,6 +730,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
             .DisposeWith(_disposables);
+    }
+
+    /// The "local server is not running" banner, beside the daemon's own recovery.
+    public LocalServerRecoveryViewModel? LocalServer { get; private set; }
+
+    public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
+        LocalServer = recovery;
+        this.RaisePropertyChanged(nameof(LocalServer));
+        _localServer.OnNext(recovery.IsLocalServer);
+        recovery.WhenAnyValue(x => x.Visible).Subscribe(_localServerDown).DisposeWith(_disposables);
     }
 
     /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
@@ -831,6 +850,20 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
     internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
         timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+
+    /// A local server takes no sign-in, so none of its notices asks for one. With this Mac selected,
+    /// the Start banner is the whole story while the server is down, so the generic connecting and
+    /// lost lines would contradict it; the daemon's own notices still stand. A remote pick
+    /// (<paramref name="remoteMachine"/>) keeps its own notices, naming the machine when it is lost.
+    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown, string? remoteMachine) =>
+        !localServer ? notice : (notice, remoteMachine) switch {
+            (SignInExpiredNotice, _)                                    => LocalServerRefusedNotice,
+            (ServerLostNotice, { } machine)                             => RemoteOfflineNotice(machine),
+            (_, not null)                                               => notice,
+            (ConnectingNotice or ServerLostNotice, _) when localServerDown => null,
+            (ServerLostNotice, _)                                       => LocalServerLostNotice,
+            _                                                           => notice,
+        };
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>

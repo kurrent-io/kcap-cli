@@ -25,7 +25,9 @@ public sealed record RunOptions(
     IReadOnlyDictionary<string, string>? EnvOverlay = null, // adds/overrides; rest of env untouched
     TimeSpan? Timeout = null,                                // internal deadline: kills per TimeoutKill scope + awaits on expiry
     CancelMode CancelMode = CancelMode.AbandonWait,
-    TimeoutKillScope TimeoutKill = TimeoutKillScope.Tree);
+    TimeoutKillScope TimeoutKill = TimeoutKillScope.Tree,
+    CancellationToken Interrupt = default,                   // streaming only: one SIGINT, then a tree kill if the child outlives InterruptGrace
+    TimeSpan InterruptGrace = default);                      // default means 10 seconds
 
 public enum ProcessStreamKind { Stdout, Stderr }
 
@@ -65,7 +67,7 @@ public interface IProcessRunner {
 /// -d</c> keeps running) and still throws OperationCanceledException; KillTree kills the tree and
 /// awaits its exit first, then STILL throws — cancellation is cancellation, TimedOut is only for
 /// the internal Timeout.
-public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
+public sealed class ProcessRunner(TimeProvider time, Func<int, bool>? interrupt = null) : IProcessRunner {
     public async Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
         var psi = StartInfo(fileName, args, options);
 
@@ -158,6 +160,8 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
 
     const int TailLimit = 500;
 
+    static readonly TimeSpan DefaultInterruptGrace = TimeSpan.FromSeconds(10);
+
     public async Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
             Action<StreamedLine> onLine, CancellationToken ct) {
         var psi = StartInfo(fileName, args, options);
@@ -188,10 +192,28 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
         var stderrTask = PumpAsync(process.StandardError, ProcessStreamKind.Stderr);
 
         using var timeoutCts = options.Timeout is { } timeout ? new CancellationTokenSource(timeout, time) : null;
-        using var waitCts = timeoutCts is null ? null : CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        using var graceExpired = new CancellationTokenSource();
+        using var interruptDone = new CancellationTokenSource();
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts?.Token ?? CancellationToken.None, graceExpired.Token);
+
+        var grace = options.InterruptGrace > TimeSpan.Zero ? options.InterruptGrace : DefaultInterruptGrace;
+        using var interruptRegistration = options.Interrupt.Register(() => {
+            try {
+                if (process.HasExited) return;
+                // Undelivered (always so on Windows), there is no cleanup to wait for.
+                if (!(interrupt ?? ProcessSignals.Interrupt)(process.Id)) {
+                    graceExpired.Cancel();
+                    return;
+                }
+            } catch (InvalidOperationException) { return; }
+
+            _ = Task.Delay(grace, time, interruptDone.Token).ContinueWith(
+                t => { if (t.IsCompletedSuccessfully) graceExpired.Cancel(); },
+                CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        });
 
         try {
-            await process.WaitForExitAsync(waitCts?.Token ?? ct).ConfigureAwait(false);
+            await process.WaitForExitAsync(waitCts.Token).ConfigureAwait(false);
         } catch (OperationCanceledException) {
             if (ct.IsCancellationRequested) {
                 // Streaming always kills the tree on cancellation, ignoring RunOptions.CancelMode.
@@ -203,9 +225,12 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
                 throw;
             }
 
-            await KillAndAwaitAsync(process, options.TimeoutKill == TimeoutKillScope.Tree).ConfigureAwait(false);
+            var timedOut = timeoutCts?.IsCancellationRequested == true;
+            await KillAndAwaitAsync(process, !timedOut || options.TimeoutKill == TimeoutKillScope.Tree).ConfigureAwait(false);
             await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
-            lock (tailLock) return new StreamingResult(process.ExitCode, TimedOut: true, tail.ToArray());
+            lock (tailLock) return new StreamingResult(process.ExitCode, TimedOut: timedOut, tail.ToArray());
+        } finally {
+            interruptDone.Cancel();
         }
 
         await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);

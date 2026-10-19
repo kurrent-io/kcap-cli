@@ -45,6 +45,22 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
     public void EditionChosen(string edition) =>
         Emit("cli_setup_edition_chosen", new JsonObject { ["edition"] = edition });
 
+    /// <summary>The app is about to spawn <c>kcap setup --local</c>; one per attempt, Try again included,
+    /// so an attempt whose spawn fails still counts.</summary>
+    public void LocalInstallStarted() => Emit("cli_setup_local_install_started", new JsonObject());
+
+    /// <summary>A run settled installed: <c>fresh</c>, <c>reused</c> or <c>recovered</c>.</summary>
+    public void LocalInstallCommitted(string plan) =>
+        Emit("cli_setup_local_install_committed", new JsonObject { ["plan"] = plan });
+
+    /// <summary>A run settled failed, other than by the app quitting. <paramref name="code"/> is the CLI's
+    /// failure code, else <c>cli_missing</c>, <c>spawn_failed</c> or <c>no_failure_line</c>;
+    /// <paramref name="locked"/> means the wizard can no longer go back to the edition choice.</summary>
+    public void LocalInstallFailed(string code, bool locked) =>
+        Emit("cli_setup_local_install_failed", new JsonObject { ["code"] = code, ["locked"] = locked });
+
+    public void LocalInstallRetried() => Emit("cli_setup_local_install_retried", new JsonObject());
+
     public void SigninOpened(string mode, string provider) =>
         Emit("cli_setup_signin_opened", new JsonObject { ["mode"] = mode, ["provider"] = provider });
 

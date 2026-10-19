@@ -27,7 +27,7 @@ public class HarnessesStepViewModelTests {
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
-                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null) {
+                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -40,7 +40,8 @@ public class HarnessesStepViewModelTests {
                 Stamped.AddRange,
                 config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
-                "test-mac");
+                "test-mac",
+                onLocalPath: local ? () => true : null);
         }
 
         public HarnessRowViewModel Row(string label) => Vm.Rows.First(r => r.Label == label);
@@ -375,6 +376,41 @@ public class HarnessesStepViewModelTests {
         public Task<StreamingResult> RunStreamingAsync(
                 string fileName, string[] args, RunOptions options, Action<StreamedLine> onLine, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    [Test]
+    [Arguments(WizardNavigation.Next, true)]
+    [Arguments(WizardNavigation.Skip, true)]
+    [Arguments(WizardNavigation.Next, false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_agents_continue_skip_and_none_detected_all_pass_with_private(WizardNavigation direction, bool detectsAgents) {
+        var (left, visible, saved) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root, detectsAgents ? null : new Dictionary<HarnessId, DetectedAgent>(), local: true);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            var canLeave = await h.Vm.CanLeaveAsync(direction, CancellationToken.None);
+
+            return (canLeave && h.Vm.CanContinue && h.Vm.CanSkip, h.Vm.VisibilityVisible,
+                ConfigMutator.LoadPure(ConfigPath).Profiles["default"].DefaultVisibility);
+        });
+
+        await Assert.That(left).IsTrue();
+        await Assert.That(visible).IsFalse();
+        await Assert.That(saved).IsEqualTo("private");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_harnesses_notes_name_no_terminal_command() {
+        var (local, cloud) = await AvaloniaSession.DispatchAsync(async () => {
+            var l = new Harness(Config.Root, local: true);
+            var c = new Harness(Config.Root);
+            await l.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (new[] { l.Vm.SavedNote, l.Vm.CliMissingNote, l.Vm.ProviderKeyDetail }, c.Vm.SavedNote);
+        });
+
+        foreach (var text in local) await Assert.That(text).DoesNotContain("kcap ");
+        await Assert.That(cloud).Contains("kcap plugin remove");
     }
 
     [Test]

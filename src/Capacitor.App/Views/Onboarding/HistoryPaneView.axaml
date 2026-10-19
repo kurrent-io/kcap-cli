@@ -171,7 +171,8 @@
             </StackPanel>
         </Border>
 
-        <TextBlock Classes="frNote" IsVisible="{Binding DeclineVisible}">
+        <TextBlock Classes="frNote" IsVisible="{Binding LocalDeclineVisible}" Text="{Binding DeclineNote}" />
+        <TextBlock Classes="frNote" IsVisible="{Binding CloudDeclineVisible}">
             <Run Text="Not now means Capacitor starts its history from today. Nothing is deleted either way, and you can widen the window later with " /><Run Text="kcap import" FontFamily="{StaticResource FrMonoFont}" Foreground="{StaticResource FrMutedBrush}" /><Run Text="." />
         </TextBlock>
     </StackPanel>
