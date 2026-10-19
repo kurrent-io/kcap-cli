@@ -65,6 +65,11 @@ sealed class WindowsScheduledTaskServiceManager(
     /// task whose definition cannot be read, or whose action no kcap release wrote, throws: without its
     /// wrapper, nothing says which daemon it runs.
     /// </summary>
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) {
+        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
+        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
+    }
+
     string WrapperOf(string serviceId, bool taskExists) {
         var local = WindowsTaskUnit.WrapperPath(config, serviceId);
         if (!taskExists) return local;

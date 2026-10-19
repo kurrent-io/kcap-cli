@@ -23,6 +23,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
         public bool ListingFails;
         public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
         public IReadOnlyList<string>? TryListInstalled() => ListingFails ? null : ListInstalled();
+        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => null;
         public ServiceStatus Status(string serviceId) {
             Interlocked.Increment(ref _statusReads);
             return binaries[serviceId] == Unreadable

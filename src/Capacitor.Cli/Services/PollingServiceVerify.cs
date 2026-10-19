@@ -4,16 +4,16 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Services;
 
 /// <summary>
-/// The <c>--verify</c> contract on a Windows Scheduled Task: mutate, then prove the service's own daemon
-/// answers a hello under the right name, protocol and version before reporting success, and undo the
-/// mutation when it does not. Exit codes and tokens are <see cref="VerifyExit"/>'s, so the desktop app
-/// classifies a Windows outcome exactly as a launchd one.
+/// The <c>--verify</c> contract for a supervisor whose <see cref="IServiceManager.Query"/> reports the
+/// job's own pid (a Windows Scheduled Task, a systemd user unit): mutate, then prove the service's own
+/// daemon answers a hello under the right name, protocol and version before reporting success, and undo
+/// the mutation when it does not. Exit codes and tokens are <see cref="VerifyExit"/>'s, so the desktop
+/// app classifies the outcome exactly as a launchd one.
 ///
-/// <para>Smaller than the launchd engine because a task has no loaded-but-stale definition to boot
-/// out: <c>schtasks /Create /F</c> replaces the registration outright, and stopping ends the wrapper
-/// and the daemon together.</para>
+/// <para>Smaller than the launchd engine because neither supervisor keeps a loaded-but-stale definition
+/// to boot out: the registration is replaced outright, and stopping ends the daemon with it.</para>
 /// </summary>
-sealed class WindowsServiceVerify(
+sealed class PollingServiceVerify(
         DaemonStore store,
         IServiceManager manager,
         Func<string, int?> validatedDaemonPid,
@@ -21,7 +21,6 @@ sealed class WindowsServiceVerify(
         TimeProvider time,
         Func<bool>? profileViable = null,
         TimeSpan? forwardBudget = null,
-        Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null,
         Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
     static readonly TimeSpan LockWait     = TimeSpan.FromSeconds(10);
     static readonly TimeSpan FenceWait    = TimeSpan.FromSeconds(3);
@@ -124,7 +123,7 @@ sealed class WindowsServiceVerify(
 
         if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
 
-        if (unitEnv?.Invoke(retireId) is not { } retiredEnv) return (RetireRefusal("unit_unreadable"), true, null);
+        if (manager.UnitEnvironment(retireId) is not { } retiredEnv) return (RetireRefusal("unit_unreadable"), true, null);
         if (!SameProfile(retiredEnv, spec.Environment)) return (RetireRefusal("foreign_profile"), true, null);
 
         if (old.State != ServiceState.Running) return (null, true, null);

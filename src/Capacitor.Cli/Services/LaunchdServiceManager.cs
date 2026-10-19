@@ -25,6 +25,9 @@ sealed partial class LaunchdServiceManager(
 
     public string UnitPath(string serviceId) => LaunchdUnit.PlistPath(home, serviceId);
 
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) =>
+        File.Exists(UnitPath(serviceId)) ? LaunchdUnit.EnvFromPlist(File.ReadAllText(UnitPath(serviceId))) : null;
+
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking launchctl.</summary>
     internal void WriteUnitFiles(ServiceSpec spec) =>

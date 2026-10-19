@@ -3,10 +3,10 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
-/// The Windows <c>--verify</c> transaction reports success only once the task's own daemon answers
-/// as the right name, protocol and version, and undoes its mutation otherwise — the evidence the
-/// desktop app's lane classifies, with launchd's exit codes.
-public class WindowsServiceVerifyTests {
+/// The polling <c>--verify</c> transaction reports success only once the supervisor's own daemon
+/// answers as the right name, protocol and version, and undoes its mutation otherwise — the evidence
+/// the desktop app's lane classifies, with launchd's exit codes.
+public class PollingServiceVerifyTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
 
     const string Id = "win-verify-svc";
@@ -24,6 +24,7 @@ public class WindowsServiceVerifyTests {
         public bool OldRunning;
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
+        public IReadOnlyDictionary<string, string>? OldEnv;
         public readonly List<string> Calls = [];
 
         public string Describe() => "fake task";
@@ -31,6 +32,7 @@ public class WindowsServiceVerifyTests {
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => Registered ? [Id] : [];
         public ServiceStatus Status(string serviceId) => new(State, null);
+        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => serviceId == Id ? null : OldEnv;
         ServiceState State => !Registered ? ServiceState.NotInstalled : Running ? ServiceState.Running : ServiceState.Installed;
 
         public ServiceQuery Query(string serviceId) => serviceId == Id
@@ -84,12 +86,14 @@ public class WindowsServiceVerifyTests {
     static HelloProbeResult Hello(string name = Id, string? version = "1.0.0") =>
         new(true, HelloProtocol.CurrentVersion, version, name);
 
-    WindowsServiceVerify Verify(FakeManager manager, Func<HelloProbeResult>? hello = null, bool viable = true,
-            Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null, FakeFence? fence = null) =>
-        new(Daemons.Store, manager,
+    PollingServiceVerify Verify(FakeManager manager, Func<HelloProbeResult>? hello = null, bool viable = true,
+            IReadOnlyDictionary<string, string>? retired = null, FakeFence? fence = null) {
+        manager.OldEnv = retired;
+        return new(Daemons.Store, manager,
             id => id == Id ? (manager.Running ? DaemonPid : null) : manager.OldRunning ? OldDaemonPid : null,
             (_, _) => Task.FromResult(manager.Running ? (hello ?? (() => Hello()))() : new HelloProbeResult(false, null, null, null)),
-            TimeProvider.System, () => viable, ShortBudget, unitEnv, (fence ?? new FakeFence(manager)).AcquireAsync);
+            TimeProvider.System, () => viable, ShortBudget, (fence ?? new FakeFence(manager)).AcquireAsync);
+    }
 
     /// The old daemon's fence, recording into the manager's calls so ordering against install and
     /// uninstall is visible.
@@ -127,8 +131,8 @@ public class WindowsServiceVerifyTests {
     static ServiceSpec Spec() => new(Id, @"C:\kcap\kcap-daemon.exe", @"C:\kcap\daemon.log",
         new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" }, []);
 
-    static Func<string, IReadOnlyDictionary<string, string>?> Retired(string? profile) =>
-        _ => profile is null ? new Dictionary<string, string>() : new Dictionary<string, string> { ["KCAP_PROFILE"] = profile };
+    static Dictionary<string, string> Retired(string? profile) =>
+        profile is null ? [] : new() { ["KCAP_PROFILE"] = profile };
 
     /// Hello and the pid are separate readings, so a single agreeing reading can pair a hello from one
     /// daemon with its replacement's pid. A pid file that changes on every read must never be confirmed.
@@ -136,7 +140,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_pid_that_changes_between_readings_is_never_confirmed() {
         var manager = new FakeManager();
         var reads   = 0;
-        var verify  = new WindowsServiceVerify(Daemons.Store, manager,
+        var verify  = new PollingServiceVerify(Daemons.Store, manager,
             _ => manager.Running ? (reads++ % 2 == 0 ? DaemonPid : DaemonPid + 1) : null,
             (_, _) => Task.FromResult(manager.Running ? Hello() : new HelloProbeResult(false, null, null, null)),
             TimeProvider.System, () => true, ShortBudget);
@@ -147,35 +151,16 @@ public class WindowsServiceVerifyTests {
     }
 
     [Test]
-    public async Task A_rename_refuses_to_retire_a_unit_pinned_to_another_profile_and_touches_nothing() {
+    [Arguments("personal")]
+    [Arguments(null)]
+    public async Task A_rename_refuses_to_retire_a_unit_not_pinned_to_the_installing_profile_and_touches_nothing(string? profile) {
         var manager = new FakeManager { OldRegistered = true };
 
-        var exit = await Verify(manager, unitEnv: Retired("personal"))
+        var exit = await Verify(manager, retired: Retired(profile))
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
         await Assert.That(manager.Calls).IsEmpty();
-    }
-
-    [Test]
-    public async Task A_rename_refuses_to_retire_a_unit_with_no_pinned_profile() {
-        var manager = new FakeManager { OldRegistered = true };
-
-        var exit = await Verify(manager, unitEnv: Retired(null))
-            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
-
-        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
-    }
-
-    [Test]
-    public async Task A_rename_retires_a_unit_pinned_to_the_same_profile() {
-        var manager = new FakeManager { OldRegistered = true };
-
-        var exit = await Verify(manager, unitEnv: Retired("work"))
-            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
-
-        await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
-        await Assert.That(manager.Calls).Contains("uninstall:old-name");
     }
 
     [Test]
@@ -243,7 +228,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_rename_retires_the_old_service_after_the_new_one_is_ready() {
         var manager = new FakeManager { OldRegistered = true };
 
-        var exit = await Verify(manager, unitEnv: Retired("work"))
+        var exit = await Verify(manager, retired: Retired("work"))
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
@@ -256,7 +241,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_rename_fences_a_running_old_daemon_and_commits_before_the_uninstall() {
         var manager = new FakeManager { OldRegistered = true, OldRunning = true };
 
-        var exit = await Verify(manager, unitEnv: Retired("work"))
+        var exit = await Verify(manager, retired: Retired("work"))
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
@@ -270,7 +255,7 @@ public class WindowsServiceVerifyTests {
         var manager = new FakeManager { OldRegistered = true, OldRunning = true };
         var fence   = new FakeFence(manager) { Outcome = AdmissionFenceOutcome.Busy };
 
-        var exit = await Verify(manager, unitEnv: Retired("work"), fence: fence)
+        var exit = await Verify(manager, retired: Retired("work"), fence: fence)
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
@@ -282,7 +267,7 @@ public class WindowsServiceVerifyTests {
         var manager = new FakeManager { OldRegistered = true, OldRunning = true };
         var fence   = new FakeFence(manager) { Pid = OldDaemonPid + 1 };
 
-        var exit = await Verify(manager, unitEnv: Retired("work"), fence: fence)
+        var exit = await Verify(manager, retired: Retired("work"), fence: fence)
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
@@ -294,7 +279,7 @@ public class WindowsServiceVerifyTests {
         var manager = new FakeManager { OldRegistered = true, OldRunning = true };
         var fence   = new FakeFence(manager) { CommitAnswers = false };
 
-        var exit = await Verify(manager, unitEnv: Retired("work"), fence: fence)
+        var exit = await Verify(manager, retired: Retired("work"), fence: fence)
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
@@ -307,7 +292,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_rename_whose_old_task_cannot_be_uninstalled_aborts_the_committed_fence() {
         var manager = new FakeManager { OldRegistered = true, OldRunning = true, OldUninstallFails = true };
 
-        var exit = await Verify(manager, unitEnv: Retired("work"))
+        var exit = await Verify(manager, retired: Retired("work"))
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
@@ -322,7 +307,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_rename_refuses_an_installed_old_task_whose_wrapper_cannot_be_read() {
         var manager = new FakeManager { OldRegistered = true };
 
-        var exit = await Verify(manager, unitEnv: _ => null)
+        var exit = await Verify(manager)
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
@@ -333,7 +318,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_rename_whose_old_task_is_gone_installs_without_retiring() {
         var manager = new FakeManager();
 
-        var exit = await Verify(manager, unitEnv: _ => null)
+        var exit = await Verify(manager)
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.Ok);
