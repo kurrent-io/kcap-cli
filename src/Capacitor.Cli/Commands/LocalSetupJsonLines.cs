@@ -4,7 +4,7 @@ using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Commands;
 
-/// <summary>The JSON lines the desktop wizard reads from <c>kcap setup --local --json</c>.</summary>
+/// <summary>The JSON lines the desktop app reads from <c>kcap setup --local --json</c> and <c>kcap local upgrade --json</c>.</summary>
 static class LocalSetupJsonLines {
     public static string Line(LocalInstallEvent e) => Render(e switch {
         LocalInstallEvent.PreflightPassed p  => new() { Event = "preflight_passed", Plan = p.Plan.ToString().ToLowerInvariant(), Version = p.Version, Root = p.Root },
@@ -22,11 +22,18 @@ static class LocalSetupJsonLines {
         LocalInstallEvent.RollingBack r      => new() { Event = "rolling_back", Reason = r.Reason },
         LocalInstallEvent.RolledBack         => new() { Event = "rolled_back" },
         LocalInstallEvent.Committed c        => new() { Event = "committed", ServerUrl = c.ServerUrl, InstallationId = c.InstallationId, Port = c.Port, Version = c.Version },
+        LocalInstallEvent.UpgradePlanned u   => new() { Event = "upgrade_planned", FromVersion = u.From, Version = u.To },
+        LocalInstallEvent.Stopping           => new() { Event = "stopping" },
+        LocalInstallEvent.Stopped            => new() { Event = "stopped" },
+        LocalInstallEvent.Switched s         => new() { Event = "switched", Version = s.Version },
+        LocalInstallEvent.Restarting r       => new() { Event = "restarting", Version = r.Version },
+        LocalInstallEvent.Upgraded u         => new() { Event = "upgraded", ServerUrl = u.ServerUrl, FromVersion = u.From, Version = u.To },
+        LocalInstallEvent.NothingToDo n      => new() { Event = "nothing_to_do", Reason = n.Reason.Wire(), Version = n.Version, InstalledVersion = n.InstalledVersion },
         _                                    => throw new ArgumentOutOfRangeException(nameof(e), e, null),
     });
 
-    public static string Failed(LocalInstallFailureCode code, string message) =>
-        Render(new() { Event = "failed", Code = code.Wire(), Message = message });
+    public static string Failed(LocalInstallFailureCode code, string message, bool? switched = null) =>
+        Render(new() { Event = "failed", Code = code.Wire(), Message = message, Switched = switched });
 
     /// <summary>The failure an exception escaping the installer stands for. The install itself throws only
     /// <see cref="LocalInstallFailure"/>; anything else came from building the installer or its preflight.</summary>

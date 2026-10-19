@@ -1057,7 +1057,7 @@ return 1;
 }
 
 } finally {
-    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<IReleaseFeed>, time);
+    await UpdateNotice.FlushAsync(command, args, profiles, config, Run<IReleaseFeed>, time, localRoot);
     await HarnessSetupNotice.FlushAsync(command, config, profiles, Run<HarnessRegistry>, time);
 }
 

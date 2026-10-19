@@ -90,7 +90,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         if (Line(e, _version) is { } line) AnsiConsole.MarkupLine($"  {Markup.Escape(line)}");
 
         if (e is LocalInstallEvent.Reused reused && reused.InstalledVersion != _version)
-            AnsiConsole.MarkupLine($"  [dim]This kcap is {Markup.Escape(_version)}; upgrades arrive with kcap local upgrade.[/]");
+            AnsiConsole.MarkupLine($"  [dim]This kcap is {Markup.Escape(_version)}; run kcap local upgrade to move the stack to it.[/]");
     }
 
     /// <summary>The status line for an event, or null for one that has none. The <c>kcap local</c> commands render a
@@ -112,6 +112,17 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             LocalInstallEvent.RollingBack r     => $"Rolling back: {r.Reason}",
             LocalInstallEvent.RolledBack        => "Rolled back",
             LocalInstallEvent.Committed c       => $"Committed: Capacitor local {c.Version} on {c.ServerUrl}",
+            LocalInstallEvent.UpgradePlanned u  => $"Upgrading Capacitor local {u.From} {UpdateCommand.Arrow} {u.To}",
+            LocalInstallEvent.Stopping          => "Stopping the local server…",
+            LocalInstallEvent.Stopped           => "Stopped",
+            LocalInstallEvent.Switched s        => $"Switched to {s.Version}",
+            LocalInstallEvent.Restarting r      => $"Starting Capacitor local {r.Version} again…",
+            LocalInstallEvent.Upgraded u        => $"Upgraded Capacitor local {u.From} {UpdateCommand.Arrow} {u.To} on {u.ServerUrl}",
+            LocalInstallEvent.NothingToDo n     => n.Reason switch {
+                UpgradeSkip.Current    => $"Capacitor local is already at {n.Version}.",
+                UpgradeSkip.StackNewer => $"Capacitor local {n.InstalledVersion} is newer than this kcap ({n.Version}); it is left as it is, and this kcap keeps working with it.",
+                _                      => "There is no local installation to upgrade.",
+            },
             _                                   => null,
         };
 

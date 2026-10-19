@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
@@ -19,8 +18,6 @@ sealed class LocalInstaller(
     HttpClient local, ECDsa manifestKey, LocalPlatform platform, TimeProvider time,
     Func<LocalInstaller, IEnumerable<ILifecycleRecovery>> recoveries) {
     static readonly TimeSpan LeaseWait = TimeSpan.FromSeconds(10);
-
-    const UnixFileMode OwnerOnly = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     IProgress<LocalInstallEvent> _progress = new SyncProgress<LocalInstallEvent>(_ => { });
 
@@ -235,48 +232,11 @@ sealed class LocalInstaller(
         return committed;
     }
 
-    /// <summary>Downloads, verifies and unpacks the bundle into <c>bin/&lt;version&gt;</c>, then points <c>bin/current</c>
-    /// at it. Every step is durable before the journal can say <c>unit</c>.</summary>
+    /// <summary>Stages the bundle, then points <c>bin/current</c> at it. Every step is durable before the journal can
+    /// say <c>unit</c>.</summary>
     async Task StageAsync(SetupDetails details, CancellationToken ct) {
-        var bin     = Path.Combine(root.Directory, "bin");
-        var staging = Path.Combine(bin, $".staging-{details.InstallationId}");
-        var rid     = platform.Rid;
-
-        DurableDirectory.Ensure(staging, root.Directory, OwnerOnly);
-
-        byte[] bytes;
-        string signature;
-
-        try {
-            (bytes, signature) = await bundles.FetchManifestAsync(details.Version, rid, ct);
-        } catch (ArgumentException ex) {
-            throw new LocalInstallFailure(LocalInstallFailureCode.InvalidArguments, ex.Message);
-        }
-
-        var manifest           = LocalBundleManifest.Verify(bytes, signature, manifestKey, details.Version, rid);
-
-        _progress.Report(new LocalInstallEvent.Downloading($"{bundles.BaseUrl}/{rid}/{manifest.Archive}", manifest.Size));
-
-        var archive = Path.Combine(staging, "archive.tar.gz");
-        await bundles.DownloadAsync(manifest, archive,
-            new SyncProgress<long>(received => _progress.Report(new LocalInstallEvent.DownloadProgress(received, manifest.Size))), ct);
-
-        _progress.Report(new LocalInstallEvent.Verified(manifest.Sha256));
-
-        var tree = Path.Combine(staging, "tree");
-        await LocalBundleUnpacker.UnpackAsync(archive, tree, ct);
-
-        var versionDir = Path.Combine(bin, details.Version);
-        Directory.Move(tree, versionDir);
-        DurableDirectory.Sync(bin);
-
-        ScriptUpdater.SwitchLink(Path.Combine(bin, "current"), details.Version);
-        DurableDirectory.Sync(bin);
-
-        Directory.Delete(staging, recursive: true);
-        DurableDirectory.Sync(bin);
-
-        _progress.Report(new LocalInstallEvent.Unpacked(versionDir));
+        await new LocalBundleStager(root, bundles, manifestKey, platform).StageAsync(details.Version, details.InstallationId, _progress, ct);
+        LocalBin.Switch(root, details.Version);
     }
 
     /// <summary>Whatever an interrupted earlier attempt left in <c>bin/</c> is replaced, which is safe only while
