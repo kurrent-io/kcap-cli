@@ -62,7 +62,7 @@ public class DaemonMutationLaneTests {
 
     static Task<MutationOutcome> CannedSucceeded(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation,
-            string? attemptId, CancellationToken ct) =>
+            string? attemptId, ObservedEvidence? predecessor, CancellationToken ct) =>
         Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded());
 
     sealed class RecordingExecutorFactory {
@@ -164,7 +164,7 @@ public class DaemonMutationLaneTests {
             "repair" => new MutationOutcome.AttentionRepair("stale_txn_marker"),
             _ => new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention),
         };
-        await using var lane = MakeLane(factory, classify: (request, _, _, _, _, _) =>
+        await using var lane = MakeLane(factory, classify: (request, _, _, _, _, _, _) =>
             request.RetireServiceId is null ? Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded())
                 : mode == "fault" ? Task.FromException<MutationOutcome>(new IOException("probe failed")) : Task.FromResult(result));
         var rename = lane.RunAsync(Req(MutationVerb.Replace, daemonName: "new-name") with { RetireServiceId = "daemon-a" }, CancellationToken.None);
@@ -477,7 +477,7 @@ public class DaemonMutationLaneTests {
         IDaemonObservation? seenObservation = null;
         var scripted = new ScriptedObservation();
         var lane = MakeLane(factory, oneShotFactory: request => { oneShotCalls++; seenRequest = request; return scripted; });
-        lane.Classify = (request, result, executor, observation, attemptId, ct) => {
+        lane.Classify = (request, result, executor, observation, attemptId, predecessor, ct) => {
             seenObservation = observation;
             return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded());
         };
@@ -1510,7 +1510,7 @@ public class DaemonMutationLaneTests {
         var observation = new ScriptedObservation(); // never full evidence
 
         var task = lane.Classify(
-            Req(verb: MutationVerb.DetachedStart), new ProcessResult(0, "", "", false), executor, observation, null, CancellationToken.None);
+            Req(verb: MutationVerb.DetachedStart), new ProcessResult(0, "", "", false), executor, observation, null, null, CancellationToken.None);
         var outcome = await Drive(task, time, TimeSpan.FromMilliseconds(500));
 
         await Assert.That(outcome).IsEqualTo(new MutationOutcome.UnconfirmedNoAttach());
@@ -1720,5 +1720,58 @@ public class DaemonMutationLaneTests {
         await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation);
         var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
         await Assert.That(outcome).IsEqualTo(new MutationOutcome.AttentionSkew(expected));
+    }
+
+    /// A reload that restarted the daemon is proven by its successor: the instance that answered
+    /// before the reload answering after it is the old daemon still running, never a success.
+    [Test]
+    public async Task Reload_that_reloaded_is_a_skew_while_only_the_pre_reload_instance_answers() {
+        var time = new FakeTimeProvider();
+        var observation = new ScriptedObservation { Behavior = (_, _) => Task.FromResult<ObservedEvidence?>(MatchingEvidence()) };
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "daemon")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "refresh_outcome=reloaded\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation, time: time);
+
+        var outcome = await Drive(lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None), time, DaemonMutationLane.DetachedPollInterval);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.AttentionSkew("predecessor_still_running"));
+    }
+
+    [Test]
+    public async Task Reload_that_reloaded_succeeds_once_a_new_instance_answers() {
+        var time = new FakeTimeProvider();
+        var observation = new ScriptedObservation {
+            Sequence = new Queue<ObservedEvidence?>([
+                MatchingEvidence(pid: 100, instanceId: "inst-old"),
+                MatchingEvidence(pid: 100, instanceId: "inst-old"),
+                new ObservedEvidence(false, null, null, null, null, null, null, false)]),
+            Behavior = (_, _) => Task.FromResult<ObservedEvidence?>(MatchingEvidence()),
+        };
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "daemon")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "refresh_outcome=reloaded\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation, time: time);
+
+        var outcome = await Drive(lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None), time, DaemonMutationLane.DetachedPollInterval);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
+    }
+
+    /// Already at standard priority, the refresh restarts nothing, so the same instance is the right answer.
+    [Test]
+    public async Task Reload_that_found_the_unit_current_accepts_the_same_instance() {
+        var observation = new ScriptedObservation { Behavior = (_, _) => Task.FromResult<ObservedEvidence?>(MatchingEvidence()) };
+        var cli = new FakeKcapCli {
+            StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Ownership(loadedSpawnType: "daemon")),
+            ReloadBehavior = _ => Task.FromResult(new ProcessResult(0, "", "refresh_outcome=current\n", false)),
+        };
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, oneShotFactory: _ => observation);
+
+        var outcome = await lane.RunAsync(Req(MutationVerb.Reload), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
     }
 }

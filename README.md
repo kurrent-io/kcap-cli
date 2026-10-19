@@ -169,7 +169,7 @@ At a glance — each links to its section below:
 | Command | What it does |
 |---------|--------------|
 | [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon (`--local` runs the server on this machine) |
-| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, logs, web UI and uninstall of the server `kcap setup --local` installed |
+| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, upgrade, logs, web UI and uninstall of the server `kcap setup --local` installed |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
@@ -396,12 +396,47 @@ kcap local stop            # stop it, and keep it stopped across logins
 kcap local restart
 kcap local logs -n 200     # the end of the server's log, which holds Postgres's and KurrentDB's too
 kcap local open            # open the web UI in a browser
+kcap local upgrade         # move it forward to this kcap's version
 kcap local uninstall       # remove it, keeping its data; --purge deletes it (see Removing the local edition)
 ```
 
-`kcap local status` reports the installation's version, port and root, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup that was interrupted. It also says when the stack is older than this `kcap`. It changes nothing, and exits 0 only when the server is running and ready.
+`kcap local status` reports the installation's version, port and root, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup or upgrade that was interrupted. It also says when the stack is older than this `kcap`, and names `kcap local upgrade`, or newer than it. It changes nothing, and exits 0 only when the server is running and ready.
 
-`start`, `stop` and `restart` wait for any other `kcap` that is changing the installation, and first finish or undo an interrupted setup. A stop persists: the server does not come back at the next login until `kcap local start`. The port is part of the installation's identity, so a server whose port another process holds cannot move to another one; stop that process instead. The logs are under `~/.config/kcap/local/logs`.
+`start`, `stop`, `restart` and `upgrade` wait for any other `kcap` that is changing the installation, and first finish or undo an interrupted setup or upgrade. A stop persists: the server does not come back at the next login until `kcap local start`. The port is part of the installation's identity, so a server whose port another process holds cannot move to another one; stop that process instead. The logs are under `~/.config/kcap/local/logs`.
+
+#### Upgrading the local server
+
+The stack is always at least as new as every `kcap` that uses it, and it only moves forward. `kcap local upgrade` is the only command that changes its version: it moves the stack to this `kcap`'s version when that is newer, and otherwise changes nothing, so an older `kcap` on the same machine (say the desktop app's bundled one) keeps working against a newer stack and never moves it back.
+
+- **npm:** `kcap update` replaces the CLI, then runs the new binary's `kcap local upgrade`. A CLI release can reach npm before its server bundle is published; the update then still succeeds, says so, and the stack stays on its version until `kcap local upgrade` is run again.
+- **Script installs:** `kcap update` does the same once the new release is in place.
+- **Homebrew and other installs:** update the CLI the way you installed it, then run `kcap local upgrade`. `kcap local status` and the notice after other commands say when the stack is behind.
+
+An upgrade downloads and verifies the new bundle beside the running one, stops the server and checks that nothing of it is left, points `bin/current` at the new version, starts it and waits until it is ready; the first start migrates the data. A server you had stopped is started for that, then stopped again. Upgrades are forward-only: nothing is snapshotted, so nothing is rolled back. If anything fails before the switch, the old version is started again (if it was running). If the new version does not start, it stays selected and stopped, the old bundle is kept in `bin/` for diagnosis, and `kcap local start` tries again once the cause is fixed. An upgrade interrupted at any point is finished or undone by the next `kcap local start`, `stop`, `restart`, `upgrade` or `uninstall`, or by `kcap setup --local`. The update cap described under [`kcap update`](#other-commands) does not apply to the local server.
+
+`--if-installed` prints nothing when there is no installation. `--json` is for the desktop app: one JSON object per line on stdout, in the style of `kcap setup --local --json`:
+
+```json
+{"v":1,"event":"upgrade_planned","version":"0.14.0","from_version":"0.13.0"}
+{"v":1,"event":"downloading","url":"https://…","bytes":84213760}
+{"v":1,"event":"verified","sha256":"…"}
+{"v":1,"event":"stopping"}
+{"v":1,"event":"stopped"}
+{"v":1,"event":"switched","version":"0.14.0"}
+{"v":1,"event":"starting","unit":"…"}
+{"v":1,"event":"ready","server_url":"http://localhost:9473"}
+{"v":1,"event":"upgraded","server_url":"http://localhost:9473","version":"0.14.0","from_version":"0.13.0"}
+```
+
+A run that changes nothing ends with `{"v":1,"event":"nothing_to_do","version":"…","installed_version":"…","reason":"…"}`, where `reason` is `current`, `stack_newer` or `not_installed`. A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…","switched":false}`; `switched` says whether the new version is selected. `code` is one of the setup codes, such as `lifecycle_busy` when another `kcap` holds the installation, `download_failed`, `verification_failed`, `start_failed` or `commit_failed`. The other events are `recovering`, `recovered`, `download_progress`, `unpacked` and `restarting`.
+
+| Exit | Meaning |
+| -- | -- |
+| 0 | Upgraded: the stack runs this `kcap`'s version |
+| 1 | Failed before the switch: the old version is selected, and running again if it was |
+| 2 | Failed after the switch: the new version is selected and stopped, or its switch is finished by the next command |
+| 3 | Nothing to do: already at this version, newer than it, or not installed |
+| 4 | No bundle is published for this version yet (`bundle_not_published`); nothing changed |
 
 ### Approval policy
 
@@ -1833,7 +1868,7 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
-| `daemon.auto_resume` | `true`     | Resume hosted agents when the daemon starts after a restart. `false` leaves them interrupted in `kcap agent ls`, from where `kcap agent resume <id>` retries one. Read at daemon start. |
+| `daemon.auto_resume` | `true`     | Resume hosted agents when the daemon starts after a restart. `false` leaves them interrupted in `kcap agent ls`, from where `kcap agent resume <id>` retries one. Read at daemon start. The desktop app's **Settings…** sets it too. |
 | `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents` or the `KCAP_MAX_AGENTS` env var, which take precedence at startup. `kcap config set daemon.max_agents` and the desktop app's **Settings…** hand the value to the running daemon, which applies it without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
@@ -2236,7 +2271,7 @@ kcap agent stop --all -y   # stop the listed non-review agents, no prompt
 
 Agent ids are long, so `attach`, `stop` and `resume` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
 
-**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one (refused, with the reason, while its previous process could not be proven gone or a newer daemon wrote its entry), `kcap agent stop <id>` discards it, and `stop --all` leaves them out; one left alone for 30 days is discarded at the next daemon start. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. A starting daemon resumes at most `KCAP_RESUME_CONCURRENCY` agents at once (default 2), leaves one last alive more than `KCAP_RESUME_MAX_AGE_SECONDS` ago (default 86400; 0 removes the bound) `interrupted (too_old)`, and counts a resume as failed when the agent does not stay up for `KCAP_RESUME_READINESS_SECONDS` (default 10). `kcap config set daemon.auto_resume false` turns the resume off.
+**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one (refused, with the reason, while its previous process could not be proven gone or a newer daemon wrote its entry), `kcap agent stop <id>` discards it, and `stop --all` leaves them out; one left alone for 30 days is discarded at the next daemon start. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. The desktop app does the same: its rows show **Resuming** and **Interrupted** with the reason, and an open terminal tab re-attaches once the agent is back or says why it was not. A starting daemon resumes at most `KCAP_RESUME_CONCURRENCY` agents at once (default 2), leaves one last alive more than `KCAP_RESUME_MAX_AGE_SECONDS` ago (default 86400; 0 removes the bound) `interrupted (too_old)`, and counts a resume as failed when the agent does not stay up for `KCAP_RESUME_READINESS_SECONDS` (default 10). `kcap config set daemon.auto_resume false` turns the resume off.
 
 **Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two:
 
@@ -2615,8 +2650,11 @@ kcap feedback --feedback                               # send feedback; prompts 
 > manager blocks install scripts. It exits early if you're already up to date,
 > and tells you what to run instead for other installs (e.g. Homebrew). On the
 > stable channel it stops at your connected server's version when the server
-> trails npm, so it never installs a CLI newer than the server it talks to. Use
-> `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+> trails npm, so it never installs a CLI newer than the server it talks to; a
+> [local server](#upgrading-the-local-server) does not cap it, and after the CLI
+> moves `kcap update` runs the new binary's `kcap local upgrade` to move the local
+> stack with it. Use `kcap update --check` for a machine-readable
+> `{current, latest, newer}` probe.
 >
 > **Script installs** (`curl -fsSL https://www.kurrent.io/install | bash`, or
 > `install.ps1` on Windows) update without npm: `kcap update` reads the

@@ -17,14 +17,15 @@ static class LocalOwnUnit {
     }
 
     /// <summary>For a caller already holding the unit lock. With <paramref name="startPresent"/> an own unit that is
-    /// already installed is started too.</summary>
-    public static bool Ensure(LocalRoot root, LocalServerUnit unit, ILocalServerService service, Func<LocalInstallFailure> refuse, bool startPresent) {
+    /// already installed is started too; with <paramref name="replace"/> it is rewritten, which also starts it.</summary>
+    public static bool Ensure(LocalRoot root, LocalServerUnit unit, ILocalServerService service, Func<LocalInstallFailure> refuse, bool startPresent,
+        bool replace = false) {
         var owner = service.Owner(unit);
         var empty = owner is { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent };
 
         if (!empty && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours) throw refuse();
 
-        if (!empty && service.IsInstalled(unit)) {
+        if (!empty && !replace && service.IsInstalled(unit)) {
             if (startPresent) service.Start(unit);
             return false;
         }

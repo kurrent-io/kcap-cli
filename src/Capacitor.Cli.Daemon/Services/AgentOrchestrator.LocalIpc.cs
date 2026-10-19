@@ -3,6 +3,7 @@ using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
@@ -82,7 +83,21 @@ internal partial class AgentOrchestrator {
                 || _agents.Values.Any(a => a.Status is "Starting" or "Running");
     }
 
-    internal List<AgentStatusDto> SnapshotAgentsForStatus() =>
+    /// <summary>The live agents, then the ledger entries with no live agent. The ledger is read whole, before
+    /// the live agents, and reconciled against that one live observation, so an agent that is published or
+    /// cleaned up in between is listed once rather than in neither part.</summary>
+    internal List<AgentStatusDto> SnapshotAgentsForStatus() {
+        var ledger = LedgerOnlyAgents(includeLive: true);
+        var live   = LiveStatusRows();
+        var listed = live.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+
+        return [.. live, .. ledger.Where(l => !listed.Contains(l.Entry.AgentId)).Select(l => LedgerStatusRow(l.Entry, l.Status))];
+    }
+
+    internal static string TranscriptFormatOf(AgentInstance agent) =>
+        agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;
+
+    List<AgentStatusDto> LiveStatusRows() =>
         [.. _agents.Values
             .OrderBy(a => a.CreatedAt)
             .ThenBy(a => a.Id, StringComparer.Ordinal)
@@ -104,12 +119,30 @@ internal partial class AgentOrchestrator {
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
                 AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput,
-                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor,
+                TranscriptFormat: TranscriptFormatOf(a),
                 // Null until the agent's first subagent report, a number from then on: the clock's
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
                 TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
+
+    /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
+    static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
+        var worktree = ResumedWorktree(entry);
+        var checkout = AgentCheckout.Resolve(worktree, entry.Launch.Work, borrowedSnapshotSource: null);
+
+        return new(
+            entry.AgentId, KindText(LaunchKind.Default), entry.Vendor, checkout.Repository, status,
+            entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
+            string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
+            HasTerminal: entry.HasTerminal, Title: entry.Launch.Title, WorktreePath: checkout.Worktree,
+            WorkLocation: checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
+            BorrowedFrom: checkout.BorrowedFrom,
+            SessionId: entry.SessionId,
+            Branch: string.IsNullOrWhiteSpace(worktree.Branch) ? null : worktree.Branch,
+            TranscriptFormat: entry.TranscriptFormat,
+            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
+    }
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame

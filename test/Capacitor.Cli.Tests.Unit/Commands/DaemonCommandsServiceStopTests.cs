@@ -59,7 +59,7 @@ public class DaemonCommandsServiceStopTests {
         ledger.Write(ResumeLedgerEntries.For("running-1", ResumeState.Running));
         ledger.Write(ResumeLedgerEntries.For("saved-1", ResumeState.Resuming));
         var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: () => acked.SetResult());
+        _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: acked.SetResult);
         var manager = new RecordingServiceManager(new() { [Name] = "/opt/kcap/kcap-daemon" });
         var time    = new FakeTimeProvider();
         using var console = ConsoleOutput.StartFullCapture();

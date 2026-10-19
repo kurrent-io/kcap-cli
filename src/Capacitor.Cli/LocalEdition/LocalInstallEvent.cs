@@ -34,4 +34,20 @@ abstract record LocalInstallEvent {
     public sealed record RollingBack(string Reason) : LocalInstallEvent;
 
     public sealed record RolledBack : LocalInstallEvent;
+
+    public sealed record UpgradePlanned(string From, string To) : LocalInstallEvent;
+
+    public sealed record Stopping : LocalInstallEvent;
+
+    public sealed record Stopped : LocalInstallEvent;
+
+    public sealed record Switched(string Version) : LocalInstallEvent;
+
+    /// <summary>A failure before the switch is starting the old version again.</summary>
+    public sealed record Restarting(string Version) : LocalInstallEvent;
+
+    public sealed record Upgraded(string ServerUrl, string From, string To) : LocalInstallEvent;
+
+    /// <summary>The stack is left as it is: already at the caller's version, newer than it, or not installed.</summary>
+    public sealed record NothingToDo(UpgradeSkip Reason, string Version, string? InstalledVersion) : LocalInstallEvent;
 }

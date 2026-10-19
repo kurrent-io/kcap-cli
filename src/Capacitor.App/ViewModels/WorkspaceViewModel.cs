@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.Resume;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -153,11 +154,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
-            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null) {
+            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
+            Func<string, ResumeLedgerEntry?>? resumeLedger = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
-        Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
+        Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time, resumeLedger) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()
@@ -259,7 +261,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .DisposeWith(_disposables);
 
         presence
-            .Where(p => p.Dto is not null)
+            .Where(p => p.Dto is not null && !LacksRuntimeMetadata(p.Dto))
             .Take(1)
             .Subscribe(p => {
                 var dto = p.Dto!;
@@ -303,13 +305,20 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _disposables.Add(StopCommand);
     }
 
+    /// A resuming row the daemon has no runtime answers for; the reader and input chosen from it would be
+    /// the older-daemon fallbacks, for good. A resume publishes the agent with them. An interrupted row
+    /// is not held back: it may stay interrupted for its whole retention, and a fallback chat beats none.
+    static bool LacksRuntimeMetadata(AgentStatusDto dto) =>
+        dto.Status == "Resuming" && dto.HasTerminal is null && dto.TranscriptFormat is null;
+
     static AgentPresence Accumulate(AgentPresence state, IChangeSet<AgentStatusDto, string> changes) {
         var dto = state.Dto;
         var ended = state.SessionEnded;
         foreach (var change in changes) {
             if (change.Reason == ChangeReason.Remove) { ended = true; continue; } // dto stays frozen
             dto = change.Current;
-            if (SessionStatusDots.IsTerminal(dto.Status)) ended = true;
+            // The latest row decides, not the first end seen: a resume brings an ended agent back under its id.
+            ended = SessionStatusDots.IsTerminal(dto.Status);
         }
         return new AgentPresence(dto, ended);
     }

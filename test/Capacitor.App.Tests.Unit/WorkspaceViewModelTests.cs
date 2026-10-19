@@ -409,6 +409,71 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A resume brings an agent back under its id after its row ended or vanished, and an interrupted
+    /// agent can still be stopped, so neither leaves the workspace latched as ended.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_resume_row_clears_an_ended_session() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            await Assert.That(vm.SessionEnded).IsTrue();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            daemon.Agents.RemoveKey("a1");
+            await Assert.That(vm.SessionEnded).IsTrue();
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            // A reconnect can skip the intermediate rows and land straight on a live one.
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await Assert.That(vm.SessionEnded).IsFalse();
+
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A resume row from an entry that never recorded the runtime's metadata cannot choose the reader or
+    /// the input channel, and the chat is built only once, so it waits for a row that can.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_waits_past_a_resume_row_that_carries_no_runtime_metadata() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: null) with { Status = "Resuming" });
+            await Assert.That(vm.Chat).IsNull();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: false) with { TranscriptFormat = TranscriptFormats.Envelopes });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.Chat).IsNotNull();
+            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Waiting);
+
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// An interrupted row can stay for the ledger's whole retention, so it is not held back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_is_built_for_an_interrupted_row_without_runtime_metadata() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: null) with { Status = "Interrupted" });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Chat).IsNotNull();
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Chat_is_built_on_the_first_dto_of_any_vendor_with_the_reader_the_format_names() {

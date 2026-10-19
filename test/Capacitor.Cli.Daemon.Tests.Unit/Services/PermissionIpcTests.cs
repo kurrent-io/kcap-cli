@@ -112,7 +112,7 @@ public class PermissionIpcTests {
     [Test]
     public async Task Resolve_withdraw_settles_as_withdrawn_by_tool_settled_and_pushes_resolved() {
         var broker = new PermissionPromptBroker();
-        var settlement = broker.Register(Dto("r1"));
+        var settlement = broker.Register(Dto("r1") with { ToolInput = JsonDocument.Parse("""{"command":"ls"}""").RootElement.Clone() });
         var (_, reader) = broker.Subscribe();
         _ = await reader.ReadAsync(new CancellationTokenSource(5000).Token); // Pending
         var ipc = new PermissionIpc(broker, NullLogger<PermissionIpc>.Instance);

@@ -114,13 +114,21 @@ internal sealed class TerminalChatInput : ChatInput {
 
     /// The hint is built from the terminal's own availability, so it is true in the windows where
     /// State alone would lie (a reattach or detach under way while State reads Attached).
+    internal static string InterruptedHint(string? reason) =>
+        "Not resumed after a daemon restart" + (string.IsNullOrEmpty(reason) ? "" : $" ({reason})") +
+        ". Retry with `kcap agent resume`, or stop it to discard it.";
+
     internal static string HintFor(SendAvailability availability, TerminalSessionState state) => availability switch {
         SendAvailability.Ready         => "Enter sends · Shift+Enter for a new line",
         SendAvailability.Sending       => "Sending…",
         SendAvailability.Transitioning => "Updating the terminal connection…",
         SendAvailability.ReadOnly      => $"Read-only: {state.Detail}",
+        SendAvailability.Connecting when state.Phase == TerminalSessionPhase.Resuming
+                                       => "Waiting for the agent to resume after a daemon restart…",
         SendAvailability.Connecting    => "Connecting to the terminal…",
         SendAvailability.Reattach      => "Reattach the terminal to send",
+        SendAvailability.Ended when state.Phase == TerminalSessionPhase.Interrupted
+                                       => InterruptedHint(state.Detail),
         SendAvailability.Ended         => "This session has ended",
         _                              => "No terminal to send to",
     };

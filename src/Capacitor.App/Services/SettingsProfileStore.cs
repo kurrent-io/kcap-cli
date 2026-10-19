@@ -18,6 +18,9 @@ public sealed class SettingsProfileStore(ConfigRoot config, string profileName, 
     public Task SaveCapacityAsync(int capacity, CancellationToken ct) =>
         SaveAsync(settings => settings with { MaxAgents = capacity }, ct);
 
+    public Task SaveAutoResumeAsync(bool autoResume, CancellationToken ct) =>
+        SaveAsync(settings => settings with { AutoResume = autoResume }, ct);
+
     public async Task<string?> SaveNameAsync(string name, CancellationToken ct) {
         string? previous = null;
         await SaveAsync(settings => {

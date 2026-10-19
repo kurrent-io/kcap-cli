@@ -3051,6 +3051,25 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Pins that the chat header names why an agent a daemon restart could not bring back stopped.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_interrupted_agent_shows_its_reason_in_the_chat_status() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+                await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Resuming);
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted", Interruption = "worktree_missing" });
+
+                await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Interrupted);
+                await Assert.That(h.Chat.AgentStatus.Tip).Contains("worktree_missing");
+                await Assert.That(h.Chat.AgentStatus.Tip).Contains("kcap agent resume a1");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     /// Pins a terminal select dialog as a chat question: text is held back, and a choice moves the
     /// dialog's cursor from where the screen shows it and confirms, in one write.
     [Test]
