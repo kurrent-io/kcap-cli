@@ -82,7 +82,12 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
             }
 
             if (result is { ExitCode: 0, TimedOut: false }) {
-                await _reconnect();
+                try {
+                    await _reconnect();
+                } catch (Exception) when (_shutdown.IsCancellationRequested) {
+                } catch (Exception ex) {
+                    Message = $"The local server started, but reconnecting failed: {ex.Message}";
+                }
                 return;
             }
 

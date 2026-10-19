@@ -637,7 +637,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp);
+        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, NoticeForLocalServer);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -842,6 +843,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
     internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
         timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+
+    /// A local server's outage belongs to its Start banner: the generic connecting and lost-session
+    /// lines would contradict it, and the lost one tells the user to sign in, which a local server
+    /// never takes. The daemon's own notices still stand.
+    internal static string? NoticeForLocalServer(string? notice, bool localServer) =>
+        localServer && notice is ConnectingNotice or ServerLostNotice ? null : notice;
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>

@@ -141,6 +141,22 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    /// A throw out of the reconnect must not escape the command, where nothing observes it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_reconnect_after_a_start_becomes_a_message() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying));
+            using var vm = new LocalServerRecoveryViewModel(
+                status, isLocalServer: true, _ => Task.FromResult(Started),
+                () => throw new ObjectDisposedException("lane"), CancellationToken.None);
+
+            await vm.StartCommand.Execute().ToTask();
+
+            await Assert.That(vm.Message).Contains("reconnecting failed");
+        });
+    }
+
     [Test]
     public async Task Sign_in_is_never_requested_for_a_local_server() {
         using var tmp = new TempDir();

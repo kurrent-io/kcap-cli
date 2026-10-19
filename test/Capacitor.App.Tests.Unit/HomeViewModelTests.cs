@@ -948,6 +948,64 @@ public class HomeViewModelTests {
         });
     }
 
+    /// The Start banner is the whole story for a stopped local server: the connection banner under
+    /// it must neither spin "Connecting" nor, after the catch-up bound, tell the user to sign in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stopped_local_server_shows_no_connecting_or_sign_in_notice() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var time = new FakeTimeProvider();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999", time: time);
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            Connect(daemon, "disconnected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(local.Visible).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsNull();
+            await Assert.That(vm.ConnectionBannerVisible).IsFalse();
+
+            time.Advance(HomeViewModel.CatchUpLimit);
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+
+            await Assert.That(vm.ConnectionNotice).IsNull();
+            await Assert.That(vm.BannerMessage ?? "").DoesNotContain("Sign in");
+            await Assert.That(vm.SignInVisible).IsFalse();
+        });
+    }
+
+    /// Suppressing the server notices must not hide the daemon's own: a local server with the
+    /// daemon down still says so.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_server_keeps_the_daemon_down_notice() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        });
+    }
+
     /// First paint after wizard auth never calls NotifySignInCompleted — Home is constructed
     /// afterwards. A live app lane plus a daemon still saying "disconnected" is catch-up, not
     /// "sign in again".
