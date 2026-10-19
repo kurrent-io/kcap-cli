@@ -86,7 +86,7 @@ public static class ConfigMutator {
         // proceed as though nothing were configured.
         string json;
         try {
-            json = File.ReadAllText(path);
+            json = ReadDuringPublish(path);
         } catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) {
             // A link at the exact path (dangling included), or a file/link ancestor, is
             // structural evidence — unreadable, not absence.
@@ -125,6 +125,20 @@ public static class ConfigMutator {
             return false;
         }
     }
+
+    // On Windows a read that overlaps Publish's replace-into-place can hit a sharing violation; that
+    // is a writer mid-rename, not unreadable evidence, so it is retried rather than reported.
+    static string ReadDuringPublish(string path) {
+        for (var attempt = 0; ; attempt++) {
+            try {
+                return File.ReadAllTextShared(path);
+            } catch (IOException e) when (e.HResult == SharingViolation && attempt < 49) {
+                Thread.Sleep(20);
+            }
+        }
+    }
+
+    const int SharingViolation = unchecked((int)0x80070020);
 
     static ProfileConfig FreshDefault() => ProfileConfig.Fresh();
 

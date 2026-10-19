@@ -43,6 +43,24 @@ public class ConfigMutatorTests {
         await Assert.That(File.Exists(AppConfig.GetConfigPath(Config.Root) + ".tmp")).IsFalse();
     }
 
+    /// A read racing a publish sees the old or the new file, never "unreadable". Only Windows can
+    /// fail this: its sharing rules are what a read overlapping the replace-into-place collides with.
+    [Test]
+    public async Task TryLoadPure_reads_while_publishes_replace_the_file() {
+        await ConfigMutator.MutateAsync(Config.Root, c => c with { MachineId = "0" });
+        var path = AppConfig.GetConfigPath(Config.Root);
+
+        var writer = Task.Run(() => {
+            for (var i = 1; i <= 200; i++) ConfigMutator.Mutate(Config.Root, c => c with { MachineId = $"{i}" });
+        });
+        var unreadable = 0;
+        while (!writer.IsCompleted)
+            if (!ConfigMutator.TryLoadPure(path, out _)) unreadable++;
+        await writer;
+
+        await Assert.That(unreadable).IsEqualTo(0);
+    }
+
     [Test]
     public async Task Mutate_survives_a_transient_reader_holding_the_destination() {
         await ConfigMutator.MutateAsync(Config.Root, c => c with { MachineId = "before" });
