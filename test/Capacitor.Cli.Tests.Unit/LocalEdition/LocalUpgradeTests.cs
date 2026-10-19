@@ -94,7 +94,7 @@ public class LocalUpgradeTests {
     string? RegistryVersion() =>
         LocalStateFiles.ReadRegistry(Root) is StateRead<InstallRegistry>.Present { Value.Active: { } active } ? active.Version : null;
 
-    bool Staged(string version) => Directory.Exists(Path.Combine(Bin, version));
+    bool Staged(string version) => Directory.Exists(Tmp.PathTo(["r", "bin", version]));
 
     [Test]
     public async Task An_upgrade_stages_stops_switches_starts_and_commits_in_that_order() {
@@ -140,11 +140,58 @@ public class LocalUpgradeTests {
     }
 
     [Test]
-    public async Task Without_an_installation_there_is_nothing_to_do() {
+    public async Task Without_an_installation_there_is_nothing_to_do_and_no_root_is_created() {
         var result = await Upgrade();
 
         await Assert.That(result).IsEqualTo(new LocalInstallEvent.NothingToDo(UpgradeSkip.NotInstalled, New, null));
         await Assert.That(Bundle(New).Requests).IsEmpty();
+        await Assert.That(Directory.Exists(Root.Directory)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_stopped_stack_is_migrated_and_stopped_again() {
+        Installed();
+        await Service.StopAsync(LocalServerUnit.ForInstallation(Root, Port), CancellationToken.None);
+        _log.Clear();
+
+        LocalInstallEvent result;
+        using (Record()) result = await Upgrade();
+
+        await Assert.That(result).IsTypeOf<LocalInstallEvent.Upgraded>();
+        await Assert.That(_log.IndexOf("stop", _log.IndexOf("GET /auth/config"))).IsLessThan(_log.IndexOf("journal:cleared"));
+        await Assert.That(Service.Running).IsFalse();
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+    }
+
+    [Test]
+    public async Task A_unit_whose_state_cannot_be_read_is_not_upgraded() {
+        Installed();
+        Service.ActivityOverride = new UnitActivity.Unknown("launchctl did not answer");
+
+        var failure = await Failure();
+
+        await Assert.That(failure.Switched).IsFalse();
+        await Assert.That(_log).IsEmpty();
+        await Assert.That(Bundle(New).Requests).IsEmpty();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_new_version_that_neither_starts_nor_stops_keeps_the_journal() {
+        Installed();
+
+        LocalUpgradeFailure failure;
+        using (Record(point => {
+                   if (point != "upgrade:starting") return;
+                   Server.Ready             = HttpStatusCode.ServiceUnavailable;
+                   Service.ActivityOverride = new UnitActivity.Exited(1);
+                   Service.StopFailure      = new LocalLifecycleException("launchctl bootout failed");
+               }))
+            failure = await Failure();
+
+        await Assert.That(failure.Switched).IsTrue();
+        await Assert.That(failure.Message).Contains("finishes the upgrade");
+        await Assert.That(JournalPhase()).IsEqualTo(LocalUpgradeJournal.Starting);
     }
 
     [Test]

@@ -21,8 +21,16 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
     /// <summary>Throws <see cref="LocalUpgradeFailure"/>, <see cref="LocalInstallFailure"/> from a recovery, or
     /// <see cref="LocalLifecycleException"/> when the lease is held or the journal cannot be acted on.</summary>
     /// <param name="stager">Built only once there is something to stage.</param>
-    public Task<LocalInstallEvent> RunAsync(Func<LocalBundleStager> stager, string version, CancellationToken ct) =>
-        stack.RunAsync(progress, (lease, state, token) => UnderLeaseAsync(lease, state, stager, version, token), ct);
+    public Task<LocalInstallEvent> RunAsync(Func<LocalBundleStager> stager, string version, CancellationToken ct) {
+        // Without a registry or a journal there is nothing to upgrade or recover, and taking the lease would create the root.
+        if (!File.Exists(stack.Root.RegistryPath) && !File.Exists(stack.Root.JournalPath))
+            return Task.FromResult(Done(new LocalInstallEvent.NothingToDo(UpgradeSkip.NotInstalled, version, null)));
+
+        return stack.RunAsync(progress, (lease, state, token) => UnderLeaseAsync(lease, state, stager, version, token), ct);
+    }
+
+    /// <summary>Whether the registry may already name the new version, for a failure that escapes as an I/O error.</summary>
+    public bool Switched { get; private set; }
 
     async Task<LocalInstallEvent> UnderLeaseAsync(LifecycleLease lease, LocalStackState state, Func<LocalBundleStager> stager, string version,
         CancellationToken ct) {
@@ -56,7 +64,13 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             throw Failed(LocalInstallFailureCode.LeftoverState,
                 $"bin/current already names {version} while the registry names {from}. Nothing was changed.");
 
-        var details = new UpgradeDetails(from, version, installation.Port, stack.Service.Activity(unit) is UnitActivity.Running or UnitActivity.Restarting);
+        var activity = stack.Service.Activity(unit);
+
+        // Unknown is not stopped: a failure before the switch would leave a running stack down.
+        if (activity is UnitActivity.Unknown(var unknown))
+            throw Failed(LocalInstallFailureCode.StartFailed, $"The {stack.Service.Describe}'s state could not be read ({unknown}). Nothing was changed.");
+
+        var details = new UpgradeDetails(from, version, installation.Port, activity is UnitActivity.Running or UnitActivity.Restarting);
 
         progress.Report(new LocalInstallEvent.UpgradePlanned(from, version));
 
@@ -133,6 +147,8 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
     /// <summary>A throw here leaves the journal at <c>switching</c>: the registry may already name the new version, so
     /// only rolling forward is safe, and the next lifecycle command does it.</summary>
     void Switch(LifecycleLease lease, LifecycleJournalEntry entry, UpgradeDetails details) {
+        Switched = true;
+
         try {
             PublishVersion(lease, entry.InstallationId, details.To);
             FaultPoints.Hit("upgrade:published");
@@ -147,35 +163,55 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
         progress.Report(new LocalInstallEvent.Switched(details.To));
     }
 
+    /// <summary>Starts the new version even when the old one was stopped, so the migration runs and is proven now; a stack
+    /// that was stopped is stopped again once it is ready. Every failure here is after the switch: the journal is cleared
+    /// only once the stack is confirmed in the state the message names.</summary>
     async Task<LocalInstallEvent> StartNewAsync(LifecycleLease lease, LifecycleJournalEntry entry, UpgradeDetails details) {
-        lease.Advance(entry, LocalUpgradeJournal.Starting, ServerStart.Allow);
-        FaultPoints.Hit("upgrade:starting");
+        var bundle = Path.Combine(LocalBin.Directory(stack.Root), details.From);
 
-        var installed = Installed();
+        LocalStackState.Installed installed;
+
+        try {
+            lease.Advance(entry, LocalUpgradeJournal.Starting, ServerStart.Allow);
+            FaultPoints.Hit("upgrade:starting");
+
+            installed = Installed();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or LocalLifecycleException) {
+            throw Unfinished(details, ex.Message);
+        }
+
         progress.Report(new LocalInstallEvent.Starting(installed.Unit.Label));
 
         try {
             await Control.StartAsync(installed, _ => { }, CancellationToken.None, rewriteUnit: true);
         } catch (Exception ex) {
-            var why = ex.Message;
-
             try {
                 await Control.StopAsync(installed, _ => { }, CancellationToken.None);
             } catch (Exception stop) {
-                why += $" It could not be stopped either ({stop.Message}).";
+                throw Unfinished(details, $"it did not start ({ex.Message}), and it could not be stopped ({stop.Message})");
             }
 
-            lease.Complete();
+            CompleteOrThrow(lease, details);
 
             throw new LocalUpgradeFailure(LocalInstallFailureCode.StartFailed,
-                $"Capacitor local {details.To} did not start: {why} It stays selected and stopped, and {details.From} is kept in "
-              + $"{Path.Combine(LocalBin.Directory(stack.Root), details.From)}. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.",
+                $"Capacitor local {details.To} did not start: {ex.Message} It stays selected and stopped, and {details.From} is kept in "
+              + $"{bundle}. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.",
                 switched: true);
         }
 
         progress.Report(new LocalInstallEvent.Ready(installed.Installation.ServerUrl));
 
-        lease.Complete();
+        if (!details.WasRunning) {
+            try {
+                await Control.StopAsync(installed, _ => { }, CancellationToken.None);
+            } catch (Exception ex) {
+                throw Unfinished(details, $"it started, but could not be stopped again as it was before the upgrade ({ex.Message})");
+            }
+
+            progress.Report(new LocalInstallEvent.Stopped());
+        }
+
+        CompleteOrThrow(lease, details);
 
         try {
             LocalBin.Discard(stack.Root, StagingName, details.From);
@@ -185,6 +221,20 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
         return Done(new LocalInstallEvent.Upgraded(installed.Installation.ServerUrl, details.From, details.To));
     }
+
+    static void CompleteOrThrow(LifecycleLease lease, UpgradeDetails details) {
+        try {
+            lease.Complete();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or LocalLifecycleException) {
+            throw Unfinished(details, $"the upgrade journal could not be cleared ({ex.Message})");
+        }
+    }
+
+    /// <summary>The journal is kept at <c>starting</c>, so the next lifecycle command starts the new version again.</summary>
+    static LocalUpgradeFailure Unfinished(UpgradeDetails details, string why) =>
+        new(LocalInstallFailureCode.StartFailed,
+            $"Capacitor local {details.To} is selected, but {why}. Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.",
+            switched: true);
 
     /// <summary>Whether the old version is back as it was, and a sentence saying so; never throws.</summary>
     async Task<(bool Restored, string Outcome)> RestartOldAsync(LifecycleLease lease, LifecycleJournalEntry entry, UpgradeDetails details) {

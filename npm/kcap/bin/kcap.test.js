@@ -35,8 +35,9 @@ assert.deepStrictEqual(npmUpdateArgs("@kurrent/kcap@1.0.2"), ["install", "-g", "
 
 // The new binary's coordinator runs after the CLI moves, silent where there is no installation.
 assert.deepStrictEqual(localUpgradeArgs(), ["local", "upgrade", "--if-installed", "--no-update-check"]);
-assert.strictEqual(localRegistryPath({}, path.join(path.sep, "home", "u")), path.join(path.sep, "home", "u", ".config", "kcap", "local", "install.json"));
-assert.strictEqual(localRegistryPath({ KCAP_LOCAL_ROOT: path.join(path.sep, "r") }, path.join(path.sep, "home", "u")), path.join(path.sep, "r", "install.json"));
+// Host-native absolute roots: path.resolve gives a POSIX-style root a drive letter on Windows.
+assert.strictEqual(localRegistryPath({}, path.resolve("/home/u")), path.join(path.resolve("/home/u"), ".config", "kcap", "local", "install.json"));
+assert.strictEqual(localRegistryPath({ KCAP_LOCAL_ROOT: path.resolve("/r") }, path.resolve("/home/u")), path.join(path.resolve("/r"), "install.json"));
 assert.strictEqual(localUpgradeSucceeded(0), true);
 assert.strictEqual(localUpgradeSucceeded(3), true);
 assert.strictEqual(localUpgradeSucceeded(1), false);

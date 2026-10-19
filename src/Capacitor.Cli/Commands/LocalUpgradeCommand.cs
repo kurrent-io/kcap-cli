@@ -39,7 +39,7 @@ sealed class LocalUpgradeCommand(ILocalStackFactory stacks) {
             }
         }
 
-        int Fail(LocalInstallFailureCode code, string message, bool? switched = null) {
+        int Fail(LocalInstallFailureCode code, string message, bool switched = false) {
             if (json) {
                 Console.Out.WriteLine(LocalSetupJsonLines.Failed(code, message, switched));
                 Console.Out.Flush();
@@ -47,7 +47,7 @@ sealed class LocalUpgradeCommand(ILocalStackFactory stacks) {
                 Console.Error.WriteLine($"  Error: {message}");
             }
 
-            return switched == true ? FailedAfterSwitch : Failed;
+            return switched ? FailedAfterSwitch : Failed;
         }
 
         if (args.Skip(2).FirstOrDefault(a => !Flags.Contains(a)) is { } unknown)
@@ -81,11 +81,14 @@ sealed class LocalUpgradeCommand(ILocalStackFactory stacks) {
         } catch (LocalUpgradeFailure failure) {
             return Fail(failure.Code, failure.Message, failure.Switched);
         } catch (LocalLifecycleException ex) when (ex.InnerException is IOException) {
-            return Fail(LocalInstallFailureCode.LifecycleBusy, ex.Message, false);
+            return Fail(LocalInstallFailureCode.LifecycleBusy, ex.Message);
         } catch (LocalLifecycleException ex) {
-            return Fail(LocalInstallFailureCode.RecoveryFailed, ex.Message, false);
+            return Fail(LocalInstallFailureCode.RecoveryFailed, ex.Message);
         } catch (LocalInstallFailure failure) {
-            return Fail(failure.Code, failure.Message, false);
+            return Fail(failure.Code, failure.Message);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // A journal or registry write: the journal it may have left is finished by the next lifecycle command.
+            return Fail(LocalInstallFailureCode.StartFailed, ex.Message, upgrade.Switched);
         }
     }
 }
