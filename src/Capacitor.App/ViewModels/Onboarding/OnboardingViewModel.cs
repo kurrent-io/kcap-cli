@@ -12,6 +12,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     readonly CancellationToken _shutdownToken;
     bool _closed;
     bool _navigating;
+    bool _advancePending;
 
     internal bool Closed => _closed;
 
@@ -29,6 +30,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         private set {
             if (_current is not null) _current.AdvanceRequested -= OnAdvanceRequested;
             if (_current is INotifyPropertyChanged leaving) leaving.PropertyChanged -= OnCurrentChanged;
+            _advancePending = false;
             this.RaiseAndSetIfChanged(ref _current, value);
             if (value is INotifyPropertyChanged entering) entering.PropertyChanged += OnCurrentChanged;
             value.AdvanceRequested += OnAdvanceRequested;
@@ -46,7 +48,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public string SkipLabel => Current.SkipLabel;
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
-    public bool BackVisible => _index > 0;
+    public bool BackVisible => PreviousShownIndex() >= 0;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -98,7 +100,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     public OnboardingViewModel(
             IEnumerable<IWizardStep> steps, CancellationToken shutdownToken = default,
-            WizardLifecycleSurface? surface = null, WizardStepId? startAt = null) {
+            WizardLifecycleSurface? surface = null, WizardStepId? startAt = null,
+            IObservable<bool>? canFinishLater = null) {
         _shutdownToken = shutdownToken;
         Surface = surface;
         var applicable = steps.Where(s => s.Applicable).ToList();
@@ -110,14 +113,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
         var idle = this.WhenAnyValue(x => x.Navigating).Select(busy => !busy);
-        var canBack = currentChanged.CombineLatest(idle, (_, notBusy) => notBusy && _index > 0);
+        var canBack = currentChanged.CombineLatest(idle, (_, notBusy) => notBusy && PreviousShownIndex() >= 0);
 
         BackCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Back), canBack);
         SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip),
             this.WhenAnyValue(x => x.CanGoSkip));
         NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next),
             this.WhenAnyValue(x => x.CanGoNext));
-        FinishLaterCommand = ReactiveCommand.Create(RequestClose, idle);
+        FinishLaterCommand = ReactiveCommand.Create(RequestClose,
+            idle.CombineLatest(canFinishLater ?? Observable.Return(true), (notBusy, allowed) => notBusy && allowed));
 
         if (surface is not null) {
             surface.WhenAnyValue(x => x.StatusText)
@@ -129,7 +133,27 @@ public sealed class OnboardingViewModel : ReactiveObject {
         PendingEnterForTesting = SafeEnterAsync(Current);
     }
 
-    void OnAdvanceRequested() => PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
+    void OnAdvanceRequested() {
+        if (_navigating) _advancePending = true;
+        else PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
+    }
+
+    // The advance a step raised mid-navigation runs once, after the gate it was refused at opens.
+    void ReleaseGate() {
+        Navigating = false;
+        if (!_advancePending) return;
+
+        _advancePending = false;
+        if (!_closed) PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
+    }
+
+    int PreviousShownIndex() {
+        for (var i = _index - 1; i >= 0; i--) {
+            if (!Steps[i].PassThrough) return i;
+        }
+
+        return -1;
+    }
 
     void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
         switch (e.PropertyName) {
@@ -168,6 +192,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     internal void RequestClose() {
         if (_closed) return;
         _closed = true;
+        _advancePending = false;
         this.RaisePropertyChanged(nameof(CanGoNext));
         this.RaisePropertyChanged(nameof(CanGoSkip));
         CloseRequested?.Invoke();
@@ -200,6 +225,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         if (_navigating || _closed) return;
         Navigating = true;
         try {
+            if (direction == WizardNavigation.Back && PreviousShownIndex() < 0) return;
             if (!await SafeCanLeaveAsync(Current, direction)) return;
 
             if (direction == WizardNavigation.Next && _index == Steps.Count - 1) {
@@ -207,11 +233,11 @@ public sealed class OnboardingViewModel : ReactiveObject {
                 return;
             }
 
-            var target = direction == WizardNavigation.Back ? _index - 1 : FirstShownFrom(_index + 1);
+            var target = direction == WizardNavigation.Back ? PreviousShownIndex() : FirstShownFrom(_index + 1);
             // Clamp, don't trust the arithmetic — a corrupted _index must never throw here.
             await MoveToAsync(Math.Clamp(target, 0, Steps.Count - 1));
         } finally {
-            Navigating = false;
+            ReleaseGate();
         }
     }
 
@@ -230,7 +256,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
             await MoveToAsync(target);
         } finally {
-            Navigating = false;
+            ReleaseGate();
         }
     }
 
