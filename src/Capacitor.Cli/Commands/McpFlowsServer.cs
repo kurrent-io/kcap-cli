@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
@@ -16,7 +17,7 @@ using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands;
 
-class McpFlowsServer(
+partial class McpFlowsServer(
         ConfigRoot config, ProfileContext profiles, TokenStore store, ICapacitorHttpClient http,
         TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
     public async Task<int> RunAsync(string? driverArg = null) {
@@ -305,6 +306,12 @@ class McpFlowsServer(
                 // Catalog-start protocol-v2 skew seam (404 means an old server, before any run
                 // started) plus an explicit-vendor echo check once the route matched.
                 var requestedVendor = NormalizeVendor(arguments?["vendor"]?.GetValue<string>());
+
+                // A patch start goes only to v5; an older server answers that route with a 404 and started
+                // nothing, so the caller is told to update rather than seeing a run without its patch.
+                if (toolName is "start_review_flow" or "start_flow" && arguments?["patch_path"] is not null
+                    && postResponse.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
+                    return BuildToolResult(id, PatchProtocolRequiredMessage, isError: true);
 
                 if (wasModelStart) {
                     // The model-bearing start went to the v3 route — its own protocol/ack gate REPLACES
@@ -1175,6 +1182,41 @@ class McpFlowsServer(
         }
     }
 
+    internal const int MaxPatchBytes = 4 * 1024 * 1024;
+
+    internal const string PatchProtocolRequiredMessage =
+        "Error (patch_protocol_required): this server cannot take a patch (it has no v5 flow start). Update the " +
+        "kcap server, or review with mode \"context-only\" and the diff inlined in context. No review flow was started.";
+
+    [GeneratedRegex("^[0-9a-f]{40}$")]
+    private static partial Regex FullShaPattern();
+
+    /// <summary>The start's patch and base commit, or null when it names none. Checked before anything is
+    /// posted, so a bad path or SHA never starts a run.</summary>
+    static async Task<(string Text, string BaseCommit)?> ReadPatchAsync(JsonObject? arguments, CancellationToken ct) {
+        var path       = McpToolArguments.OptionalString(arguments, "patch_path");
+        var baseCommit = McpToolArguments.OptionalString(arguments, "base_commit")?.ToLowerInvariant();
+        if (path is null && baseCommit is null) return null;
+        if (path is null || baseCommit is null)
+            throw new ArgumentException("patch_path and base_commit must be given together.");
+        if (!FullShaPattern().IsMatch(baseCommit))
+            throw new ArgumentException("base_commit must be a full 40-character commit SHA.");
+        if (!Path.IsPathFullyQualified(path) || !File.Exists(path))
+            throw new ArgumentException("patch_path must be an absolute path to an existing file.");
+        if (new FileInfo(path).Length is var size && size > MaxPatchBytes)
+            throw new ArgumentException($"the patch is {size} bytes; at most {MaxPatchBytes} can be reviewed.");
+
+        var bytes = await File.ReadAllBytesAsync(path, ct);
+        if (bytes.Length == 0)
+            throw new ArgumentException("the patch file is empty; there is nothing to review.");
+
+        try {
+            return (new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(bytes), baseCommit);
+        } catch (DecoderFallbackException) {
+            throw new ArgumentException("the patch file is not UTF-8 text; produce it with `git diff` (add --binary for binary files).");
+        }
+    }
+
     /// <summary>
     /// Routes a review-flow start to the versioned start endpoint. §2.7 B3: a vendor-bearing,
     /// non-dynamic start POSTs to /api/flows/review/start/v4 (protocol 4, the resumable-park tier),
@@ -1234,6 +1276,7 @@ class McpFlowsServer(
         // Both throw ArgumentException, which HandleToolCallAsync turns into a clean tool error
         // WITHOUT a POST (so a rejected pairing never mints a run and never retries v2).
         var model = NormalizeModel(arguments?["model"]?.GetValue<string>());
+        var patch = await ReadPatchAsync(arguments, ct);
 
         if (model is not null) {
             if (definitionYaml is not null)
@@ -1270,7 +1313,8 @@ class McpFlowsServer(
             Context:              context,
             Instructions:         instructions,
             RequestingSessionId:  requestingSessionId,
-            RequestingCwd:        cwd,
+            // A patch run is reviewed in an owned worktree at its base, so it offers nothing to borrow.
+            RequestingCwd:        patch is null ? cwd : null,
             RequestingRepoRoot:   repoRoot,
             RepoOwner:            repoInfo?.Owner,
             RepoName:             repoInfo?.RepoName,
@@ -1286,8 +1330,18 @@ class McpFlowsServer(
             // §2.7 B3 primary attempt overrides this to 4 for the /v4 route (see the routing below).
             ClientFlowProtocolVersion: model is not null ? 3 : definitionYaml is null ? 2 : null,
             Model:                model,
-            SessionTitle:         sessionTitle
+            SessionTitle:         sessionTitle,
+            Patch:                patch?.Text,
+            BaseCommit:           patch?.BaseCommit
         );
+
+        // A patch goes only to the route that takes it. An older route would drop the two fields and start a
+        // run without the patch, so a server without v5 is reported, never fallen back from.
+        if (patch is not null)
+            return await client.PostAsync(
+                $"{apiRoot}/api/flows/review/start/v5",
+                JsonContent.Create(body with { ClientFlowProtocolVersion = 5 }, McpJsonContext.Default.StartReviewFlowDto),
+                ct);
 
         // §2.7 B3: a participant_parked-capable client routes every non-dynamic, vendor-bearing
         // start through /review/start/v4 (protocol 4), so the server returns the version-gated
@@ -2551,6 +2605,8 @@ class McpFlowsServer(
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
                     ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it reviews a worktree mirrored from THIS SESSION's project directory (or repo_path when given) — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
                     ["repo_path"]    = new("string", "Optional absolute path to a checkout or linked worktree on this machine to review instead of this session's project directory — for a change in another repository or worktree. The session stays the requester; a daemon must host that repository, and on this machine the reviewer borrows that checkout."),
+                    ["patch_path"]   = new("string", "Optional absolute path to a file holding a git diff (at most 4 MiB, UTF-8) to review instead of inline context, for a change too large to paste. Requires base_commit. The reviewer gets a worktree at base_commit on a daemon that hosts the repository, with the patch attached, and applies it itself; nothing else of yours is seen. Follow-up rounds inline their own delta in context. Not with mode 'context-only'; needs a server with the v5 start protocol."),
+                    ["base_commit"]  = new("string", "The full 40-character SHA the patch applies to, e.g. from `git merge-base origin/main HEAD`. It must be reachable from the hosting daemon's checkout or its origin, so a pushed commit unless the daemon runs on this machine. Required with patch_path."),
                     ["vendor"]       = new("string", "Optional reviewer vendor for the reserved alias, independent of the driver harness. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. The selected vendor must be installed and certified unattended on an eligible daemon; there is no silent fallback. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex')."),
                     ["model"]        = new("string", "Optional reviewer model override for this review. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
@@ -2626,6 +2682,8 @@ class McpFlowsServer(
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
                     ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it works in a worktree mirrored from THIS SESSION's project directory (or repo_path when given) — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
                     ["repo_path"]      = new("string", "Optional absolute path to a checkout or linked worktree on this machine to review instead of this session's project directory — for a change in another repository or worktree. The session stays the requester; a daemon must host that repository, and on this machine the reviewer borrows that checkout."),
+                    ["patch_path"]   = new("string", "Optional absolute path to a file holding a git diff (at most 4 MiB, UTF-8) to review instead of inline context, for a change too large to paste. Requires base_commit. The reviewer gets a worktree at base_commit on a daemon that hosts the repository, with the patch attached, and applies it itself; nothing else of yours is seen. Follow-up rounds inline their own delta in context. Not with mode 'context-only'; needs a server with the v5 start protocol."),
+                    ["base_commit"]  = new("string", "The full 40-character SHA the patch applies to, e.g. from `git merge-base origin/main HEAD`. It must be reachable from the hosting daemon's checkout or its origin, so a pushed commit unless the daemon runs on this machine. Required with patch_path."),
                     ["vendor"]         = new("string", "Optional reviewer vendor. Reserved spec-review/code-review aliases use it independently of the driver. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. Custom single-participant catalog definitions accept an explicit override. Rejected for multi-participant and definition_yaml flows. The selected vendor must be certified unattended on an eligible daemon; no silent fallback. Pass a lowercase canonical token."),
                     ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
@@ -2763,7 +2821,10 @@ record StartReviewFlowDto(
     // (StartFlowAsync rejects the pairing locally) and is invalid for dynamic (definition_yaml) flows.
     [property: JsonPropertyName("model")]                  string? Model = null,
     // Optional on the wire: a server that does not read it titles the participant session from its prompt.
-    [property: JsonPropertyName("session_title")]          string? SessionTitle = null
+    [property: JsonPropertyName("session_title")]          string? SessionTitle = null,
+    // A patch start's diff and the commit it applies to; sent only to /review/start/v5.
+    [property: JsonPropertyName("patch")]                  string? Patch = null,
+    [property: JsonPropertyName("base_commit")]            string? BaseCommit = null
 );
 
 /// <summary>
