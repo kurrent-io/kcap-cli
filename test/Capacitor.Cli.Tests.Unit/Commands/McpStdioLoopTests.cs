@@ -124,19 +124,28 @@ public class McpStdioLoopTests {
         await Assert.That(string.Join(",", output.Ids)).IsEqualTo("3,1,2");
     }
 
+    /// <summary>A call whose order key cannot be read cannot be placed in order, so it is refused as an invalid
+    /// request rather than run alongside the call it should have waited for.</summary>
     [Test]
-    public async Task A_call_whose_order_key_cannot_be_read_still_runs_and_the_loop_serves_on() {
+    public async Task A_call_whose_order_key_cannot_be_read_is_refused_and_the_loop_serves_on() {
         using var output = new Responses();
+        var ran = 0;
         // A duplicated key nested in arguments throws when the order key first reads it.
         var input = string.Join('\n',
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x","arguments":{"a":1,"a":2}}}""",
             Request("2", "\"ping\""));
 
-        await McpStdioLoop.RunAsync(new StringReader(input), output, (id, _) => Task.FromResult(Answer(id, "tools/call")),
+        await McpStdioLoop.RunAsync(new StringReader(input), output, (id, _) => {
+                Interlocked.Increment(ref ran);
+                return Task.FromResult(Answer(id, "tools/call"));
+            },
             (id, method, _) => Answer(id, method), "test",
             request => ((request["params"] as JsonObject)?["arguments"] as JsonObject)?["a"]?.ToJsonString());
 
-        await Assert.That(output.Ids.OrderBy(i => i)).IsEquivalentTo(["1", "2"]);
+        var refused = output.All.Single(r => r["id"]!.ToJsonString() == "1");
+        await Assert.That(refused["error"]!["code"]!.GetValue<int>()).IsEqualTo(-32600);
+        await Assert.That(ran).IsEqualTo(0);
+        await Assert.That(output.Ids).Contains("2");
     }
 
     /// Yields its lines, then fails the next read as a broken stdin would.

@@ -68,8 +68,13 @@ static class McpStdioLoop {
                     inFlight.RemoveAll(t => t.IsCompletedSuccessfully);
                     foreach (var done in tails.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList()) tails.Remove(done);
 
+                    if (!TryOrderKey(orderKey, request, out var key)) {
+                        await WriteAsync(Error(id, -32600, "Invalid request"));
+                        continue;
+                    }
+
                     Task call;
-                    if (OrderKeyOf(orderKey, request) is { } key) {
+                    if (key is not null) {
                         var prior = tails.GetValueOrDefault(key) ?? Task.CompletedTask;
                         call       = Task.Run(() => CallAfterAsync(prior, id, request));
                         tails[key] = call;
@@ -107,13 +112,16 @@ static class McpStdioLoop {
         }
     }
 
-    /// <summary>The call's order key, or none when reading it fails: a malformed nested property throws on its
-    /// first read, and on this thread that would end the server. The call itself still runs and answers.</summary>
-    static string? OrderKeyOf(Func<JsonObject, string?>? orderKey, JsonObject request) {
+    /// <summary>Reads the call's order key, null when it has none. False when reading fails: a malformed nested
+    /// property throws on its first read, and such a call can be placed in no order, so it is refused rather
+    /// than run alongside the call it should wait for.</summary>
+    static bool TryOrderKey(Func<JsonObject, string?>? orderKey, JsonObject request, out string? key) {
         try {
-            return orderKey?.Invoke(request);
+            key = orderKey?.Invoke(request);
+            return true;
         } catch {
-            return null;
+            key = null;
+            return false;
         }
     }
 
