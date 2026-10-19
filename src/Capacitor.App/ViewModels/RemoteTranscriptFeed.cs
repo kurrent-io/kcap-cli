@@ -126,7 +126,11 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         while (!ct.IsCancellationRequested && IsCurrent(attempt)) {
             try {
                 if (!await EnsureSeededAsync(attempt, ct).ConfigureAwait(false)) return;
-                if (await TailAsync(attempt, ct).ConfigureAwait(false)) failures = 0;
+                if (await TailAsync(attempt, ct).ConfigureAwait(false)) {
+                    failures = 0;
+                    // Once per outage: a reason seen before the stream came back is logged again.
+                    _logged.Clear();
+                }
             } catch (OperationCanceledException) {
                 return;
             } catch (HubException ex) {

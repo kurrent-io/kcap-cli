@@ -120,13 +120,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
     public IAvaloniaReadOnlyList<QueuedChatMessage> QueuedMessages => _queuedMessages;
     public bool HasQueuedMessages => _queuedMessages.Count > 0;
+    /// Other people's prompts are counted apart, so the strip never reads as the viewer's own.
     public string QueueSummary {
         get {
+            var foreign     = _queuedMessages.Count(q => q.IsForeign);
             var unconfirmed = _queuedMessages.Count(q => q.IsUnconfirmed);
-            var queued = _queuedMessages.Count - unconfirmed;
-            return unconfirmed == 0 ? $"{MessageCount(queued)} queued"
-                : queued == 0 ? $"{MessageCount(unconfirmed)} unconfirmed"
-                : $"{MessageCount(queued)} queued · {unconfirmed} unconfirmed";
+            (int Count, string Word)[] segments =
+                [(_queuedMessages.Count - unconfirmed - foreign, "queued"), (unconfirmed, "unconfirmed"), (foreign, "from others")];
+
+            return string.Join(" · ", segments.Where(s => s.Count > 0)
+                .Select((s, i) => i == 0 ? $"{MessageCount(s.Count)} {s.Word}" : $"{s.Count} {s.Word}"));
         }
     }
 

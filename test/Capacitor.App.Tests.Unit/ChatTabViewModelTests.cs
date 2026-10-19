@@ -3348,7 +3348,7 @@ public class ChatTabViewModelTests {
             var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
             await Assert.That(foreign.Text).IsEqualTo("and this");
             await Assert.That(foreign.IsAwaitingPickup).IsFalse();
-            await Assert.That(chat.QueueSummary).IsEqualTo("2 messages queued");
+            await Assert.That(chat.QueueSummary).IsEqualTo("1 message queued · 1 from others");
 
             queue.OnNext([Item("do it", mine, sender: "u1")]);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
