@@ -158,7 +158,9 @@ public class LocalUpgradeTests {
         using (Record()) result = await Upgrade();
 
         await Assert.That(result).IsTypeOf<LocalInstallEvent.Upgraded>();
-        await Assert.That(_log.IndexOf("stop", _log.IndexOf("GET /auth/config"))).IsLessThan(_log.IndexOf("journal:cleared"));
+        var stopAfterReady = _log.IndexOf("stop", _log.IndexOf("GET /auth/config"));
+        await Assert.That(stopAfterReady).IsGreaterThanOrEqualTo(0);
+        await Assert.That(stopAfterReady).IsLessThan(_log.IndexOf("journal:cleared"));
         await Assert.That(Service.Running).IsFalse();
         await Assert.That(RegistryVersion()).IsEqualTo(New);
     }
