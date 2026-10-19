@@ -163,6 +163,9 @@ class McpFlowsServer(
     async Task<(string Cwd, string? Root, RepositoryPayload? Info)> ResolveNamedCheckoutAsync(string path) {
         if (!Path.IsPathFullyQualified(path))
             throw new ArgumentException("repo_path must be an absolute path to a checkout on this machine.");
+        // FindRoot walks up from any path, so a mistyped one would quietly review its nearest checkout.
+        if (!Directory.Exists(path))
+            throw new ArgumentException("repo_path does not exist on this machine.");
         if (GitRepository.FindRoot(path) is not { } root)
             throw new ArgumentException("repo_path is not inside a git checkout on this machine.");
 

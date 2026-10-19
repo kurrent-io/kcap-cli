@@ -71,6 +71,7 @@ public class McpFlowsServerRepoPathTests {
     [Test]
     [Arguments("relative/path")]
     [Arguments("/")]
+    [Arguments("/no/such/kcap-checkout")]
     public async Task A_path_that_names_no_checkout_is_refused_before_anything_is_posted(string repoPath) {
         using var server = RefusingServer();
         using var client = new HttpClient();
