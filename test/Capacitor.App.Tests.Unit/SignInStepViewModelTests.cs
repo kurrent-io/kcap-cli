@@ -464,7 +464,7 @@ public class SignInStepViewModelTests {
             return (startTitle, pickerTitle);
         });
 
-        await Assert.That(start).IsEqualTo("Sign in to Capacitor");
+        await Assert.That(start).IsEqualTo("Sign in to kcap");
         await Assert.That(picker).IsEqualTo("Choose a workspace");
     }
 

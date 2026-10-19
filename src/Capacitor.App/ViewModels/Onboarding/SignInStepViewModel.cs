@@ -161,7 +161,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public string Title => Phase switch {
         SignInPhase.PickWorkspace => "Choose a workspace",
         SignInPhase.SignUp        => "Finish in your browser, then continue here",
-        _                         => "Sign in to Capacitor",
+        _                         => "Sign in to kcap",
     };
 
     public string Eyebrow => Phase switch {
@@ -175,7 +175,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             "Create your workspace on the kcap.ai page that just opened. When it says your workspace is ready, " +
             "continue here and setup carries on.",
         SignInPhase.Start or SignInPhase.Waiting =>
-            "Use your work account. It finds the Capacitor workspaces you belong to.",
+            "Use your work account. It finds the kcap workspaces you belong to.",
         SignInPhase.PickWorkspace =>
             "Your account belongs to more than one. Pick the one this machine records into.",
         _ => null,
