@@ -428,6 +428,11 @@ public class WorkspaceViewModelTests {
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
             await Assert.That(vm.SessionEnded).IsFalse();
 
+            // A reconnect can skip the intermediate rows and land straight on a live one.
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await Assert.That(vm.SessionEnded).IsFalse();
+
             await vm.TeardownAsync();
         });
     }

@@ -171,6 +171,26 @@ public class TerminalTabResumeTests {
         });
     }
 
+    /// The row and the attach outcome arrive in either order; the interruption wins whichever is last.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task An_interrupted_row_that_arrives_before_the_exit_still_shows_the_reason(bool failedRowFirst) {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.AttachAsync();
+
+            if (failedRowFirst) rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            rig.Entry = Ledger(ResumeState.Interrupted, "readiness_failed");
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted", Interruption = "readiness_failed" });
+            await rig.DropAsync(client, new AttachOutcome.Exited(3));
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Interrupted);
+            await Assert.That(rig.Vm.State.Detail).IsEqualTo("readiness_failed");
+        });
+    }
+
     /// An agent that simply finished keeps its exit, whatever stale status the cache still shows.
     [Test]
     [NotInParallel("AvaloniaSession")]

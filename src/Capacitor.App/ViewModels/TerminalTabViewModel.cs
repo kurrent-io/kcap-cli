@@ -397,8 +397,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     }
 
     void HandleDtoObserved(AgentStatusDto dto) {
-        var previous = _lastStatus;
-        _lastStatus = dto.Status;
+        var previous = _lastDto?.Status;
+        _lastDto = dto;
         // Claim pending → dto-won, or recover timeout-won → dto-won when a late agent row lands
         // after NotFound. A concurrent TeardownAsync's disposed state loses neither CAS.
         for (;;) {
@@ -713,12 +713,14 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
     }
 
-    // The status the Agents cache last showed; UI thread only.
-    string? _lastStatus;
+    // The row the Agents cache last showed; UI thread only.
+    AgentStatusDto? _lastDto;
 
     /// A tab that settled on an end can still see its agent come back: a resumed runtime that fails its
     /// readiness window exits and is then interrupted, and an interrupted one retried with
     /// `kcap agent resume` returns under the same id. A tab with an attempt in flight is left to it.
+    /// Runs when a row arrives and again when an attempt settles, since the two arrive in either order;
+    /// a null <paramref name="previous"/> reads only the row's own state.
     void ReconcileResumeStatus(string? previous, AgentStatusDto dto) {
         if (State.Phase is not (TerminalSessionPhase.Exited or TerminalSessionPhase.Failed
                 or TerminalSessionPhase.SessionEnded or TerminalSessionPhase.Interrupted)) return;
@@ -785,6 +787,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             var remainder = decoder.Flush();
             if (remainder.Length > 0) surface.Feed(remainder);
             Publish(state, openingToken);
+            if (_lastDto is { } latest && Volatile.Read(ref _resolveState) == ResolveDtoWon) ReconcileResumeStatus(null, latest);
         }, DispatcherPriority.Default, CancellationToken.None).GetTask();
 
     async Task RunDetachAsync() {

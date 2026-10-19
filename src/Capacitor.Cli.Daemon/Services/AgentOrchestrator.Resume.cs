@@ -580,6 +580,12 @@ internal partial class AgentOrchestrator {
     /// resume lane still holds, then the interrupted entries with their reason. <paramref name="includeLive"/>
     /// keeps the entries of agents live right now, for a caller reconciling against its own live observation.</summary>
     internal IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgents(bool includeLive = false) {
+        // Under the lock a retry takes to write its entry and add its candidate, so no entry is caught
+        // between the two and missing from both.
+        lock (_ledgerLock) return LedgerOnlyAgentsLocked(includeLive);
+    }
+
+    IReadOnlyList<(ResumeLedgerEntry Entry, string Status, string State)> LedgerOnlyAgentsLocked(bool includeLive) {
         var rows = _resumeCandidates.Values
             .Where(e => includeLive || !_agents.ContainsKey(e.AgentId))
             .OrderBy(e => e.CreatedAt)
