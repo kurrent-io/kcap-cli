@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
@@ -1684,8 +1685,11 @@ public partial class WorktreeManager(
             return await LeftWorktreeAsync(dir) is { } worktree
                 ? await UnsavedWorkAsync(worktree, time)
                 : "its git dir could not be read";
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
-            // A git that times out or cannot start must not take the startup sweep down; the directory stays.
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or GitConfigTransportException
+                                       or Win32Exception or InvalidOperationException) {
+            // A git that times out (the runner's InvalidOperationException) or cannot start must not take
+            // the startup sweep down; the directory stays.
+            LogOrphanCheckFailed(ex, dir);
             return "it could not be read";
         }
     }
@@ -1967,6 +1971,9 @@ public partial class WorktreeManager(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Kept left-behind worktree {Path}: it holds {Reason}. Remove it with `git worktree remove` once the work is saved")]
     partial void LogOrphanKept(string path, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Could not check left-behind worktree {Path} for unsaved work; keeping it")]
+    partial void LogOrphanCheckFailed(Exception ex, string path);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Worktree {Path} starts from {BaseRef} via {Source}")]
     partial void LogWorktreeBase(string path, string baseRef, string source);
