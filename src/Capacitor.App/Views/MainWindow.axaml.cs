@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -91,9 +92,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                         ? Observable.Return<ISessionWorkspace?>(null)
                         : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
-                    // A popup can't meaningfully survive the pane swapping under it — opening a
-                    // workspace closes the feed; its Closed handler then turns the gate off.
                     if (workspace is not null) ActivityButton.Flyout?.Hide();
+                    else Dispatcher.UIThread.Post(LauncherView.FocusComposer, DispatcherPriority.Loaded);
                     UpdateActivityVisibility();
                 })
                 .DisposeWith(disposables);

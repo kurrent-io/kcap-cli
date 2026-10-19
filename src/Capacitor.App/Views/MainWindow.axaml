@@ -136,7 +136,7 @@
                         </Button>
                     </Grid>
 
-                    <views:LauncherPaneView Grid.Row="1" DataContext="{Binding Home}" />
+                    <views:LauncherPaneView x:Name="LauncherView" Grid.Row="1" DataContext="{Binding Home}" />
                 </Grid>
 
                 <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
