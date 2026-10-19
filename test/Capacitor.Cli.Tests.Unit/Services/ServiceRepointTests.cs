@@ -20,7 +20,7 @@ public class ServiceRepointTests {
         ServiceId: "test", DaemonBinaryPath: binary, LogPath: "/home/u/.config/kcap/daemon-test.log",
         Environment: new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" }, ExtraArgs: ["--max-agents", "4"]);
 
-    static readonly Func<TimeSpan> Plenty = static () => TimeSpan.FromMinutes(1);
+    static readonly Func<TimeSpan> Plenty = static () => LaunchdServiceManager.ReloadBudget + TimeSpan.FromMinutes(1);
 
     [Test]
     public async Task WithBinary_replaces_only_the_program_and_keeps_every_other_byte() {

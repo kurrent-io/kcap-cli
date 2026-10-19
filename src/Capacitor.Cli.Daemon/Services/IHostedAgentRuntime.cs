@@ -22,6 +22,10 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// the orchestrator never type-switches to derive it.</summary>
     string RuntimeTransport => "pty";
 
+    /// <summary>What the vendor's resume takes when it is not the session id; recorded as the vendor
+    /// session in the resume ledger. Null when the session id is enough.</summary>
+    string? VendorResumeToken => null;
+
     /// <summary>OS process id of the hosted agent (for logging).</summary>
     int Pid { get; }
 

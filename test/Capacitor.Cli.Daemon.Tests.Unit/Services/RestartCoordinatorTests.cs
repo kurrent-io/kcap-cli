@@ -1,4 +1,7 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -117,6 +120,153 @@ public class RestartCoordinatorTests {
         await Assert.That(spy.Calls).IsEqualTo(0);
 
         busy = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Binary_change_with_agents_mid_turn_waits_until_the_boundary() {
+        var spy      = new SpyStrategy();
+        var size     = 100L;
+        var boundary = false;
+        var c        = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.AtTurnBoundary = () => boundary;
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        boundary = true;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Binary_change_fires_at_the_bound_without_a_boundary() {
+        var spy  = new SpyStrategy();
+        var time = new FakeTimeProvider();
+        var size = 100L;
+        var c    = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, time);
+        c.IsBusy         = () => false;
+        c.AtTurnBoundary = () => false;
+        c.TurnWait       = TimeSpan.FromMinutes(5);
+        c.StatBinary     = () => new BinaryStat(size, 1);
+        c.PrimeBaseline();
+        size = 200;
+        c.Tick();
+        time.Advance(TimeSpan.FromMinutes(4));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        time.Advance(TimeSpan.FromMinutes(1));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>A mid-round flow participant holds a self-detected restart only until the wait bound;
+    /// an eval in flight still holds it past the bound.</summary>
+    [Test]
+    public async Task A_mid_round_flow_participant_holds_a_self_detected_restart_only_until_the_bound() {
+        var spy  = new SpyStrategy();
+        var time = new FakeTimeProvider();
+        var size = 100L;
+        var hard = false;
+        var c    = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, time);
+        c.IsHardBusy     = () => hard;
+        c.IsBusy         = () => true;
+        c.AtTurnBoundary = () => true;
+        c.TurnWait       = TimeSpan.FromMinutes(5);
+        c.StatBinary     = () => new BinaryStat(size, 1);
+        c.PrimeBaseline();
+        size = 200;
+        c.Tick();
+        time.Advance(TimeSpan.FromMinutes(4));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        hard = true;
+        time.Advance(TimeSpan.FromMinutes(1));
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        hard = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    RestartCoordinator WiredCoordinator(SpyStrategy spy, AgentOrchestrator orch) =>
+        RestartCoordinator.ForTest(
+            Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System, orch, new EvalContextCache(TimeProvider.System));
+
+    static AgentOrchestrator BuildOrchestrator() =>
+        AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+    [Test]
+    public async Task Running_interactive_agents_do_not_block_an_explicit_restart() {
+        var spy = new SpyStrategy();
+        await using var orch = BuildOrchestrator();
+        orch.SeedAgentForTest("interactive-1", status: "Running").ActivityClock.SetTurnInFlight(true);
+        var c = WiredCoordinator(spy, orch);
+
+        await Assert.That(orch.InteractiveAgentsAtTurnBoundary).IsFalse();
+        c.RequestRestart(force: false);
+
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>A when-idle request waits for no agents at all, mid-turn or not, while a now request
+    /// proceeds with the agent running.</summary>
+    [Test]
+    public async Task A_when_idle_request_waits_for_a_running_interactive_agent_and_now_does_not() {
+        var spy = new SpyStrategy();
+        await using var orch = BuildOrchestrator();
+        orch.SeedAgentForTest("interactive-1", status: "Running").ActivityClock.SetTurnInFlight(true);
+        var c = WiredCoordinator(spy, orch);
+
+        await Assert.That(c.RequestRestart(force: false, whenIdle: true)).IsEqualTo(RestartRequestResult.Queued);
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        await Assert.That(c.RequestRestart(force: false)).IsEqualTo(RestartRequestResult.Restarting);
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_when_idle_request_fires_once_the_last_agent_is_gone() {
+        var spy    = new SpyStrategy();
+        var agents = true;
+        var c      = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.HasAgents = () => agents;
+
+        c.RequestRestart(force: false, whenIdle: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        agents = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_mid_round_flow_participant_blocks_an_explicit_restart_but_not_a_forced_one() {
+        var spy = new SpyStrategy();
+        await using var orch = BuildOrchestrator();
+        orch.SeedAgentForTest("flow-1", LaunchKind.ReviewFlow, status: "Running", flowRunId: "run-1", flowRole: "reviewer")
+            .ActivityClock.SetTurnInFlight(true);
+        var c = WiredCoordinator(spy, orch);
+
+        await Assert.That(c.RequestRestart(force: false)).IsEqualTo(RestartRequestResult.Queued);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        c.RequestRestart(force: true);
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Force_ignores_busy_flow_participants_but_not_evals() {
+        var spy  = new SpyStrategy();
+        var hard = true;
+        var c    = NewCoordinator(spy, isBusy: () => true, stat: () => new BinaryStat(100, 1));
+        c.IsHardBusy = () => hard;
+        c.RequestRestart(force: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+        hard = false;
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(1);
     }

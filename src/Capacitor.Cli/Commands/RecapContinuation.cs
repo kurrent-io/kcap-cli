@@ -1,5 +1,5 @@
-using Capacitor.Cli.Continuation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;

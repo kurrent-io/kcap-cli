@@ -11,6 +11,22 @@ public class DaemonConfig {
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
 
+    /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
+    public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>How many ledgered agents a booting daemon relaunches at once.</summary>
+    public int ResumeConcurrency { get; set; } = 2;
+
+    /// <summary>A ledgered agent last alive longer ago than this is interrupted rather than resumed.</summary>
+    public TimeSpan ResumeMaxAge { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>Whether a booting daemon resumes its ledgered agents at all.</summary>
+    public bool AutoResume { get; set; } = true;
+
+    /// <summary>How long a resumed runtime must stay alive after publishing for the resume to count;
+    /// for a PTY vendor this is the whole handshake.</summary>
+    public TimeSpan ResumeReadinessWindow { get; set; } = TimeSpan.FromSeconds(10);
+
     /// <summary>
     /// Absolute path of the native <c>kcap</c> CLI binary, resolved as the daemon's sibling
     /// (<see cref="Capacitor.Cli.Core.Mcp.KcapBinaryCommand.ResolveCliSibling"/>) — inside the

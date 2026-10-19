@@ -51,6 +51,26 @@ public class PiRpcHostedAgentRuntimeTests {
         await Assert.That(FirstCommandId(proc, "get_state")).IsEqualTo("init-state");
     }
 
+    [Test]
+    public async Task ApplyState_records_the_session_file() {
+        var (rt, _) = NewRuntime();
+        await using var _ = rt;
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(rt.SessionFile).IsEqualTo("/tmp/s.jsonl");
+    }
+
+    [Test]
+    public async Task The_resume_token_is_the_session_file_get_state_reported() {
+        var (rt, _) = NewRuntime();
+        await using var _ = rt;
+
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(((IHostedAgentRuntime)rt).VendorResumeToken).IsEqualTo("/tmp/s.jsonl");
+    }
+
     /// <summary>Security/correctness regression: <see cref="PiRpcHostedAgentRuntime.ResolvedModel"/>
     /// is read by the orchestrator as a CONFIRMED-applied-model signal, so a <c>get_state</c> that
     /// carries no model must resolve to null — the <see cref="IAcpTranscriptSource"/> contract's

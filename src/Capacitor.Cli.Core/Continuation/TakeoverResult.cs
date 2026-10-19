@@ -1,8 +1,8 @@
 using System.Text.Json.Nodes;
 
-namespace Capacitor.Cli.Continuation;
+namespace Capacitor.Cli.Core.Continuation;
 
-abstract record TakeoverResult {
+public abstract record TakeoverResult {
     TakeoverResult() { }
 
     /// <summary>Nothing was written: the session may still be running, or cannot be continued.</summary>

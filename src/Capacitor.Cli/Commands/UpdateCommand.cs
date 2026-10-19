@@ -170,7 +170,7 @@ public sealed class UpdateCommand(
         await Console.Out.WriteLineAsync($"kcap updated to {target}.");
         await Console.Out.WriteLineAsync(OperatingSystem.IsWindows()
             ? "Run `kcap daemon restart` if you run the daemon."
-            : "A running daemon restarts on the new version once it is idle.");
+            : "A running daemon restarts on the new version; its agents are stopped and resumed.");
 
         return 0;
     }

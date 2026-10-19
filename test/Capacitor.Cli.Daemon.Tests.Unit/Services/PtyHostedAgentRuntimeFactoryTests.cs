@@ -155,6 +155,28 @@ public class PtyHostedAgentRuntimeFactoryTests {
         }
     }
 
+    /// <summary>A private launch carries nothing that would link its session to the agent on the
+    /// server, as a <c>--private</c> local spawn does not.</summary>
+    [Test]
+    public async Task A_private_launch_carries_no_hosted_agent_identity() {
+        var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
+        var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        var pty      = new SpyPtyProcessFactory();
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+
+        var start = await factory.StartAsync(
+            BuildClaudeLaunchContext(null) with { IsPrivate = true, DaemonBridgeUrl = "http://127.0.0.1:9" }, CancellationToken.None);
+
+        try {
+            await Assert.That(pty.LastEnv!.ContainsKey(HostedAgent.AgentIdVar)).IsFalse();
+            await Assert.That(pty.LastEnv.ContainsKey(HostedAgent.RenderedVar)).IsFalse();
+            await Assert.That(pty.LastEnv.ContainsKey(HostedAgent.BridgeUrlVar)).IsFalse();
+            await Assert.That(pty.LastEnv.ContainsKey("KCAP_SESSION_KIND")).IsFalse();
+        } finally {
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
     /// <summary>The PTY spawn applies the overlay over the daemon's environment with these removed,
     /// so a daemon started inside a participant cannot pass its role on.</summary>
     [Test]

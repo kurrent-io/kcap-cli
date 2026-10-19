@@ -103,20 +103,26 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
     /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
     /// function the daemon advertises to the server — which refuses a registration whose transport
-    /// differs from the advertisement.</para></summary>
+    /// differs from the advertisement.</para>
+    ///
+    /// <para>A resume names the transport its agent ran on and keeps it, whatever the interactive
+    /// setting: a local session was a terminal and must stay attachable.</para></summary>
     internal bool UsesAppServer(RuntimeStartContext ctx) =>
         _config.CodexAppServerActive
-     && (ctx.IsReviewFlow
-         || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
+     && ctx.RequestedTransport switch {
+            CodexTransportDecision.Pty       => false,
+            CodexTransportDecision.AppServer => true,
+            _ => ctx.IsReviewFlow
+              || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer)
+        };
+
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
-        // §2.7 B4: resume is app-server-only (thread/resume). A resume request routed to the PTY path can't
-        // be honored and would silently start a FRESH session — forking the transcript, breaking the
-        // never-silently-fork invariant — so fail the launch instead. (Server-side, resume must also be
-        // capability-gated to app-server-capable daemons before B6 activates parking.)
-        if (ctx.ResumeSessionId is not null && !UsesAppServer(ctx))
-            throw new InvalidOperationException(
-                "codex: a resume (ResumeSessionId set) requires the app-server route; refusing to start a fresh PTY session.");
+        // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
+        if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !UsesAppServer(ctx))
+            return Task.FromException<HostedRuntimeStart>(
+                new InvalidOperationException("codex: a reviewer resume requires the app-server route; refusing to start a PTY session."));
 
         return UsesAppServer(ctx) ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
     }

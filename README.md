@@ -1072,12 +1072,13 @@ kcap daemon start                   # start in foreground (--name defaults to KC
 kcap daemon start -d                # start in background (daemonize)
 kcap daemon start --name laptop -d  # run multiple daemons on the same machine by giving each a unique name
 kcap daemon status                  # list all running daemons
-kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version)
-kcap daemon stop --name laptop      # stop just that one
+kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version and any resuming/interrupted agents)
+kcap daemon stop --name laptop      # stop just that one, ending its hosted agents
+kcap daemon stop --name laptop --keep-agents   # stop it but keep its agents for the next start to resume
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
-kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
-kcap daemon restart --name laptop --when-idle  # queue the restart for the next idle moment
-kcap daemon restart --name laptop --force      # restart now even if busy (tears down running agents)
+kcap daemon restart --name laptop              # restart now, stopping its agents and resuming them on the new daemon; refuses while an eval, a launch or a flow round is in progress
+kcap daemon restart --name laptop --when-idle  # queue the restart until the daemon hosts no agents at all and no eval or launch is in progress
+kcap daemon restart --name laptop --force      # restart without waiting for a flow round (a participant mid-round is parked or ended); an eval or a launch still holds it
 kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory
 kcap daemon doctor --clean          # also remove a stale entry's pid/marker files, dropping it from the list (held entries are never touched; the inert lock file is left in place)
 ```
@@ -1099,7 +1100,7 @@ A daemon whose process is alive but whose local control socket does not yet answ
 Daemon 'laptop': running (PID 12345, starting — not yet serving)
 ```
 
-**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself once it's **idle** (no running hosted agents and no in-flight eval) — service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart --force` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
+**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself, stopping its hosted agents and **resuming them on the new version** under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. It waits until no eval, launch or flow round is in progress and every interactive agent is waiting on input — the last for at most `KCAP_RESTART_TURN_WAIT_SECONDS` (default 300). Service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
 
 #### Run it as a service (auto-restart)
 
@@ -1113,14 +1114,15 @@ kcap daemon service install --replace --verify  # take over a foreign/loaded uni
 kcap daemon service install --replace --verify --retire OLD   # also remove the unit OLD, e.g. after a rename
 kcap daemon service status                 # installed / running state
 kcap daemon service status --json          # machine-readable status (pids, binary paths, txn-marker state)
-kcap daemon service stop                   # stop the running service (stays installed)
+kcap daemon service stop                   # stop the running service (stays installed), ending its hosted agents
+kcap daemon service stop --keep-agents     # stop it, keeping its agents for the next start to resume
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
-kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; reloads only an idle daemon (runs after `kcap update`)
-kcap daemon service refresh --name N --force   # reload daemon N now even while busy (ends its hosted agents); prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
-kcap daemon service uninstall              # stop and remove the service
-kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR
+kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; a reload stops the daemon with its agents kept and the reloaded daemon resumes them, and waits for the next update while an eval or a launch is in progress (runs after `kcap update`)
+kcap daemon service refresh --name N --force   # reload daemon N now, even mid-eval; prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
+kcap daemon service uninstall              # stop and remove the service, ending its hosted agents
+kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR, ending their hosted agents
 ```
 
 `install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. Over an installed service, a plain `install` stops it and installs it again. On macOS it rewrites the plist only once launchd has unloaded the old job, waiting up to 15 seconds; on Linux and Windows a refused registration puts the previous unit file back. A failed install says whether the service is still loaded or now stopped, which daemon its unit names, and the command that reinstalls it: `install --replace --verify`, or on Linux `uninstall` then `install`. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
@@ -1139,7 +1141,7 @@ On **Windows** the service is a per-user Scheduled Task scoped to your account, 
 
 `install --replace --verify` (requires `--verify`) takes over an existing label/unit instead of refusing on contention: it clears a foreign or already-loaded label, stops a validated live owner if one is running, then installs and verifies as above — one transaction, rolling back to a verified-safe absent state on any failure rather than leaving a half-replaced unit.
 
-`install --replace --verify --retire <id>` additionally removes the unit `<id>` inside the same transaction — the unit a daemon rename leaves behind. The retired unit must be pinned to the same profile as the one being installed (`KCAP_PROFILE` in its plist), or the command refuses with `verify_retire_refused` and touches nothing; an absent unit is a no-op. With `--retire`, a live daemon already running under the *new* name is `verify_contended` rather than taken over. A unit already installed under the new name, even a stopped one, is refused before the old unit is touched (`retire_reason=target_occupied`), as is a new name whose state cannot be read (`target_unknown`); if a unit appears under the new name while the old one is being retired, it is refused rather than cleared (`target_claimed`), and the old unit stays retired. When the old unit's daemon is running, the command first pauses its new work through the daemon's control socket and boots it out only once that pause is acknowledged: a daemon still running or starting an agent or evaluation refuses with `agents_active`, one too old to pause with `fence_unsupported` (restart it, then retry), and one that cannot be reached or confirmed — or a loaded label with no plist — with `fence_unavailable` or `unit_unreadable`. Each of these refusals happens before either unit is changed.
+`install --replace --verify --retire <id>` additionally removes the unit `<id>` inside the same transaction — the unit a daemon rename leaves behind. The retired unit must be pinned to the same profile as the one being installed (`KCAP_PROFILE` in its plist), or the command refuses with `verify_retire_refused` and touches nothing; an absent unit is a no-op. With `--retire`, a live daemon already running under the *new* name is `verify_contended` rather than taken over. A unit already installed under the new name, even a stopped one, is refused before the old unit is touched (`retire_reason=target_occupied`), as is a new name whose state cannot be read (`target_unknown`); if a unit appears under the new name while the old one is being retired, it is refused rather than cleared (`target_claimed`), and the old unit stays retired. When the old unit's daemon is running, the command first pauses its new work through the daemon's control socket and, once that pause is acknowledged, asks it to end its hosted agents and exit before booting it out: a daemon still running or starting an agent or evaluation refuses with `agents_active`, one too old to pause with `fence_unsupported` (restart it, then retry), and one that cannot be reached or confirmed — or a loaded label with no plist — with `fence_unavailable` or `unit_unreadable`. Each of these refusals happens before either unit is changed.
 
 **App-managed starts are gated; plain terminal use is not.** When the invoking launcher carries the `KCAP_CONSENT_SEED_DEFAULT` environment directive — the desktop supervisor or a self-respawn, never a bare `kcap daemon service start --verify`/`kcap daemon start -d` typed at a terminal — `start --verify` pre-mutation-checks the installed unit's baked directive, binary digest, and identity evidence before touching anything, and exits `28` (`verify_start_gate`) with one `start_gate_reason=<token>` line naming which check failed: `directive_missing`, `directive_invalid`, `identity_mismatch`, `foreign_binary`, `package_inconsistent`, or `evidence_unreadable`. A gate that passes is re-checked immediately before bootstrap; if the evidence changed in between (a foreign writer, a swapped binary), it rolls back the same way a forward-phase failure does and exits `29` (`verify_start_gate_drift`) instead of proceeding on stale authorization. No directive means no gate — this only ever fires for an app-managed start.
 
@@ -1818,6 +1820,7 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
+| `daemon.auto_resume` | `true`     | Resume hosted agents when the daemon starts after a restart. `false` leaves them interrupted in `kcap agent ls`, from where `kcap agent resume <id>` retries one. Read at daemon start. |
 | `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents` or the `KCAP_MAX_AGENTS` env var, which take precedence at startup. `kcap config set daemon.max_agents` and the desktop app's **Settings…** hand the value to the running daemon, which applies it without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
@@ -2211,13 +2214,16 @@ kcap agent start claude --title "Fix login" -- "fix the login redirect"  # name 
 
 ```bash
 kcap agent                 # no subcommand — same as `kcap agent ls`
-kcap agent ls              # list daemon-hosted agents (id, status, kind, repo, title)
+kcap agent ls              # list daemon-hosted agents (id, status, state, kind, repo, title)
 kcap agent attach ab12     # re-attach your terminal (any unique id prefix works)
+kcap agent resume ab12     # retry an agent a daemon restart left interrupted
 kcap agent stop ab12       # graceful /exit, then terminate
 kcap agent stop --all -y   # stop the listed non-review agents, no prompt
 ```
 
-Agent ids are long, so `attach` and `stop` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+Agent ids are long, so `attach`, `stop` and `resume` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+
+**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one (refused, with the reason, while its previous process could not be proven gone or a newer daemon wrote its entry), `kcap agent stop <id>` discards it, and `stop --all` leaves them out; one left alone for 30 days is discarded at the next daemon start. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. A starting daemon resumes at most `KCAP_RESUME_CONCURRENCY` agents at once (default 2), leaves one last alive more than `KCAP_RESUME_MAX_AGE_SECONDS` ago (default 86400; 0 removes the bound) `interrupted (too_old)`, and counts a resume as failed when the agent does not stay up for `KCAP_RESUME_READINESS_SECONDS` (default 10). `kcap config set daemon.auto_resume false` turns the resume off.
 
 **Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two:
 

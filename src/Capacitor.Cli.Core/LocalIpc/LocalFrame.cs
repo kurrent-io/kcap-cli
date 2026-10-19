@@ -18,9 +18,19 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Detach()                   => new(FrameType.Detach);
     public static LocalFrame Exited(int code)           => new(FrameType.Exited) { ExitCode = code };
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
+
+    /// <summary>The refusal for an id the daemon is not running; an attach to a resuming agent retries on
+    /// this text and on no other.</summary>
+    public const string NoSuchAgentPrefix = "no such agent";
+
+    public static LocalFrame NoSuchAgent(string agentId)  => Error($"{NoSuchAgentPrefix} {agentId}");
     public static LocalFrame Restart(string mode)       => new(FrameType.Restart)    { Text = mode };
     public static LocalFrame RestartAck(string status)  => new(FrameType.RestartAck) { Text = status };
-    public static LocalFrame Stop(string agentId)       => new(FrameType.Stop)       { Text = agentId };
+    public static LocalFrame Shutdown(ShutdownRequestDto dto) => new(FrameType.Shutdown)       { Text = ShutdownIpc.Serialize(dto) };
+    public static LocalFrame ShutdownAck(string status) => new(FrameType.ShutdownAck)          { Text = status };
+    public static LocalFrame AgentResume(string agentId) => new(FrameType.AgentResume)         { Text = agentId };
+    public static LocalFrame AgentResumeAck(string status) => new(FrameType.AgentResumeAck)    { Text = status };
+    public static LocalFrame Stop(string agentId)      => new(FrameType.Stop)       { Text = agentId };
     public static LocalFrame StopAck(string payload)    => new(FrameType.StopAck)    { Text = payload };
     public static LocalFrame StopV2(bool force, string agentId) => FrameCodec.StopV2(force, agentId);
 
@@ -29,6 +39,12 @@ public sealed record LocalFrame(FrameType Type) {
     /// The title column is opt-in: a client that predates it accepts only 3 or 6 columns and
     /// refuses any other width, and a daemon that predates it ignores the request payload.
     public static LocalFrame ListWithTitles() => new(FrameType.List) { Text = ListTitleColumn };
+
+    public const string ListStateColumn = "title+state";
+
+    /// Adds the state column and the ledger rows of agents with no live process. A daemon that
+    /// predates it answers as it would a bare List, with six columns.
+    public static LocalFrame ListWithState() => new(FrameType.List) { Text = ListStateColumn };
 
     /// Constructs any of the consent control frames, whose payload is always UTF-8 JSON
     /// (snake_case via ConsentIpcJsonContext) carried in Text — see ConsentIpc.cs.

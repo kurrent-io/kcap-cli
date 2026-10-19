@@ -1,7 +1,7 @@
 using System.Text.Json.Nodes;
-using Capacitor.Cli.Continuation;
+using Capacitor.Cli.Core.Continuation;
 
-namespace Capacitor.Cli.Tests.Unit.Continuation;
+namespace Capacitor.Cli.Core.Tests.Unit.Continuation;
 
 public class TakeoverReportTests {
     [Test]
