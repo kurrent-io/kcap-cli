@@ -169,7 +169,7 @@ At a glance — each links to its section below:
 | Command | What it does |
 |---------|--------------|
 | [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon (`--local` runs the server on this machine) |
-| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, logs and web UI of the server `kcap setup --local` installed |
+| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, logs, web UI and uninstall of the server `kcap setup --local` installed |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
@@ -213,6 +213,7 @@ kcap setup --server-url <url> --no-prompt    # CI / scripted
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 kcap setup --local                           # run a Capacitor server on this machine
+kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
 The install scripts run `kcap setup` after a first install, so this is usually how you met it; re-run it any time.
@@ -312,6 +313,17 @@ A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; 
 
 For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
 
+#### Removing the local edition
+
+```bash
+kcap local uninstall            # stop and remove the server, keep its data
+kcap local uninstall --purge    # also delete its data and retire its URL
+```
+
+`kcap local uninstall` refuses while a daemon is running agents, unless `--force` ends them with the daemon. It then stops every kcap daemon and watcher and removes the daemon service, stops the local server and verifies that nothing of it is still running, and only then removes the server's service and its `bin/` and `run/` directories. If anything cannot be stopped, nothing is removed. Its data, its identity and your profile stay, so `kcap setup --local` brings the same installation back on the same URL, downloading the version it was running.
+
+`--purge` goes on to retire the installation, then delete its `data/` and `logs/`, the pending recordings and the caches for it in the config directory, and clear the server URL of every profile there that points at it. A retired URL is never sent to again: a watcher still running, or a profile under another `KCAP_CONFIG_DIR`, is refused with an error naming the removed installation, and a later `kcap setup --local` creates a new installation on a new port. A purge that is interrupted is finished by the next `kcap local` command or `kcap setup --local`. `--yes` skips the confirmation.
+
 #### Unattended setup
 
 ```bash
@@ -384,6 +396,7 @@ kcap local stop            # stop it, and keep it stopped across logins
 kcap local restart
 kcap local logs -n 200     # the end of the server's log, which holds Postgres's and KurrentDB's too
 kcap local open            # open the web UI in a browser
+kcap local uninstall       # remove it, keeping its data; --purge deletes it (see Removing the local edition)
 ```
 
 `kcap local status` reports the installation's version, port and root, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup that was interrupted. It also says when the stack is older than this `kcap`. It changes nothing, and exits 0 only when the server is running and ready.

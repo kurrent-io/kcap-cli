@@ -105,8 +105,10 @@ public static partial class DaemonRunner {
         // honors --server-url, KCAP_URL, KCAP_PROFILE.
         var serverEnv  = ProfileOverrides.FromEnvironment();
         var machineEnv = MachineAuth.FromEnvironment();
-        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv, LocalEndpoints.Read(LocalRoot.FromEnvironment(userHome)));
+        var localRoot  = LocalRoot.FromEnvironment(userHome);
+        var profiles   = await AppConfig.ResolveActiveProfile(args, configRoot, serverEnv, LocalEndpoints.Read(localRoot));
         config.Profiles  = profiles;
+        config.LocalRoot = localRoot;
         config.ServerUrl = profiles.Resolution.ServerUrl ?? "";
 
         // CLI arg overrides for daemon-specific settings — parse before host builder.

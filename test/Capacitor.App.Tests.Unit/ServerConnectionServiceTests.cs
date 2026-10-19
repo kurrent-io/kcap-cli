@@ -3,6 +3,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Microsoft.AspNetCore.SignalR;
@@ -13,6 +14,8 @@ namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel(nameof(HubTestHost))]
 public class ServerConnectionServiceTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static ServerConnectionService Lane(HubTestHost host, string? token = null) =>
         new(TimeProvider.System, host.Url, () => Task.FromResult(token));
 
@@ -652,5 +655,40 @@ public class ServerConnectionServiceTests {
         await second.WaitAsync(TimeSpan.FromSeconds(10));
         await Assert.That(received.Single().StreamPosition).IsEqualTo(5UL);
         await WaitUntilAsync(() => HubTestHost.StreamUnsubscribes.Count == 2, what: "the second unsubscribe");
+    }
+
+    /// <summary>The installation is retired between negotiation and the WebSocket upgrade, the one moment the
+    /// negotiation's own check has already passed: the upgrade, which carries the bearer, must never reach the
+    /// port.</summary>
+    [Test]
+    public async Task A_websocket_upgrade_after_the_installation_is_retired_never_reaches_the_port() {
+        var root = new LocalRoot(Tmp.CreateDir("local"));
+        root.EnsureCreated();
+
+        InstallRegistry? installed = null;
+        var negotiations = 0;
+        var upgrades     = 0;
+
+        await using var host = await HubTestHost.StartAsync(onRequest: (path, upgrade) => {
+            if (path.EndsWith("/negotiate", StringComparison.Ordinal) && Interlocked.Increment(ref negotiations) == 1)
+                LocalStateFiles.PublishRegistry(root, installed!.RetireActive());
+            if (upgrade) Interlocked.Increment(ref upgrades);
+        });
+
+        var port = new Uri(host.Url).Port;
+        installed = InstallRegistry.Empty.WithActive(new("0123456789abcdef0123456789abcdef", port, $"http://localhost:{port}", "1.0.0"));
+        LocalStateFiles.PublishRegistry(root, installed);
+
+        await using var lane = new ServerConnectionService(
+            TimeProvider.System, host.Url, () => Task.FromResult<string?>("token"), localRoot: root);
+        var connected = false;
+        using var watch = lane.Status.Subscribe(s => connected |= s.State == ServerLaneState.Connected);
+        lane.Start();
+
+        await Next(lane.Status, s => s.State == ServerLaneState.Retrying);
+
+        await Assert.That(Volatile.Read(ref negotiations)).IsGreaterThanOrEqualTo(1);
+        await Assert.That(Volatile.Read(ref upgrades)).IsEqualTo(0);
+        await Assert.That(connected).IsFalse();
     }
 }

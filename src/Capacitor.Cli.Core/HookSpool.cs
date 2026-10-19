@@ -45,7 +45,7 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
 
     // The subdirectory name belongs to the spool, not to ConfigRoot: a root that enumerated its
     // tenants' directories would change every time one of them gained a file.
-    const string DirName = "spool";
+    public const string DirName = "spool";
 
     /// <summary>The spool under a config root. The directory overload is for a spool that is not
     /// under one — a test's own throwaway directory, or a vendor's legacy location.</summary>

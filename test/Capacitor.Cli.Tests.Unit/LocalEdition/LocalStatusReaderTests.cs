@@ -38,7 +38,7 @@ public class LocalStatusReaderTests {
     }
 
     Task<LocalStatusReport> Read(string cliVersion = "1.2.3") =>
-        new LocalStatusReader(new LocalStack(Root, Home, Service, new HttpClient(Server), TimeProvider.System), cliVersion, _ => _holders.FirstOrDefault())
+        new LocalStatusReader(new LocalStack(Root, Home, Service, new HttpClient(Server), TimeProvider.System, new FakeOutgoingRecorders([]), new ConfigRoot(Tmp.PathTo("cfg"))), cliVersion, _ => _holders.FirstOrDefault())
             .ReadAsync(CancellationToken.None);
 
     void Publish(bool withBinary = true) {

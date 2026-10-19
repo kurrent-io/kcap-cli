@@ -1010,19 +1010,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// helpers are the only writers of agent status and registry membership, so the ordering
     /// cannot be forgotten at a call site.
     internal void SetAgentStatus(AgentInstance agent, string status) {
-        agent.Status = status;
+        lock (_membership) agent.Status = status;
         _statusNotifier.Pulse();
     }
 
     internal void PublishAgent(AgentInstance agent) {
-        _agents[agent.Id] = agent;
+        lock (_membership) _agents[agent.Id] = agent;
         _statusNotifier.Pulse();
     }
 
     internal void UnpublishAgent(string agentId) {
-        _agents.TryRemove(agentId, out _);
+        lock (_membership) _agents.TryRemove(agentId, out _);
         _statusNotifier.Pulse();
     }
+
+    /// <summary>Held by every change of agent status, agent membership and pending launches, and by
+    /// <see cref="BusyForStatus"/>, so that count is one consistent observation however launches overlap.</summary>
+    readonly Lock _membership = new();
 
     internal void SetResolvedTitle(AgentInstance agent, string title) {
         if (agent.ResolvedTitle == title) return;
@@ -1994,8 +1998,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal IDisposable TrackPendingLaunch(
             string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
             string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
-        _pendingLaunches[agentId] = new PendingLaunch(
-            agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
+        lock (_membership)
+            _pendingLaunches[agentId] = new PendingLaunch(
+                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
         _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
@@ -2003,7 +2008,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     sealed class PendingLaunchScope(AgentOrchestrator owner, string agentId) : IDisposable {
         public void Dispose() {
-            if (owner._pendingLaunches.TryRemove(agentId, out _)) owner._statusNotifier.Pulse();
+            bool removed;
+            lock (owner._membership) removed = owner._pendingLaunches.TryRemove(agentId, out _);
+            if (removed) owner._statusNotifier.Pulse();
         }
     }
 

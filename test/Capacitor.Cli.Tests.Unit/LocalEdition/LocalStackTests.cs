@@ -19,7 +19,7 @@ public class LocalStackTests {
 
     FakeLocalServerService Service => field ??= new(_log, Home);
 
-    LocalStack Stack => field ??= new(Root, Home, Service, new HttpClient(), new FakeTimeProvider());
+    LocalStack Stack => field ??= new(Root, Home, Service, new HttpClient(), new FakeTimeProvider(), new FakeOutgoingRecorders(_log), new ConfigRoot(Tmp.PathTo("cfg")));
 
     static readonly LocalInstallation Active = new("abc123", 9473, "http://localhost:9473", "1.2.3");
 
@@ -136,7 +136,7 @@ public class LocalStackTests {
     [Test]
     public async Task RunAsync_does_not_run_the_command_while_another_holds_the_lease() {
         var time = new FakeTimeProvider();
-        var stack = new LocalStack(Root, Home, Service, new HttpClient(), time);
+        var stack = new LocalStack(Root, Home, Service, new HttpClient(), time, new FakeOutgoingRecorders(_log), new ConfigRoot(Tmp.PathTo("cfg")));
         using var held = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
         var ran = false;
 

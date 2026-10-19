@@ -71,6 +71,17 @@ internal partial class AgentOrchestrator {
             .Select(p => new PendingLaunchDto(
                 p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage))];
 
+    /// <summary>Whether any agent is running or starting, as one observation: an admitted launch still before its
+    /// runtime starts (consent, worktree, attachments), a pending one, or a published one. A launch is admitted before
+    /// it is pending and leaves admission only after it is published, so reading the admissions under the lock misses
+    /// none. A launch still queued has not been admitted; it is no different from one that arrives after this.</summary>
+    internal bool BusyForStatus() {
+        lock (_membership)
+            return _admission.InFlight > 0
+                || !_pendingLaunches.IsEmpty
+                || _agents.Values.Any(a => a.Status is "Starting" or "Running");
+    }
+
     internal List<AgentStatusDto> SnapshotAgentsForStatus() =>
         [.. _agents.Values
             .OrderBy(a => a.CreatedAt)

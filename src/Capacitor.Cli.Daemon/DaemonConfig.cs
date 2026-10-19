@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -85,10 +86,19 @@ public class DaemonConfig {
     /// <summary>The profile this daemon resolved at boot. A separate process from the CLI, so it
     /// resolves its own; nothing re-resolves later, which is what keeps its token reads and its
     /// daemon identity naming one profile for the daemon's whole life.</summary>
+    /// <summary>The local installation's root, so every transport to the server is checked against its registry.</summary>
+    public LocalRoot? LocalRoot { get; set; }
+
     public ProfileContext Profiles {
-        get => field ?? throw new InvalidOperationException($"DaemonConfig.Profiles was never set; pass a {nameof(ProfileContext)} in from the entry point.");
-        set;
+        get => _profiles ?? throw new InvalidOperationException($"DaemonConfig.Profiles was never set; pass a {nameof(ProfileContext)} in from the entry point.");
+        set => _profiles = value;
     }
+
+    ProfileContext? _profiles;
+
+    /// <summary>Why <see cref="ServerUrl"/> may not be sent to, as resolved at boot; null when it may, or when nothing
+    /// was resolved.</summary>
+    public string? DestinationRefusal => _profiles is null ? null : LocalDestination.Refusal(ServerUrl, _profiles.Resolution.Endpoint);
 
     /// <summary>Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
     /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children

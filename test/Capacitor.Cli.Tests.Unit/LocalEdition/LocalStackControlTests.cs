@@ -34,7 +34,7 @@ public class LocalStackControlTests {
     }
 
     LocalStackControl Control(TimeProvider? time = null) =>
-        new(new LocalStack(Root, Home, Service, new HttpClient(Server), time ?? TimeProvider.System), _ => _holders.FirstOrDefault());
+        new(new LocalStack(Root, Home, Service, new HttpClient(Server), time ?? TimeProvider.System, new FakeOutgoingRecorders([]), new ConfigRoot(Tmp.PathTo("cfg"))), _ => _holders.FirstOrDefault());
 
     void Publish() {
         Root.EnsureCreated();

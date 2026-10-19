@@ -7,8 +7,10 @@ using Capacitor.Cli.LocalEdition;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>The <c>kcap local</c> group, for the installation <c>kcap setup --local</c> made.</summary>
-sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser) {
+sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser, IOutgoingRecorders recorders, ConfigRoot config, UserHome home) {
     const int DefaultLogLines = 50;
+
+    static readonly string[] UninstallFlags = ["--purge", "--force", "--yes", "-y"];
 
     public async Task<int> HandleAsync(string[] args) {
         var sub = args.Length > 1 ? args[1] : null;
@@ -23,6 +25,7 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser) {
             "stop"         => await WithStack(s => LifecycleAsync(c => c.StopAsync, s)),
             "restart"      => await WithStack(s => LifecycleAsync(c => c.RestartAsync, s)),
             "open"         => await WithStack(OpenAsync),
+            "uninstall"    => await UninstallAsync(args[2..]),
             _              => await Unknown(sub),
         };
     }
@@ -118,6 +121,96 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser) {
         else await Console.Out.WriteLineAsync($"  Open {url} in a browser.");
 
         return 0;
+    }
+
+    async Task<int> UninstallAsync(string[] args) {
+        if (args.FirstOrDefault(a => !UninstallFlags.Contains(a)) is { } unknown) {
+            await Console.Error.WriteLineAsync($"Unknown option for kcap local uninstall: {unknown}");
+            return await PrintUsage(1);
+        }
+
+        return await WithStack(stack => UninstallAsync(stack, purge: args.Contains("--purge"), force: args.Contains("--force"),
+            yes: args.Contains("--yes") || args.Contains("-y")));
+    }
+
+    async Task<int> UninstallAsync(LocalStack stack, bool purge, bool force, bool yes) {
+        var root = stack.Root.Directory;
+
+        switch (stack.Read()) {
+            case LocalStackState.NotInstalled:
+                await Console.Out.WriteLineAsync($"There is no local installation in {root}.");
+                return 0;
+
+            case LocalStackState.Unreadable(var path, var reason):
+                return await FailAsync($"{path} cannot be read ({reason}). Nothing was changed.");
+
+            case LocalStackState.Interrupted(var operation, _):
+                await Console.Out.WriteLineAsync($"An interrupted {operation} of the local installation is finished first.");
+                break;
+
+            case LocalStackState.Installed installed:
+                await DescribeUninstallAsync(installed.Installation, root, purge);
+                break;
+        }
+
+        if (!yes) {
+            if (Console.IsInputRedirected) return await FailAsync("pass --yes to uninstall without a prompt.");
+
+            await Console.Out.WriteAsync("Proceed? [y/N] ");
+
+            if (!string.Equals((await Console.In.ReadLineAsync())?.Trim(), "y", StringComparison.OrdinalIgnoreCase)) {
+                await Console.Out.WriteLineAsync("Cancelled.");
+                return 0;
+            }
+        }
+
+        var uninstall = new LocalUninstall(stack.Service, home, recorders);
+
+        LocalUninstallOutcome outcome;
+
+        try {
+            outcome = await stack.RunAsync(new SyncProgress<LocalInstallEvent>(RenderRecovery),
+                (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None, force);
+        } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure) {
+            return await FailAsync(ex.Message);
+        }
+
+        await Console.Out.WriteLineAsync(outcome switch {
+            LocalUninstallOutcome.Purged      => $"Purged the local installation in {root}.",
+            LocalUninstallOutcome.Uninstalled => $"Uninstalled the local server. Its data in {root} is kept; kcap setup --local brings it back.",
+            _                                 => $"There is no local installation in {root}.",
+        });
+
+        return 0;
+    }
+
+    async Task DescribeUninstallAsync(LocalInstallation installation, string root, bool purge) {
+        await Console.Out.WriteLineAsync($"This will uninstall the local server at {installation.ServerUrl}:");
+        await Console.Out.WriteLineAsync("  • Stop every kcap daemon and watcher, and remove the daemon service");
+        await Console.Out.WriteLineAsync("  • Stop the local server and remove its service");
+        await Console.Out.WriteLineAsync($"  • Delete {Path.Combine(root, "bin")} and {Path.Combine(root, "run")}");
+
+        if (!purge) {
+            await Console.Out.WriteLineAsync($"Its data in {Path.Combine(root, "data")} and its profile are kept.");
+            return;
+        }
+
+        await Console.Out.WriteLineAsync($"  • Delete {Path.Combine(root, "data")} and {Path.Combine(root, "logs")}: every session it recorded");
+        await Console.Out.WriteLineAsync($"  • Delete pending recordings and the caches for it in {config.Directory}");
+        await Console.Out.WriteLineAsync($"  • Clear the server of every profile in {config.Directory} that points at it");
+        await Console.Out.WriteLineAsync($"  • Retire {installation.ServerUrl}: nothing is sent to it again, and a new installation gets a new port");
+    }
+
+    static void RenderRecovery(LocalInstallEvent e) {
+        var line = e switch {
+            LocalInstallEvent.Recovering r  => $"Finishing an interrupted {r.Operation} (stopped at {r.Phase})…",
+            LocalInstallEvent.Recovered r   => $"Finished the interrupted {r.Operation}",
+            LocalInstallEvent.RollingBack r => $"Rolling back: {r.Reason}",
+            LocalInstallEvent.RolledBack    => "Rolled back",
+            _                               => null,
+        };
+
+        if (line is not null) Console.Out.WriteLine($"  {line}");
     }
 
     static async Task<int> FailAsync(string message) {
