@@ -781,8 +781,15 @@ sealed class SetupCommand(
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
 
-        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
+        var unattended = noPrompt && !loginComplete && provider != AuthProvider.None
+            ? await new UnattendedCredential(chosenHttp).ProbeAsync(serverUrl, await ContextForAsync(activeProfile, serverUrl), time)
+            : null;
+
+        var loginStepResult = await ReportUnattendedSignInAsync(unattended, activeProfile)
+                           ?? await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
         if (loginStepResult != 0) return loginStepResult;
+
+        var machineSignedIn = unattended is UnattendedCredential.Outcome.Machine;
 
         // Ahead of the browser leg, whose import decides the eval-watch handoff from them.
         var pluginPath = ResolvePluginPath();
@@ -1142,12 +1149,7 @@ sealed class SetupCommand(
         AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
 
         // Built from the profile login stored the token under: discovery may have switched it after startup.
-        var snapshot   = await AppConfig.LoadProfileConfig(config);
-        var loggedInto   = new ProfileContext(
-            new ResolvedProfile(null, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null)
-                .Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), snapshot);
-
-        var held          = await HeldDaemonNamesAsync(serverUrl, loggedInto);
+        var held          = await HeldDaemonNamesAsync(serverUrl, await ContextForAsync(activeProfile, serverUrl));
         var envName       = Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME");
         var requestedName = GetArg(args, "--daemon-name");
         // The profile's own name comes before the machine's so a re-run never renames a daemon in use.
@@ -1218,8 +1220,9 @@ sealed class SetupCommand(
         // carries what this run actually chose.
         FirstRunMachineActionResult? daemonService = null;
 
-        // The posture offers no harness, so there is nothing for a daemon to launch.
-        if (!museAssistant) {
+        // The posture offers no harness, so there is nothing for a daemon to launch. A service unit never carries the
+        // machine credential, so its daemon could not authenticate.
+        if (!museAssistant && !machineSignedIn) {
             AnsiConsole.MarkupLine("  Running the agent daemon as a background service, so this machine stays reachable…");
             daemonService = await EnsureDaemonServiceAsync(
                 serverUrl, saved, previousDaemonName, browserAnswers.FlowId, browserAnswers.FlowStillLive);
@@ -1256,7 +1259,7 @@ sealed class SetupCommand(
         // probe (awaited outside that boundary) must be equally non-fatal.
         // Server-scoped: the import step is only actually authorized if the token both refreshes
         // and belongs to the server we just configured.
-        var authSatisfied = await IsAuthSatisfiedAsync(
+        var authSatisfied = machineSignedIn || await IsAuthSatisfiedAsync(
             provider, async () => (await store.GetValidTokensForServerAsync(activeName, serverUrl)).Tokens is not null);
 
         var importResult = await RunImportStepAsync(new ImportStepInputs(
@@ -1327,7 +1330,8 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
+        if (machineSignedIn) AnsiConsole.MarkupLine($"\n{MachineDaemonLine}");
+        else if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
@@ -2038,6 +2042,46 @@ sealed class SetupCommand(
               + $"--org/--slug create a workspace only for an account that has none — re-run with "
               + $"--server-url {landed} to configure that one.");
         };
+    }
+
+    internal const string MachineDaemonLine =
+        "  [dim]No daemon service was set up: a service cannot carry the machine credential. Where "
+      + MachineAuth.ClientIdVar + " and " + MachineAuth.ClientSecretVar + " are set, start one with[/] [cyan]kcap daemon start -d[/]";
+
+    /// <summary>The profile <paramref name="profileName"/> retargeted at <paramref name="serverUrl"/>, read now:
+    /// discovery may have switched the active profile after startup.</summary>
+    async Task<ProfileContext> ContextForAsync(string profileName, string serverUrl) {
+        var snapshot = await AppConfig.LoadProfileConfig(config);
+
+        return new ProfileContext(
+            new ResolvedProfile(null, profileName, snapshot.Profiles.GetValueOrDefault(profileName), null)
+                .Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), snapshot);
+    }
+
+    /// <summary>Step 2's report for a credential found without asking anyone, the failure for a machine
+    /// credential that does not work, or null when a person still has to sign in.</summary>
+    async Task<int?> ReportUnattendedSignInAsync(UnattendedCredential.Outcome? outcome, string profileName) {
+        switch (outcome) {
+            case UnattendedCredential.Outcome.Machine:
+                AnsiConsole.MarkupLine(
+                    $"  [green]✓[/] Signed in with the machine credential ({MachineAuth.ClientIdVar}/{MachineAuth.ClientSecretVar})");
+
+                return SetupExit.Done;
+            case UnattendedCredential.Outcome.Stored:
+                var tokens = await store.LoadAsync(profileName);
+                AnsiConsole.MarkupLine(
+                    $"  [green]✓[/] Already signed in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/] [dim](kcap login)[/]");
+
+                return SetupExit.Done;
+            case UnattendedCredential.Outcome.Rejected rejected:
+                await Console.Error.WriteLineAsync($"  The machine credential did not work: {rejected.Problem}");
+                await Console.Error.WriteLineAsync(
+                    $"  Check {MachineAuth.ClientIdVar} and {MachineAuth.ClientSecretVar}, or unset both to sign in as a person.");
+
+                return SetupExit.Failed;
+            default:
+                return null;
+        }
     }
 
     /// <summary>
