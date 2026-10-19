@@ -69,7 +69,7 @@ static class McpStdioLoop {
                     foreach (var done in tails.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList()) tails.Remove(done);
 
                     Task call;
-                    if (orderKey?.Invoke(request) is { } key) {
+                    if (OrderKeyOf(orderKey, request) is { } key) {
                         var prior = tails.GetValueOrDefault(key) ?? Task.CompletedTask;
                         call       = Task.Run(() => CallAfterAsync(prior, id, request));
                         tails[key] = call;
@@ -102,6 +102,16 @@ static class McpStdioLoop {
             _ = request?.Count;
 
             return request;
+        } catch {
+            return null;
+        }
+    }
+
+    /// <summary>The call's order key, or none when reading it fails: a malformed nested property throws on its
+    /// first read, and on this thread that would end the server. The call itself still runs and answers.</summary>
+    static string? OrderKeyOf(Func<JsonObject, string?>? orderKey, JsonObject request) {
+        try {
+            return orderKey?.Invoke(request);
         } catch {
             return null;
         }
