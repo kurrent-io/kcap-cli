@@ -21,19 +21,19 @@
         <Grid Margin="36,44,36,28" RowDefinitions="*,Auto">
             <ScrollViewer Grid.Row="0">
                 <StackPanel>
-                    <Panel Width="64" Height="64" HorizontalAlignment="Center">
+                    <Panel Width="64" Height="64" HorizontalAlignment="Left">
                         <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                                RenderOptions.BitmapInterpolationMode="HighQuality" />
                         <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
                     </Panel>
 
                     <TextBlock Margin="0,20,0,0" Text="{Binding Title}"
-                               HorizontalAlignment="Center" TextAlignment="Center"
+                               HorizontalAlignment="Left" TextAlignment="Left"
                                FontSize="19" FontWeight="SemiBold" LineHeight="26" LetterSpacing="-0.2"
                                Foreground="{StaticResource KcapTextBrush}" />
 
                     <StackPanel Margin="0,12,0,0" Orientation="Horizontal" Spacing="10"
-                                HorizontalAlignment="Center" IsVisible="{Binding ShowVersionChange}">
+                                HorizontalAlignment="Left" IsVisible="{Binding ShowVersionChange}">
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
                                 IsVisible="{Binding ShowInstalledVersion}"
                                 Background="{StaticResource KcapSurfaceBrush}"
@@ -52,7 +52,7 @@
                     </StackPanel>
 
                     <TextBlock Margin="0,14,0,0" Width="400" Text="{Binding Disclosure}"
-                               HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
+                               HorizontalAlignment="Left" TextAlignment="Left" TextWrapping="Wrap"
                                FontSize="13.5" LineHeight="21"
                                Foreground="{StaticResource KcapMutedBrush}" />
 

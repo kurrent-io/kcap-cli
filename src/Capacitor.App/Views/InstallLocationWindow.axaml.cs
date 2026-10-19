@@ -6,7 +6,7 @@ namespace Capacitor.App.Views;
 
 public partial class InstallLocationWindow : Window {
     bool _moving;
-    string _actionLabel = "Move to Applications";
+    string _actionLabel = "Install and open";
     bool _canMove = true;
     public InstallLocationWindow() => InitializeComponent();
 
@@ -14,12 +14,14 @@ public partial class InstallLocationWindow : Window {
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
             Func<string, ApplicationsInstallPlan>? selectDestination = null) : this() {
         void ShowPlan(ApplicationsInstallPlan? selected) {
-            Heading.Text = selected?.Title ?? "Move to Applications";
-            _actionLabel = selected?.ButtonLabel ?? "Move to Applications";
+            Heading.Text = selected?.Title ?? "Install kcap";
+            _actionLabel = selected?.ButtonLabel ?? "Install and open";
             MoveButton.Content = _actionLabel;
             var detail = selected?.Detail ?? "Its command-line tool and background service need a permanent location.";
-            Explanation.Text = destinations is { Count: > 1 } || selected?.Action == ApplicationsInstallAction.OpenInstalled
-                ? detail : $"{where}\n\n{detail}";
+            Explanation.Text = selected is null ? $"{where} {detail}" : detail;
+            LocationPanel.IsVisible = selected is not null && selected.Action != ApplicationsInstallAction.Blocked
+                && destinations is not { Count: > 1 };
+            LocationPath.Text = selected?.Target;
             InstallArrow.IsVisible = InstallFolder.IsVisible = selected is null || selected.Action == ApplicationsInstallAction.Install;
             UpdateBadge.IsVisible = selected?.Action == ApplicationsInstallAction.Update;
             ReadyBadge.IsVisible = selected?.Action == ApplicationsInstallAction.OpenInstalled;
@@ -31,7 +33,8 @@ public partial class InstallLocationWindow : Window {
         if (destinations is { Count: > 1 }) {
             DestinationPanel.IsVisible = true;
             DestinationPicker.ItemsSource = destinations;
-            Explanation.Text = "More than one installation location was found, or an app occupies the destination.\n\nChoose where to install kcap. Unrelated apps will not be replaced.";
+            Heading.Text = "Choose an install location";
+            Explanation.Text = "Choose which Applications folder kcap should use. Unrelated apps will stay untouched.";
             _canMove = false;
             MoveButton.IsEnabled = false;
             DestinationPicker.SelectionChanged += (_, _) => {
