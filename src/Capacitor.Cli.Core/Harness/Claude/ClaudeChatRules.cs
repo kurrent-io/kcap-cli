@@ -19,6 +19,19 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     ClaudeChatRules() { }
 
+    public IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) {
+        if (raw.Kind != AcpEventKind.UserMessage || raw.Text is not { Length: > 0 } text) return [];
+        var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
+        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
+            || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
+            || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsCompactSummary)
+            || SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) is not (null or "human")) return [];
+        // Try the exact text first: a user can be documenting the paste wrapper itself. Unwrap
+        // once, without stripping reminders/commands that may be part of that literal paste.
+        var pasted = UnwrapPastes(text.Replace("\r\n", "\n"));
+        return pasted == text ? [text] : [text, pasted];
+    }
+
     public string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) {
         if (raw.Kind != AcpEventKind.UserMessage) return null;
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);

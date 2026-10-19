@@ -274,6 +274,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     // Own sends, until the transcript echoes them into the history. The queue's acknowledgement
     // decides the echo, so a replay or a reworded receipt neither settles nor doubles one.
     readonly List<QueuedChatMessage> _unechoed = new();
+    // Keep confirmed literal receipts for replay in this feed. Display cleanup must not hide a
+    // user turn again after its queue row has retired. A different feed drops this evidence.
+    readonly HashSet<string> _literalInputHistory = new(StringComparer.Ordinal);
     int _recallEdits = -1;
     /// Replaces the composer text with the next older prompt; false when nothing changed.
     public bool RecallOlder() => Recall(_history.Older(Recallable(), Unechoed()));
@@ -951,6 +954,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
         _items.Clear();
         _history.Clear();
+        _literalInputHistory.Clear();
         _unechoed.Clear();
         _superseded.Clear();
         _pendingTools.Clear();
@@ -1270,7 +1274,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
         _planActivity?.Apply(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
-        foreach (var (projected, offset) in read.Lines) {
+        foreach (var (line, offset) in read.Lines) {
+            var projected = line.RestoreSubmittedInputs(text => {
+                if (!Tracked.Any(q => !q.IsForeign && !q.Acknowledged && q.Matches(text, _inputGeneration, offset))
+                    && !_superseded.Any(pair => !pair.Old.Acknowledged && pair.Old.Matches(text, _inputGeneration, offset))) return false;
+                _literalInputHistory.Add(text);
+                return true;
+            }, _literalInputHistory.Contains);
             _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
