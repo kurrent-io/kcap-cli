@@ -77,6 +77,16 @@ internal record AgentInstance(
 
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
+
+    bool _reopenedTranscriptRefused;
+
+    /// Set when the server will take no events for an ACP session this agent reopened: the bind or the
+    /// cursor read was refused, or the binding is already terminal. A native resume judged with this set
+    /// has failed.
+    public bool ReopenedTranscriptRefused {
+        get => Volatile.Read(ref _reopenedTranscriptRefused);
+        set => Volatile.Write(ref _reopenedTranscriptRefused, value);
+    }
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }
@@ -2910,7 +2920,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (start.Runtime.RequiresSourceClaimBeforeFirstTurn)
                     _ = StartEnvelopeSourcedSessionAsync(agent, start.Runtime, transcript, cmd.Vendor, acpCts);
                 else
-                    _ = StartAcpForwardingAsync(agent, transcript, cmd.Vendor, acpCts);
+                    _ = StartAcpForwardingAsync(
+                        agent, transcript, cmd.Vendor, acpCts,
+                        reopened: resume is not null && cmd.ResumeSessionId == transcript.AcpSessionId);
             }
 
             // Reconnect PID-record seam (reconnect spec §6.2 step 1): a resume candidate's pid is
@@ -4883,7 +4895,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
     /// immediately below the bind await closes that race.
     /// </summary>
-    async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
+    /// <remarks>A <paramref name="reopened"/> session already has events on the server, and a forwarder
+    /// numbering from 0 would have each new one deduplicated away until it passed the server's cursor.
+    /// <c>AcpSessionStarted</c> reports no cursor, so it is read with an empty <c>AcpSessionEvents</c>
+    /// batch, which the server answers without appending, and the forwarder resumes after it.</remarks>
+    async Task StartAcpForwardingAsync(
+            AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts,
+            bool reopened = false) {
         try {
             await _server.AcpSessionStartedAsync(
                 agent.Id,
@@ -4895,10 +4913,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 acpCts.Token
             );
 
-            // Non-envelope AcpSessionStarted bind: no source-claim cursor, so always a fresh forwarder
-            // (SessionStarted@0). §2.7 B4's rebind cursor rides ONLY the source-claim path below.
-            StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq: -1);
+            var acceptedSeq = -1L;
+
+            if (reopened) {
+                var cursor = await _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, [], acpCts.Token);
+
+                if (cursor.Rejected) {
+                    agent.ReopenedTranscriptRefused = true;
+                    LogReopenedCursorRejected(agent.Id);
+
+                    return;
+                }
+
+                acceptedSeq = cursor.AcceptedSeq;
+            }
+
+            StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq);
         } catch (Exception ex) {
+            if (reopened && !acpCts.IsCancellationRequested) agent.ReopenedTranscriptRefused = true;
             LogAcpBindFailed(ex, agent.Id);
         }
     }
@@ -4911,12 +4943,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>AcpSessionStarted</c> — can reuse it verbatim without re-binding. Synchronous (no awaits). The
     /// CALLER owns the try/catch.
     ///
-    /// <para><paramref name="acceptedSeq"/> (§2.7 B4): a FRESH bind (<c>-1</c>, the default) builds the
-    /// SessionStarted@0 initial envelope and the forwarder's local seq starts at 0. An envelope-sourced
-    /// REBIND (a parked reviewer relaunch, <c>≥ 0</c>) initializes the forwarder from the source-claim's
-    /// canonical <c>AcceptedSeq</c> instead — no SessionStarted, new events numbered from that seq + 1
-    /// (see §2.5 item 6). Only the <see cref="StartEnvelopeSourcedSessionAsync"/> source-claim path can
-    /// carry a cursor; the non-envelope <see cref="StartAcpForwardingAsync"/> path always passes -1.</para>
+    /// <para><paramref name="acceptedSeq"/>: <c>-1</c> for a session the server holds no events of, which
+    /// starts with SessionStarted@0; otherwise the server's cursor — a parked reviewer's source claim, or
+    /// a session a restart resume reopened — and the forwarder sends no SessionStarted and numbers from
+    /// the next seq.</para>
     /// </summary>
     void StartForwarderAfterBind(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts, long acceptedSeq = -1) {
         // Liveness check: the bind await (either path) can span a reconnect outage. If finalize already
@@ -6185,6 +6215,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
     partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server refused the transcript cursor of the ACP session agent {AgentId} reopened")]
+    partial void LogReopenedCursorRejected(string agentId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
     partial void LogAcpBindAbortedAgentGone(string agentId);

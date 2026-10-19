@@ -478,6 +478,12 @@ internal partial class AgentOrchestrator {
 
     const string NativeResumeUnsupported = "native_resume_unsupported";
     const string StoppedDuringResume     = "stopped";
+    const string TranscriptRefusedReason = "acp_binding_unavailable";
+
+    /// <summary>A reopened ACP session whose binding the server holds as terminal drops the first new
+    /// event, which stops the forwarder: the vendor conversation survived, but nothing it says is recorded.</summary>
+    static bool TranscriptRefused(AgentInstance agent) =>
+        agent.ReopenedTranscriptRefused || agent.AcpForwarder?.Forwarder.IsTerminal == true;
 
     static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
@@ -859,9 +865,17 @@ internal partial class AgentOrchestrator {
 
         if (resume.Agent is not { } agent) return ("runtime_exited", null);
 
-        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct);
+        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct, judgeTranscript: true);
 
         if (agent.StopRequested) return (StoppedDuringResume, null);
+
+        if (!survived && TranscriptRefused(agent)) {
+            // Still pending its resume, so the teardown this starts keeps the worktree for kcap continue.
+            await agent.Runtime.TerminateAsync(ShutdownTerminateGrace);
+
+            return (TranscriptRefusedReason, null);
+        }
+
         if (!survived) return ("runtime_exited", agent.Runtime.ExitCode);
 
         lock (_ledgerLock) {
@@ -873,11 +887,13 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Whether the resumed runtime is still running, and still this agent, once the readiness
-    /// window has passed since it published.</summary>
-    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct) {
+    /// window has passed since it published. <paramref name="judgeTranscript"/> also fails it when the
+    /// server takes no events for the session it reopened.</summary>
+    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct, bool judgeTranscript = false) {
         var started = _time.GetTimestamp();
 
-        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)) {
+        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)
+            && !(judgeTranscript && TranscriptRefused(agent))) {
             var left = _config.ResumeReadinessWindow - _time.GetElapsedTime(started);
             if (left <= TimeSpan.Zero) return true;
 
