@@ -43,6 +43,7 @@ public class ReferenceLinksTests {
     [Arguments("```\n#7 @octo 1a2b3c4\n```")]
     [Arguments("Mail a@b.com about 1234567 or deadbee.")]
     [Arguments("No space#8 and no x/y/z#9.")]
+    [Arguments("Not #0, acme/x#0, acme/..#1 or acme/.#1.")]
     [Arguments("Escaped \\#12 and \\@octo stay text.")]
     public async Task Code_emails_and_lookalikes_stay_text(string markdown) {
         await RunOnUiAsync(async () => {
