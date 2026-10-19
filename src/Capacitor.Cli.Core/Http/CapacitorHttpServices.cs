@@ -153,6 +153,11 @@ public static class CapacitorHttpServices {
             .ConfigurePrimaryHttpMessageHandler(
                 () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
 
+        services.AddHttpClient(CapacitorClients.Ollama)
+            .ConfigureHttpClient(c => c.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(
+                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+
         return services;
     }
 

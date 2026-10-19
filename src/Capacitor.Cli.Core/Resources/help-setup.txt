@@ -43,14 +43,22 @@ Options:
   --yes                       With --local: confirm the install. Required by
                               --no-prompt and --json for an install; reusing an
                               existing installation needs no confirmation.
+  --embedding-model <model>   With --local: embed with this Ollama model for
+                              search by meaning, pulling it if Ollama lacks it.
+                              The model fixes the width of the stored vectors,
+                              so changing it later embeds everything again.
+  --no-embeddings             With --local: do not configure Ollama, removing a
+                              model an earlier setup configured. Remembered, so a
+                              later setup without either flag keeps it.
   --json                      With --local: write one JSON object per line,
                               ending with "committed" or "failed", and run only
                               the server and login steps. Exits 0 on "committed",
                               1 on "failed", and 130 when an interrupt (Ctrl+C or
                               SIGTERM) was received, whichever line came last.
-                              Takes only --single-user, --yes and
-                              --no-update-check. With --discover: the workspace
-                              report.
+                              Takes only --single-user, --yes, --no-update-check,
+                              --embedding-model and --no-embeddings, and uses a
+                              running Ollama unless told otherwise. With
+                              --discover: the workspace report.
   --daemon-name <name>        Daemon name. With --no-prompt, a name another
                               machine's daemon holds exits 1; otherwise it is the
                               prompt's suggestion, moved to a free variant if held
@@ -177,7 +185,13 @@ against it. macOS on Apple silicon only for now. The first version is for a
 machine with one user: on a shared machine, other OS users can open the web UI
 and act as its admin, so setup asks you to confirm that and the install itself
 (--single-user and --yes; --no-prompt and --json cannot ask and require both).
-Running it again reuses the existing installation. A failed or cancelled
+Running it again reuses the existing installation.
+When Ollama is running on http://localhost:11434, setup offers it for search by
+meaning with mxbai-embed-large (1024 dimensions, about 670 MB), pulls the model
+if missing, and restarts the server when the model changes. --no-prompt asks
+nothing, so with Ollama running and nothing recorded yet it needs
+--embedding-model or --no-embeddings. Without Ollama, or when the pull fails,
+setup carries on and search works by keyword. A failed or cancelled
 install removes what it created and keeps its logs/ directory. A machine with
 a profile for another server is refused for now, and musl builds of kcap are
 not supported.

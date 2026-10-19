@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -94,5 +95,61 @@ internal sealed class LocalSetupArgsTests {
 
         await Assert.That(error).IsNull();
         await Assert.That(parsed).IsEqualTo(new LocalSetupArgs(Json: false, SingleUser: false, Yes: false, NoPrompt: true));
+    }
+
+    [Test]
+    public async Task Json_accepts_the_embedding_flags() {
+        var (parsed, error) = LocalSetupArgs.Parse(
+            ["setup", "--local", "--json", "--single-user", "--embedding-model", "nomic-embed-text:v1.5"], kcapUrlEnv: null);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(parsed!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Ollama("nomic-embed-text:v1.5"));
+
+        var (skip, _) = LocalSetupArgs.Parse(["setup", "--local", "--json", "--no-embeddings"], kcapUrlEnv: null);
+        await Assert.That(skip!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Skip());
+    }
+
+    [Test]
+    public async Task The_embedding_model_takes_the_equals_form_too() {
+        var (terminal, _) = LocalSetupArgs.Parse(["setup", "--local", "--embedding-model=nomic-embed-text"], kcapUrlEnv: null);
+        var (json, error) = LocalSetupArgs.Parse(["setup", "--local", "--json", "--embedding-model=nomic-embed-text"], kcapUrlEnv: null);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(terminal!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Ollama("nomic-embed-text"));
+        await Assert.That(json!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Ollama("nomic-embed-text"));
+    }
+
+    [Test]
+    public async Task An_empty_equals_form_is_refused() {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", "--embedding-model="], kcapUrlEnv: null);
+
+        await Assert.That(parsed).IsNull();
+        await Assert.That(error).Contains("--embedding-model needs an Ollama model name");
+    }
+
+    [Test]
+    public async Task No_embedding_flag_leaves_the_answer_open() {
+        var (parsed, _) = LocalSetupArgs.Parse(["setup", "--local", "--no-prompt"], kcapUrlEnv: null);
+
+        await Assert.That(parsed!.Embeddings).IsNull();
+    }
+
+    [Test]
+    [Arguments("--embedding-model")]
+    [Arguments("--embedding-model", "--yes")]
+    [Arguments("--embedding-model", "bad name")]
+    public async Task The_embedding_model_flag_needs_a_model_name(params string[] flags) {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", .. flags], kcapUrlEnv: null);
+
+        await Assert.That(parsed).IsNull();
+        await Assert.That(error).Contains("--embedding-model needs an Ollama model name");
+    }
+
+    [Test]
+    public async Task Both_embedding_flags_contradict_each_other() {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", "--no-embeddings", "--embedding-model", "mxbai-embed-large"], kcapUrlEnv: null);
+
+        await Assert.That(parsed).IsNull();
+        await Assert.That(error).Contains("contradict");
     }
 }

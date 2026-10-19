@@ -29,6 +29,9 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// <summary>Replaces the activity <see cref="Activity"/> would otherwise derive.</summary>
     public UnitActivity? ActivityOverride { get; set; }
 
+    /// <summary>The unit the last <see cref="Install"/> wrote.</summary>
+    public LocalServerUnit? Installed { get; private set; }
+
     /// <summary>Set by an install or start, cleared by a stop or uninstall.</summary>
     public bool Running { get; private set; }
 
@@ -44,6 +47,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
         LoadedRoot = unit.Root.Directory;
         Running    = true;
+        Installed  = unit;
 
         var file = UnitFile(unit);
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);

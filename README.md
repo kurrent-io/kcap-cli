@@ -85,7 +85,7 @@ kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt
 - **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
 - **npm:** `npm install -g @kurrent/kcap`, then `kcap setup`. This needs Node.js; see [npm installs and upgrades](#npm-installs-and-upgrades) for npm 11's install-script gate.
 - **Desktop app:** on macOS or Windows the [desktop app](#desktop-app) bundles `kcap` and the daemon.
-- **Run the server on this machine:** `kcap setup --local` installs a Capacitor server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
+- **Run the server on this machine:** `kcap setup --local` installs a Capacitor server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. With [Ollama](https://ollama.com) running, it also sets up search by meaning. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
 
 ## Desktop app
 
@@ -213,6 +213,7 @@ kcap setup --server-url <url> --no-prompt    # CI / scripted
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 kcap setup --local                           # run a Capacitor server on this machine
+kcap setup --local --embedding-model <model> # …embedding with this Ollama model
 kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
@@ -293,23 +294,36 @@ everyone:
 
 The first version is for a machine with one user: on a shared machine, other OS users can open the web UI and act as its admin. Setup therefore asks you to confirm that (`--single-user`) and to confirm the install itself (`--yes`); `--no-prompt` and `--json` cannot ask, so they require both for an install. Re-running `kcap setup --local` reuses the existing installation, which needs no confirmation beyond `--single-user`.
 
+**Search by meaning.** When [Ollama](https://ollama.com) is running on `http://localhost:11434`, setup offers it as the server's embedding provider, suggesting `mxbai-embed-large` (1024 dimensions, about 670 MB). It pulls the model if Ollama does not have it, checks that it embeds text, and writes the choice to `data/embedding.json` under the installation, which the server's service passes to it as `Embedding__Provider=ollama`, `Embedding__Ollama__Model` and `Embedding__Ollama__BaseUrl`. A new installation starts with it; on an existing one a changed model restarts the server. The model fixes the width of the stored vectors, so changing it later means embedding everything again, which the server does in the background.
+
+- `--embedding-model <model>` picks the model without asking. `--no-embeddings` stops setup configuring Ollama, removing a model an earlier setup configured, and is remembered: a later setup without either flag, `--json` included, leaves search by keyword. An embedding provider set in the web UI's settings still applies.
+- `--no-prompt` asks nothing: with Ollama running and nothing recorded yet, it needs one of those two flags. A recorded model or decline is kept.
+- Without Ollama, setup carries on and search works by keyword; re-run `kcap setup --local` once Ollama runs. A failed pull or a model that cannot embed is reported the same way and never fails the install.
+
 - A machine that already has a profile for another server is refused for now.
 - Builds of kcap for musl Linux are not supported.
 - `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
 
-`--json` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. It accepts only `--single-user`, `--yes` and `--no-update-check`:
+`--json` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model` and `--no-embeddings`, and uses a running Ollama with the configured model, or `mxbai-embed-large`, unless a flag says otherwise:
 
 ```json
 {"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
 {"v":1,"event":"port_chosen","port":9473}
 {"v":1,"event":"downloading","url":"https://…","bytes":84213760}
 {"v":1,"event":"verified","sha256":"…"}
+{"v":1,"event":"embeddings_ollama_found","version":"0.12.3","url":"http://localhost:11434"}
+{"v":1,"event":"embeddings_model_pulling","model":"mxbai-embed-large"}
+{"v":1,"event":"embeddings_model_progress","received":335544320,"bytes":669603840,"model":"mxbai-embed-large"}
+{"v":1,"event":"embeddings_model_ready","model":"mxbai-embed-large","dimensions":1024}
+{"v":1,"event":"embeddings_configured","provider":"ollama","model":"mxbai-embed-large"}
 {"v":1,"event":"starting","unit":"…"}
 {"v":1,"event":"ready","server_url":"http://localhost:9473"}
 {"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"…","port":9473,"version":"0.13.0"}
 ```
 
 A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed`, or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+
+The `embeddings_*` events come after `unpacked` for an install and after `preflight_passed` for a reuse, before `starting`. `embeddings_model_pulling` and `embeddings_model_progress` (one per whole percent) appear only when Ollama lacks the model, and `embeddings_configured` carries `replaced_model` when it replaced a different one. When the step does not end in `embeddings_configured`, it ends in `{"v":1,"event":"embeddings_skipped","code":"…","message":"…"}`, which never fails the install; `code` is `declined` (`--no-embeddings`, now or in an earlier setup), `ollama_not_found`, `pull_failed`, `model_unusable` (the model cannot embed text) or `write_failed`. Unless it is `declined`, a model configured earlier stays configured.
 
 For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
 
@@ -400,7 +414,7 @@ kcap local upgrade         # move it forward to this kcap's version
 kcap local uninstall       # remove it, keeping its data; --purge deletes it (see Removing the local edition)
 ```
 
-`kcap local status` reports the installation's version, port and root, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup or upgrade that was interrupted. It also says when the stack is older than this `kcap`, and names `kcap local upgrade`, or newer than it. It changes nothing, and exits 0 only when the server is running and ready.
+`kcap local status` reports the installation's version, port and root, whether search is configured to work by meaning through Ollama (and with which model) or by keyword only, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup or upgrade that was interrupted. It also says when the stack is older than this `kcap`, and names `kcap local upgrade`, or newer than it. It changes nothing, and exits 0 only when the server is running and ready.
 
 `start`, `stop`, `restart` and `upgrade` wait for any other `kcap` that is changing the installation, and first finish or undo an interrupted setup or upgrade. A stop persists: the server does not come back at the next login until `kcap local start`. The port is part of the installation's identity, so a server whose port another process holds cannot move to another one; stop that process instead. The logs are under `~/.config/kcap/local/logs`.
 

@@ -45,6 +45,10 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
             new("Installation", installation.Id),
             new("Root", stack.Root.Directory),
             new("Service", $"{service.Describe} {Label(unit)} ({service.UnitFile(unit)})"),
+            new("Search", (unit.EmbeddingModel is { } model
+                ? $"by meaning through Ollama with {model} while it answers, and by keyword"
+                : "by keyword only; kcap setup --local --embedding-model <model> adds search by meaning through Ollama")
+              + (LocalEmbeddingFile.Read(stack.Root) is { Pending: true } ? " (not yet applied; kcap setup --local applies it)" : "")),
         };
 
         if (state.UnitAbsent) return Down($"Not running: no {service.Describe} is installed for it.", fields, notes, StoppedAdvice(unit, "installs and starts it"), Leftovers());

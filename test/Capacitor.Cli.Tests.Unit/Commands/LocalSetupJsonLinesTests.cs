@@ -52,6 +52,20 @@ internal sealed class LocalSetupJsonLinesTests {
             """{"v":1,"event":"nothing_to_do","version":"1.2.0","installed_version":"1.3.0","reason":"stack_newer"}""");
         yield return () => (new LocalInstallEvent.NothingToDo(UpgradeSkip.NotInstalled, "1.3.0", null),
             """{"v":1,"event":"nothing_to_do","version":"1.3.0","reason":"not_installed"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingOllamaFound("http://localhost:11434", "0.12.3"),
+            """{"v":1,"event":"embeddings_ollama_found","version":"0.12.3","url":"http://localhost:11434"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingModelPulling("mxbai-embed-large"),
+            """{"v":1,"event":"embeddings_model_pulling","model":"mxbai-embed-large"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingModelProgress("mxbai-embed-large", 10, 670),
+            """{"v":1,"event":"embeddings_model_progress","received":10,"bytes":670,"model":"mxbai-embed-large"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingModelReady("mxbai-embed-large", 1024),
+            """{"v":1,"event":"embeddings_model_ready","model":"mxbai-embed-large","dimensions":1024}""");
+        yield return () => (new LocalInstallEvent.EmbeddingsConfigured("mxbai-embed-large", null),
+            """{"v":1,"event":"embeddings_configured","provider":"ollama","model":"mxbai-embed-large"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingsConfigured("nomic-embed-text", "mxbai-embed-large"),
+            """{"v":1,"event":"embeddings_configured","provider":"ollama","model":"nomic-embed-text","replaced_model":"mxbai-embed-large"}""");
+        yield return () => (new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.OllamaNotFound, "No Ollama."),
+            """{"v":1,"event":"embeddings_skipped","code":"ollama_not_found","message":"No Ollama."}""");
     }
 
     [Test]
