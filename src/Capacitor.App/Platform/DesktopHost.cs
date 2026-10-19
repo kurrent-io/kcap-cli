@@ -11,13 +11,14 @@ namespace Capacitor.App.Platform;
 /// What differs between the platforms the app ships on, decided once at startup, so the rest of
 /// the app asks the host instead of testing the operating system.
 public abstract class DesktopHost : IDisposable {
-    protected DesktopHost(string cliDirectory, bool updateRelaunch) {
+    protected DesktopHost(string cliDirectory, bool updateRelaunch, SingleInstanceLock singleInstance) {
         CliDirectory = cliDirectory;
         UpdateRelaunch = updateRelaunch;
+        SingleInstance = singleInstance;
     }
 
     /// Passed to a copy the app starts of itself before exiting: that copy waits for this one to
-    /// release its instance claim instead of handing over to a process that is shutting down.
+    /// release its single-instance lock instead of handing over to a process that is shutting down.
     /// Velopack's restart after an update is recognised by its own hook.
     public const string RelaunchArg = "--relaunch";
 
@@ -28,24 +29,25 @@ public abstract class DesktopHost : IDisposable {
     /// The host for this process, or null when another copy of the app took over this launch and
     /// this process must exit.
     public static DesktopHost? Start(string[] args, bool updateRelaunch) {
-        var appDirectory = AppContext.BaseDirectory;
         var relaunch = updateRelaunch || args.Contains(RelaunchArg, StringComparer.Ordinal);
-        if (OperatingSystem.IsMacOS()) return new MacDesktopHost(BundleLayout.CliDirectory(appDirectory), updateRelaunch);
-        if (OperatingSystem.IsWindows()) return WindowsDesktopHost.Start(appDirectory, updateRelaunch, relaunch);
-        if (OperatingSystem.IsLinux()) return LinuxDesktopHost.Start(appDirectory, updateRelaunch, relaunch);
+        if (SingleInstanceLock.Acquire(relaunch ? RelaunchWait : TimeSpan.Zero) is not { } singleInstance) return null;
+
+        var appDirectory = AppContext.BaseDirectory;
+        if (OperatingSystem.IsMacOS()) return new MacDesktopHost(BundleLayout.CliDirectory(appDirectory), updateRelaunch, singleInstance);
+        if (OperatingSystem.IsWindows()) return new WindowsDesktopHost(BundleLayout.CliDirectory(appDirectory), updateRelaunch, singleInstance);
+        if (OperatingSystem.IsLinux()) return LinuxDesktopHost.Start(appDirectory, updateRelaunch, singleInstance);
         throw new PlatformNotSupportedException();
     }
 
-    /// The host for this platform with nothing claimed or copied: what a process that never ran
+    /// The host for this platform with nothing locked or copied: what a process that never ran
     /// Start sees, such as the headless test app.
     public static DesktopHost Unstarted() {
         var cliDirectory = BundleLayout.CliDirectory(AppContext.BaseDirectory);
-        if (OperatingSystem.IsMacOS()) return new MacDesktopHost(cliDirectory, false);
-        if (OperatingSystem.IsWindows()) return new WindowsDesktopHost(cliDirectory, false, null);
-        return new LinuxDesktopHost(cliDirectory, false, null, null);
+        if (OperatingSystem.IsMacOS()) return new MacDesktopHost(cliDirectory, false, SingleInstanceLock.Unenforced);
+        if (OperatingSystem.IsWindows()) return new WindowsDesktopHost(cliDirectory, false, SingleInstanceLock.Unenforced);
+        return new LinuxDesktopHost(cliDirectory, false, null, SingleInstanceLock.Unenforced);
     }
 
-    /// The directory the bundled CLI runs from.
     public string CliDirectory { get; }
 
     /// Velopack relaunched this process after applying an update; its hook fires on a failed apply
@@ -56,7 +58,6 @@ public abstract class DesktopHost : IDisposable {
     /// the model changes and the pause state is refreshed on a timer.
     public virtual bool TrayAnnouncesMenuOpen => true;
 
-    /// A second copy can be started while this one is still running.
     public virtual bool CanRelaunchNow => true;
 
     public virtual AppBuilder ConfigureAvalonia(AppBuilder builder) => builder;
@@ -66,10 +67,9 @@ public abstract class DesktopHost : IDisposable {
 
     public abstract IDesktopNotificationSink CreateNotificationSink(Action<Action> dispatch);
 
-    /// Runs show when another launch asks this copy to come forward.
-    public virtual void OnSecondLaunch(Action show) { }
+    public SingleInstanceLock SingleInstance { get; }
 
-    /// A copy of this app with args, which waits for this one to release its instance claim.
+    /// A copy of this app with args, which waits for this one to release its single-instance lock.
     public ProcessStartInfo NewCopy(params string[] args) {
         var executable = Executable ?? throw new InvalidOperationException("The app's executable could not be found.");
         var start = new ProcessStartInfo(executable) { UseShellExecute = false };
@@ -86,7 +86,7 @@ public abstract class DesktopHost : IDisposable {
         // Checked before shutting down: past that point a start that fails leaves nothing running.
         if (Executable is not { } executable || !File.Exists(executable)) return Task.FromResult(false);
         var start = NewCopy();
-        // On Exit, once teardown is over: shutdown can outlast the new copy's wait for the claim.
+        // On Exit, once teardown is over: shutdown can outlast the new copy's wait for the lock.
         desktop.Exit += (_, _) => {
             try { Process.Start(start)?.Dispose(); }
             catch (Exception ex) { Console.Error.WriteLine($"kcap: could not relaunch: {ex.Message}"); }
@@ -96,5 +96,8 @@ public abstract class DesktopHost : IDisposable {
 
     protected virtual string? Executable => Environment.ProcessPath;
 
-    public virtual void Dispose() => GC.SuppressFinalize(this);
+    public virtual void Dispose() {
+        SingleInstance.Dispose();
+        GC.SuppressFinalize(this);
+    }
 }

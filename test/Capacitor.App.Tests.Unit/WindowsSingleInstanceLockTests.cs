@@ -8,7 +8,7 @@ namespace Capacitor.App.Tests.Unit;
 /// thread — on a shared one the second TryAcquire would succeed and prove nothing.
 [RunOn(OS.Windows)]
 [SupportedOSPlatform("windows")]
-public class SingleInstanceGuardTests {
+public class WindowsSingleInstanceLockTests {
     static string UniqueName() => $"kcap-test-{Guid.NewGuid():N}";
 
     static Task<T> OnOwnThread<T>(Func<T> body) {
@@ -27,15 +27,15 @@ public class SingleInstanceGuardTests {
         using var held = new ManualResetEventSlim();
         using var exit = new ManualResetEventSlim();
         var owner = OnOwnThread(() => {
-            var guard = SingleInstanceGuard.TryAcquire(name, TimeSpan.Zero);
-            guard?.OnShowRequested(() => shown.TrySetResult());
+            var guard = WindowsSingleInstanceLock.TryAcquire(name, TimeSpan.Zero);
+            if (guard is not null) guard.ShowRequested += () => shown.TrySetResult();
             held.Set();
             exit.Wait(); // a thread that ends abandons the mutex, which would free it
             return guard;
         });
         held.Wait();
 
-        var second = await OnOwnThread(() => SingleInstanceGuard.TryAcquire(name, TimeSpan.Zero));
+        var second = await OnOwnThread(() => WindowsSingleInstanceLock.TryAcquire(name, TimeSpan.Zero));
         await shown.Task.WaitAsync(TimeSpan.FromSeconds(5));
         exit.Set();
         using var first = await owner;
@@ -44,22 +44,20 @@ public class SingleInstanceGuardTests {
         await Assert.That(second).IsNull();
     }
 
-    /// The old copy still holds the lock while it shuts down; the relaunched one must get it once
-    /// that copy is gone, not hand over to it.
     [Test]
     public async Task A_relaunch_waits_for_the_old_copy_to_exit_and_then_takes_the_lock() {
         var name = UniqueName();
         using var held = new ManualResetEventSlim();
         using var exit = new ManualResetEventSlim();
         var oldCopy = OnOwnThread(() => {
-            var guard = SingleInstanceGuard.TryAcquire(name, TimeSpan.Zero);
+            var guard = WindowsSingleInstanceLock.TryAcquire(name, TimeSpan.Zero);
             held.Set();
             exit.Wait();
             return guard; // the thread ends still owning the mutex, as a process exit does
         });
         held.Wait();
 
-        var relaunch = OnOwnThread(() => SingleInstanceGuard.TryAcquire(name, TimeSpan.FromSeconds(10)));
+        var relaunch = OnOwnThread(() => WindowsSingleInstanceLock.TryAcquire(name, TimeSpan.FromSeconds(10)));
         await Task.Delay(200);
         await Assert.That(relaunch.IsCompleted).IsFalse();
         exit.Set();
@@ -72,9 +70,9 @@ public class SingleInstanceGuardTests {
 
     [Test]
     public async Task The_lock_name_ignores_path_case_and_carries_no_backslash() {
-        var lower = SingleInstanceGuard.NameFor(@"C:\Users\someone\AppData\Local\KurrentCapacitor\current\Kurrent Capacitor.exe");
-        var upper = SingleInstanceGuard.NameFor(@"C:\USERS\SOMEONE\APPDATA\LOCAL\KURRENTCAPACITOR\CURRENT\KURRENT CAPACITOR.EXE");
-        var other = SingleInstanceGuard.NameFor(@"C:\src\kcap-cli\src\Capacitor.App\bin\Debug\net10.0\Kurrent Capacitor.exe");
+        var lower = WindowsSingleInstanceLock.NameFor(@"C:\Users\someone\AppData\Local\KurrentCapacitor\current\Kurrent Capacitor.exe");
+        var upper = WindowsSingleInstanceLock.NameFor(@"C:\USERS\SOMEONE\APPDATA\LOCAL\KURRENTCAPACITOR\CURRENT\KURRENT CAPACITOR.EXE");
+        var other = WindowsSingleInstanceLock.NameFor(@"C:\src\kcap-cli\src\Capacitor.App\bin\Debug\net10.0\Kurrent Capacitor.exe");
 
         await Assert.That(upper).IsEqualTo(lower);
         await Assert.That(other).IsNotEqualTo(lower);

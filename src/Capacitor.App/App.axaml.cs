@@ -248,7 +248,7 @@ public partial class App : Application {
             var windowLifecycle = new DesktopWindowLifecycle(this.TryGetFeature<IActivatableLifetime>(),
                 () => _shutdownStarted ? null : MainWindowAction(_coordinator), AppKitDock.SetVisible);
             desktop.Exit += (_, _) => { windowLifecycle.Dispose(); Program.Host.Dispose(); };
-            Program.Host.OnSecondLaunch(() => Dispatcher.UIThread.Post(() => {
+            Program.Host.SingleInstance.ShowRequested += () => Dispatcher.UIThread.Post(() => {
                 if (_shutdownStarted) return;
                 if (MainWindowAction(_coordinator) is { } showMain) {
                     showMain();
@@ -259,7 +259,7 @@ public partial class App : Application {
                 if (startup is null) return;
                 if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
                 startup.Activate();
-            }));
+            });
             // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
             _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
             _menuBar.Install();

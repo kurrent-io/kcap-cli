@@ -6,7 +6,7 @@ namespace Capacitor.App.Tests.Unit;
 public class LinuxDesktopHostTests {
     [Test]
     public async Task A_new_copy_starts_from_the_image_and_waits_for_this_one_to_exit() {
-        using var host = new LinuxDesktopHost("/cli", false, new AppImageInstall("/apps/Kcap.AppImage"), null);
+        using var host = new LinuxDesktopHost("/cli", false, new AppImageInstall("/apps/Kcap.AppImage"), SingleInstanceLock.Unenforced);
 
         var start = host.NewCopy("--setup");
 

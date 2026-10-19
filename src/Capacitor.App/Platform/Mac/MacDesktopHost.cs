@@ -7,7 +7,7 @@ using Capacitor.Cli.Core;
 namespace Capacitor.App.Platform.Mac;
 
 [SupportedOSPlatform("macos")]
-public sealed class MacDesktopHost(string cliDirectory, bool updateRelaunch) : DesktopHost(cliDirectory, updateRelaunch) {
+public sealed class MacDesktopHost(string cliDirectory, bool updateRelaunch, SingleInstanceLock singleInstance) : DesktopHost(cliDirectory, updateRelaunch, singleInstance) {
     public override AppBuilder ConfigureAvalonia(AppBuilder builder) =>
         builder.With(new AvaloniaNativePlatformOptions {
             RenderingMode = MacRenderingOrder.Resolve(Environment.GetEnvironmentVariable(MacRenderingOrder.EnvVar)),
