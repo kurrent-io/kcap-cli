@@ -9,7 +9,8 @@ namespace Capacitor.Cli.LocalEdition;
 /// cancellation escapes.
 /// </summary>
 static class LocalEmbeddingStep {
-    /// <returns>The setting to record, or null when the recorded one stands.</returns>
+    /// <returns>The setting to record, or null when the recorded one stands. A new model is reported configured only
+    /// once the caller has applied it, through <see cref="Applied"/>.</returns>
     public static async Task<LocalEmbeddingSetting?> DecideAsync(LocalRoot root, LocalEmbeddingAnswer answer, OllamaClient ollama,
         IProgress<LocalInstallEvent> progress, CancellationToken ct) {
         var current = LocalEmbeddingFile.Read(root);
@@ -56,10 +57,11 @@ static class LocalEmbeddingStep {
 
         progress.Report(new LocalInstallEvent.EmbeddingModelReady(model, dimensions));
 
-        var replaced = current?.Model is { } old && old != model ? old : null;
-        progress.Report(new LocalInstallEvent.EmbeddingsConfigured(model, replaced));
+        if (current?.Model != model) return new LocalEmbeddingSetting(model);
 
-        return current?.Model == model ? null : new LocalEmbeddingSetting(model);
+        progress.Report(new LocalInstallEvent.EmbeddingsConfigured(model, null));
+
+        return null;
     }
 
     /// <summary>Records <paramref name="setting"/>. A failure is reported, not thrown: the next setup decides again.</summary>
@@ -73,6 +75,13 @@ static class LocalEmbeddingStep {
                 $"{LocalEmbeddingFile.PathFor(root)} could not be written ({ex.Message}); run kcap setup --local again."));
             return false;
         }
+    }
+
+    /// <summary>Reports a setting the unit now serves; a decline was reported when it was decided.</summary>
+    public static void Applied(LocalEmbeddingSetting? previous, LocalEmbeddingSetting setting, IProgress<LocalInstallEvent> progress) {
+        if (setting.Model is not { } model) return;
+
+        progress.Report(new LocalInstallEvent.EmbeddingsConfigured(model, previous?.Model is { } old && old != model ? old : null));
     }
 
     /// <summary>Puts back what <see cref="LocalEmbeddingFile.Read"/> returned before a change, absence included.</summary>

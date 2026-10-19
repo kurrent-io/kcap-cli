@@ -19,8 +19,9 @@ public class LocalEmbeddingStepTests {
 
     /// <returns>Whether the recorded setting changed.</returns>
     async Task<bool> Run(FakeOllama ollama, LocalEmbeddingAnswer answer) {
-        var setting = await LocalEmbeddingStep.DecideAsync(Root, answer, ollama.Client(), _events, CancellationToken.None);
-        if (setting is not null) LocalEmbeddingStep.Record(Root, setting, _events);
+        var previous = LocalEmbeddingFile.Read(Root);
+        var setting  = await LocalEmbeddingStep.DecideAsync(Root, answer, ollama.Client(), _events, CancellationToken.None);
+        if (setting is not null && LocalEmbeddingStep.Record(Root, setting, _events)) LocalEmbeddingStep.Applied(previous, setting, _events);
 
         return setting is not null;
     }

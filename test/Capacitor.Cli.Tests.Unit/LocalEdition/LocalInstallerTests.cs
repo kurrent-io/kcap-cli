@@ -588,6 +588,7 @@ public class LocalInstallerTests {
         await Assert.That(_log).Contains("start");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code).IsEqualTo(LocalEmbeddingSkipCode.WriteFailed);
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsConfigured>()).IsEmpty();
     }
 
     [Test]
