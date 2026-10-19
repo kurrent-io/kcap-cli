@@ -111,7 +111,7 @@ Updates arrive through the app: it checks a few times a day, downloads in the ba
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
 
-**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** directly from the new disk image and choose **Update and open**. The app finds verified existing installations in `/Applications` and `~/Applications` and updates them at their original path, preserving CLI links and background services. If you already dragged `kcap.app` into Applications, opening that copy offers the same upgrade of the existing installation; after the installed copy opens, you can remove the extra `kcap.app` copy. The app displays as **kcap**.
+**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. Existing installations stay in their Applications folder and migrate from `Kurrent Capacitor.app` to `kcap.app`. The migration updates owned terminal links and background-service paths, preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. If valid installations exist in both Applications folders, or another app occupies the destination, choose a destination first. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed migration restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
 
 ### Desktop app on Windows
 

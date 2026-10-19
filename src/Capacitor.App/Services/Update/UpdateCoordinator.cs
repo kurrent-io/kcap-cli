@@ -15,8 +15,8 @@ public sealed class UpdateCoordinator {
     // Velopack's updater on Windows kills every process running from the install folder, and the
     // app's daemon runs from there; elsewhere the daemon restarts itself at a turn boundary.
     internal static string ReadyDisclosure(bool windows) => windows
-        ? "Restart kcap to finish installing the update. Installing stops the daemon, which interrupts any running agents mid-turn; the daemon resumes them when it next starts unless daemon.auto_resume is off."
-        : "Restart kcap to finish installing the update. The daemon then restarts on its own once its agents finish their current turn, and resumes them unless daemon.auto_resume is off.";
+        ? "Restart kcap to finish installing the update.\n\nInstalling stops the daemon, which interrupts any running agents mid-turn; the daemon resumes them when it next starts unless daemon.auto_resume is off."
+        : "Restart kcap to finish installing the update.\n\nThe daemon then restarts on its own once its agents finish their current turn, and resumes them unless daemon.auto_resume is off.";
 
     readonly IAppUpdater _updater;
     readonly ILifecycleSurface _surface;

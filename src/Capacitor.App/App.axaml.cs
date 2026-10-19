@@ -392,12 +392,20 @@ public partial class App : Application {
         var root = InstallLocation.BundleRoot(Environment.ProcessPath);
         var kind = InstallLocation.Classify(root, _userHome.Path);
         if (kind == InstallLocationKind.NotABundle) return false;
+        if (InstallLocation.Passes(kind) && Path.GetFileName(root!) == "kcap.app"
+                && desktop.Args?.Contains("--kcap-installed", StringComparer.Ordinal) == true) return false;
         var userApps = Path.Combine(_userHome.Path, "Applications");
-        var apps = ApplicationsMover.SelectApplicationsDirectory(root!, userApps);
-        var mover = new ApplicationsMover(new ProcessRunner(_time), ApplicationsMover.PromoteExclusive, apps,
-            swap: ApplicationsMover.SwapAtomic, isRunning: InstalledAppRunning);
+        var directories = ApplicationsMover.ApplicationDirectories(root!, userApps);
+        var runner = new ProcessRunner(_time);
+        var launcher = new ApplicationsLauncher(runner, InstalledAppState, _time, installationHandoff: true);
+        ApplicationsMover Mover(string apps) => new(runner, ApplicationsMover.PromoteExclusive, apps,
+            swap: ApplicationsMover.SwapAtomic, isRunning: InstalledAppRunning,
+            quitRunning: QuitInstalledAppAsync,
+            migrateReferences: () => new ApplicationReferences(runner, _userHome, _daemonStore, _time),
+            activate: launcher.OpenAsync, userApplicationsDir: userApps);
+        var mover = Mover(directories[0]);
         var plan = mover.Inspect(root!);
-        if (!ShouldPromptToInstall(kind, root!, plan)) return false;
+        if (directories.Count == 1 && !ShouldPromptToInstall(kind, root!, plan)) return false;
         // Shutdown(0) closes this window as a side effect, which the window's own Closed handler
         // below turns back into a Quit call — this flag is what keeps that reentry from calling
         // Shutdown twice, whichever of the three paths (Quit, a successful move, or the titlebar
@@ -413,24 +421,42 @@ public partial class App : Application {
             move: async () => {
                 var outcome = await mover.MoveAsync(root!, _shutdown.Token);
                 if (outcome.Moved) {
-                    var launcher = new ApplicationsLauncher(new ProcessRunner(_time), InstalledAppState, _time);
-                    if (!await launcher.OpenAsync(outcome.InstalledPath!, _shutdown.Token))
-                        return new MoveOutcome(false, outcome.InstalledPath, "Could not confirm kcap opened. Open the copy in Applications, then quit this window.");
+                    if (plan.Action == ApplicationsInstallAction.OpenInstalled
+                            && !await launcher.OpenAsync(outcome.InstalledPath!, _shutdown.Token))
+                        return new MoveOutcome(false, outcome.InstalledPath, "Could not confirm kcap opened. Open the installed copy, then quit this window.");
                     Quit();
                 }
                 return outcome;
             },
-            quit: Quit, plan: plan);
+            quit: Quit, plan: plan, destinations: directories.Count > 1 ? directories : null,
+            selectDestination: directory => {
+                mover = Mover(directory);
+                plan = mover.Inspect(root!);
+                return plan;
+            });
         desktop.MainWindow = window;
         window.Show();
         return true;
     }
 
     internal static bool ShouldPromptToInstall(InstallLocationKind kind, string root, ApplicationsInstallPlan plan) =>
-        !InstallLocation.Passes(kind)
-        || (kind is InstallLocationKind.Applications or InstallLocationKind.UserApplications
-            && Path.GetFileName(root.TrimEnd('/')) == "kcap.app"
-            && Path.GetFileName(plan.Target) == "Kurrent Capacitor.app");
+        !InstallLocation.Passes(kind) || plan.Migrates || Path.GetFullPath(root) != Path.GetFullPath(plan.Target)
+        || Path.GetFileName(root.TrimEnd('/')) == "Kurrent Capacitor.app";
+
+    async Task<bool> QuitInstalledAppAsync(string root, CancellationToken ct) {
+        if (InstalledAppState(root) == false) return true;
+        var runner = new ProcessRunner(_time);
+        var result = await runner.RunAsync("/usr/bin/osascript",
+            ["-e", "on run argv\ntell application (item 1 of argv) to quit\nend run", "--", root],
+            new RunOptions(Timeout: TimeSpan.FromSeconds(30)), ct);
+        if (result.TimedOut || result.ExitCode != 0) return false;
+        var started = _time.GetTimestamp();
+        while (_time.GetElapsedTime(started) < TimeSpan.FromSeconds(30)) {
+            if (InstalledAppState(root) == false) return true;
+            await Task.Delay(TimeSpan.FromMilliseconds(100), _time, ct);
+        }
+        return false;
+    }
 
     static bool InstalledAppRunning(string root) => InstalledAppState(root) != false;
 
@@ -451,15 +477,16 @@ public partial class App : Application {
     }
 
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
-            ApplicationsInstallPlan? plan = null) {
+            ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
+            Func<string, ApplicationsInstallPlan>? selectDestination = null) {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
             InstallLocationKind.Translocated => "kcap is running from a temporary location.",
             InstallLocationKind.Applications or InstallLocationKind.UserApplications =>
-                $"An existing kcap installation was found at {plan?.Target}.",
+                $"An existing kcap installation was found at {plan?.ExistingPath ?? plan?.Target}.",
             _                                => "kcap is not in your Applications folder.",
         };
-        return new InstallLocationWindow(where, move, quit, plan);
+        return new InstallLocationWindow(where, move, quit, plan, destinations, selectDestination);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the

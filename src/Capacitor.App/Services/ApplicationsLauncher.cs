@@ -2,12 +2,13 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services;
 
-internal sealed class ApplicationsLauncher(IProcessRunner runner, Func<string, bool?> isRunning, TimeProvider time) {
+internal sealed class ApplicationsLauncher(IProcessRunner runner, Func<string, bool?> isRunning, TimeProvider time, bool installationHandoff = false) {
     internal async Task<bool> OpenAsync(string path, CancellationToken ct) {
         var running = isRunning(path);
         if (running is null) return false;
         // Without -n, Launch Services can activate this disk-image process instead of the installed copy.
         string[] args = running.Value ? [path] : ["-n", path];
+        if (installationHandoff && !running.Value) args = [.. args, "--args", "--kcap-installed"];
         var result = await runner.RunAsync("open", args, new RunOptions(Timeout: TimeSpan.FromSeconds(10)), ct);
         if (result.ExitCode != 0 || result.TimedOut) return false;
 

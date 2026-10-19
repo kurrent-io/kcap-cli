@@ -18,9 +18,24 @@
                     <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                            RenderOptions.BitmapInterpolationMode="HighQuality" />
                     <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+                    <Border x:Name="UpdateBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapPurpleDimBrush}">
+                        <views:AppIcon Kind="RefreshCw" Size="16" Foreground="{StaticResource KcapPurpleBrush}" />
+                    </Border>
+                    <Border x:Name="ReadyBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSuccessDimBrush}">
+                        <views:AppIcon Kind="Check" Size="16" Foreground="{StaticResource KcapSuccessBrush}" />
+                    </Border>
+                    <Border x:Name="ConflictBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapWarningDimBrush}">
+                        <views:AppIcon Kind="TriangleAlert" Size="16" Foreground="{StaticResource KcapWarningBrush}" />
+                    </Border>
                 </Panel>
-                <views:AppIcon Kind="ArrowRight" Size="24" VerticalAlignment="Center" Foreground="{StaticResource KcapPurpleBrush}" />
-                <views:AppIcon Kind="Folder" Size="64" Foreground="{StaticResource KcapInfoBrush}" />
+                <views:AppIcon x:Name="InstallArrow" Kind="ArrowRight" Size="24" VerticalAlignment="Center" Foreground="{StaticResource KcapPurpleBrush}" />
+                <views:AppIcon x:Name="InstallFolder" Kind="Folder" Size="64" Foreground="{StaticResource KcapInfoBrush}" />
             </StackPanel>
 
             <TextBlock x:Name="Heading" Margin="0,24,0,0" Text="Move to Applications"
@@ -31,6 +46,12 @@
                        HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap"
                        FontSize="13.5" LineHeight="21"
                        Foreground="{StaticResource KcapMutedBrush}" />
+
+            <StackPanel x:Name="DestinationPanel" IsVisible="False" Margin="0,18,0,0" Spacing="8">
+                <TextBlock Text="Choose which Applications folder to use" Foreground="{StaticResource KcapTextBrush}" />
+                <ComboBox x:Name="DestinationPicker" Classes="kcapField" HorizontalAlignment="Stretch"
+                          PlaceholderText="Select a destination…" />
+            </StackPanel>
 
             <Border x:Name="ErrorPanel" IsVisible="False" Margin="0,18,0,0" Padding="12,9"
                     CornerRadius="8" BorderThickness="1"
