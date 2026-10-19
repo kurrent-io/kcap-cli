@@ -1,0 +1,310 @@
+using System.Net;
+using System.Runtime.InteropServices;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
+using Capacitor.Cli.LocalEdition;
+using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
+using TUnit.Assertions.Enums;
+using TUnit.Core.Enums;
+
+namespace Capacitor.Cli.Tests.Unit.LocalEdition;
+
+[ExcludeOn(OS.Windows)]
+public class LocalUpgradeTests {
+    const string Old = "1.2.3";
+    const string New = "1.3.0";
+    const int    Port = 47391;
+    const string Id   = "0123456789abcdef0123456789abcdef";
+
+    static readonly LocalPlatform MacArm = new(true, false, false, Architecture.Arm64);
+
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    readonly List<string> _log = [];
+    readonly RecordingProgress<LocalInstallEvent> _events = new();
+
+    UserHome Home => field ??= NewHome();
+
+    LocalRoot Root => field ??= LocalRoot.Resolve(Tmp.PathTo("r"), Home);
+
+    string Bin => LocalBin.Directory(Root);
+
+    FakeLocalServerService Service => field ??= new(_log, Home);
+
+    FakeLocalServer Server => field ??= new(_log, Root);
+
+    readonly Dictionary<string, FakeBundle> _bundles = [];
+
+    FakeBundle Bundle(string version) =>
+        _bundles.TryGetValue(version, out var bundle) ? bundle : _bundles[version] = new(Tmp.PathTo($"bundle-{version}.tar.gz"), version);
+
+    UserHome NewHome() {
+        Tmp.CreateDir("home");
+        return new(Tmp.GetResolvedPath("home"));
+    }
+
+    LocalStack Stack() =>
+        new(Root, Home, Service, new HttpClient(Server), TimeProvider.System, new FakeOutgoingRecorders([]), new ConfigRoot(Tmp.PathTo("cfg"))) {
+            FindHolder = _ => null,
+        };
+
+    LocalBundleStager Stager(string version) => new(Root, Bundle(version).Client(), Bundle(version).Key, MacArm);
+
+    /// <summary>An installation at <paramref name="version"/>, its unit installed and running.</summary>
+    void Installed(string version = Old) {
+        Root.EnsureCreated();
+        LocalStateFiles.PublishRegistry(Root, InstallRegistry.Empty.WithActive(new(Id, Port, $"http://localhost:{Port}", version)));
+
+        Tmp.CreateFile(["r", "bin", version, "kcap-server"]);
+        LocalBin.Switch(Root, version);
+
+        Service.Install(LocalServerUnit.ForInstallation(Root, Port));
+        _log.Clear();
+    }
+
+    Task<LocalInstallEvent> Upgrade(string version = New, CancellationToken ct = default) =>
+        new LocalUpgrade(Stack(), _events).RunAsync(() => Stager(version), version, ct);
+
+    async Task<LocalUpgradeFailure> Failure(string version = New) {
+        try {
+            await Upgrade(version);
+        } catch (LocalUpgradeFailure failure) {
+            return failure;
+        }
+
+        throw new InvalidOperationException("The upgrade succeeded.");
+    }
+
+    IDisposable Record(Action<string>? also = null) =>
+        FaultPoints.Arm(point => {
+            if (point == $"renamed:{Root.JournalPath}") _log.Add($"journal:{JournalPhase()}");
+            else if (point == $"unlink:{Root.JournalPath}") _log.Add("journal:cleared");
+            else if (point == $"renamed:{Root.RegistryPath}") _log.Add($"registry:{RegistryVersion()}");
+
+            also?.Invoke(point);
+        });
+
+    static IDisposable CrashAt(string at) => FaultPoints.Arm(point => { if (point == at) throw new SimulatedCrash(); });
+
+    string? JournalPhase() =>
+        LocalStateFiles.ReadJournal(Root) is StateRead<LifecycleJournalEntry>.Present(var entry) ? entry.Phase : null;
+
+    bool JournalAbsent() => LocalStateFiles.ReadJournal(Root) is StateRead<LifecycleJournalEntry>.Absent;
+
+    string? RegistryVersion() =>
+        LocalStateFiles.ReadRegistry(Root) is StateRead<InstallRegistry>.Present { Value.Active: { } active } ? active.Version : null;
+
+    bool Staged(string version) => Directory.Exists(Path.Combine(Bin, version));
+
+    [Test]
+    public async Task An_upgrade_stages_stops_switches_starts_and_commits_in_that_order() {
+        Installed();
+
+        LocalInstallEvent result;
+        using (Record()) result = await Upgrade();
+
+        await Assert.That(_log).IsEquivalentTo([
+            "journal:staging",
+            "journal:stopping",
+            "stop",
+            "journal:switching",
+            $"registry:{New}",
+            "journal:starting",
+            "install",
+            "GET /healthz/ready",
+            "GET /auth/config",
+            "journal:cleared",
+        ], CollectionOrdering.Matching);
+
+        await Assert.That(result).IsEqualTo(new LocalInstallEvent.Upgraded($"http://localhost:{Port}", Old, New));
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(New);
+        await Assert.That(Staged(Old)).IsFalse();
+        await Assert.That(Directory.EnumerateDirectories(Bin, ".staging-*")).IsEmpty();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    [Arguments(Old, "current")]
+    [Arguments("1.2.0", "stack_newer")]
+    public async Task A_caller_at_or_below_the_stack_changes_nothing(string caller, string reason) {
+        Installed();
+
+        var result = await Upgrade(caller);
+
+        await Assert.That(result is LocalInstallEvent.NothingToDo n && n.Reason.Wire() == reason && n.InstalledVersion == Old).IsTrue();
+        await Assert.That(_log).IsEmpty();
+        await Assert.That(Bundle(caller).Requests).IsEmpty();
+        await Assert.That(RegistryVersion()).IsEqualTo(Old);
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task Without_an_installation_there_is_nothing_to_do() {
+        var result = await Upgrade();
+
+        await Assert.That(result).IsEqualTo(new LocalInstallEvent.NothingToDo(UpgradeSkip.NotInstalled, New, null));
+        await Assert.That(Bundle(New).Requests).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_download_failure_leaves_the_old_version_running_untouched() {
+        Installed();
+        Bundle(New).ManifestMissing = true;
+
+        var failure = await Failure();
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.BundleNotPublished);
+        await Assert.That(failure.Switched).IsFalse();
+        await Assert.That(_log).DoesNotContain("stop");
+        await Assert.That(Service.Running).IsTrue();
+        await Assert.That(RegistryVersion()).IsEqualTo(Old);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);
+        await Assert.That(Staged(New)).IsFalse();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_failed_stop_starts_the_old_version_again() {
+        Installed();
+        Service.StopFailure = new LocalLifecycleException("the stores did not go down");
+
+        var failure = await Failure();
+
+        await Assert.That(failure.Switched).IsFalse();
+        await Assert.That(failure.Message).Contains($"Capacitor local {Old} was started again");
+        await Assert.That(_log.IndexOf("start")).IsGreaterThan(_log.IndexOf("stop"));
+        await Assert.That(RegistryVersion()).IsEqualTo(Old);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);
+        await Assert.That(Staged(New)).IsFalse();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_stopped_stack_is_not_started_by_a_failure_before_the_switch() {
+        Installed();
+        await Service.StopAsync(LocalServerUnit.ForInstallation(Root, Port), CancellationToken.None);
+        _log.Clear();
+        Service.StopFailure = new LocalLifecycleException("the stores did not go down");
+
+        var failure = await Failure();
+
+        await Assert.That(failure.Message).Contains("stays selected and stopped");
+        await Assert.That(_log).DoesNotContain("start");
+    }
+
+    [Test]
+    public async Task A_new_version_that_does_not_start_stays_selected_and_stopped() {
+        Installed();
+
+        LocalUpgradeFailure failure;
+        using (Record(point => {
+                   if (point != "upgrade:starting") return;
+                   Server.Ready             = HttpStatusCode.ServiceUnavailable;
+                   Service.ActivityOverride = new UnitActivity.Exited(1);
+               }))
+            failure = await Failure();
+
+        await Assert.That(failure.Switched).IsTrue();
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.StartFailed);
+        await Assert.That(failure.Message).Contains("stays selected and stopped");
+        await Assert.That(_log[^2..]).IsEquivalentTo(["stop", "journal:cleared"], CollectionOrdering.Matching);
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(New);
+        await Assert.That(Staged(Old)).IsTrue().Because("the old bundle is kept for diagnosis");
+    }
+
+    [Test]
+    public async Task A_crash_before_the_stop_is_undone_by_the_next_command() {
+        Installed();
+
+        using (CrashAt("upgrade:stopping")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+
+        await Assert.That(JournalPhase()).IsEqualTo(LocalUpgradeJournal.Stopping);
+        _log.Clear();
+
+        await new LocalStackControl(Stack(), _ => null).StopAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(_log[0]).IsEqualTo("start");
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(RegistryVersion()).IsEqualTo(Old);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);
+        await Assert.That(Staged(New)).IsFalse();
+        await Assert.That(_events.Reports).Contains(new LocalInstallEvent.Recovered(LocalUpgradeJournal.Operation, LocalUpgradeJournal.Stopping));
+    }
+
+    [Test]
+    public async Task A_switch_that_cannot_be_confirmed_is_finished_forward_by_the_next_upgrade() {
+        Installed();
+
+        LocalUpgradeFailure failure;
+        using (CrashAt("upgrade:published")) failure = await Failure();
+
+        await Assert.That(failure.Switched).IsTrue();
+        await Assert.That(JournalPhase()).IsEqualTo(LocalUpgradeJournal.Switching);
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);
+
+        // The older CLI's run recovers forward first, then finds the stack newer than itself.
+        var result = await Upgrade(Old);
+
+        await Assert.That(result is LocalInstallEvent.NothingToDo { Reason: UpgradeSkip.StackNewer }).IsTrue();
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(New);
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(Service.Running).IsTrue();
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+
+    [Test]
+    public async Task A_crash_while_starting_the_new_version_is_rolled_forward() {
+        Installed();
+
+        using (CrashAt("upgrade:starting")) await Assert.ThrowsAsync<SimulatedCrash>(() => Upgrade());
+
+        await Assert.That(JournalPhase()).IsEqualTo(LocalUpgradeJournal.Starting);
+
+        await new LocalStackControl(Stack(), _ => null).StartAsync(_events, _ => { }, CancellationToken.None);
+
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(Staged(Old)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_journal_this_build_did_not_write_changes_nothing() {
+        Installed();
+        using (var lease = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None))
+            lease.Begin(LocalUpgradeJournal.Operation, "migrating", ServerStart.Deny, Id, new Dictionary<string, string>());
+
+        await Assert.ThrowsAsync<LocalLifecycleException>(() => Upgrade());
+
+        await Assert.That(JournalPhase()).IsEqualTo("migrating");
+        await Assert.That(_log).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("1.2.5", New)]
+    [Arguments(New, "1.2.5")]
+    public async Task Two_callers_in_either_order_leave_the_newer_version(string first, string second) {
+        Installed();
+
+        await Upgrade(first);
+        var later = await Upgrade(second);
+
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(New);
+        if (second != New) await Assert.That(later is LocalInstallEvent.NothingToDo { Reason: UpgradeSkip.StackNewer }).IsTrue();
+    }
+
+    [Test]
+    public async Task Two_concurrent_callers_never_move_the_stack_backwards() {
+        Installed();
+
+        var runs = await Task.WhenAll(Upgrade("1.2.5"), Upgrade(New));
+
+        await Assert.That(runs.Count(r => r is LocalInstallEvent.Upgraded)).IsGreaterThanOrEqualTo(1);
+        await Assert.That(RegistryVersion()).IsEqualTo(New);
+        await Assert.That(LocalBin.Current(Root)).IsEqualTo(New);
+        await Assert.That(JournalAbsent()).IsTrue();
+    }
+}

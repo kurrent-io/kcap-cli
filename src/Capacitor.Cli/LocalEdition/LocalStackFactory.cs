@@ -5,7 +5,8 @@ using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
 
-sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time, IHttpClientFactory http, IOutgoingRecorders recorders, ConfigRoot config)
+sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time, IHttpClientFactory http, IOutgoingRecorders recorders, ConfigRoot config,
+    LocalBundleClient bundles)
     : ILocalStackFactory {
     public LocalStack Create() {
         if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsLinux())
@@ -13,4 +14,6 @@ sealed class LocalStackFactory(LocalRoot root, UserHome home, TimeProvider time,
 
         return new(root, home, LocalServerServices.ForCurrentOs(home, time), http.CreateClient(CapacitorClients.LocalInstallation), time, recorders, config);
     }
+
+    public LocalBundleStager Stager() => new(root, bundles, LocalBundleManifestKey.Load(), LocalPlatform.Current());
 }

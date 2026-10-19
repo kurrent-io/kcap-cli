@@ -21,6 +21,11 @@ switch to the script install: run `kcap daemon service install` again.
 
 For other installs (e.g. Homebrew), prints the command to run instead.
 
+When this machine has a local installation (kcap setup --local), npm and
+script installs then run the new binary's kcap local upgrade, which moves
+the local stack to the new version; a failed upgrade makes kcap update
+exit 1. Other installs run kcap local upgrade themselves after updating.
+
 On macOS and Linux a running daemon restarts on the new version by itself;
 its agents are stopped and resumed.
 
@@ -48,7 +53,8 @@ tenant's server trails npm (rollouts are manual and can lag by days), they
 target the server's version — shown with a "(server version)" marker —
 rather than a CLI newer than the server supports, and kcap update installs
 exactly that version. The cap applies on the stable channel only; beta
-deliberately rides ahead.
+deliberately rides ahead. It does not apply to a local installation, whose
+stack moves with the CLI.
 
 update_check (kcap config set update_check false):
   Controls ALL kcap update nudging, not just the local stderr hint. With

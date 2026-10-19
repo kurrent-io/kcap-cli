@@ -30,6 +30,8 @@ public class LocalUninstallCommandTests {
 
     sealed class StackFactory(Func<LocalStack> create) : ILocalStackFactory {
         public LocalStack Create() => create();
+
+        public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");
     }
 
     sealed class NoBrowser : IBrowserLauncher {
@@ -38,9 +40,8 @@ public class LocalUninstallCommandTests {
 
     async Task<(int Exit, string Out, string Err)> RunAsync(params string[] args) {
         var config  = new ConfigRoot(Tmp.CreateDir("cfg"));
-        var command = new LocalCommand(
-            new StackFactory(() => new(Root, Home, Service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders(_log), config)),
-            new NoBrowser(), new FakeOutgoingRecorders(_log), config, Home);
+        var stacks  = new StackFactory(() => new(Root, Home, Service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders(_log), config));
+        var command = new LocalCommand(stacks, new LocalUpgradeCommand(stacks), new NoBrowser(), new FakeOutgoingRecorders(_log), config, Home);
 
         using var capture = ConsoleOutput.StartFullCapture();
 

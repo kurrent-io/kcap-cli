@@ -19,7 +19,7 @@ public class UpdateCommandScriptInstallTests : IDisposable {
 
     public void Dispose() => _sp?.Dispose();
 
-    UpdateCommand Command(ScriptReleaseFixture f, List<string> refreshed, Func<string, int>? refreshExit = null) {
+    UpdateCommand Command(ScriptReleaseFixture f, List<string> refreshed, Func<string, int>? refreshExit = null, int upgradeExit = LocalUpgradeCommand.NothingToDo) {
         var profiles = Resolutions.Of(new Profile(), "script-update", null);
         var services = new ServiceCollection();
         services.AddSingleton(Config.Root);
@@ -36,7 +36,8 @@ public class UpdateCommandScriptInstallTests : IDisposable {
             releases, new ScriptUpdater(releases), InstallKind.Script) {
             ScriptLayout = f.Layout,
             Rid          = ScriptReleaseFixture.Rid,
-            RunRefresh   = exe => { refreshed.Add(exe); return Task.FromResult(refreshExit?.Invoke(exe) ?? 0); },
+            RunRefresh      = exe => { refreshed.Add($"refresh:{exe}"); return Task.FromResult(refreshExit?.Invoke(exe) ?? 0); },
+            RunLocalUpgrade = exe => { refreshed.Add($"local upgrade:{exe}"); return Task.FromResult(upgradeExit); },
         };
     }
 
@@ -52,9 +53,26 @@ public class UpdateCommandScriptInstallTests : IDisposable {
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(f.CurrentTarget).IsEqualTo("versions/999.0.0");
-        await Assert.That(refreshed).IsEquivalentTo([f.Layout.CurrentBin("kcap")]);
+        await Assert.That(refreshed).IsEquivalentTo([$"refresh:{f.Layout.CurrentBin("kcap")}", $"local upgrade:{f.Layout.CurrentBin("kcap")}"],
+            TUnit.Assertions.Enums.CollectionOrdering.Matching);
         await Assert.That(f.Requests).Contains("/download/cli/channels/latest.json");
         await Assert.That(output.GetCapturedOutput()).Contains("kcap updated to 999.0.0.");
+    }
+
+    /// <summary>The CLI is updated either way; the exit says the stack did not follow it.</summary>
+    [Test]
+    [Arguments(LocalUpgradeCommand.Upgraded, 0)]
+    [Arguments(LocalUpgradeCommand.Failed, 1)]
+    [Arguments(LocalUpgradeCommand.FailedAfterSwitch, 1)]
+    public async Task A_failed_local_upgrade_fails_the_update(int upgradeExit, int exit) {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink");
+        using var f = new ScriptReleaseFixture();
+        f.Publish("999.0.0");
+
+        using var output = ConsoleOutput.StartFullCapture();
+
+        await Assert.That(await Command(f, [], upgradeExit: upgradeExit).HandleAsync([])).IsEqualTo(exit);
+        await Assert.That(f.CurrentTarget).IsEqualTo("versions/999.0.0");
     }
 
     /// <summary>An install from the beta channel keeps updating from it while the profile names none.</summary>

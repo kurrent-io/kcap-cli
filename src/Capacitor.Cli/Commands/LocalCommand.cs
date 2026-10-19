@@ -7,7 +7,8 @@ using Capacitor.Cli.LocalEdition;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>The <c>kcap local</c> group, for the installation <c>kcap setup --local</c> made.</summary>
-sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser, IOutgoingRecorders recorders, ConfigRoot config, UserHome home) {
+sealed class LocalCommand(
+    ILocalStackFactory stacks, LocalUpgradeCommand upgrade, IBrowserLauncher browser, IOutgoingRecorders recorders, ConfigRoot config, UserHome home) {
     const int DefaultLogLines = 50;
 
     static readonly string[] UninstallFlags = ["--purge", "--force", "--yes", "-y"];
@@ -26,6 +27,7 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser, I
             "restart"      => await WithStack(s => LifecycleAsync(c => c.RestartAsync, s)),
             "open"         => await WithStack(OpenAsync),
             "uninstall"    => await UninstallAsync(args[2..]),
+            "upgrade"      => await upgrade.HandleAsync(args),
             _              => await Unknown(sub),
         };
     }
@@ -78,7 +80,7 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser, I
             await Console.Out.WriteLineAsync($"  {done}");
 
             return 0;
-        } catch (Exception ex) when (ex is LocalInstallFailure or LocalLifecycleException) {
+        } catch (Exception ex) when (ex is LocalInstallFailure or LocalLifecycleException or LocalUpgradeFailure) {
             return await FailAsync(ex.Message);
         }
     }
@@ -171,7 +173,7 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser, I
         try {
             outcome = await stack.RunAsync(new SyncProgress<LocalInstallEvent>(RenderRecovery),
                 (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None, force);
-        } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure) {
+        } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure) {
             return await FailAsync(ex.Message);
         }
 
@@ -207,7 +209,7 @@ sealed class LocalCommand(ILocalStackFactory stacks, IBrowserLauncher browser, I
             LocalInstallEvent.Recovered r   => $"Finished the interrupted {r.Operation}",
             LocalInstallEvent.RollingBack r => $"Rolling back: {r.Reason}",
             LocalInstallEvent.RolledBack    => "Rolled back",
-            _                               => null,
+            _                               => LocalSetupTerminal.Line(e, CapacitorVersion.CurrentDisplay()),
         };
 
         if (line is not null) Console.Out.WriteLine($"  {line}");
