@@ -2280,7 +2280,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (launch.TryStart()) {
                 var outcome = await HandleAdmittedLaunchAsync(cmd, hold, launch.Token);
                 // Cancelled past its last cancellation point, with no stopper left waiting to stop what it published.
-                if (launch.SettleAbandoned() && _agents.GetValueOrDefault(cmd.AgentId) is { } published)
+                if (launch.SettleAbandoned() && outcome.Kind == CommandOutcomeKind.LaunchExecuted
+                    && _agents.GetValueOrDefault(cmd.AgentId) is { } published)
                     _ = StopAgentCoreAsync(published);
 
                 return outcome;
