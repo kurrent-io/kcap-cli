@@ -2,7 +2,8 @@
 # Usage: assert-app-plugin.sh <bundle.app-or-app-directory> <version>
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-bundle="${1:?bundle required}"
+# Absolute, because the smoke step runs the CLI from a scratch directory.
+bundle="$(cd "${1:?bundle required}" && pwd)"
 version="${2:?version required}"
 source_dir="$here/../kcap"
 if [ -d "$bundle/Contents/Resources" ]; then
@@ -22,10 +23,13 @@ while IFS= read -r -d '' file; do
   fi
 done < <(find "$source_dir" -type f -print0)
 echo "bundled plugin payload is complete and stamped $version"
-# Carrying the payload is not enough: the bundled CLI must also resolve it.
-scratch="$(mktemp -d)"
-(cd "$scratch" && env -u KCAP_PLUGIN_DIR KCAP_CONFIG_DIR="$scratch/config" DO_NOT_TRACK=1 \
+# Carrying the payload is not enough: the bundled CLI must also resolve it. A successful install
+# also writes the git hook into the home's git config, so the home is a scratch one too.
+scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT
+mkdir "$scratch/home"
+native="$scratch"
+if command -v cygpath >/dev/null 2>&1; then native="$(cygpath -m "$scratch")"; fi
+(cd "$scratch" && env -u KCAP_PLUGIN_DIR HOME="$native/home" KCAP_CONFIG_DIR="$native/config" DO_NOT_TRACK=1 \
   "$cli" plugin install --project --no-update-check)
 test -f "$scratch/.claude/settings.local.json"
-rm -rf "$scratch"
 echo "bundled CLI resolves the bundled plugin"
