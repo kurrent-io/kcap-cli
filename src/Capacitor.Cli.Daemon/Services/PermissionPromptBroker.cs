@@ -137,11 +137,14 @@ internal sealed class PermissionPromptBroker {
             var entry = _pending.Values.FirstOrDefault(e =>
                 e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
             if (entry is null && toolName is not null && toolInput is { } input) {
+                // Once per notice: a Codex key re-serializes the input, and the gate is held.
+                JsonElement? codexKey = null;
+                JsonElement KeyFor(string vendor) => vendor == "codex" ? codexKey ??= CodexPermissionInput.MatchKey(toolName, input) : input;
                 var owed = _allowedCalls.FindIndex(c => c.AgentId == agentId && c.SessionId == sessionId
                     && (sentAt is null || RequestedBy(c.Dto, sentAt.Value))
                     && (c.ToolUseId == toolUseId
                      || c.ToolUseId is null && c.SubagentId == subagentId && c.ToolName == toolName
-                        && c.Input is { } ran && JsonElement.DeepEquals(ran, MatchKey(c.Dto.Vendor, toolName, input)!.Value)));
+                        && c.Input is { } ran && JsonElement.DeepEquals(ran, KeyFor(c.Dto.Vendor))));
                 if (owed >= 0) {
                     _allowedCalls.RemoveAt(owed);
                     return false;
@@ -151,7 +154,7 @@ internal sealed class PermissionPromptBroker {
                     .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
                              && e.SubagentId == subagentId && e.Dto.ToolName == toolName
                              && (sentAt is null || RequestedBy(e.Dto, sentAt.Value))
-                             && e.MatchInput is { } held && JsonElement.DeepEquals(held, MatchKey(e.Dto.Vendor, toolName, input)!.Value))
+                             && e.MatchInput is { } held && JsonElement.DeepEquals(held, KeyFor(e.Dto.Vendor)))
                     .MinBy(e => e.Seq);
             }
             return entry is not null
