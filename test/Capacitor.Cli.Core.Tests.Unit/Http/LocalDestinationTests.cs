@@ -144,6 +144,61 @@ public class LocalDestinationTests : IDisposable {
         await Assert.That(LocalDestination.Refusal(new Uri("https://registry.npmjs.org/kcap"), null, Url, refusal)).IsNull();
     }
 
+    /// <summary>A server the request may reach redirects it to a purged installation's port: the hop is checked before
+    /// it is sent, as the first request was.</summary>
+    [Test]
+    public async Task A_redirect_to_a_retired_port_is_refused_before_the_hop_is_sent() {
+        using var retired = WireMockServer.Start();
+        var root = NewRoot();
+        Publish(root, InstallRegistry.Empty
+            .WithActive(new(InstallationId, new Uri(retired.Urls[0]).Port, retired.Urls[0], "1.0.0")).RetireActive());
+
+        _server.Given(Request.Create().WithPath("/moved").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(302).WithHeader("Location", $"{retired.Urls[0]}/ping"));
+        using var sp = Container(Resolutions.At(Url, Config.Root), root);
+        using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForSessionAsync();
+
+        var refused = await Assert.ThrowsAsync<LocalDestinationException>(() => client.GetAsync($"{Url}/moved"));
+
+        await Assert.That(refused!.Message).Contains(InstallationId);
+        await Assert.That(retired.LogEntries).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_redirect_within_the_server_is_followed() {
+        _server.Given(Request.Create().WithPath("/old").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(301).WithHeader("Location", "/ping"));
+        using var sp = Container(Resolutions.At(Url, Config.Root), NewRoot());
+        using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForSessionAsync();
+
+        using var response = await client.GetAsync($"{Url}/old");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(string.Join(",", _server.LogEntries.Select(e => e.RequestMessage.Path).Where(p => p != "/auth/config"))).IsEqualTo("/old,/ping");
+    }
+
+    /// <summary>As the runtime follows them: the credential stays with its origin, and a POST answered with a 302 is
+    /// repeated as a GET.</summary>
+    [Test]
+    public async Task A_redirect_to_another_origin_drops_the_credential_and_turns_a_post_into_a_get() {
+        using var other = WireMockServer.Start();
+        other.Given(Request.Create().WithPath("/landed")).RespondWith(Response.Create().WithStatusCode(200));
+        _server.Given(Request.Create().WithPath("/post").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(302).WithHeader("Location", $"{other.Urls[0]}/landed"));
+        using var sp = Container(Resolutions.At(Url, Config.Root), NewRoot());
+        using var client = await sp.GetRequiredService<ICapacitorHttpClient>().ForSessionAsync();
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{Url}/post") { Content = new StringContent("{}") };
+        request.Headers.Authorization = new("Bearer", "secret");
+
+        using var response = await client.SendAsync(request);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        var landed = other.LogEntries.Single().RequestMessage;
+        await Assert.That(landed.Method).IsEqualTo("GET");
+        await Assert.That(landed.Headers!.ContainsKey("Authorization")).IsFalse();
+    }
+
     /// <summary>The same sends go through when no installation ever claimed the port, which is what makes the cases
     /// above prove the registry rather than a broken fixture.</summary>
     [Test]

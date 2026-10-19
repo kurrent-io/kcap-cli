@@ -44,22 +44,26 @@ public static class CapacitorHttpServices {
         services.AddTransient(sp => new UnauthorizedRecoveryHandler(sp.GetRequiredService<ICredentialSource>()));
         services.AddTransient(sp => new LocalDestinationHandler(sp.GetRequiredService<CapacitorServer>()));
 
+        // Innermost, so it sees every hop of a redirect before it is sent.
+        static LocalDestinationHandler Redirecting(IServiceProvider sp) =>
+            new(sp.GetRequiredService<CapacitorServer>(), followRedirects: true);
+
         services.AddHttpClient(CapacitorClients.Default)
-            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler<UnauthorizedRecoveryHandler>()
-            // Redirects are followed. The runtime drops Authorization only when a hop crosses origin,
-            // so refusing them buys nothing against leaking a bearer and turns a same-origin
-            // normalisation — or any 3xx at all on a server that needs no bearer — into a hard failure
-            // the hook callers classify as unretryable and never spool.
+            .AddHttpMessageHandler(Redirecting)
+            // Redirects are followed, by the destination handler rather than the runtime, so each hop is checked.
+            // Authorization is dropped only when a hop crosses origin, so refusing them buys nothing against
+            // leaking a bearer and turns a same-origin normalisation — or any 3xx at all on a server that needs no
+            // bearer — into a hard failure the hook callers classify as unretryable and never spool.
             //
             // The lifetime matters because an MCP server holds one of these for its whole life: the
             // factory rotates handlers, but not a handler this client already has, so the pool has to
             // retire its own sockets or a DNS change never reaches a process that never restarts.
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler {
-                AllowAutoRedirect        = true,
+                AllowAutoRedirect        = false,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
             })
             // Nothing is redacted by default, so a logging provider added later would print the bearer.
@@ -70,14 +74,14 @@ public static class CapacitorHttpServices {
         // hook that POSTs once cannot use what a second attempt would learn — its caller spools the
         // payload and the next invocation carries a credential the rotation would have minted anyway.
         services.AddHttpClient(CapacitorClients.Hook)
-            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ServerVersionCaptureHandler>()
             .AddHttpMessageHandler<PlanEntitlementCaptureHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             .AddHttpMessageHandler(sp => new UnauthorizedRecoveryHandler(
                 sp.GetRequiredService<ICredentialSource>(), recover: false))
+            .AddHttpMessageHandler(Redirecting)
             .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler {
-                AllowAutoRedirect        = true,
+                AllowAutoRedirect        = false,
                 PooledConnectionLifetime = TimeSpan.FromMinutes(2),
             })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
@@ -103,11 +107,11 @@ public static class CapacitorHttpServices {
         // CONFIGURED server, and these requests go to one the caller has not adopted yet, so what they
         // captured would be filed against the wrong server.
         services.AddHttpClient(CapacitorClients.Anonymous)
-            .AddHttpMessageHandler<LocalDestinationHandler>()
             .AddHttpMessageHandler<ObservationHeaderHandler>()
             // With no bearer to strip there is nothing a redirect can break, and a download that
             // lands on an object store needs the hop followed.
-            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = true })
+            .AddHttpMessageHandler(Redirecting)
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false })
             // A caller may still set an Authorization header by hand on this lane.
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 

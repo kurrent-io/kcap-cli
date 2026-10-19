@@ -209,6 +209,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The credential every lane to this server sends: the hub, agent-run events, attachments.</summary>
     internal ICredentialSource Credentials { get; }
 
+    static HttpMessageHandler NoRedirects(HttpMessageHandler handler) {
+        switch (handler) {
+            case HttpClientHandler h:  h.AllowAutoRedirect = false; break;
+            case SocketsHttpHandler s: s.AllowAutoRedirect = false; break;
+        }
+
+        return handler;
+    }
+
     public ServerConnection(
             DaemonConfig config, ICredentialSource credentials, ILoggerFactory loggerFactory,
             ILogger<ServerConnection> logger, TimeProvider time, DaemonStatusNotifier? statusNotifier = null) {
@@ -225,20 +234,21 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
         // to anything.
         var refusal = config.DestinationRefusal;
+        // It follows redirects itself, so it can check each hop; the handler under it follows none.
         DelegatingHandler Guarded(HttpMessageHandler inner) =>
-            new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal) { InnerHandler = inner };
+            new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal, followRedirects: true) {
+                InnerHandler = new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = NoRedirects(inner) },
+            };
 
         _eventQueue = new(
-            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
-            new HttpClient(Guarded(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() })));
+            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler())));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
-                    options.HttpMessageHandlerFactory = inner =>
-                        Guarded(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner });
+                    options.HttpMessageHandlerFactory = Guarded;
                     options.WebSocketFactory = (context, ct) => {
                         LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
 

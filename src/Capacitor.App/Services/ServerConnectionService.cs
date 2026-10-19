@@ -275,12 +275,24 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         }
     }
 
+    static HttpMessageHandler NoRedirects(HttpMessageHandler handler) {
+        switch (handler) {
+            case HttpClientHandler h:  h.AllowAutoRedirect = false; break;
+            case SocketsHttpHandler s: s.AllowAutoRedirect = false; break;
+        }
+
+        return handler;
+    }
+
     HubConnection Build() {
         var builder = new HubConnectionBuilder()
             .WithUrl($"{_serverUrl}/hubs/sessions", o => {
                 o.AccessTokenProvider = _token;
                 // Every negotiation and every WebSocket upgrade, reconnects included.
-                o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal) { InnerHandler = inner };
+                // The guard follows redirects itself, so it can check each hop; the handler under it follows none.
+                o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal, followRedirects: true) {
+                    InnerHandler = NoRedirects(inner),
+                };
                 o.WebSocketFactory = ConnectWebSocketAsync;
             });
         if (_hubLogging is { } logging) builder.ConfigureLogging(logging);
