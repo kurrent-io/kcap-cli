@@ -51,6 +51,10 @@ internal sealed class PermissionPromptBroker {
 
     public bool HasSubscriber => !_subscribers.IsEmpty;
 
+    internal int OwedCountForTesting {
+        get { lock (_gate) return _allowedCalls.Count; }
+    }
+
     /// <param name="subagentId">The vendor's id for the subagent whose tool call this is, null for
     /// the main agent's own. Kept off the wire: only <see cref="WithdrawTurn"/> reads it.</param>
     public Task<PermissionSettlement> Register(PermissionPendingDto dto, string? subagentId = null) {
@@ -189,7 +193,7 @@ internal sealed class PermissionPromptBroker {
 
     // Caller holds _gate.
     void OweLocked(PermissionPendingDto dto, string? subagentId, JsonElement? input) {
-        if (dto.Vendor != "claude") return;
+        if (dto.Vendor != "claude" || _withdrawnAgents.Contains(dto.AgentId)) return;
         var turn = (dto.AgentId, dto.SessionId, subagentId);
         if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
         else _allowedCalls.Add(new AllowedCall(dto, subagentId, input));

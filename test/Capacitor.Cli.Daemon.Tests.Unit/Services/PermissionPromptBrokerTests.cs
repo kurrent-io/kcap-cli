@@ -264,6 +264,19 @@ public class PermissionPromptBrokerTests {
         await Assert.That(waiting.IsCompleted).IsFalse();
     }
 
+    /// An agent that has exited is owed nothing: its id is never reused, so a record for it could
+    /// only sit there.
+    [Test]
+    public async Task An_exited_agent_is_owed_nothing() {
+        var broker = new PermissionPromptBroker();
+        broker.WithdrawForAgent("a2");
+        broker.OweCall(Dto("late", agent: "a2", input: """{"command":"ls"}"""), subagentId: null);
+        var other = broker.Register(Dto("other", agent: "a1", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
+        await Assert.That(other.IsCompleted).IsFalse();
+    }
+
     /// A late notice cannot spend a call owed to a prompt registered after it was sent, so that
     /// prompt's own notice is still the one that consumes it.
     [Test]
