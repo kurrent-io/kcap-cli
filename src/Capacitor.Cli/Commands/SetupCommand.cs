@@ -2500,7 +2500,9 @@ sealed class SetupCommand(
                 return 1;
             }
 
-            await installer.InstallAsync(new(args.SingleUser, args.Yes), progress, deferral.Token);
+            // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
+            await installer.InstallAsync(new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress,
+                deferral.Token);
 
             return 0;
         } catch (Exception ex) {

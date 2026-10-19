@@ -10,6 +10,9 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
     public const string SingleUserNotice =
         "This first version is for a machine with one user: on a shared machine, other users can open the web UI and act as its admin.";
 
+    public const string EmbeddingModelNotice =
+        "The embedding model fixes the width of the stored vectors, so changing it later means embedding everything again.";
+
     string _version = "";
 
     /// <summary>The first answer a run that cannot ask is missing, or null when it has both. A reuse needs no
@@ -59,11 +62,22 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             confirmed = true;
         }
 
+        LocalEmbeddingAnswer embeddings;
+
+        try {
+            if (await EmbeddingsAsync(installer, canAsk) is not { } answer)
+                return await FailAsync(MissingEmbeddings(installer.Ollama!.BaseUrl));
+
+            embeddings = answer;
+        } catch (Exception ex) {
+            return await FailAsync(LocalSetupJsonLines.Classify(ex).Message);
+        }
+
         // Taken after the questions, so a Ctrl+C at a prompt still exits at once: nothing exists yet to roll back.
         using var deferral = InteractiveLifetime.Defer();
 
         try {
-            var committed = await installer.InstallAsync(new(SingleUser: true, Confirmed: confirmed), progress, deferral.Token);
+            var committed = await installer.InstallAsync(new(SingleUser: true, Confirmed: confirmed, embeddings), progress, deferral.Token);
 
             return deferral.Interrupted ? (130, null) : (0, committed);
         } catch (Exception ex) {
@@ -71,8 +85,46 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         }
     }
 
-    static bool Ask(string question) =>
-        AnsiConsole.Prompt(new ConfirmationPrompt(Markup.Escape(question)) { DefaultValue = false });
+    /// <summary>The flags' answer; else the configured model, or the step's own report when Ollama is not running;
+    /// else the user's. Null when only the user could answer and cannot be asked.</summary>
+    async Task<LocalEmbeddingAnswer?> EmbeddingsAsync(LocalInstaller installer, bool canAsk) {
+        var configured = installer.ConfiguredEmbeddingModel;
+
+        if (args.Embeddings is { } given) {
+            if (configured is not null && given is LocalEmbeddingAnswer.Ollama { Model: { } model } && model != configured)
+                AnsiConsole.MarkupLine($"  [yellow]![/] {Markup.Escape($"{model} replaces {configured}. {EmbeddingModelNotice}")}");
+
+            return given;
+        }
+
+        if (configured is not null) return new LocalEmbeddingAnswer.Ollama(null);
+
+        var ollama = installer.Ollama ?? throw new InvalidOperationException("The installer has no Ollama client.");
+
+        if (await ollama.VersionAsync(CancellationToken.None) is null) return new LocalEmbeddingAnswer.Ollama(null);
+
+        if (!canAsk) return null;
+
+        AnsiConsole.MarkupLine($"  {Markup.Escape($"Ollama is running on {Url(ollama.BaseUrl)}, so search can find sessions and memories by meaning as well as by keyword.")}");
+        AnsiConsole.MarkupLine($"  {Markup.Escape(EmbeddingModelNotice)}");
+
+        if (!Ask("Use Ollama for semantic search?", defaultValue: true)) return new LocalEmbeddingAnswer.Skip();
+
+        var chosen = AnsiConsole.Prompt(new TextPrompt<string>("Embedding model:")
+            .DefaultValue(OllamaClient.DefaultModel)
+            .Validate(m => LocalSetupArgs.IsModelName(m) ? ValidationResult.Success() : ValidationResult.Error("Not an Ollama model name.")));
+
+        return new LocalEmbeddingAnswer.Ollama(chosen);
+    }
+
+    static string MissingEmbeddings(Uri ollama) =>
+        $"Ollama is running on {Url(ollama)}. Pass {LocalSetupArgs.EmbeddingModelFlag} {OllamaClient.DefaultModel} to use it for semantic search, "
+      + $"or {LocalSetupArgs.NoEmbeddingsFlag} to search by keyword. {EmbeddingModelNotice}";
+
+    static string Url(Uri uri) => uri.ToString().TrimEnd('/');
+
+    static bool Ask(string question, bool defaultValue = false) =>
+        AnsiConsole.Prompt(new ConfirmationPrompt(Markup.Escape(question)) { DefaultValue = defaultValue });
 
     static (int, LocalInstallEvent.Committed?) Declined() {
         AnsiConsole.MarkupLine("[dim]Setup cancelled.[/]");
@@ -112,8 +164,19 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             LocalInstallEvent.RollingBack r     => $"Rolling back: {r.Reason}",
             LocalInstallEvent.RolledBack        => "Rolled back",
             LocalInstallEvent.Committed c       => $"Committed: Capacitor local {c.Version} on {c.ServerUrl}",
+            LocalInstallEvent.EmbeddingOllamaFound o   => $"Found Ollama {o.Version} on {o.Url}",
+            LocalInstallEvent.EmbeddingModelPulling p  => $"Pulling {p.Model} into Ollama…",
+            LocalInstallEvent.EmbeddingModelProgress p => Tenth(p.Received, p.Bytes) is { } tenth ? $"  {tenth}% of {Megabytes(p.Bytes)} MB" : null,
+            LocalInstallEvent.EmbeddingModelReady r    => $"{r.Model} is ready ({r.Dimensions} dimensions)",
+            LocalInstallEvent.EmbeddingsConfigured { Replaced: { } old } c =>
+                $"Semantic search uses {c.Model} through Ollama; everything embedded with {old} is embedded again in the background",
+            LocalInstallEvent.EmbeddingsConfigured c   => $"Semantic search uses {c.Model} through Ollama",
+            LocalInstallEvent.EmbeddingsSkipped k      => k.Message,
             _                                   => null,
         };
+
+    /// <summary>The percentage when it is a multiple of ten, so a terminal shows a pull in ten lines.</summary>
+    static long? Tenth(long received, long bytes) => bytes > 0 && received * 100 / bytes % 10 == 0 ? received * 100 / bytes : null;
 
     static string Megabytes(long bytes) => (bytes / (1024.0 * 1024.0)).ToString("0", CultureInfo.InvariantCulture);
 }

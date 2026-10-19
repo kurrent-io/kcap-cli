@@ -24,6 +24,10 @@ public static class CapacitorClients {
     /// <summary>The local-installation probe: no credential, no proxy, no redirect, a short timeout.</summary>
     public const string LocalInstallation = "capacitor-local-installation";
 
+    /// <summary>A local Ollama: no credential, no proxy, no redirect, and no client timeout, because a model pull
+    /// streams for as long as the download takes. Each call bounds itself.</summary>
+    public const string Ollama = "ollama";
+
     /// <summary>The caller's own bearer, sent exactly once: no rotation, no redirect.</summary>
     public const string Bearer = "capacitor-bearer";
 

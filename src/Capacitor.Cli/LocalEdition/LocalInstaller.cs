@@ -34,6 +34,12 @@ sealed class LocalInstaller(
     /// <summary>Replaces the platform's socket-path limit.</summary>
     public int? SocketLimit { get; init; }
 
+    /// <summary>Required when the answers carry an embedding answer.</summary>
+    public OllamaClient? Ollama { get; init; }
+
+    /// <summary>The Ollama model the installation embeds with, or null. Read without the lease.</summary>
+    public string? ConfiguredEmbeddingModel => LocalEmbeddingFile.ReadModel(root);
+
     /// <summary>Reports to whichever <see cref="InstallAsync"/> is running, so a recovery built before the call can
     /// report into it.</summary>
     public IProgress<LocalInstallEvent> Progress => new SyncProgress<LocalInstallEvent>(Report);
@@ -107,7 +113,7 @@ sealed class LocalInstaller(
             if (plan.Hint == PlanHint.Reuse) {
                 var existing = plan.Existing!;
 
-                return await ReuseAsync(existing, unitLock!, ct);
+                return await ReuseAsync(existing, unitLock!, answers, ct);
             }
 
             if (!answers.SingleUser || !answers.Confirmed)
@@ -129,6 +135,8 @@ sealed class LocalInstaller(
 
         try {
             await StageAsync(details, ct);
+            // Before the unit is written, so the first start already has the model.
+            await EmbeddingsAsync(answers, ct);
 
             entry = lease.Advance(entry, LocalSetupJournal.Unit, ServerStart.Fenced);
 
@@ -183,9 +191,11 @@ sealed class LocalInstaller(
     }
 
     /// <summary>Takes over the unit lock. No port is taken and no journal is written: the profile is published only
-    /// once the installation's own server answers unfenced. Nothing is downloaded unless an uninstall removed the
-    /// binaries; then the installed version is staged again over the data it kept.</summary>
-    async Task<LocalInstallEvent.Committed> ReuseAsync(LocalInstallation existing, LocalUnitLock unitLock, CancellationToken ct) {
+    /// once the installation's own server answers unfenced. No bundle is downloaded unless an uninstall removed the
+    /// binaries; then the installed version is staged again over the data it kept. A changed embedding model rewrites
+    /// the unit, which restarts the server.</summary>
+    async Task<LocalInstallEvent.Committed> ReuseAsync(LocalInstallation existing, LocalUnitLock unitLock, LocalInstallAnswers answers,
+        CancellationToken ct) {
         var unit    = LocalServerUnit.ForInstallation(root, existing.Port);
         var details = new SetupDetails(existing.Id, existing.Port, existing.Version, existing.ServerUrl, Path.GetFullPath(config.Directory), ActiveProfile());
 
@@ -202,7 +212,10 @@ sealed class LocalInstaller(
                 await RestageAsync(details, ct);
             }
 
-            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true);
+            var changed = await EmbeddingsAsync(answers, ct);
+            unit = LocalServerUnit.ForInstallation(root, existing.Port);
+
+            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true, rewrite: changed);
         } finally {
             unitLock.Dispose();
         }
@@ -231,6 +244,12 @@ sealed class LocalInstaller(
 
         return committed;
     }
+
+    /// <returns>True when the embedding configuration changed.</returns>
+    async Task<bool> EmbeddingsAsync(LocalInstallAnswers answers, CancellationToken ct) =>
+        answers.Embeddings is { } answer
+     && await LocalEmbeddingStep.RunAsync(root, answer, Ollama ?? throw new InvalidOperationException("An embedding answer needs an Ollama client."),
+            _progress, ct);
 
     /// <summary>Downloads, verifies and unpacks the bundle into <c>bin/&lt;version&gt;</c>, then points <c>bin/current</c>
     /// at it. Every step is durable before the journal can say <c>unit</c>.</summary>

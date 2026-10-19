@@ -1,3 +1,5 @@
+using Capacitor.Cli.Core.LocalEdition;
+
 namespace Capacitor.Cli.LocalEdition;
 
 /// <summary>What a local install reports as it goes, in order. The front ends render these as terminal lines or JSON
@@ -32,6 +34,21 @@ abstract record LocalInstallEvent {
     public sealed record Committed(string ServerUrl, string InstallationId, int Port, string Version) : LocalInstallEvent;
 
     public sealed record RollingBack(string Reason) : LocalInstallEvent;
+
+    public sealed record EmbeddingOllamaFound(string Url, string Version) : LocalInstallEvent;
+
+    public sealed record EmbeddingModelPulling(string Model) : LocalInstallEvent;
+
+    public sealed record EmbeddingModelProgress(string Model, long Received, long Bytes) : LocalInstallEvent;
+
+    /// <summary>The model is in Ollama and embedded a probe string into <paramref name="Dimensions"/> numbers.</summary>
+    public sealed record EmbeddingModelReady(string Model, int Dimensions) : LocalInstallEvent;
+
+    /// <summary>The server embeds with <paramref name="Model"/>. <paramref name="Replaced"/> names a different model
+    /// configured before, whose vectors no longer match.</summary>
+    public sealed record EmbeddingsConfigured(string Model, string? Replaced) : LocalInstallEvent;
+
+    public sealed record EmbeddingsSkipped(LocalEmbeddingSkipCode Code, string Message) : LocalInstallEvent;
 
     public sealed record RolledBack : LocalInstallEvent;
 }

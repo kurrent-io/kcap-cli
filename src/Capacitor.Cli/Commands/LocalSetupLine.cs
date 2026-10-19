@@ -41,6 +41,14 @@ sealed record LocalSetupLine {
 
     public string? Reason { get; init; }
 
+    public string? Provider { get; init; }
+
+    public string? Model { get; init; }
+
+    public string? ReplacedModel { get; init; }
+
+    public int? Dimensions { get; init; }
+
     public string? Code { get; init; }
 
     public string? Message { get; init; }

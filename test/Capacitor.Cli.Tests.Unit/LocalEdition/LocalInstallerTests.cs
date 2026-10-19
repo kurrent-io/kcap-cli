@@ -51,16 +51,24 @@ public class LocalInstallerTests {
     public void WriteConfig() =>
         Tmp.CreateFile("cfg/config.json", """{"version":2,"active_profile":"default","profiles":{"default":{}}}""");
 
-    LocalInstaller Installer(FakeBundle? bundle = null) =>
+    LocalInstaller Installer(FakeBundle? bundle = null, FakeOllama? ollama = null) =>
         new(Root, Config, Home, Service, (bundle ?? Bundle).Client(), new HttpClient(Server), (bundle ?? Bundle).Key, MacArm, _time, _ => []) {
             Version     = Version,
             SocketLimit = int.MaxValue,
+            Ollama      = ollama?.Client(),
         };
 
     static readonly LocalInstallAnswers Yes = new(SingleUser: true, Confirmed: true);
 
-    Task<LocalInstallEvent.Committed> Install(LocalInstallAnswers? answers = null, CancellationToken ct = default, FakeBundle? bundle = null) =>
-        Installer(bundle).InstallAsync(answers ?? Yes, _events, ct);
+    Task<LocalInstallEvent.Committed> Install(LocalInstallAnswers? answers = null, CancellationToken ct = default, FakeBundle? bundle = null,
+        FakeOllama? ollama = null) =>
+        Installer(bundle, ollama).InstallAsync(answers ?? Yes, _events, ct);
+
+    static readonly LocalInstallAnswers YesWithOllama = Yes with { Embeddings = new LocalEmbeddingAnswer.Ollama(null) };
+
+    static readonly LocalInstallAnswers ReuseWithOllama = new(false, false, new LocalEmbeddingAnswer.Ollama(null));
+
+    int EventAt<T>() where T : LocalInstallEvent => _events.Reports.FindIndex(e => e is T);
 
     async Task<LocalInstallFailure> Failure(LocalInstallAnswers? answers = null, CancellationToken ct = default, FakeBundle? bundle = null) {
         try {
@@ -483,6 +491,69 @@ public class LocalInstallerTests {
         ], CollectionOrdering.Matching);
         await Assert.That(_events.Reports.OfType<LocalInstallEvent.Reused>().Single()).IsEqualTo(new LocalInstallEvent.Reused(first.ServerUrl, Version));
         await Assert.That(ConfigMutator.LoadPure(ConfigPath).Profiles["default"].ServerUrl).IsEqualTo(first.ServerUrl);
+    }
+
+    [Test]
+    public async Task An_install_records_the_embedding_model_before_the_unit_first_starts() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+
+        await Install(YesWithOllama, ollama: ollama);
+
+        await Assert.That(Service.Installed!.EmbeddingModel).IsEqualTo(OllamaClient.DefaultModel);
+        await Assert.That(_log.Count(e => e == "install")).IsEqualTo(1);
+        await Assert.That(EventAt<LocalInstallEvent.Unpacked>()).IsLessThan(EventAt<LocalInstallEvent.EmbeddingsConfigured>());
+        await Assert.That(EventAt<LocalInstallEvent.EmbeddingsConfigured>()).IsLessThan(EventAt<LocalInstallEvent.Starting>());
+    }
+
+    [Test]
+    public async Task A_rolled_back_install_takes_its_embedding_model_with_it() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        Server.WhileFenced = FakeAuthConfig.Lifted;
+
+        await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(YesWithOllama, ollama: ollama));
+
+        await Assert.That(File.Exists(LocalEmbeddingFile.PathFor(Root))).IsFalse();
+    }
+
+    [Test]
+    public async Task Reuse_with_the_same_model_starts_the_unit_as_it_is() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        await Install(YesWithOllama, ollama: ollama);
+        _log.Clear();
+
+        await Install(ReuseWithOllama, ollama: ollama);
+
+        await Assert.That(_log).Contains("start");
+        await Assert.That(_log).DoesNotContain("install");
+    }
+
+    [Test]
+    public async Task Reuse_with_a_changed_model_rewrites_the_unit_so_the_server_restarts_with_it() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        await Install();
+        _log.Clear();
+        _events.Reports.Clear();
+
+        await Install(ReuseWithOllama, ollama: ollama);
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(_log).DoesNotContain("start");
+        await Assert.That(Service.Installed!.EmbeddingModel).IsEqualTo(OllamaClient.DefaultModel);
+        await Assert.That(EventAt<LocalInstallEvent.EmbeddingsConfigured>()).IsLessThan(EventAt<LocalInstallEvent.Starting>());
+    }
+
+    [Test]
+    public async Task Reuse_without_ollama_keeps_the_configured_model_and_the_unit() {
+        using (var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024))
+            await Install(YesWithOllama, ollama: ollama);
+        _log.Clear();
+
+        using var gone = new FakeOllama();
+        await Install(ReuseWithOllama, ollama: gone);
+
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo(OllamaClient.DefaultModel);
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code).IsEqualTo(LocalEmbeddingSkipCode.OllamaNotFound);
     }
 
     [Test]

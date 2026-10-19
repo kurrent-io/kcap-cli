@@ -21,6 +21,8 @@ sealed class LocalInstallerFactory(
                 new LocalSetupRecovery(service, home, local, time, installer.Progress, installer.RolledForward),
                 // Setup may be writing JSON events to stdout, which stopping a daemon would print into.
                 new LocalPurgeRecovery(service, home, recorders, config, mayStop: false, force: false, installer.Progress),
-            ]);
+            ]) {
+            Ollama = new OllamaClient(http.CreateClient(CapacitorClients.Ollama), OllamaClient.DefaultUrl, time),
+        };
     }
 }
