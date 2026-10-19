@@ -82,10 +82,21 @@ public class LocalRootIdentityTests {
 
             await Assert.That(LocalRootIdentity.Compare(root, Path.Combine(mount, "root"))).IsEqualTo(RootMatch.Different);
         } finally {
-            detached = !attached || Run("hdiutil", "detach", "-force", mount) == 0 || Run("hdiutil", "detach", "-force", mount) == 0;
+            detached = !attached || await DetachAsync(mount);
         }
 
         await Assert.That(detached).IsTrue();
+    }
+
+    // On a loaded runner Spotlight or fseventsd can hold a fresh volume busy for seconds, refusing even a
+    // forced detach.
+    static async Task<bool> DetachAsync(string mount) {
+        foreach (var pause in (int[])[0, 1, 2, 4, 8]) {
+            await Task.Delay(TimeSpan.FromSeconds(pause));
+            if (Run("hdiutil", "detach", "-force", mount) == 0) return true;
+        }
+
+        return false;
     }
 
     [Test]
