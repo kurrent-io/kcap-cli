@@ -45,6 +45,75 @@ public class PullRequestContextViewModelTests {
         }
     });
 
+    /// A list read before the work context named the primary repository described the session
+    /// without one; the hint arriving lists again, inside the 30-second poll.
+    [Test]
+    public Task The_primary_repository_arriving_lists_again_with_it() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+
+            h.Vm.PrimaryRepositoryChanged();
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+
+            await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "the second list");
+            await Assert.That(h.Source.Descriptions.Select(d => d.Repository)).IsEquivalentTo(new[] { null, repository });
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A refresh queued behind the short gap cannot run while the pane is in the background, so
+    /// hiding the pane drops it; the return lists afresh with the current repository.
+    [Test]
+    public Task A_refresh_queued_when_the_pane_is_hidden_is_dropped_until_it_returns() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+            h.Vm.PrimaryRepositoryChanged();
+            await Assert.That(h.Vm.IsReading).IsTrue();
+
+            h.Vm.SetForeground(false);
+            await Assert.That(h.Vm.IsReading).IsFalse();
+
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 2, what: "the list on return");
+            await Assert.That(h.Source.Descriptions[^1].Repository).IsEqualTo(repository);
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A refresh queued behind a list read that then stops retries has nothing left to run it, so
+    /// it must not keep the card reading.
+    [Test]
+    public Task A_refresh_queued_behind_a_read_that_stops_retries_is_dropped() => RunOnUiAsync(async () => {
+        var h = new Harness(primary: () => new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        try {
+            h.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Source.ListFailure = "retries_stopped";
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 1, what: "the list read");
+
+            h.Vm.PrimaryRepositoryChanged();
+            h.Source.ListGate.SetResult();
+
+            await WaitUntilAsync(() => h.Vm.Notice.StartsWith("This session's pull requests are unavailable", StringComparison.Ordinal), what: "retries stopped");
+            await Assert.That(h.Vm.IsReading).IsFalse();
+        } finally {
+            await h.Dispose();
+        }
+    });
+
     [Test]
     public Task Teardown_does_not_wait_for_a_stalled_branch_lookup_or_publish_its_result() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
@@ -634,14 +703,20 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task A_list_refresh_alone_does_not_delay_the_stale_snapshot_indicator() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        // A read's settle job re-arms the tick after the job that reveals it; the advance below must follow it.
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial reads settled");
         var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
         var list = new TaskCompletionSource();
         h.Source.ListGate = list;
         h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
         h.Time.Advance(TimeSpan.FromSeconds(30));
         await WaitUntilAsync(() => h.Source.Overviews == 2 && h.Source.Lists == 2, what: "renewal and list pending");
+        // CanReveal turns true in one UI job but is announced by the renewal's settle job, whose notify re-arms
+        // the tick: an advance made before that announcement re-arms it past the advance and fires nothing.
+        var announced = false;
+        h.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(h.Vm.CanReveal) && h.Vm.CanReveal) announced = true; };
         renewal.SetResult(h.Source.Overview(h.Vm.Selected!.Subject) with { AccessValidForSeconds = 10 });
-        await WaitUntilAsync(() => h.Vm.CanReveal, what: "short access lease renewed");
+        await WaitUntilAsync(() => announced, what: "short access lease renewed");
         h.Time.Advance(TimeSpan.FromSeconds(10)); Dispatcher.UIThread.RunJobs();
         await WaitUntilAsync(() => h.Vm.HasStaleOverview, what: "list does not renew access");
         await Assert.That(h.Vm.Description).IsEqualTo("Private description");

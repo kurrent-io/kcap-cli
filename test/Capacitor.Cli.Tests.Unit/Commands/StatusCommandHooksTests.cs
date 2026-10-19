@@ -1,4 +1,5 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
@@ -161,6 +162,32 @@ public class StatusCommandHooksTests {
         await Assert.That(StatusCommand.MuseHooksDetailLine(broken, detected: false, wired: false)).IsNull();
         await Assert.That(StatusCommand.MuseHooksDetailLine(hookless, detected: true, wired: false)).IsNull();
         await Assert.That(StatusCommand.MuseHooksDetailLine(tmp.PathTo("absent/settings.json"), detected: true, wired: false)).IsNull();
+    }
+
+    /// Codex refuses a hooks.json that starts with a byte-order mark and runs none of it, although
+    /// the kcap entries parse fine here: only a wired file with the mark is refused, only Codex reads
+    /// as not running, and a registry without Codex has nothing to refuse.
+    [Test]
+    public async Task CodexRefusedHooks_finds_a_wired_file_codex_rejects_for_its_byte_order_mark() {
+        using var tmp   = new TempDir();
+        var       home  = new UserHome(tmp.CreateDir("home"));
+        var       clean = CodexHarness.Over(new CodexPaths(home, tmp.CreateDir("clean")));
+        var       bom   = CodexHarness.Over(new CodexPaths(home, tmp.CreateDir("bom")));
+        var       bare  = CodexHarness.Over(new CodexPaths(home, tmp.CreateDir("bare")));
+        CodexHooksWriter.Install(clean.Paths.UserHooksJson);
+        tmp.CreateFile("bom/hooks.json", "\uFEFF" + await File.ReadAllTextAsync(clean.Paths.UserHooksJson));
+        tmp.CreateFile("bare/hooks.json", "\uFEFF{}");
+
+        var refused = StatusCommand.CodexRefusedHooks(HarnessRegistry.Over(TestBinaries.None, bom));
+
+        await Assert.That(refused).IsEqualTo(bom.Paths.UserHooksJson);
+        await Assert.That(StatusCommand.CodexHooksDetailLine(refused!)).Contains("kcap plugin install --codex");
+        await Assert.That(StatusCommand.CodexRefusedHooks(HarnessRegistry.Over(TestBinaries.None, clean))).IsNull();
+        await Assert.That(StatusCommand.CodexRefusedHooks(HarnessRegistry.Over(TestBinaries.None, bare))).IsNull();
+        await Assert.That(StatusCommand.CodexRefusedHooks(HarnessRegistry.Over(TestBinaries.None))).IsNull();
+        await Assert.That(StatusCommand.HooksRun(HarnessId.Codex, wired: true, refused)).IsFalse();
+        await Assert.That(StatusCommand.HooksRun(HarnessId.Codex, wired: true, null)).IsTrue();
+        await Assert.That(StatusCommand.HooksRun(HarnessId.Claude, wired: true, refused)).IsTrue();
     }
 
     /// Every harness the build knows appears on the line — a tenth would too, since the line is

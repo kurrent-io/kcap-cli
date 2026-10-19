@@ -18,11 +18,12 @@ through the `kcap-plans` MCP tools; nothing infers it. Three rules:
 1. **When you write or are handed a plan, spec or design document, declare it.**
    Call `declare_plan_document` with its `kind` (`plan`, `spec` or `design`)
    and `path`. The file is read locally, hashed, and keyed against the repository root
-   **and the checkout it sits in**: declaring the same file again from the same
-   checkout lands on the same plan, but from a different worktree or clone it
-   starts a separate one. To continue a plan another session began, see
-   "Resuming a plan" below — do not re-declare its document. When a plan
-   implements a spec, or a spec refines a design, pass the other file as
+   **and the checkout it sits in**. Declaring it again lands on the same plan, from
+   the same checkout or, once this session is on that plan, from another worktree
+   or clone of the repository. A document declared after `set_plan_tasks` joins the
+   plan holding those tasks. For a file in a checkout that is not the project
+   directory, pass an absolute `path` or name the checkout as `workspace_root`. When
+   a plan implements a spec, or a spec refines a design, pass the other file as
    `argues_from` so both attach to one plan.
 2. **When a plan has discrete steps, declare them and update each transition.**
    Call `set_plan_tasks` with the whole ordered list (`title`, optional
@@ -59,13 +60,13 @@ When you are continuing another session (the user named one), use `kcap recap <X
 4. **Verify before continuing.** The ledger records what the earlier session *claimed*. A task left `in_progress` may be half-written: check the working tree and the history since the document's `commit_sha`, when it is set, before picking it up.
 5. **Adopt it.** `update_plan_task(plan_id: …, task_id: …, status: "in_progress")` on the task you are resuming. That attaches this session to the plan and makes it the session's current plan, so later calls can omit `plan_id`. Send it even when the task is already `in_progress`, because the attachment happens whether or not the status changes. Until you send it, the app does not show the plan on this session, even while you or your subagents work through the plan. This is always the last write of the procedure, but make it before you dispatch any work.
 
-**Do not call `declare_plan_document` for that plan's file while resuming from a different checkout** — a new worktree, another clone. It would start a second plan, point this session at it, and split the ledger: your progress would land on an empty plan while the original stops moving. Rule 1's "declare a document when you read it" does not apply here. From the same checkout path, declaring it again is harmless.
+**Declare that plan's file from a different checkout only with `plan_id`** — a new worktree, another clone. Without it, a session not yet on the plan starts a second plan, points itself at it, and splits the ledger: your progress would land on an empty plan while the original stops moving. With `plan_id`, or after step 5, the document joins the plan you are continuing.
 
 ## Tool reference
 
 | Tool | Required args | Purpose |
 |---|---|---|
-| `declare_plan_document` | `kind`, `path` (+ `argues_from`, `work_item_id`, `session_id`) | Declare the document; returns `plan_id`, `document_key`, `created`. |
+| `declare_plan_document` | `kind`, `path` (+ `argues_from`, `work_item_id`, `plan_id`, `workspace_root`, `session_id`) | Declare the document; returns `plan_id`, `document_key`, `created`. |
 | `set_plan_tasks` | `tasks` (+ `plan_id`, `session_id`) | Replace the declared task list; returns tasks with ids and ordinals. |
 | `update_plan_task` | `status` and one of `task_id` / `ordinal` (+ `note`, `plan_id`) | Record one transition; the result names the plan. |
 | `get_plan` | — (+ `plan_id`, `session_id`) | Documents, tasks with status and source, progress. |

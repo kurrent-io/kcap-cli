@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
@@ -60,6 +61,7 @@ public class PermissionWiringTests {
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
         services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
+        services.AddSingleton<ICredentialSource>(new FixedCredentialSource());
         services.AddSingleton<DaemonStatusNotifier>();
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));

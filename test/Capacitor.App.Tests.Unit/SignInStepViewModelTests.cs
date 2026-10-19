@@ -9,6 +9,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Time.Testing;
 using ReactiveUI.Reactive;
 
@@ -90,7 +91,7 @@ public class SignInStepViewModelTests {
             var bridges = new WizardBridges(
                 action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults,
                 progress => new WizardTenantProvisioner(
-                    new TenantProvisioningClient(new HttpClient(Signup)), "https://signup.example", progress,
+                    new TenantProvisioningClient(new HttpClient(Signup), ClientAgent.Desktop), "https://signup.example", progress,
                     CliTelemetry.Disabled(TimeProvider.System), Time));
 
             Picker      = bridges.Picker;
@@ -1101,14 +1102,16 @@ public class SignInStepViewModelTests {
     public async Task The_pane_renders_sign_in_with_the_work_account_first() {
         var (workAccount, urlBox, urlBoxShown, statusShown) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
-            var vm = new OnboardingViewModel([new WelcomeStepViewModel(), h.Vm]);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel);
+            var vm = new OnboardingViewModel([edition, h.Vm]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            await vm.NextCommand.Execute().ToTask(); // Welcome -> Sign in
+            await edition.ChooseCloudCommand.Execute().ToTask(); // Edition -> Sign in
+            await vm.PendingAdvanceForTesting;
             Dispatcher.UIThread.RunJobs();
 
             var button = window.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "WorkAccountButton");
@@ -1136,14 +1139,16 @@ public class SignInStepViewModelTests {
         var (box, submit, link, provisioning) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             GateProvisioning(h, InviteRequired);
-            var vm = new OnboardingViewModel([new WelcomeStepViewModel(), h.Vm]);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel);
+            var vm = new OnboardingViewModel([edition, h.Vm]);
             await vm.PendingEnterForTesting;
 
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            await vm.NextCommand.Execute().ToTask(); // Welcome -> Sign in
+            await edition.ChooseCloudCommand.Execute().ToTask(); // Edition -> Sign in
+            await vm.PendingAdvanceForTesting;
             var exec = h.SignIn();
             await ConfirmCreateAsync(h);
             await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");

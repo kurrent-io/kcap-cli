@@ -26,7 +26,9 @@ static class HtmlBlockReader {
         int _inlineLevels;
         int _deepest;
         bool _hasContent;
-        bool _afterDetailsOpen;
+        /// True at the block's start too: a details opened in an earlier block may own a summary
+        /// here, which the folder checks once the blocks are matched.
+        bool _summaryAllowed = true;
 
         public void Run(IReadOnlyList<HtmlToken> tokens) {
             if (WrapsAcrossBlocks(tokens)) {
@@ -68,7 +70,7 @@ static class HtmlBlockReader {
             if (_open.Count > 0) { plan.Rejected = true; return; }
             FlushParagraph();
             plan.Parts.Add(new(opens ? HtmlBlockPartKind.Open : HtmlBlockPartKind.Close, token, [], 0));
-            _afterDetailsOpen = opens && token.Name == "details";
+            _summaryAllowed = opens && token.Name == "details";
         }
 
         void Step(HtmlToken token) {
@@ -77,7 +79,7 @@ static class HtmlBlockReader {
                     return;
                 case HtmlTokenKind.Text:
                     if (!token.IsWhitespace) {
-                        _afterDetailsOpen = false;
+                        _summaryAllowed = false;
                         _hasContent = true;
                         Leaf(1);
                     }
@@ -94,7 +96,7 @@ static class HtmlBlockReader {
                     return;
                 // A line break is content only beside something else: alone it makes no paragraph.
                 case HtmlTagClass.Void when opens:
-                    _afterDetailsOpen = false;
+                    _summaryAllowed = false;
                     _hasContent |= token.Name == "img";
                     Leaf(token.Name == "img" ? 2 : 1);
                     _content.Add(token);
@@ -117,11 +119,11 @@ static class HtmlBlockReader {
             }
         }
 
-        /// Accepted only as the first thing after its `details` open tag, in the same block, once.
+        /// Accepted only as the first thing after a `details` open tag or at the block's start, once.
         void Summary(bool opens) {
             if (opens) {
-                if (!_afterDetailsOpen || _open.Count > 0) { plan.Rejected = true; return; }
-                _afterDetailsOpen = false;
+                if (!_summaryAllowed || _open.Count > 0) { plan.Rejected = true; return; }
+                _summaryAllowed = false;
                 _open.Push("summary");
                 Begin();
                 return;
@@ -135,7 +137,7 @@ static class HtmlBlockReader {
         void LeafBlock(HtmlToken token, bool opens, HtmlBlockPartKind kind) {
             if (opens) {
                 if (_open.Count > 0) { plan.Rejected = true; return; }
-                _afterDetailsOpen = false;
+                _summaryAllowed = false;
                 FlushParagraph();
                 _open.Push(token.Name);
                 _leafTag = token;
@@ -148,14 +150,14 @@ static class HtmlBlockReader {
 
         void Rule() {
             if (_open.Count > 0) { plan.Rejected = true; return; }
-            _afterDetailsOpen = false;
+            _summaryAllowed = false;
             FlushParagraph();
             plan.Parts.Add(new(HtmlBlockPartKind.Rule, null, [], 1));
         }
 
         void Inline(HtmlToken token, bool opens) {
             if (opens) {
-                _afterDetailsOpen = false;
+                _summaryAllowed = false;
                 _open.Push(token.Name);
                 // A block nested this far can never fit, and rejecting here keeps the builder shallow.
                 if (++_inlineLevels > GitHubHtmlPass.MaxDepth) plan.Rejected = true;

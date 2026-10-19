@@ -1807,6 +1807,129 @@ public class HomeViewModelTests {
             .Contains("consent policy denied");
 
     [Test]
+    public async Task An_empty_snapshot_failure_is_a_sentence() {
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure("standalone_snapshot_empty"))
+            .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure("git commit -m Initial snapshot failed:"))
+            .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure(
+                "git commit -m Initial snapshot failed: On branch main\nnothing to commit"))
+            .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure(
+                "git commit -m Initial snapshot failed: fatal: unable to write new index file"))
+            .IsEqualTo(HomeViewModel.WorkspacePrepFailed + " Unable to write new index file");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Changing_repository_clears_the_start_error() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var vm = Build(out var launch, out _, path);
+            launch.Next = new LaunchOutcome(false, null, "git commit -m Initial snapshot failed:");
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+
+            // Same folder under a different casing is still that folder on macOS/Windows.
+            if (!OperatingSystem.IsLinux()) {
+                await vm.SelectRepositoryAsync("/repo/A");
+                await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+            }
+
+            await vm.SelectRepositoryAsync("/repo/b");
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_the_previous_repository_does_not_stick() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectRepositoryAsync("/repo/b");
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_the_previous_machine_does_not_stick() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/repo/a"],
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
+                launchFailures: failures, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/repo/a");
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_local_does_not_stick_on_a_same_named_remote() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService { DaemonName = "home-pc" };
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/repo/a"],
+                    MachineId = "remote-machine",
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
+                launchFailures: failures, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                localMachineId: "local-machine");
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.SelectedMachine).IsEqualTo("home-pc");
+            await Assert.That(vm.RemoteMachineSelected).IsTrue();
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/repo/a");
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task LaunchFailureAfterAcceptSetsStartError() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {

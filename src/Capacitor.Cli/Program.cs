@@ -166,7 +166,9 @@ var serverEnv = museHook.Apply(ProfileOverrides.FromEnvironment());
 var machineEnv = MachineAuth.FromEnvironment();
 var endpoints  = AuthEndpoints.FromEnvironment();
 
-var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, LocalEndpoints.Read(LocalRoot.FromEnvironment(home)), workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
+var localRoot = LocalRoot.FromEnvironment(home);
+
+var profiles = museHook.Bind(await AppConfig.ResolveForRepo(args, config, serverEnv, LocalEndpoints.Read(localRoot), workdir, gitTimeoutMs: isHook || isRefreshHandoff ? 1000 : 5000));
 
 if (museHook.MissingProfileWarning(profiles) is { } missingProfile) {
     Console.Error.WriteLine(missingProfile);
@@ -186,7 +188,7 @@ var telemetryStartup = TelemetryStartup.FromEnvironment(command, baseUrl, endpoi
 var services = new ServiceCollection()
     .AddCapacitorCli(
         config, home, workdir, daemonPaths, profiles, serverEnv, machineEnv, endpoints, clock, baseUrl,
-        telemetryStartup);
+        telemetryStartup, localRoot);
 
 await using var sp = services.BuildValidated();
 
@@ -267,7 +269,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "local", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
@@ -464,6 +466,8 @@ switch (command) {
         return await Run<AgentCommand>().HandleAsync(args, baseUrl);
     case "setup":
         return await Run<SetupCommand>().HandleAsync(args);
+    case "local":
+        return await Run<LocalCommand>().HandleAsync(args);
     case "muse-assistant":
         return await Run<MuseAssistantCommand>().HandleAsync(args);
     case "plugin":
@@ -613,6 +617,8 @@ switch (command) {
                 return 1;
         }
     }
+    case "memories":
+        return await Run<MemoriesCommand>().HandleAsync(args);
     case "page":
     case "artefact":
         return await Run<ArtefactCommand>().HandleAsync(args);
@@ -933,7 +939,8 @@ switch (command) {
     // Spawned detached by a hook that gave up on its own client creation (RefreshTokenHandoff); it
     // outlives the hook to finish the rotation. Not in PrintUsage — nobody types it by hand.
     case RefreshTokenHandoff.Command: {
-        try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
+        if (!profiles.Resolution.SendsNoBearer)
+            try { await sp.GetRequiredService<TokenStore>().GetValidTokensForProfileAsync(profiles.Name); } catch { }
 
         return 0;
     }

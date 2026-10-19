@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
@@ -5,10 +6,12 @@ using Capacitor.Cli.Core;
 using ProfileConfigJsonContextIndented = Capacitor.Cli.Core.Config.ProfileConfigJsonContextIndented;
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Commands;
 
-public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, CliTelemetry telemetry) {
+public sealed class ConfigCommand(
+        ConfigRoot config, ICapacitorHttpClient http, CliTelemetry telemetry, DaemonStore daemons, TimeProvider time) {
     public async Task<int> HandleAsync(string[] args) {
         if (args.Length < 2) {
             await Console.Error.WriteLineAsync("Usage: kcap config <show|set|unset> [key] [value]");
@@ -66,13 +69,14 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
             value = result.Url;
         }
 
-        var profileName = "default";
+        var     profileName = "default";
+        Profile updated     = new();
 
         await ConfigMutator.MutateAsync(config, c => {
             profileName = c.ActiveName;
-            var profile = ApplySet(c.Profiles.GetValueOrDefault(profileName) ?? new Profile(), key, value);
+            updated     = ApplySet(c.Profiles.GetValueOrDefault(profileName) ?? new Profile(), key, value);
 
-            return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [profileName] = profile } };
+            return c with { Profiles = new Dictionary<string, Profile>(c.Profiles) { [profileName] = updated } };
         });
 
         // Echo what was STORED, not what was typed: flows.reviewer_vendor is canonicalized on the way
@@ -90,7 +94,37 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
                 $"Warning: '{stored}' is not a vendor this kcap version knows ({ReviewerVendors.Tokens}); " +
                 "the server has the authoritative list and will reject an unknown vendor at start time.");
 
+        if (key == "daemon.max_agents" && updated.Daemon is { } daemon) {
+            var name = DaemonNameResolver.Resolve([], daemon.Name);
+            await Console.Out.WriteLineAsync(
+                await ApplyCapacityLiveAsync(new LocalControlOps(daemons, name, time), name, daemon.MaxAgents, CancellationToken.None));
+        }
+
         return 0;
+    }
+
+    // A daemon launched with --max-agents takes that flag over the profile at every start.
+    const string FlagPrecedence = "A --max-agents flag in the daemon's launch command overrides it at startup.";
+
+    /// <summary>
+    /// Hands a new capacity to the running daemon, which applies it without a restart — a restart ends
+    /// every hosted agent. Returns the line telling the user where the value took effect.
+    /// </summary>
+    internal static async Task<string> ApplyCapacityLiveAsync(ILocalControlOps ops, string daemonName, int maxAgents, CancellationToken ct) {
+        try {
+            var ack = await ops.PutDaemonSettingsAsync(new DaemonSettingsPutDto(maxAgents), ct);
+
+            return ack.Ok
+                ? $"Applied to running daemon '{daemonName}'; no restart needed. {FlagPrecedence}"
+                : $"Daemon '{daemonName}' refused the value ({ack.Reason}); it keeps {ack.MaxAgents?.ToString(CultureInfo.InvariantCulture) ?? "its current capacity"}.";
+        } catch (LocalControlOpsException ex) when (ex.Reason == "daemon_unreachable") {
+            return $"Daemon '{daemonName}' is not running; it reads the new value when it starts. {FlagPrecedence}";
+        } catch (LocalControlOpsException ex) when (ex.Reason == "daemon_rejected") {
+            return $"Daemon '{daemonName}' cannot take the value live; it reads it when it restarts " +
+                   $"(`kcap daemon restart --name {daemonName} --when-idle` waits for its agents to finish). {FlagPrecedence}";
+        } catch (LocalControlOpsException ex) {
+            return $"Could not confirm the new value with daemon '{daemonName}' ({ex.Reason}); `kcap daemon status` shows its capacity.";
+        }
     }
 
     async Task<int> Unset(string key) {
@@ -159,7 +193,8 @@ public sealed class ConfigCommand(ConfigRoot config, ICapacitorHttpClient http, 
         key switch {
             "server_url" => profile with { ServerUrl = value },
             "daemon.name" => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { Name = value } },
-            "daemon.max_agents" when int.TryParse(value, out var n) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { MaxAgents = n } },
+            "daemon.max_agents" when int.TryParse(value, out var n) && n >= 0 => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { MaxAgents = n } },
+            "daemon.max_agents" => throw new ArgumentException($"Invalid value for daemon.max_agents: '{value}'. Must be 0 (unlimited) or a positive integer."),
             "daemon.claude_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { ClaudePath = value } },
             "daemon.claude_path" => throw new ArgumentException("Invalid value for daemon.claude_path: must not be empty."),
             "daemon.codex_path" when !string.IsNullOrEmpty(value) => profile with { Daemon = (profile.Daemon ?? new DaemonSettings()) with { CodexPath = value } },

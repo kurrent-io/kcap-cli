@@ -4,6 +4,7 @@ using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.PrDetection;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -26,6 +27,7 @@ sealed class DetachedImportPlanRunner(
         ChosenServerHttp http,
         GitProviderRouter router,
         TimeProvider time,
+        LocalRoot localRoot,
         Func<ImportPlanLevel, ProfileContext, Task<SetupImportRun>>? passRunner = null,
         AccountStore? accounts = null) {
     /// <returns>0 when every level finished with nothing failed; 1 otherwise.</returns>
@@ -43,7 +45,7 @@ sealed class DetachedImportPlanRunner(
             return 1;
         }
 
-        var context = SetupCommand.ImportContext(profiles, plan.ServerUrl);
+        var context = SetupCommand.ImportContext(profiles, plan.ServerUrl, LocalEndpoints.Read(localRoot));
         var scoped  = passRunner is null ? http.For(plan.ServerUrl, context) : null;
         var exit    = 0;
 

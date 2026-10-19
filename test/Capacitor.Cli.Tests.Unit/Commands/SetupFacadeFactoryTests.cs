@@ -23,7 +23,7 @@ public class SetupFacadeFactoryTests {
             new AuthProxyClient(http.CreateClient(CapacitorClients.Anonymous), TimeProvider.System),
             new GitHubOAuthClient(http), new WorkOSClient(http, TimeProvider.System), new RecordingBrowser(),
             NoTelemetry.Facade, AuthEndpoints.Defaults, TimeProvider.System,
-            new TenantProvisioningClient(http.CreateClient(CapacitorClients.Anonymous)));
+            new TenantProvisioningClient(http.CreateClient(CapacitorClients.Anonymous), ClientAgent.Cli));
     }
 
     static AuthHttpScript TwoTenants() =>

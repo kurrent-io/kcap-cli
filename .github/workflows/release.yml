@@ -197,6 +197,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The same rule picks the npm dist-tag, so GitHub and npm agree on what a prerelease is.
+      - name: Derive release channel
+        id: disttag
+        run: echo "TAG=$(bash scripts/npm-dist-tag.sh "$VERSION")" >> "$GITHUB_OUTPUT"
+
       - name: Download all release archives
         uses: actions/download-artifact@v8
         with:
@@ -237,6 +242,7 @@ jobs:
         with:
           files: release-artifacts/*
           generate_release_notes: true
+          prerelease: ${{ steps.disttag.outputs.TAG == 'beta' }}
 
   # The script installer's manifests, served by kcap-web from the bucket's cli/ prefix. The
   # archives stay on the GitHub Release: the checksum and the bytes it covers come from two hosts.

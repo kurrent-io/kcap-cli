@@ -27,7 +27,7 @@ public class DaemonRunnerMuseAdvertisementTests {
 
     MuseHostedAgentRuntimeFactory Factory(DaemonConfig config, bool binary) =>
         new(config, NullLoggerFactory.Instance, TimeProvider.System,
-            new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+            new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
                 NullLogger<ServerConnection>.Instance, TimeProvider.System),
             new MusePaths(Home, null, null),
             binaryExists: _ => binary,

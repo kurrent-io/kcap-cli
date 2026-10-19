@@ -38,7 +38,7 @@ public static partial class CommandEvents {
     static readonly HashSet<string> KnownVerbs = new(StringComparer.Ordinal) {
         "--help", "-h", "help", "--version", "-v",
         "errors", "recap", "sessions", "validate-plan", "eval", "login", "logout", "whoami",
-        "daemon", "agent", "setup", "plugin", "profile", "use", "status", "config",
+        "daemon", "agent", "setup", "local", "plugin", "profile", "use", "status", "config",
         "ignore", "allow", "remap", "repos", "projects", "project", "update", "review", "mcp",
         "curate", "cleanup", "uninstall", "disable", "hide", "import", "watch",
         "copilot-finalize", "set-title", "hook", "cursor", "cursor-verify-appendonly",
@@ -58,6 +58,7 @@ public static partial class CommandEvents {
         ["agent"]   = new(StringComparer.Ordinal) { "start", "stop", "list", "status" },
         ["page"]      = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
         ["artefact"]  = new(StringComparer.Ordinal) { "publish", "list", "share", "delete" },
+        ["local"]     = new(StringComparer.Ordinal) { "help", "status", "start", "stop", "restart", "logs", "open" },
     };
 
     const int MaxFlags = 12;

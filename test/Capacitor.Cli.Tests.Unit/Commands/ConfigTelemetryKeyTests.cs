@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
@@ -14,7 +15,7 @@ public class ConfigTelemetryKeyTests {
     [Arguments("0")]
     [Arguments("no")]
     public async Task Telemetry_off_persists_disabled(string value) {
-        await Assert.That(new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).TryApplyTelemetry("telemetry", value)).IsTrue();
+        await Assert.That(new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).TryApplyTelemetry("telemetry", value)).IsTrue();
         await Assert.That(TelemetryState.PersistedEnabled(Config.Root)).IsFalse();
     }
 
@@ -24,18 +25,18 @@ public class ConfigTelemetryKeyTests {
     [Arguments("1")]
     [Arguments("yes")]
     public async Task Telemetry_on_persists_enabled(string value) {
-        await Assert.That(new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).TryApplyTelemetry("telemetry", value)).IsTrue();
+        await Assert.That(new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).TryApplyTelemetry("telemetry", value)).IsTrue();
         await Assert.That(TelemetryState.PersistedEnabled(Config.Root)).IsTrue();
     }
 
     [Test]
     public async Task Other_keys_are_not_claimed() {
-        await Assert.That(new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).TryApplyTelemetry("server_url", "https://acme.kcap.ai")).IsFalse();
+        await Assert.That(new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).TryApplyTelemetry("server_url", "https://acme.kcap.ai")).IsFalse();
     }
 
     [Test]
     public async Task Invalid_telemetry_value_throws_with_an_actionable_message() {
-        var ex = Assert.Throws<ArgumentException>(() => new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade).TryApplyTelemetry("telemetry", "banana"));
+        var ex = Assert.Throws<ArgumentException>(() => new ConfigCommand(Config.Root, new FixedCapacitorHttpClient(), NoTelemetry.Facade, DaemonStore.FromEnvironment(), TimeProvider.System).TryApplyTelemetry("telemetry", "banana"));
 
         await Assert.That(ex!.Message.Contains("on")).IsTrue();
         await Assert.That(ex.Message.Contains("off")).IsTrue();

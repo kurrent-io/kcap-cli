@@ -11,7 +11,8 @@ namespace Capacitor.Cli.Core.LocalEdition;
 ///
 /// <para>Both files are written durably and owner-only, replacing whatever sits at the path rather
 /// than writing through a link. The journal's <c>phase</c> and <c>server_start</c> are read by the
-/// server's bootstrap: <c>server_start</c> must be exactly <c>"allow"</c> for it to start.</para>
+/// server's bootstrap: <c>server_start</c> absent or <c>"allow"</c> starts it, <c>"fenced"</c> starts it fenced, and
+/// anything else refuses.</para>
 /// </summary>
 public static partial class LocalStateFiles {
     public const int CurrentSchema = 1;
@@ -32,11 +33,12 @@ public static partial class LocalStateFiles {
 
     internal static void ClearJournal(LocalRoot root) {
         File.Delete(root.JournalPath);
+        FaultPoints.Hit($"unlink:{root.JournalPath}");
 
         if (File.Exists(root.JournalPath) || Directory.Exists(root.JournalPath))
             throw new LocalLifecycleException($"The lifecycle journal {root.JournalPath} could not be removed.");
 
-        DirectorySync.Flush(root.Directory);
+        DurableDirectory.Sync(root.Directory);
     }
 
     static void Write(string path, byte[] bytes) {
@@ -50,7 +52,7 @@ public static partial class LocalStateFiles {
             }
         }
 
-        DirectorySync.Flush(Path.GetDirectoryName(path)!);
+        DurableDirectory.Sync(Path.GetDirectoryName(path)!);
     }
 
     static StateRead<T> Read<TWire, T>(string path, JsonTypeInfo<TWire> info, Func<TWire, T?> map)
@@ -121,9 +123,10 @@ public static partial class LocalStateFiles {
         if (wire.Schema is < 1 or > CurrentSchema) return null;
         if (wire.Operation is not { Length: > 0 } operation || wire.Phase is not { Length: > 0 } phase || wire.StartedAt is not { } startedAt)
             return null;
-        if (wire.ServerStart is not (Allow or Deny)) return null;
+        if (wire.ServerStart switch { Allow => ServerStart.Allow, Fenced => ServerStart.Fenced, Deny => ServerStart.Deny, _ => (ServerStart?)null } is not { } serverStart)
+            return null;
 
-        return new(operation, phase, wire.ServerStart == Allow, wire.InstallationId, startedAt, wire.Details ?? new Dictionary<string, string>());
+        return new(operation, phase, serverStart, wire.InstallationId, startedAt, wire.Details ?? new Dictionary<string, string>());
     }
 
     static RegistryWire FromRegistry(InstallRegistry registry) =>
@@ -138,13 +141,18 @@ public static partial class LocalStateFiles {
             Schema         = CurrentSchema,
             Operation      = entry.Operation,
             Phase          = entry.Phase,
-            ServerStart    = entry.ServerStartAllowed ? Allow : Deny,
+            ServerStart    = entry.ServerStart switch {
+                ServerStart.Allow  => Allow,
+                ServerStart.Fenced => Fenced,
+                _                  => Deny,
+            },
             InstallationId = entry.InstallationId,
             StartedAt      = entry.StartedAt,
             Details        = new(entry.Details),
         };
 
     const string Allow = "allow";
+    const string Fenced = "fenced";
     const string Deny  = "deny";
 
     internal sealed class RegistryWire {

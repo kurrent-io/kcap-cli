@@ -14,7 +14,7 @@ public class SetupImportRunnerTests {
 
     SetupImportRunner Runner(ProfileContext profiles) => new(
         Config.Root, Home, TestHarnesses.Under(Home),
-        new ChosenServerHttp(Config.Root, profiles, ProfileOverrides.None, MachineAuth.None),
+        new ChosenServerHttp(Config.Root, profiles, ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root),
         new GitProviderRouter(), TimeProvider.System, TestAccounts.None);
 
     /// Seven solo Claude sessions with ascending timestamps under the real Claude harness path

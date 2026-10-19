@@ -12,7 +12,7 @@ public class ServerConnectionRepoPathsTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     sealed class RepoPathsServerConnection(DaemonConfig config) : ServerConnection(
-        config, UnusedTokenStore.Create(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
+        config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
         public readonly List<string[]>       Sent        = [];
         public readonly TaskCompletionSource SendEntered = new();
         public          TaskCompletionSource? SendGate;

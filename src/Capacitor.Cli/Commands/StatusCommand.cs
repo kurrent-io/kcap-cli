@@ -4,8 +4,10 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Services;
@@ -38,15 +40,18 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync($"           {IgnoredRepoProfileLine(ignored)}");
 
         // Auth
-        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        var auth = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.Endpoint);
         await Console.Out.WriteLineAsync($"  Auth:    {FormatAuthLine(auth, time.GetUtcNow())}");
 
         // Hooks
         await Console.Out.WriteAsync("  Hooks:   ");
 
-        var line = BuildHooksStatusLine(harnesses.Select(h => (h.Id, h.Signals.IsWired)));
+        var codexRefused = CodexRefusedHooks(harnesses);
+        var line         = BuildHooksStatusLine(harnesses.Select(h => (h.Id, HooksRun(h.Id, h.Signals.IsWired, codexRefused))));
 
         await Console.Out.WriteLineAsync(line);
+
+        if (codexRefused is not null) await Console.Out.WriteLineAsync($"           {CodexHooksDetailLine(codexRefused)}");
 
         var accountLines = BuildAccountLines(
             accounts.TryLoad()?.Accounts.Select(a => (a, AccountWiring.State(a, home))) ?? [],
@@ -65,7 +70,7 @@ public sealed class StatusCommand(
 
         var activity = new HookActivity(config, time);
 
-        foreach (var h in harnesses.Where(h => h.Signals.IsWired))
+        foreach (var h in harnesses.Where(h => HooksRun(h.Id, h.Signals.IsWired, codexRefused)))
             await Console.Out.WriteLineAsync(
                 $"           {RecordingLine(h.Id, h.Label, activity.LastEvent(h.VendorId), time.GetUtcNow())}");
 
@@ -78,8 +83,13 @@ public sealed class StatusCommand(
             await Console.Out.WriteLineAsync($"  Git:     {gitWarning}");
 
         // Daemon: the per-name PID files `kcap daemon status` reads, so the two agree.
-        Console.Write("  Daemon:  ");
-        await WriteAgentStatusAsync(store);
+        var daemons = ReadDaemonEntries(store);
+        await Console.Out.WriteLineAsync($"  Daemon:  {DaemonLine(daemons)}");
+
+        var (units, verifySupported) = await InstalledUnitsAsync();
+        foreach (var warning in DaemonDriftLines(
+                     CapacitorVersion.Current(), daemons, units, UnitIdentity.ResolveDaemonBinary(), verifySupported))
+            await Console.Out.WriteLineAsync($"           {warning}");
 
         return 0;
     }
@@ -91,18 +101,19 @@ public sealed class StatusCommand(
     async Task<int> WriteJsonAsync(string[] args, string? baseUrl) {
         var (current, advisory, bundled) = await ResolveVersionAsync(args);
         var server = await ProbeServerAsync(http, baseUrl, config, time);
-        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server);
+        var auth   = await ResolveAuthAsync(tokenStore, machine, profiles.Name, server, profiles.Resolution.Endpoint);
 
         // The exit-time footer is the human surface for this, and the payload already carries it.
         if (advisory.Newer) UpdateNotice.MarkReported();
 
-        var activity = new HookActivity(config, time);
+        var activity     = new HookActivity(config, time);
+        var codexRefused = CodexRefusedHooks(harnesses);
 
         var payload = BuildPayload(
             profiles.Name, server, auth, current, advisory, bundled,
             [.. harnesses.Select(h => {
                 var installed = harnesses.Detected(h.Id);
-                var wired     = h.Signals.IsWired;
+                var wired     = HooksRun(h.Id, h.Signals.IsWired, codexRefused);
 
                 return new StatusHarnessJson(
                     h.VendorId, installed, wired, installed && !wired ? InstallCommandFor(h.Id) : null,
@@ -135,7 +146,7 @@ public sealed class StatusCommand(
             harnesses,
             new StatusDaemonJson(
                 live.Count > 0,
-                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value))],
+                [.. live.Select(e => new StatusDaemonEntryJson(e.Name, e.Pid!.Value, e.Version is { } v ? CapacitorVersion.Display(v) : null))],
                 daemons.Count > live.Count));
     }
 
@@ -197,7 +208,20 @@ public sealed class StatusCommand(
     /// with irrelevant remediation.
     /// </summary>
     internal static async Task<AuthSnapshot> ResolveAuthAsync(
-            TokenStore tokens, MachineAuth machine, string profile, ServerReach server) {
+            TokenStore tokens, MachineAuth machine, string profile, ServerReach server, LocalEndpointClass endpoint) {
+        // Ahead of the provider: through an outage that is the last one cached, and a token left in
+        // the store must not be refreshed for a server it is never sent to.
+        switch (endpoint) {
+            case LocalEndpointClass.Local:
+                return new AuthSnapshot(StatusAuthState.NotRequired);
+            case LocalEndpointClass.Retired:
+                return new AuthSnapshot(StatusAuthState.LocalUnavailable,
+                    Problem: $"{server.Url} belonged to a removed local installation (run: kcap setup)");
+            case LocalEndpointClass.Undetermined(var reason):
+                return new AuthSnapshot(StatusAuthState.LocalUnavailable,
+                    Problem: $"cannot tell whether {server.Url} is the local installation: {reason}");
+        }
+
         if (server.Provider == AuthProvider.None) return new AuthSnapshot(StatusAuthState.NotRequired);
 
         // Diversion is deliberately raised by EITHER variable, so that a half-configured runner is
@@ -238,6 +262,7 @@ public sealed class StatusCommand(
         StatusAuthState.Expired     => $"{auth.Identity} ✗ token expired (run: kcap login)",
         StatusAuthState.WrongServer => $"✗ token was issued by {auth.IssuedServerUrl ?? "another server"} (run: kcap login)",
         StatusAuthState.None        => "not authenticated (run: kcap login)",
+        StatusAuthState.LocalUnavailable => $"✗ {auth.Problem}",
     };
 
     /// <summary>The version facts behind the Version line, without printing it.</summary>
@@ -271,7 +296,7 @@ public sealed class StatusCommand(
 
     internal sealed record AuthSnapshot(
         StatusAuthState State, string? Identity = null, DateTimeOffset? ExpiresAt = null, string? MachineLine = null,
-        string? IssuedServerUrl = null);
+        string? IssuedServerUrl = null, string? Problem = null);
 
     async Task WriteVersionLineAsync(string[] args) {
         Console.Write("  Version: ");
@@ -332,30 +357,110 @@ public sealed class StatusCommand(
 
     internal static string FormatBundledVersionLine(string current) => $"kcap {current} (bundled with Kurrent Capacitor)";
 
-    static async Task WriteAgentStatusAsync(DaemonStore store) {
-        var entries = ReadDaemonEntries(store);
-        var live    = entries.Where(e => e.Alive).ToList();
+    internal static string DaemonLine(IReadOnlyList<DaemonEntry> entries) {
+        var live = entries.Where(e => e.Alive).ToList();
 
-        switch (live.Count) {
-            case 0:
-                await Console.Out.WriteLineAsync(
-                    entries.Count == 0
-                        ? "not running"
-                        : "not running (stale PID files; `kcap daemon doctor --clean` to remove)"
-                );
+        return live.Count switch {
+            0 when entries.Count == 0 => "not running",
+            0 => "not running (stale PID files; `kcap daemon doctor --clean` to remove)",
+            1 => $"running — {Describe(live[0])}",
+            _ => $"running ({live.Count}) — {string.Join(", ", live.Select(Describe))}",
+        };
 
-                return;
-            case 1:
-                await Console.Out.WriteLineAsync($"running — {live[0].Name} (PID {live[0].Pid})");
+        static string Describe(DaemonEntry e) =>
+            e.Version is { } v ? $"{e.Name} (PID {e.Pid}, {CapacitorVersion.Display(v)})" : $"{e.Name} (PID {e.Pid})";
+    }
 
-                return;
-            default: {
-                var summary = string.Join(", ", live.Select(e => $"{e.Name} (PID {e.Pid})"));
-                await Console.Out.WriteLineAsync($"running ({live.Count}) — {summary}");
+    /// <summary>How long status gives the unit read. On Windows it is also the budget schtasks shares
+    /// across its calls, and a call still running when it is spent is killed.</summary>
+    static readonly TimeSpan UnitsBudget = TimeSpan.FromSeconds(3);
 
-                break;
+    /// <summary>The installed service units and the daemon binary each names; a unit whose binary cannot
+    /// be read is kept with a null binary. launchd and systemd read only unit files here. Empty when the
+    /// read does not finish within <see cref="UnitsBudget"/>, so a stalled home directory cannot hang status.</summary>
+    async Task<(IReadOnlyList<(string Id, string? Binary)> Units, bool VerifySupported)> InstalledUnitsAsync() {
+        IServiceManager manager;
+        try {
+            manager = OperatingSystem.IsWindows()
+                ? new WindowsScheduledTaskServiceManager(config, schtasks: BoundedSchtasks(time.GetTimestamp()))
+                : ServiceManagerFactory.ForCurrentOs(config, home, time);
+        } catch (PlatformNotSupportedException) {
+            return ([], false);
+        }
+
+        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
+        try {
+            return (await Task.Run(() => ReadUnits(manager)).WaitAsync(UnitsBudget, time), verifySupported);
+        } catch (TimeoutException) {
+            return ([], verifySupported);
+        }
+    }
+
+    Func<string[], (int ExitCode, string StdOut, string StdErr)> BoundedSchtasks(long started) => args => {
+        var left = UnitsBudget - time.GetElapsedTime(started);
+        if (left <= TimeSpan.Zero) return (1, "", "kcap status ran out of time to ask schtasks");
+
+        var (code, stdout, stderr, timedOut) = ServiceProcess.RunBounded("schtasks", args, left);
+        return timedOut ? (1, "", "schtasks timed out and was terminated") : (code, stdout, stderr);
+    };
+
+    internal static IReadOnlyList<(string Id, string? Binary)> ReadUnits(IServiceManager manager) {
+        IReadOnlyList<string>? ids;
+        try {
+            ids = manager.TryListInstalled();
+        } catch (Exception ex) when (IsUnitReadFailure(ex)) {
+            return [];
+        }
+
+        return [.. (ids ?? []).Select(id => (id, Binary(id)))];
+
+        string? Binary(string id) {
+            try {
+                return manager.UnitBinary(id);
+            } catch (Exception ex) when (IsUnitReadFailure(ex)) {
+                return null;
             }
         }
+    }
+
+    static bool IsUnitReadFailure(Exception ex) =>
+        ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception;
+
+    /// <summary>
+    /// One warning per daemon that `kcap update` does not reach: one running another version than this
+    /// CLI, or one whose service unit runs a binary outside this CLI's install. Each names the command
+    /// that puts it on this install.
+    /// </summary>
+    internal static IReadOnlyList<string> DaemonDriftLines(
+            string cliVersion, IReadOnlyList<DaemonEntry> daemons, IReadOnlyList<(string Id, string? Binary)> units,
+            string? daemonBinary, bool verifySupported) {
+        var cli      = CapacitorVersion.Display(cliVersion);
+        var versions = daemons.Where(d => d is { Alive: true, Version: not null })
+            .ToDictionary(d => d.Name, d => CapacitorVersion.Display(d.Version!));
+        var unitBinaries = units.ToDictionary(u => u.Id, u => u.Binary);
+
+        List<string> lines = [];
+
+        foreach (var name in versions.Keys.Union(unitBinaries.Keys).Order(StringComparer.Ordinal)) {
+            var drifted = versions.TryGetValue(name, out var version) && version != cli;
+            var hasUnit = unitBinaries.TryGetValue(name, out var binary);
+            var outside = binary is not null && daemonBinary is not null && !UnitIdentity.SameDaemon(binary, daemonBinary);
+            if (!drifted && !outside) continue;
+
+            List<string> facts = [];
+            if (drifted) facts.Add($"daemon '{name}' runs {version}, but this kcap is {cli}");
+            if (outside) facts.Add($"{(drifted ? "its service" : $"service '{name}'")} runs {binary}, outside this kcap's install, so `kcap update` does not reach it");
+
+            var fix = !hasUnit
+                ? $"`kcap daemon stop --name {name}`, then `kcap daemon start --name {name}`"
+                : verifySupported
+                    ? $"`kcap daemon service install --replace --verify --name {name}`"
+                    : $"`kcap daemon service install --name {name}`";
+
+            lines.Add($"⚠ {string.Join("; ", facts)}. Run {fix}.");
+        }
+
+        return lines;
     }
 
     /// <summary>
@@ -397,7 +502,9 @@ public sealed class StatusCommand(
             // A present but unparseable marker is a hard-death breadcrumb, not an absence: it is
             // counted as stale rather than skipped, so the file someone has to clean up is reported.
             entries.Add(entry is { } e
-                ? new DaemonEntry(name, e.Pid, DaemonPidProbe.IsOurDaemon(e.Pid, e.StartToken))
+                ? DaemonPidProbe.IsOurDaemon(e.Pid, e.StartToken)
+                    ? new DaemonEntry(name, e.Pid, true, DaemonVersionMarker.TryRead(store, name))
+                    : new DaemonEntry(name, e.Pid, false)
                 : new DaemonEntry(name, null, false));
         }
 
@@ -405,7 +512,8 @@ public sealed class StatusCommand(
     }
 
     /// <param name="Pid">Null when the marker is present but carries no usable PID.</param>
-    internal sealed record DaemonEntry(string Name, int? Pid, bool Alive);
+    /// <param name="Version">The version a live daemon recorded at startup, when it recorded one.</param>
+    internal sealed record DaemonEntry(string Name, int? Pid, bool Alive, string? Version = null);
 
     /// <summary>
     /// Whether a wired agent has run a kcap hook on this machine: proof the hooks loaded (and, for
@@ -427,6 +535,23 @@ public sealed class StatusCommand(
             ? null
             : $"{HarnessRegistry.LabelOf(HarnessId.Muse)}: hooks missing for {string.Join(", ", missing)}. Run `kcap plugin install --muse`";
     }
+
+    /// <summary>The Codex hooks file kcap is wired into but Codex refuses for its byte-order mark, or
+    /// null. Read once per status run, so the Hooks line, the detail line and the recording lines
+    /// cannot disagree.</summary>
+    internal static string? CodexRefusedHooks(HarnessRegistry harnesses) =>
+        harnesses.ById(HarnessId.Codex) is CodexHarness { Signals.IsWired: true } codex
+     && CodexHooksInstaller.StartsWithByteOrderMark(codex.Paths.UserHooksJson)
+            ? codex.Paths.UserHooksJson
+            : null;
+
+    /// <summary>Whether a harness's hooks actually run: a Codex file Codex refuses is wired to kcap
+    /// yet runs nothing, so it reads as unwired.</summary>
+    internal static bool HooksRun(HarnessId id, bool wired, string? codexRefused) =>
+        wired && !(id == HarnessId.Codex && codexRefused is not null);
+
+    internal static string CodexHooksDetailLine(string hooksPath) =>
+        $"{HarnessRegistry.LabelOf(HarnessId.Codex)}: {hooksPath} starts with a UTF-8 byte-order mark, so Codex ignores every hook in it. Run `kcap plugin install --codex` to rewrite it without one";
 
     /// <summary>A settings.json that does not parse is reported as such: reading it as "no hooks" would
     /// claim every event is missing, and re-running the install cannot fix it. It is reported for an

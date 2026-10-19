@@ -7,6 +7,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -29,7 +30,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
@@ -61,7 +62,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
@@ -87,7 +88,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
@@ -123,7 +124,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),
@@ -153,7 +154,7 @@ public class ReauthCompositionTests {
                 config.Root, AuthFixtures.NewTokenStore(config.Root), new PlainHttpClientFactory(),
                 new AuthProxyClient(new HttpClient(), TimeProvider.System), new(new PlainHttpClientFactory()), new(new PlainHttpClientFactory(), TimeProvider.System),
                 "default", ServerUrl,
-                WizardComposition.BuildBridges(action => action(), new(new HttpClient()), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
+                WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System),
                 new ConsentFlipClaims(config.Root),
                 new AppStateStore(config.PathTo("app-state.json")),
                 new RecordingOpener(),

@@ -116,7 +116,7 @@ public class ReplayChildContentCapabilityTests {
             "opencode"    => new OpenCodeImportSource(Path.Combine(scratch, "db"), Path.Combine(scratch, "ledger"), TimeProvider.System),
             "antigravity" => new AntigravityImportSource(new(new(scratch), ""), TimeProvider.System),
             "mistralvibe" => new MistralVibeImportSource(new MistralVibePaths(new UserHome(scratch), null), TimeProvider.System),
-            "grok"        => new GrokImportSource(new GrokPaths(new UserHome(scratch), null), TimeProvider.System),
+            "grok"        => new GrokImportSource(new GrokPaths(new UserHome(scratch), null), _ => Task.FromResult<RepositoryPayload?>(null), TimeProvider.System),
             "muse"        => new MuseImportSource(new MusePaths(new UserHome(scratch), null, null), new WatcherPaths(scratch), TimeProvider.System),
             _             => throw new ArgumentOutOfRangeException(nameof(vendor), vendor, "unclassified import source"),
         };

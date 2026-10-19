@@ -67,6 +67,24 @@ public class DetailsFoldTests {
     }
 
     [Test]
+    public async Task A_summary_in_a_block_of_its_own_heads_the_details_it_follows() {
+        const string markdown = "<details>\n\n<summary><strong>Agent Prompt</strong></summary>\n\nbody\n\n</details>";
+        await Assert.That(Trees.Shape(markdown)).IsEqualTo("doc(html('<details>'),html('<summary><strong>Agent Prompt</strong></summary>'),p('body'),html('</details>'))");
+        await Assert.That(Trees.Dump(markdown)).IsEqualTo("doc(details#0{em*2('Agent Prompt')}(p('body')))");
+        await Assert.That(Trees.Dump("<details>\n\n<details>\n\n<summary>Inner</summary>\n\nx\n\n</details>\n\n</details>"))
+            .IsEqualTo("doc(details#0{}(details#1{'Inner'}(p('x'))))");
+    }
+
+    /// A summary block that does not come first in a details stays source wherever it lands.
+    [Test]
+    [Arguments("<details>\n\nbody\n\n<summary>S</summary>\n\n</details>", "doc(details#0{}(p('body'),html('<summary>S</summary>')))")]
+    [Arguments("<details>\n<summary>A</summary>\n\n<summary>B</summary>\n\n</details>", "doc(details#0{'A'}(html('<summary>B</summary>')))")]
+    [Arguments("<details>\n\na\n\n</details>\n\n<summary>S</summary>", "doc(details#0{}(p('a')),html('<summary>S</summary>'))")]
+    [Arguments("<details>\n<div>\n\n<summary>S</summary>\n\n</div>\n</details>", "doc(details#0{}(html('<summary>S</summary>')))")]
+    public async Task A_summary_block_that_does_not_come_first_stays_source(string markdown, string expected) =>
+        await Assert.That(Trees.Dump(markdown)).IsEqualTo(expected);
+
+    [Test]
     public async Task A_second_summary_rejects_its_block_and_the_pair() =>
         await Assert.That(Trees.Dump("<details>\n<summary>A</summary>\n<summary>B</summary>\n\n</details>"))
             .IsEqualTo("doc(html('<details>\\n<summary>A</summary>\\n<summary>B</summary>'),html('</details>'))");

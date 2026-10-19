@@ -16,7 +16,6 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly HubConnection             _hub;
     readonly TimeProvider _time;
     readonly DaemonConfig              _config;
-    readonly TokenStore                _tokens;
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate                = new();
     readonly PendingPermissionRegistry _pendingPermissions  = new();
@@ -206,32 +205,31 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         catch (Exception ex) { _logger.LogDebug(ex, "CommandRejected send failed (old server or transient)"); }
     }
 
+    /// <summary>The credential every lane to this server sends: the hub, agent-run events, attachments.</summary>
+    internal ICredentialSource Credentials { get; }
+
     public ServerConnection(
-            DaemonConfig config, TokenStore tokens, ILoggerFactory loggerFactory,
+            DaemonConfig config, ICredentialSource credentials, ILoggerFactory loggerFactory,
             ILogger<ServerConnection> logger, TimeProvider time, DaemonStatusNotifier? statusNotifier = null) {
         _time            = time;
         _config          = config;
-        _tokens          = tokens;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
+        Credentials      = credentials;
 
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
         void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
 
         _eventQueue = new(
-            config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
+            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
             new HttpClient(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() }));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
-                    options.AccessTokenProvider = async () => {
-                        var resolution = await tokens.GetValidTokensForServerAsync(config.Profiles.Name, config.ServerUrl);
-
-                        return resolution.Tokens?.AccessToken;
-                    };
+                    options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
                     options.HttpMessageHandlerFactory = inner =>
                         new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
                     options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(

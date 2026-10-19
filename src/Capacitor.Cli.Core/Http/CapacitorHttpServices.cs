@@ -138,6 +138,11 @@ public static class CapacitorHttpServices {
                 () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false })
             .RedactLoggedHeaders(["Authorization", "Cookie", "Set-Cookie"]);
 
+        services.AddHttpClient(CapacitorClients.LocalInstallation)
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(5))
+            .ConfigurePrimaryHttpMessageHandler(
+                () => new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false });
+
         return services;
     }
 
@@ -152,6 +157,10 @@ public static class CapacitorHttpServices {
         // These lanes stand up on their own — a container may take them without the authenticated
         // ones — so the clock they resolve has to be registered here too, not only beside those.
         services.TryAddSingleton(TimeProvider.System);
+
+        // A default rather than a requirement: every host but the desktop app is the CLI, and the desktop
+        // app registers its own ahead of this.
+        services.TryAddSingleton(ClientAgent.Cli);
 
         // No base address on either: their URLs come from the environment on every read, so one
         // pinned at container-build time would outlive the override it was resolved from.
@@ -173,6 +182,13 @@ public static class CapacitorHttpServices {
         // Downloads a release archive, so the whole-request cap is generous; manifest reads carry their own.
         // GitHub answers a release asset with a redirect to its storage host, which the default handler follows.
         services.AddHttpClient<KcapReleaseClient>(c => {
+            c.Timeout = TimeSpan.FromMinutes(10);
+            c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
+        });
+
+        // Same terms as the release client: the bundle is an archive, so the cap is generous and
+        // redirects are followed.
+        services.AddHttpClient<LocalBundleClient>(c => {
             c.Timeout = TimeSpan.FromMinutes(10);
             c.DefaultRequestHeaders.Add("User-Agent", "kcap-cli");
         });

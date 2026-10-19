@@ -151,7 +151,7 @@ static class SystemdUnit {
     ///
     /// <para><see cref="FirstToken"/> reverses this, so <c>daemon doctor</c> still recovers the real path.</para>
     /// </summary>
-    static string QuoteArg(string a) {
+    internal static string QuoteArg(string a) {
         // No raw control character survives here, not only the line breaks. A newline is the worst case — the
         // line ends there and systemd reads the remainder as the next directive — but quoting does not make
         // U+0001, a backspace or a vertical tab valid unit syntax either, and this writer has no encoder for
@@ -191,6 +191,6 @@ static class SystemdUnit {
     static string EscapeExpansions(string s) => s.Replace("%", "%%").Replace("$", "$$");
 
     /// <summary>An <c>Environment=</c> assignment; the whole <c>KEY=VALUE</c> is quoted when VALUE needs it.</summary>
-    static string EnvAssignment(string key, string value) =>
+    internal static string EnvAssignment(string key, string value) =>
         NeedsQuote(value) ? $"\"{key}={Esc(value)}\"" : $"{key}={value}";
 }

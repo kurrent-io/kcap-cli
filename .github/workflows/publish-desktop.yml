@@ -75,11 +75,16 @@ jobs:
       - name: Verify immutable objects
         run: bash scripts/verify-desktop-immutables.sh releases "$VERSION" scripts/r2-fetch.sh "$CHANNEL"
 
+      # vpk uploads every asset the manifest lists, and the build renamed the installers it lists;
+      # the next step publishes the renamed ones.
       - name: Upload the feed and packages
-        run: >
-          vpk upload s3 --channel "$CHANNEL" --outputDir releases --endpoint "$R2_ENDPOINT"
-          --bucket "$R2_BUCKET" --prefix "desktop/$CHANNEL"
-          --keyId "$AWS_ACCESS_KEY_ID" --secret "$AWS_SECRET_ACCESS_KEY"
+        run: |
+          set -euo pipefail
+          jq '[.[] | select(.Type != "Installer")]' "releases/assets.$CHANNEL.json" > assets.tmp
+          mv assets.tmp "releases/assets.$CHANNEL.json"
+          vpk upload s3 --channel "$CHANNEL" --outputDir releases --endpoint "$R2_ENDPOINT" \
+            --bucket "$R2_BUCKET" --prefix "desktop/$CHANNEL" \
+            --keyId "$AWS_ACCESS_KEY_ID" --secret "$AWS_SECRET_ACCESS_KEY"
 
       - name: Upload the installers and promote aliases
         run: |

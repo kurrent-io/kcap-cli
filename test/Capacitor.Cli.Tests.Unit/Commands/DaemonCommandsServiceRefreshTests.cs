@@ -125,7 +125,7 @@ public class DaemonCommandsServiceRefreshTests {
         public IReadOnlyList<string> ListInstalled() => throw Touched();
         public ServiceStatus Status(string serviceId) => throw Touched();
         public ServiceQuery Query(string serviceId) => throw Touched();
-        public void Install(ServiceSpec spec, bool startNow) => throw Touched();
+        public bool Install(ServiceSpec spec, bool startNow, out string? error) => throw Touched();
         public void WriteAndBootstrap(ServiceSpec spec) => throw Touched();
         public bool Uninstall(string serviceId, out string? error) => throw Touched();
         public bool Start(string serviceId, out string? error) => throw Touched();

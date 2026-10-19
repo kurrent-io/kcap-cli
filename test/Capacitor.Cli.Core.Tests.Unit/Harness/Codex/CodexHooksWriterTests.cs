@@ -38,6 +38,21 @@ public class CodexHooksWriterTests {
         await Assert.That(stop[1]!["hooks"]![0]!["timeout"]!.GetValue<int>()).IsEqualTo(30);
     }
 
+    /// A byte-order mark makes Codex refuse the whole file, so an install that would otherwise leave
+    /// the entries as they are still rewrites it without one.
+    [Test]
+    public async Task Install_rewrites_a_file_that_starts_with_a_byte_order_mark() {
+        var clean = Tmp.PathTo("clean.json");
+        CodexHooksWriter.Install(clean);
+        var hooks = Tmp.CreateFile("hooks.json", "\uFEFF" + await File.ReadAllTextAsync(clean));
+        await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooks)).IsTrue();
+
+        await Assert.That(CodexHooksWriter.Install(hooks)).IsEqualTo(SettingsEdit.Changed);
+        await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooks)).IsFalse();
+        await Assert.That((await File.ReadAllBytesAsync(hooks))[0]).IsEqualTo((byte)'{');
+        await Assert.That(CodexHooksWriter.Install(hooks)).IsEqualTo(SettingsEdit.Unchanged);
+    }
+
     [Test]
     public async Task Install_refuses_malformed_hooks() {
         var hooks = Tmp.CreateFile("hooks.json", "nope");

@@ -23,13 +23,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     int _index;
 
-    IWizardStep _current = null!;
+    IWizardStep? _current;
     public IWizardStep Current {
-        get => _current;
+        get => _current!;
         private set {
+            if (_current is not null) _current.AdvanceRequested -= OnAdvanceRequested;
             if (_current is INotifyPropertyChanged leaving) leaving.PropertyChanged -= OnCurrentChanged;
             this.RaiseAndSetIfChanged(ref _current, value);
-            if (_current is INotifyPropertyChanged entering) entering.PropertyChanged += OnCurrentChanged;
+            if (value is INotifyPropertyChanged entering) entering.PropertyChanged += OnCurrentChanged;
+            value.AdvanceRequested += OnAdvanceRequested;
             this.RaisePropertyChanged(nameof(Eyebrow));
             this.RaisePropertyChanged(nameof(NextLabel));
             this.RaisePropertyChanged(nameof(SkipLabel));
@@ -63,12 +65,12 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     public bool NextIsSecondary => Current.ShowsOwnPrimary;
 
-    /// The outcome lines name the daemon step's own action. Other pages have no such button.
+    /// The daemon is enabled beside the steps; its outcome lines land on the page that closes setup.
     public bool ShowLifecycleStatus =>
-        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.StatusText);
+        Current.Id == WizardStepId.Done && !string.IsNullOrEmpty(Surface?.StatusText);
 
     public bool ShowLifecycleAttention =>
-        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.AttentionText);
+        Current.Id == WizardStepId.Done && !string.IsNullOrEmpty(Surface?.AttentionText);
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     internal bool Navigating {
@@ -90,6 +92,9 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     /// The constructor's own initial-entry call, exposed so a test can await it deterministically.
     internal Task PendingEnterForTesting { get; }
+
+    /// The navigation the current step's own action last started, so a test can await it.
+    internal Task PendingAdvanceForTesting { get; private set; } = Task.CompletedTask;
 
     public OnboardingViewModel(
             IEnumerable<IWizardStep> steps, CancellationToken shutdownToken = default,
@@ -123,6 +128,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
         PendingEnterForTesting = SafeEnterAsync(Current);
     }
+
+    void OnAdvanceRequested() => PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
 
     void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
         switch (e.PropertyName) {

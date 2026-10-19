@@ -50,9 +50,32 @@ public class LifecycleLeaseTests {
     [Test]
     public async Task Begin_refuses_to_overwrite_an_unrecovered_operation() {
         using var lease = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
-        lease.Begin("setup", "staged", serverStartAllowed: false);
+        lease.Begin("setup", "staged", ServerStart.Deny);
 
-        await Assert.That(() => lease.Begin("upgrade", "staged", serverStartAllowed: false)).Throws<InvalidOperationException>();
+        await Assert.That(() => lease.Begin("upgrade", "staged", ServerStart.Deny)).Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    [Arguments(ServerStart.Allow, "allow")]
+    [Arguments(ServerStart.Fenced, "fenced")]
+    [Arguments(ServerStart.Deny, "deny")]
+    public async Task Each_server_start_value_round_trips(ServerStart value, string expected) {
+        using var lease = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
+
+        lease.Begin("setup", "staged", value);
+
+        var read = (StateRead<LifecycleJournalEntry>.Present)lease.ReadJournal();
+        await Assert.That(read.Value.ServerStart).IsEqualTo(value);
+        await Assert.That(File.ReadAllText(Root.JournalPath)).Contains($"\"server_start\": \"{expected}\"");
+    }
+
+    [Test]
+    public async Task An_unknown_server_start_is_unreadable() {
+        using var lease = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
+        File.WriteAllText(Root.JournalPath,
+            "{\"schema\":1,\"operation\":\"setup\",\"phase\":\"staged\",\"server_start\":\"refuse\",\"started_at\":\"2026-10-16T12:00:00Z\"}");
+
+        await Assert.That(lease.ReadJournal()).IsTypeOf<StateRead<LifecycleJournalEntry>.Unreadable>();
     }
 
     async Task Acquire(TimeSpan wait, CancellationToken ct) {

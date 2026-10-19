@@ -32,8 +32,28 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
-  --daemon-name <name>        Daemon name, used with --no-prompt and after a
-                              browser answer (the terminal prompt asks otherwise)
+  --local                     Install and start a Capacitor server on this machine
+                              instead of using a hosted workspace (macOS on Apple
+                              silicon). See "Local edition" below. Cannot be
+                              combined with <tenant>, --server-url, --discover,
+                              --org, --slug, --tier, --invite-code, --device,
+                              --github or --muse-assistant.
+  --single-user               With --local: confirm this machine has one user.
+                              Required by --no-prompt and --json.
+  --yes                       With --local: confirm the install. Required by
+                              --no-prompt and --json for an install; reusing an
+                              existing installation needs no confirmation.
+  --json                      With --local: write one JSON object per line,
+                              ending with "committed" or "failed", and run only
+                              the server and login steps. Exits 0 on "committed",
+                              1 on "failed", and 130 when an interrupt (Ctrl+C or
+                              SIGTERM) was received, whichever line came last.
+                              Takes only --single-user, --yes and
+                              --no-update-check. With --discover: the workspace
+                              report.
+  --daemon-name <name>        Daemon name. With --no-prompt, a name another
+                              machine's daemon holds exits 1; otherwise it is the
+                              prompt's suggestion, moved to a free variant if held
   --default-visibility <vis>  Default visibility: private, project, org_public, public
   --org <name>                Organization name for a workspace to create, instead
                               of being prompted for it. Requires --slug.
@@ -151,6 +171,19 @@ Options:
                               connect-capacitor skill; see README → Unattended
                               setup → Muse Assistant.
 
+Local edition: `kcap setup --local` runs a Capacitor server on this machine
+instead of a hosted workspace, then continues with login, hooks and the daemon
+against it. macOS on Apple silicon only for now. The first version is for a
+machine with one user: on a shared machine, other OS users can open the web UI
+and act as its admin, so setup asks you to confirm that and the install itself
+(--single-user and --yes; --no-prompt and --json cannot ask and require both).
+Running it again reuses the existing installation. A failed or cancelled
+install removes what it created and keeps its logs/ directory. A machine with
+a profile for another server is refused for now, and musl builds of kcap are
+not supported.
+KCAP_LOCAL_BUNDLE_BASE_URL and KCAP_LOCAL_BUNDLE_VERSION redirect the download
+for development and pre-release builds; the manifest must still verify.
+
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
 the cursor shell command are covered; Copilot CLI via ~/.copilot/ or the
@@ -201,16 +234,22 @@ is never overridden. Answering "Not now" installs nothing. The audience chosen
 on that screen becomes your default visibility, and the Import screen's answer
 runs the import from this machine, so the terminal does not ask either again.
 
-After a browser answer the terminal asks nothing more. The daemon takes
---daemon-name if given, else this profile's name (your user name on a first
-run). If another machine holds it, setup tries the name suffixed with this
-machine's, then numbered variants of that, and ends with an error naming
---daemon-name if all of them are taken. The provider API key
-setting is kept as it is; change it with
-`kcap config set use_provider_api_key true|false`. When the browser's Done
-screen ran the daemon as a service, setup says so instead of suggesting
-`kcap daemon start -d`. A finished browser flow with no import answer skips
-the import prompt and names `kcap import --all` for later.
+The daemon step asks only for a name. It suggests --daemon-name, else
+KCAP_DAEMON_NAME, else the profile's daemon name, else this machine's name;
+when a daemon on another machine of your account holds it, the first free
+of name-1, name-2, and so on. Setup then installs the daemon as a background
+service and starts it, so it runs after a restart and the service manager
+restarts it if it dies. When the name differs from the one the profile had,
+the old name's service is removed in the same step on macOS and Windows, so
+the machine keeps one daemon; one that belongs to another profile, or whose
+daemon is busy, or any when the new name already had a service, is left in
+place, as it is on Linux, and setup prints the `kcap daemon service uninstall
+--name` command that removes it. After a browser answer the terminal asks
+nothing more:
+the suggested name is used as it is. The provider API key setting is kept as
+it is; change it with `kcap config set use_provider_api_key true|false`. A
+finished browser flow with no import answer skips the import prompt and names
+`kcap import --all` for later.
 
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
 asks how to continue: create one for you (organization name, workspace slug and

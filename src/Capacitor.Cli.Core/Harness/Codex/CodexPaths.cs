@@ -12,6 +12,8 @@ public sealed class CodexPaths {
     public string UserHooksJson => Path.Combine(Home, "hooks.json");
     public string ConfigToml    => Path.Combine(Home, "config.toml");
     public string SkillsDir     => Path.Combine(Home, "skills");
+    public string ModelsCache   => Path.Combine(Home, "models_cache.json");
+    public string AuthJson      => Path.Combine(Home, "auth.json");
 
     /// <summary>
     /// Matches Codex's own <c>[projects."&lt;path&gt;"]</c> key form: absolute, and on Windows

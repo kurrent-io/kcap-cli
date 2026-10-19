@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// </summary>
 sealed class CaptureServerConnection() : ServerConnection(
     new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-    UnusedTokenStore.Create(),
+    new FixedCredentialSource(),
     NullLoggerFactory.Instance,
     NullLogger<ServerConnection>.Instance
 , TimeProvider.System) {
@@ -381,10 +381,13 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>Every (agentId, event) pair passed to AppendAgentRunEventAsync, in call order.</summary>
     public List<(string AgentId, object Event)> RunEvents { get; } = [];
 
+    /// <summary>When set, AppendAgentRunEventAsync records the event, then fails with this.</summary>
+    public Exception? RunEventThrow { get; set; }
+
     public override Task AppendAgentRunEventAsync(string agentId, object evt) {
         lock (RunEvents) RunEvents.Add((agentId, evt));
 
-        return Task.CompletedTask;
+        return RunEventThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 
     /// <summary>Every shutdown report, with the state of the token it was handed. The token matters

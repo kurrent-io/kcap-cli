@@ -21,8 +21,17 @@ public class ServerConnectionServiceTests {
     static ServerConnectionService Lane(HubTestHost host, TimeSpan[] reconnectDelays) =>
         new(TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), reconnectDelays);
 
-    static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 10) =>
-        await source.Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
+    /// The default bound is a hang guard, not a measure: it outlasts the lane's first four redial pauses
+    /// (18 s), so a cold-start attempt that fails and recovers still connects inside it. A timeout names
+    /// every value seen, so a lane stuck short of the match says where.
+    static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 30) {
+        var seen = new List<T>();
+        try {
+            return await source.Do(v => { lock (seen) seen.Add(v); }).Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
+        } catch (TimeoutException) {
+            lock (seen) throw new TimeoutException($"No match within {seconds}s; saw: [{string.Join(", ", seen)}]");
+        }
+    }
 
     [Test]
     public async Task ConnectsAndServesDaemons() {

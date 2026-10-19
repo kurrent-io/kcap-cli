@@ -304,6 +304,11 @@ record SessionTitlePayload {
 
     [JsonPropertyName("cache_write_tokens")]
     public long CacheWriteTokens { get; init; }
+
+    /// <summary>The server's title-source tag. Absent, it records the title as a raw placeholder that
+    /// its backfill may regenerate.</summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; init; }
 }
 
 record WhatsDonePayload {
@@ -1454,6 +1459,14 @@ public static class AcpEventKind {
     /// existing additive folds (session totals, per-model attribution, cost) count them unchanged. An
     /// older server treats it as an unrecognised Kind (dropped, cursor still advances).</summary>
     public const string TokenUsage         = "token_usage";
+
+    /// <summary>A subagent the hosted agent started: <see cref="AcpEventEnvelope.AgentId"/> names it,
+    /// <see cref="AcpEventEnvelope.AgentType"/> its role. Its own events then carry that
+    /// <see cref="AcpEventEnvelope.AgentId"/>. An older server treats it as an unrecognised Kind.</summary>
+    public const string SubagentStarted    = "subagent_started";
+
+    /// <summary>The subagent named by <see cref="AcpEventEnvelope.AgentId"/> finished.</summary>
+    public const string SubagentCompleted  = "subagent_completed";
 }
 
 /// <summary>
@@ -1541,7 +1554,19 @@ public readonly record struct AcpEventEnvelope(
         long?   UsageCachedInputTokens = null,
         long?   UsageCacheWriteInputTokens = null,
         long?   UsageOutputTokens      = null,
-        long?   UsageReasoningTokens   = null
+        long?   UsageReasoningTokens   = null,
+
+        // session_started — the repository the hosted agent's worktree belongs to, which is how the
+        // server attributes a hosted session to it. Additive and nullable, so ContractVersion stays 1.
+        string? RepoOwner     = null,
+        string? RepoName      = null,
+        string? RepoRemoteUrl = null,
+        string? RepoBranch    = null,
+
+        // The subagent an event belongs to, and on subagent_started its role; null for the hosted
+        // agent's own events. A server without these fields records a subagent's events as the parent's.
+        string? AgentId   = null,
+        string? AgentType = null
     );
 
 /// <summary>

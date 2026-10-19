@@ -70,7 +70,9 @@
             <StackPanel Grid.Row="1" Margin="0,22,0,0" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                 <Button Content="Not now" Classes="kcapChip" Command="{Binding DeclineCommand}" IsCancel="True"
                         IsVisible="{Binding ShowDeclineButton}" />
-                <Button Content="{Binding AcceptButtonText}" Classes="kcapPrimary" Command="{Binding AcceptCommand}" IsDefault="True" />
+                <Button x:Name="AcceptButton" Content="{Binding AcceptButtonText}" Command="{Binding AcceptCommand}"
+                        Classes.kcapPrimary="{Binding !AcceptIsDestructive}" Classes.kcapDangerFill="{Binding AcceptIsDestructive}"
+                        IsDefault="{Binding !AcceptIsDestructive}" />
             </StackPanel>
         </Grid>
     </Panel>

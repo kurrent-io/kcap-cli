@@ -322,18 +322,22 @@ public class FlowsLaneTests {
     }
 
     /// <summary>A hung server stalls memory as well as the listing: the lanes stop short of the budget, so the
-    /// cached block arrives while the caller still waits for it.</summary>
+    /// cached block arrives while the caller still waits for it. The clock stops just short of the budget, so
+    /// only a cutoff inside it can release the lanes.</summary>
     [Test]
     public async Task A_hung_server_still_delivers_the_cached_catalogue_within_the_budget() {
         await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+        var time  = new FakeTimeProvider();
         var scope = new FixedScope("repo", "machine");
         var composite = new SessionStartCompositeContextProvider(scope,
-            new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new HangingHandler())), TimeProvider.System),
-            new SessionStartGuidelinesLane(Lazy(new HttpClient(new HangingHandler())), TimeProvider.System),
-            new SessionStartFlowsLane(Lazy(new HttpClient(new HangingHandler())), TimeProvider.System, Cache),
-            TimeProvider.System);
+            new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new HangingHandler())), time),
+            new SessionStartGuidelinesLane(Lazy(new HttpClient(new HangingHandler())), time),
+            new SessionStartFlowsLane(Lazy(new HttpClient(new HangingHandler())), time, Cache),
+            time);
 
-        var result = await composite.GetAsync(Req(memory: true, flows: true)).WaitAsync(Req().Budget);
+        var pending = composite.GetAsync(Req(memory: true, flows: true));
+        time.Advance(Req().Budget - TimeSpan.FromTicks(1));
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
         await Assert.That(result.Fragment!).Contains("- code-review: ");

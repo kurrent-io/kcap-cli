@@ -91,4 +91,34 @@ public class ProfileResolverLocalTests {
         await Assert.That(result.ServerUrl).IsEqualTo("http://localhost:51234");
         await Assert.That(result.IgnoredRepoProfile).IsNull();
     }
+
+    [Test]
+    public async Task A_resolution_naming_the_installation_sends_no_bearer() {
+        var result = Resolve(LocalConfig("http://[::1]:51234"), Installed);
+
+        await Assert.That(result.Endpoint).IsTypeOf<LocalEndpointClass.Local>();
+        await Assert.That(result.SendsNoBearer).IsTrue();
+    }
+
+    [Test]
+    public async Task A_cloud_resolution_on_the_same_machine_still_sends_one() {
+        var result = Resolve(LocalConfig("https://cloud.example"), Installed);
+
+        await Assert.That(result.Endpoint).IsTypeOf<LocalEndpointClass.Ordinary>();
+        await Assert.That(result.SendsNoBearer).IsFalse();
+    }
+
+    /// <summary>Setup points a resolution computed before it chose a server at the one it chose; the
+    /// classification must follow the URL in both directions.</summary>
+    [Test]
+    public async Task Retargeting_reclassifies_rather_than_carrying_the_old_answer() {
+        var local = Resolve(LocalConfig(), Installed);
+        var cloud = Resolve(LocalConfig("https://cloud.example"), Installed);
+
+        await Assert.That(local.Retargeted("https://cloud.example", Installed).SendsNoBearer).IsFalse();
+
+        var toLocal = cloud.Retargeted("http://127.0.0.1:51234", Installed);
+        await Assert.That(toLocal.SendsNoBearer).IsTrue();
+        await Assert.That(toLocal.ServerUrl).IsEqualTo("http://localhost:51234");
+    }
 }

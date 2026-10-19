@@ -3,6 +3,7 @@ using System.Net;
 using System.Text;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
@@ -48,7 +49,7 @@ public class WizardAuthBridgesTests {
         var handler  = new ScriptedSignupHandler();
         var progress = new RecordingAuthProgress();
         var time     = new FakeTimeProvider();
-        var client   = new TenantProvisioningClient(new HttpClient(handler));
+        var client   = new TenantProvisioningClient(new HttpClient(handler), ClientAgent.Desktop);
 
         return (new WizardTenantProvisioner(client, BaseUrl, progress, telemetry ?? CliTelemetry.Disabled(TimeProvider.System), time),
             handler, progress, time);

@@ -21,9 +21,12 @@ sealed class WindowsScheduledTaskServiceManager(
         OperatingSystem.IsWindows() ? WindowsProcessTable.Snapshot() : new Dictionary<int, WindowsProcessEntry>();
 
     void CheckSchtasks(string[] args) {
+        if (Schtasks(args) is { } error) throw new InvalidOperationException(error);
+    }
+
+    string? Schtasks(string[] args) {
         var (code, _, err) = _schtasks(args);
-        if (code != 0)
-            throw new InvalidOperationException($"schtasks {string.Join(' ', args)} failed (exit {code}): {err.Trim()}");
+        return code == 0 ? null : $"schtasks {string.Join(' ', args)} failed (exit {code}): {err.Trim()}";
     }
 
     public string Describe() => "Windows Scheduled Task";
@@ -130,16 +133,31 @@ sealed class WindowsScheduledTaskServiceManager(
         return files;
     }
 
-    public void Install(ServiceSpec spec, bool startNow) {
+    /// <summary>A refused registration puts the previous wrapper back: an existing task runs whatever its
+    /// wrapper names at the next sign-in, so a failed install must not leave it repointed.</summary>
+    public bool Install(ServiceSpec spec, bool startNow, out string? error) {
+        var wrapperPath = WindowsTaskUnit.WrapperPath(config, spec.ServiceId);
+        var previous    = File.Exists(wrapperPath) ? File.ReadAllText(wrapperPath) : null;
+
         var files = WriteUnitFiles(spec);
         var xmlPath = files.First(f => f.Path.EndsWith(".task.xml", StringComparison.Ordinal)).Path;
-        ServiceProcess.Check("schtasks", WindowsTaskUnit.CreateArgs(spec.ServiceId, xmlPath));
+        error = Schtasks(WindowsTaskUnit.CreateArgs(spec.ServiceId, xmlPath));
         File.Delete(xmlPath); // the task XML is only needed for registration
-        if (startNow) ServiceProcess.Check("schtasks", WindowsTaskUnit.RunArgs(spec.ServiceId));
+
+        if (error is not null) {
+            if (previous is null) File.Delete(wrapperPath);
+            else _writeUnit(wrapperPath, previous, WrapperEncoding);
+            return false;
+        }
+
+        if (startNow) error = Schtasks(WindowsTaskUnit.RunArgs(spec.ServiceId));
+        return error is null;
     }
 
     /// <summary>No distinct verify path for scheduled tasks yet — delegate mechanically to <see cref="Install"/>.</summary>
-    public void WriteAndBootstrap(ServiceSpec spec) => Install(spec, startNow: true);
+    public void WriteAndBootstrap(ServiceSpec spec) {
+        if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);
+    }
 
     // Deleting a task leaves its running instance alone, so the wrapper and daemon are ended first — the
     // same "removed means stopped" launchd and systemd give. A daemon that survives keeps the task and

@@ -201,7 +201,15 @@ public sealed record DiscoveredTenant {
     // Compare provider case-insensitively: the proxy's /discover-tenants-workos emits "WorkOS"
     // while AuthProvider.WorkOS is "workos" (the tenant /auth/config casing).
     [JsonIgnore] public bool   IsWorkOS    => string.Equals(Provider, AuthProvider.WorkOS, StringComparison.OrdinalIgnoreCase);
-    [JsonIgnore] public string ProfileName => IsWorkOS ? (Slug ?? OrganizationId ?? "tenant") : OrgLogin;
+    /// <summary>The profile the tenant is saved under: its slug or org login unless
+    /// <see cref="TenantDiscovery.NameProfiles"/> matched an existing profile on its server.</summary>
+    [JsonIgnore] public string ProfileName {
+        get => _profileName ?? (IsWorkOS ? (Slug ?? OrganizationId ?? "tenant") : OrgLogin);
+        init => _profileName = value;
+    }
+
+    string? _profileName;
+
     [JsonIgnore] public string Label       => !string.IsNullOrEmpty(DisplayName) ? DisplayName : OrgLogin;
 }
 

@@ -9,8 +9,12 @@ namespace Capacitor.App.ViewModels;
 /// Only the ids are held: the chips themselves live in the tray until a delivery clears them.
 public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset, IReadOnlyList<Guid> attachmentIds) : ReactiveObject {
     public const string AwaitingPickupNote = "The agent reads it when its current step ends";
+    public const string AttachmentsOnlyText = "Attachments only";
 
     public string Text { get; } = text;
+    /// The server's queue item carries no attachments, so a prompt that was only files arrives
+    /// with empty text.
+    public string DisplayText => string.IsNullOrWhiteSpace(Text) ? AttachmentsOnlyText : Text;
     public IReadOnlyList<Guid> AttachmentIds { get; } = attachmentIds;
     internal int ComposerEdits { get; } = composerEdits;
     internal bool Acknowledged { get; set; }

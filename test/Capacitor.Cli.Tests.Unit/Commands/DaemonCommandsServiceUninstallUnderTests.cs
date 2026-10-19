@@ -30,7 +30,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
                 : new(ServiceState.Installed, binaries[serviceId]);
         }
         public ServiceQuery Query(string serviceId) => new(LabelProbe.Loaded, true, ServiceState.Installed, binaries[serviceId], null);
-        public void Install(ServiceSpec spec, bool startNow) { }
+        public bool Install(ServiceSpec spec, bool startNow, out string? error) { error = null; return true; }
         public void WriteAndBootstrap(ServiceSpec spec) { }
 
         public bool Uninstall(string serviceId, out string? error) {

@@ -364,7 +364,8 @@ public class RemoteSessionViewModelTests {
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready on the late session id");
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3"));
-            await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s3"), what: "re-acquired on the new session id");
+            await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s3") && vm.Access == RemoteSessionAccess.Ready,
+                what: "re-acquired on the new session id");
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s2"), what: "the old session released");
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3", status: "Completed"));

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Core.Config;
 
@@ -33,14 +34,29 @@ public static class ConfigMutator {
             ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, CancellationToken ct = default) =>
         Task.Run(() => MutateStrict(config, mutate), ct);
 
-    public static ProfileConfig MutateStrict(ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate) {
+    /// <summary>The strict mutation with a durable publication: the directory chain is created and synced,
+    /// the temp file is flushed, and the directory is synced after the rename. <paramref name="home"/>
+    /// bounds the directory sync; with none the whole chain to the filesystem root is synced.</summary>
+    public static Task<ProfileConfig> MutateStrictAsync(
+            ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, bool durable,
+            UserHome? home = null, CancellationToken ct = default) =>
+        Task.Run(() => MutateStrict(config, mutate, durable, home), ct);
+
+    public static ProfileConfig MutateStrict(ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate) =>
+        MutateStrict(config, mutate, durable: false);
+
+    public static ProfileConfig MutateStrict(
+            ConfigRoot config, Func<ProfileConfig, ProfileConfig> mutate, bool durable, UserHome? home = null) {
         var path = AppConfig.GetConfigPath(config);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var dir  = Path.GetDirectoryName(path)!;
+
+        if (durable) DurableDirectory.Ensure(dir, DurableDirectory.AnchorFor(dir, home), null);
+        else Directory.CreateDirectory(dir);
 
         using (config.AcquireLock(AppConfig.ConfigFileName)) {
             if (!TryLoadPure(path, out var current)) throw new ConfigUnreadableException(path);
             var next = mutate(current);
-            Publish(path, next);
+            Publish(path, next, durable);
             return next;
         }
     }
@@ -112,16 +128,29 @@ public static class ConfigMutator {
 
     static ProfileConfig FreshDefault() => ProfileConfig.Fresh();
 
-    static void Publish(string path, ProfileConfig config) {
-        var tmp = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
-        File.WriteAllBytes(tmp,
-            JsonSerializer.SerializeToUtf8Bytes(config, ProfileConfigJsonContextIndented.Default.ProfileConfig));
+    static void Publish(string path, ProfileConfig config, bool durable = false) {
+        var tmp   = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(config, ProfileConfigJsonContextIndented.Default.ProfileConfig);
+
+        try {
+            using (var stream = new FileStream(tmp, FileMode.Create, FileAccess.Write)) {
+                stream.Write(bytes);
+                if (durable) FaultPoints.Hit($"flush:{path}");
+                stream.Flush(flushToDisk: true);
+            }
+        } catch {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+            throw;
+        }
+
         // Windows denies replace-into-place while any reader holds the destination without
         // FILE_SHARE_DELETE; readers are short-lived, so retry briefly before surfacing.
         for (var attempt = 0; ; attempt++) {
             try {
+                if (durable) FaultPoints.Hit($"rename:{path}");
                 File.Move(tmp, path, overwrite: true);
-                return;
+                if (durable) FaultPoints.Hit($"renamed:{path}");
+                break;
             } catch (Exception e) when (e is UnauthorizedAccessException or IOException && attempt < 49) {
                 Thread.Sleep(20);
             } catch {
@@ -129,5 +158,7 @@ public static class ConfigMutator {
                 throw;
             }
         }
+
+        if (durable) DurableDirectory.Sync(Path.GetDirectoryName(path)!);
     }
 }

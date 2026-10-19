@@ -9,6 +9,12 @@ Getting Started:
   logout                           Remove stored credentials
   whoami                           Show current user; verify the server accepts your token
 
+Local server (kcap setup --local):
+  local status                     Explain the local installation's state and what to do about it
+  local start | stop | restart     Start, stop or restart the local server
+  local logs [-n N]                Print the end of the local server's log
+  local open                       Open the local web UI in a browser
+
 Vendor accounts:
   accounts                         Manage the Claude and Codex config directories kcap records
 
@@ -76,6 +82,9 @@ Session:
 
 Curation:
   curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
+
+Memories:
+  memories import [opts]           Copy Claude Code's local memory notes into server memories
 
 Pages:
   page publish <file.html> [opts]  Publish a self-contained HTML page, print its link

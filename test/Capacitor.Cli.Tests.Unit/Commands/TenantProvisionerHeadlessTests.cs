@@ -1,6 +1,7 @@
 using System.Net;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -22,7 +23,7 @@ public class TenantProvisionerHeadlessTests {
     [Test]
     public async Task Declines_instead_of_throwing_when_there_is_no_terminal_to_prompt_on() {
         var provisioner = new SpectreTenantProvisioner(
-            new TenantProvisioningClient(new HttpClient()), BaseUrl, NoTelemetry.Facade,
+            new TenantProvisioningClient(new HttpClient(), ClientAgent.Cli), BaseUrl, NoTelemetry.Facade,
             TimeProvider.System,
             isInteractive: () => false);
 
@@ -419,6 +420,6 @@ public class TenantProvisionerHeadlessTests {
     }
 
     static SpectreTenantProvisioner Provisioner(ProvisioningStubHandler handler, Func<bool> isInteractive, RequestedWorkspace requested) =>
-        new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false)), BaseUrl,
+        new(new TenantProvisioningClient(new HttpClient(handler, disposeHandler: false), ClientAgent.Cli), BaseUrl,
             NoTelemetry.Facade, TimeProvider.System, isInteractive, requested);
 }

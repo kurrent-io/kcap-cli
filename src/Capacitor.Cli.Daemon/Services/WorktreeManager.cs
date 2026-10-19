@@ -434,20 +434,29 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
-        // Inventoried and logged here, not at the source: `add -A` in this worktree is where the standalone
-        // path's filters resolve. Round 6 removed the source-level logging as dead, and this call was
-        // applying overrides inline — silently disabling LFS against a README that promises the opposite.
+        // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
         await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. standaloneOverrides], "add", "-A");
-        // Identity supplied explicitly. This is the daemon's OWN bookkeeping commit, not the user's work,
-        // so it must not depend on the host having git identity configured — a machine without a global
-        // user.email fails with "Author identity unknown". Found while the broken copy was temporarily
-        // repaired and this line became reachable for the first time; that repair was reverted then and has
-        // landed now, so this is live rather than speculative.
+        // Exit 0 = empty index (greenfield: nothing to copy). Exit 1 = staged content.
+        // Any other code is a real git failure — without this check, commit --allow-empty would
+        // hide it behind a successful empty tree.
+        var staged = await RunGitCaptureResult(
+            worktreePath, GitTimeout, time, sourceReadOnly: false,
+            [.. noHooks, .. standaloneOverrides],
+            "diff", "--cached", "--quiet");
+        if (staged.ExitCode is not (0 or 1))
+            throw new InvalidOperationException(
+                $"git diff --cached --quiet failed: {GitFailureDetail(staged.Stderr, staged.Stdout)}");
+        // Bookkeeping commit. Identity is explicit: a host with no user.email fails with
+        // "Author identity unknown". An empty folder is a valid start — commit an empty tree
+        // so the agent has a real HEAD to build on.
+        var commitArgs = staged.ExitCode == 0
+            ? new[] { "commit", "--allow-empty", "-m", "Initial snapshot" }
+            : new[] { "commit", "-m", "Initial snapshot" };
         await RunGit(worktreePath, GitTimeout,
             time,
             [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
-            "commit", "-m", "Initial snapshot");
+            commitArgs);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }
@@ -1565,16 +1574,28 @@ public partial class WorktreeManager(
             params string[] args) {
         var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, args);
         if (result.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', args)} failed: {GitFailureDetail(result.Stderr, result.Stdout)}");
     }
 
     static async Task<string> RunGitCapture(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, params string[] args) {
         var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, [], args);
         if (result.ExitCode != 0)
-            throw new InvalidOperationException($"git {string.Join(' ', args)} failed: {result.Stderr}");
+            throw new InvalidOperationException(
+                $"git {string.Join(' ', args)} failed: {GitFailureDetail(result.Stderr, result.Stdout)}");
         return result.Stdout;
     }
+
+    /// <summary>Stderr when git wrote one; otherwise stdout. A commit with nothing staged reports
+    /// that only on stdout, and a reason built from stderr alone is then a bare command.</summary>
+    static string GitFailureDetail(string stderr, string stdout) =>
+        (string.IsNullOrWhiteSpace(stderr) ? stdout : stderr).Trim();
+
+    /// <summary>Legacy refusal from daemons that rejected an empty standalone snapshot. The
+    /// launcher still maps this prefix for rolling upgrades; current builds commit an empty tree.</summary>
+    internal const string EmptySnapshotFailure =
+        "standalone_snapshot_empty: There's nothing in this folder to start from.";
 
     static async Task<bool> GitConfigBoolAsync(string cwd, string key, TimeProvider time) {
         var result = await RunGitCaptureResult(cwd, GitTimeout, time, true, [], "config", "--bool", "--get", key);
