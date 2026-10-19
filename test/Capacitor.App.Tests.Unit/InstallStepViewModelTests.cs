@@ -214,6 +214,26 @@ public class InstallStepViewModelTests {
         await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("profile_mismatch");
     }
 
+    /// The app always passes both answers, so the installer's request for them names flags the user never typed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_missing_answer_failure_shows_the_app_headline_not_the_flags() {
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("answer_required",
+                "A local installation needs both answers: that it serves only you (--single-user), and that you confirm it (--yes).")),
+        };
+
+        var (message, detail) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (install.FailureMessage, install.FailureDetail);
+        });
+
+        await Assert.That(message).IsEqualTo(InstallStepViewModel.AnswerRequiredText);
+        await Assert.That(detail).IsNull();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Unlocked_transient_failure_offers_retry_and_back_and_try_again_reruns() {

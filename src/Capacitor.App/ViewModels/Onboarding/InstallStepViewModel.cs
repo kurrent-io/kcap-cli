@@ -14,6 +14,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string BusyText   = "Another kcap setup, upgrade or uninstall is running on this Mac.";
     public const string LockedText     = "The install did not finish.";
     public const string ProfileMismatchCode = "profile_mismatch";
+    public const string AnswerRequiredText  = "This installer needs answers this version of Capacitor doesn't give. Update Capacitor, then try again.";
     public const string NotStartedText = "The local server didn't finish starting. Try again to finish the install.";
 
     readonly LocalInstallController _controller;
@@ -73,6 +74,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         null                                         => null,
         { Affordance: LocalInstallAffordance.Busy }  => BusyText,
         { Affordance: LocalInstallAffordance.Retry } => RetryGuidance(Failure.Code),
+        { Code: "answer_required" }                  => AnswerRequiredText,
         var failed                                   => TerminalAdvice.Strip(failed.Message) ?? LockedText,
     };
 

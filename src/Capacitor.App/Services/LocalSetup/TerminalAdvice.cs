@@ -4,18 +4,24 @@ namespace Capacitor.App.Services.LocalSetup;
 
 /// The installer's messages are written for a terminal; the app shows their causes, not their commands.
 public static partial class TerminalAdvice {
-    /// Drops every sentence or <c>;</c>-clause that names a kcap command or a terminal step, keeping
-    /// the rest. Null when nothing but advice was left.
+    /// Drops every sentence or <c>;</c>-clause that names a kcap command, opens with "Run", or sets an
+    /// environment variable, keeping the rest verbatim. Null when nothing but advice was left.
     public static string? Strip(string? message) {
         if (string.IsNullOrWhiteSpace(message)) return null;
 
         var sentences = new List<string>();
         foreach (var sentence in SentenceBreak().Split(message.Trim())) {
-            var clauses = sentence.TrimEnd('.').Split("; ").Where(c => !Advice().IsMatch(c)).ToList();
-            if (clauses.Count == 0) continue;
+            var clauses = sentence.TrimEnd('.').Split("; ");
+            var kept    = clauses.Where(c => !Advice().IsMatch(c)).ToList();
+            if (kept.Count == clauses.Length) {
+                sentences.Add(sentence);
+                continue;
+            }
+            if (kept.Count == 0) continue;
 
-            var kept = string.Join("; ", clauses);
-            sentences.Add(char.ToUpperInvariant(kept[0]) + kept[1..] + (kept[^1] is '!' or '?' ? "" : "."));
+            var text = string.Join("; ", kept);
+            if (!ReferenceEquals(kept[0], clauses[0])) text = char.ToUpperInvariant(text[0]) + text[1..];
+            sentences.Add(text + (text[^1] is '!' or '?' ? "" : "."));
         }
 
         return sentences.Count == 0 ? null : string.Join(" ", sentences);
@@ -25,7 +31,8 @@ public static partial class TerminalAdvice {
     private static partial Regex SentenceBreak();
 
     [GeneratedRegex(
-        @"\bkcap\s+(setup|local|upgrade|uninstall|login|logout|daemon|import|status|start|stop|agent|mcp|hook)\b|\brun setup again\b|\bin your terminal\b",
+        @"\bkcap\s+(setup|local|upgrade|uninstall|login|logout|daemon|import|status|start|stop|agent|mcp|hook)\b"
+      + @"|^\s*run\s|\b(set|unset|export)\s+KCAP_[A-Z_]+|\brun setup again\b|\bin your terminal\b",
         RegexOptions.IgnoreCase)]
     private static partial Regex Advice();
 }
