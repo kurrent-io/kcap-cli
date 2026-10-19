@@ -203,9 +203,9 @@ internal partial class AgentOrchestrator {
             if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
 
             // A launch under the same id would otherwise start under the id just stopped; the one that
-            // published this agent may still be finishing, so the agent is stopped once they settle.
-            var settled = await SettleCancelledLaunchesAsync(starting);
-            var ok      = await StopAgentCoreAsync(agent) && settled;
+            // published this agent may still be finishing, so the agent is stopped once they settle. One
+            // that outlasts the wait stops the agent under this id itself when it settles.
+            var ok = await SettleCancelledLaunchesAsync(starting) && await StopAgentCoreAsync(agent);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
             return;
