@@ -429,6 +429,22 @@ public class AgentOrchestratorFinalizerVerdictTests {
             .IsEqualTo(new AgentRunStopped("failed", null));
     }
 
+    /// <summary>Overlapping stops of one agent report its ending once, after the last of them settles.</summary>
+    [Test]
+    public async Task Overlapping_stops_report_once() {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = orch.SeedAgentForTest("stop-twice-1", status: "Running", pty: new RecordingPtyProcess());
+
+        await Task.WhenAll(orch.HandleStopAgentForTest("stop-twice-1"), orch.HandleStopAgentForTest("stop-twice-1"));
+
+        await Assert.That(server.StatusChangedCalls.Count(c => c.AgentId == "stop-twice-1")).IsEqualTo(1);
+        await Assert.That(server.RunEvents.Count(e => e.AgentId == "stop-twice-1")).IsEqualTo(1);
+        await Assert.That(agent.StopSettled.Task.IsCompleted).IsTrue();
+    }
+
     /// <summary>Part A final-review fix wave, item 2: the publish→report race. A same-tick
     /// TTL/idle/stuck-Starting sweep can reach StopAgentCoreAsync in the instant AFTER
     /// TryStartReap has published the verdict but BEFORE the finalizer's CAS has set

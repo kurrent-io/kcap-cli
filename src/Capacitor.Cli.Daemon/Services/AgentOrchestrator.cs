@@ -78,11 +78,15 @@ internal record AgentInstance(
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
 
-    /// 1 while a stop owes the server its report, sent once the stop knows whether the agent is gone.
-    public int                  StopReportOwed;
+    /// Who reports this run's ending: <see cref="AgentOrchestrator.RunReportUnclaimed"/>, owed by a stop,
+    /// or sent. Claimed once, so a stop and the finalizer never both report it.
+    public int                  RunReport;
 
-    /// Completes once a stop has terminated the agent and sent its report, so the finalizer ends the
-    /// session only after it.
+    /// Stops in progress; the last to settle sends the owed report.
+    public int                  StopsInFlight;
+
+    /// Completes once every stop has settled and the report is sent, so the finalizer ends the session
+    /// only after it.
     public TaskCompletionSource StopSettled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     int _reopenedTranscript;
@@ -3476,7 +3480,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? exitCode is null or 0 ? "Completed" : "Failed"
                 : "Failed";
 
-            if (agent.Status is not "Completed" and not "Failed") {
+            if (agent.Status is not "Completed" and not "Failed" && ClaimRunReport(agent, RunReportSent)) {
                 if (!agent.Runtime.HasExited) LogOutputEndedWhileRunning(agent.Id);
 
                 // A startup failure means the process exited before establishing
@@ -4072,6 +4076,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
         }
 
+        Interlocked.Increment(ref agent.StopsInFlight);
+
         try {
             LogStopping(agentId);
 
@@ -4101,7 +4107,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // The server hears of the stop only once termination is confirmed or refuted, below. An
             // unregistered agent has no server-side row.
-            if (!agent.IsPrivate) Volatile.Write(ref agent.StopReportOwed, 1);
+            if (!agent.IsPrivate) ClaimRunReport(agent, RunReportOwedByStop);
 
             // Set status BEFORE cancelling ReadCts so the read loop's finally
             // block sees "Completed" and skips its own status change / event append.
@@ -4184,11 +4190,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // teardown, and is idempotent: if claude already fired its own session-end
             // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
-            await agent.Runtime.TerminateAsync(shuttingDown ? ShutdownTerminateGrace : TimeSpan.FromSeconds(10));
+            await agent.Runtime.TerminateAsync(shuttingDown ? ShutdownTerminateGrace : StopTerminateGrace);
 
             // TerminateAsync's SIGKILL is followed by a single non-blocking waitpid, so the
             // child is usually not reaped yet; poll briefly before calling the stop a failure.
-            if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(2));
+            if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(StopExitPoll);
 
             return agent.Runtime.HasExited;
         } catch (Exception ex) {
@@ -4196,15 +4202,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             return false;
         } finally {
-            // Every settled stop reports what it found, a stop that threw included.
-            SendOwedStopReport(agent);
-            agent.StopSettled.TrySetResult();
+            // The last stop to settle reports what it found, a stop that threw included.
+            if (Interlocked.Decrement(ref agent.StopsInFlight) == 0) {
+                SendOwedStopReport(agent);
+                agent.StopSettled.TrySetResult();
+            }
         }
     }
 
-    /// <summary>How long the finalizer waits for a stop still terminating: the graceful window, the
-    /// terminate grace and the post-kill poll, with room to spare.</summary>
-    static readonly TimeSpan StopSettleWait = TimeSpan.FromSeconds(30);
+    internal const int RunReportUnclaimed  = 0;
+    internal const int RunReportOwedByStop = 1;
+    internal const int RunReportSent       = 2;
+
+    static bool ClaimRunReport(AgentInstance agent, int claim) =>
+        Interlocked.CompareExchange(ref agent.RunReport, claim, RunReportUnclaimed) == RunReportUnclaimed;
+
+    static readonly TimeSpan StopTerminateGrace = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan StopExitPoll       = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long the finalizer waits for a stop still terminating: longer than the slowest stop
+    /// (the graceful send and exit waits, the terminate grace and the post-kill poll), so only a stop
+    /// that hangs is reported for it.</summary>
+    TimeSpan StopSettleWait => 2 * GracefulExitWait + StopTerminateGrace + StopExitPoll + TimeSpan.FromSeconds(10);
 
     /// <summary>The report a stop owes the server, sent at most once: Completed and a user stop when the
     /// agent is confirmed gone, Failed when it is not, since a live agent must never read as stopped. A
@@ -4213,7 +4232,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// a stop must not wait on a hub that is reconnecting, and starting them before the stop settles is
     /// what orders them ahead of the session's end.</summary>
     void SendOwedStopReport(AgentInstance agent) {
-        if (Interlocked.Exchange(ref agent.StopReportOwed, 0) == 0) return;
+        if (Interlocked.CompareExchange(ref agent.RunReport, RunReportSent, RunReportOwedByStop) != RunReportOwedByStop) return;
 
         var gone = agent.Runtime.HasExited;
         if (!gone) {
