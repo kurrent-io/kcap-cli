@@ -2677,7 +2677,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // only a published agent keeps the directory.
                 if (placement == AttachmentPlacement.DaemonStore) storeLease = _attachmentStore.Lease(agentId);
 
-                var fetch = await _attachmentFetcher.FetchAsync(root, placement, attachmentIds, _shutdownCts.Token);
+                // A local stop ends the fetch as it ends the handshake.
+                using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancel);
+                var fetch = await _attachmentFetcher.FetchAsync(root, placement, attachmentIds, fetchCts.Token);
 
                 if (fetch.Batch is null) {
                     LogAttachmentFetchFailed(agentId, fetch.FailedId, fetch.Error);
