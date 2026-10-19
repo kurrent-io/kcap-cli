@@ -20,11 +20,12 @@ public class TerminalTabResumeTests {
         public readonly FakeTerminalAttachClientFactory Factory = new();
         public readonly FakeTimeProvider Time = new();
         public ResumeLedgerEntry? Entry;
+        public volatile Func<ResumeLedgerEntry?>? Gate;
         public TerminalTabViewModel Vm = null!;
 
         public async Task<FakeTerminalAttachClient> AttachAsync() {
             Vm = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time,
-                agentId => agentId == "a1" ? Entry : null, Window);
+                agentId => agentId != "a1" ? null : Gate is { } gate ? gate() : Entry, Window);
             Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
             Dispatcher.UIThread.RunJobs();
             await (Vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
@@ -233,6 +234,62 @@ public class TerminalTabResumeTests {
 
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming", Title = "same status" });
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+        });
+    }
+
+    /// A retry that lands while a poll is reading the ledger is newer than that poll's verdict.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retry_seen_while_a_poll_settles_starts_another_wait() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Resuming) };
+            var client = await rig.AttachAsync();
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+
+            using var inRead = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var gated = Ledger(ResumeState.Interrupted, "runtime_exited");
+            rig.Gate = () => { inRead.Set(); release.Wait(TimeSpan.FromSeconds(5)); return gated; };
+            rig.Time.Advance(TerminalTabViewModel.ResumeRetryGap);
+            while (!inRead.IsSet) await Task.Delay(5);
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            rig.Gate = null;
+            rig.Entry = Ledger(ResumeState.Running);
+            var phases = new List<TerminalSessionPhase>();
+            rig.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(TerminalTabViewModel.State)) phases.Add(rig.Vm.State.Phase); };
+            release.Set();
+            for (var i = 0; i < 200 && !phases.Contains(TerminalSessionPhase.Interrupted); i++) { Dispatcher.UIThread.RunJobs(); await Task.Delay(5); }
+
+            await Assert.That(phases).Contains(TerminalSessionPhase.Interrupted);
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+            await rig.TickAsync();
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// An attach acknowledged late belongs to the old runtime; it must not consume the retry seen meanwhile.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_late_acknowledgement_does_not_swallow_a_retry_seen_while_connecting() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            rig.Vm = new TerminalTabViewModel("a1", rig.Daemon, rig.Factory.Factory, () => new FakeTerminalSurface(), rig.Time,
+                agentId => agentId == "a1" ? rig.Entry : null, Window);
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            Dispatcher.UIThread.RunJobs();
+            await (rig.Vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = rig.Factory.Created.Single();
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await client.TriggerAttached("old"u8.ToArray());
+            await rig.DropAsync(client, new AttachOutcome.Exited(1));
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
         });
     }
 
