@@ -404,6 +404,10 @@ partial class McpFlowsServer(
                     if (retryResponse.StatusCode == HttpStatusCode.Unauthorized)
                         return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
 
+                    if (startPatch is not null
+                        && retryResponse.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
+                        return BuildToolResult(id, PatchProtocolRequiredMessage, isError: true);
+
                     if (CheckVendorOverrideResult(toolName, preference, retryResponse.StatusCode, retryResponse.IsSuccessStatusCode, retryBody, out var retryRunIdToClose) is { } retryVendorCheck) {
                         if (retryRunIdToClose is not null)
                             await BestEffortCloseAsync(client, apiRoot, retryRunIdToClose, time);

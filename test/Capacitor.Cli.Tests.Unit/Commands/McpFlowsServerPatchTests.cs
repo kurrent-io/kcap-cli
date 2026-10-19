@@ -59,12 +59,13 @@ public class McpFlowsServerPatchTests {
         return server;
     }
 
-    async Task<string> Call(WireMockServer server, JsonObject request) {
+    async Task<string> Call(WireMockServer server, JsonObject request, string? savedVendor = null) {
         using var client = new HttpClient();
 
         return await Server().HandleToolCallAsync(
             JsonNode.Parse("1")!, request, client, server.Url!,
-            cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null, requestingSessionId: "s1");
+            cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null, requestingSessionId: "s1",
+            reviewerVendorPreference: () => Task.FromResult(new McpFlowsServer.SavedReviewerVendor(savedVendor, "default")));
     }
 
     [Test]
@@ -96,6 +97,24 @@ public class McpFlowsServerPatchTests {
         await Assert.That(isError).IsTrue();
         await Assert.That(text).Contains("patch_protocol_required");
         await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Path)).IsEquivalentTo([StartV5]);
+    }
+
+    /// <summary>The saved-vendor retry of a patch start reports a missing v5 the same way the first post does.</summary>
+    [Test]
+    public async Task A_saved_vendor_retry_that_finds_no_v5_is_reported_as_a_patch_refusal() {
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath(StartV5).UsingPost()).InScenario("retry").WillSetStateTo("second")
+            .RespondWith(Response.Create().WithStatusCode(400)
+                .WithBody("""{"error":"reviewer_vendor_required","message":"no reviewer vendor"}"""));
+        server.Given(Request.Create().WithPath(StartV5).UsingPost()).InScenario("retry").WhenStateIs("second")
+            .RespondWith(Response.Create().WithStatusCode(404));
+
+        var (isError, text) = Unwrap(await Call(server,
+            StartRequest("start_review_flow", PatchFile(System.Text.Encoding.UTF8.GetBytes(Diff)), Base), savedVendor: "codex"));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("patch_protocol_required");
+        await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Path)).IsEquivalentTo([StartV5, StartV5]);
     }
 
     /// <summary>Blank patch arguments name no patch, so the start takes its usual route and a 404 there is not
