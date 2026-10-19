@@ -922,7 +922,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var selected = SelectedRepoPath;
         var options = paths
-            .OrderBy(p => RepoLabel.Leaf(p), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
             .ThenBy(p => p, StringComparer.Ordinal)
             .Select(p => new RepositoryOption(p, Lookup(byRepo, p) ?? DefaultVendor, PathComparer.Equals(p, selected)))
             .ToList();

@@ -285,7 +285,7 @@ internal sealed class AgentHookPoster(
                 await LifecycleSpoolDrain.RunAsync(
                     new CursorMarkers(config, time), client, Url!, lifecycle, transcript, sessionId, budget,
                     time, cts.Token,
-                    onWhatsDoneRequested: (sid, vendor) => watchers.SpawnWhatsDoneGenerator(sid, vendor));
+                    onWhatsDoneRequested: watchers.SpawnWhatsDoneGenerator);
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.

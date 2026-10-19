@@ -85,7 +85,7 @@ class McpFlowsServer(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),
                     clock: new FlowRetryClock(time),
                     requestingSessionId: requester.SessionId, driverVendor: driverVendor,
-                    reviewerVendorPreference: () => LoadReviewerVendorPreferenceAsync(),
+                    reviewerVendorPreference: LoadReviewerVendorPreferenceAsync,
                     callerAgentId: callerAgentId);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local

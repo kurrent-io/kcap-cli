@@ -122,7 +122,7 @@ public class InteractiveLifetimeDeferralTests {
     [Test]
     public async Task A_nested_deferral_is_refused_and_a_disposed_one_frees_the_slot() {
         using (InteractiveLifetime.Defer()) {
-            await Assert.That(() => InteractiveLifetime.Defer()).Throws<InvalidOperationException>();
+            await Assert.That(InteractiveLifetime.Defer).Throws<InvalidOperationException>();
         }
 
         InteractiveLifetime.Defer().Dispose();

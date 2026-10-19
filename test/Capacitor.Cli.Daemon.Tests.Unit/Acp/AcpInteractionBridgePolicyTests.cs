@@ -89,10 +89,10 @@ public class AcpInteractionBridgePolicyTests {
                 logger: NullLogger.Instance,
                 unattendedPolicy: policy,
                 preset: preset,
-                notifyAutoApproval: n => harness.Notices.Add(n),
+                notifyAutoApproval: harness.Notices.Add,
                 policySnapshot: snapshot,
                 policyVendor: vendor,
-                notifyPolicyDecision: e => harness.Decisions.Add(e),
+                notifyPolicyDecision: harness.Decisions.Add,
                 policyCwd: cwd, time: TimeProvider.System)
         };
 
