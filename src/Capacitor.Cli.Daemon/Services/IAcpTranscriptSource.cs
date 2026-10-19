@@ -41,10 +41,11 @@ internal interface IAcpTranscriptSource {
     /// </summary>
     ChannelReader<AcpEventEnvelope> Envelopes { get; }
 
-    /// <summary>A session reopened for a restart resume: the server already holds its history, and its
-    /// first turn waits for <see cref="ReleaseFirstTurn"/>.</summary>
+    /// <summary>A session reopened for a restart resume: the server already holds its history, and no
+    /// turn of it, the first included, reaches the vendor before <see cref="ReleaseFirstTurn"/>.</summary>
     bool Reopened => false;
 
-    /// <summary>Sends a reopened session's held first turn, once the server has accepted an event of it.</summary>
+    /// <summary>Lets a reopened session's turns through, in the order they were queued, once the server has
+    /// accepted an event of it.</summary>
     void ReleaseFirstTurn() { }
 }

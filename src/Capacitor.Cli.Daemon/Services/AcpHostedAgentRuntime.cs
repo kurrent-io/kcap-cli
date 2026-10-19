@@ -924,9 +924,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     throw new InvalidOperationException(
                         $"{DiagnosticBinary} does not advertise loadSession, so session {resumeSessionId} cannot be reopened.");
 
+                // Before the session id, which is what admits user input: no turn may slip past the hold.
+                Volatile.Write(ref _turnsHeld, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
+                _reopened = true;
                 // Set before the load so its updates are recognised as this session's.
                 _sessionId = resumeSessionId;
-                _reopened  = true;
 
                 sessionNewResult = await RunHandshakeStageAsync(
                         "session_created", stageCt => LoadForRestartResumeAsync(connection, resumeSessionId, cwd, stageCt), ct)
@@ -1020,12 +1022,17 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         // delay agent registration/stoppability for the whole turn. Completion is
         // observed via the Updates/Envelopes channels, not this method's return.
         if (_reopened) {
-            // The note is the event whose acceptance proves the server records this session; the
-            // nudge waits for it, so a session nothing would record never acts.
+            // The note is the event whose acceptance proves the server records this session. Every turn,
+            // the nudge first, queues behind the hold, so a session nothing would record never acts.
             EmitEnvelope(new AcpEventEnvelope(
                 Seq: 0, Kind: AcpEventKind.SystemNote, Text: "Session reopened after a kcap daemon restart.", TimestampIso: NowIso()));
-            _heldFirstPrompt = string.IsNullOrEmpty(initialPrompt) ? null : initialPrompt;
-            if (_heldFirstPrompt is null) _firstTurnSettled.TrySetResult();
+
+            if (!string.IsNullOrEmpty(initialPrompt)) {
+                try { _ = EnqueueTurn(initialPrompt, acknowledgeWrite: false); }
+                catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "ACP: initial prompt not queued — the runtime is already being torn down."); }
+            } else {
+                _firstTurnSettled.TrySetResult();
+            }
         } else if (!string.IsNullOrEmpty(initialPrompt)) {
             // A dispose racing the tail of this handshake can already have completed
             // _pendingTurns by the time this runs — the only reachable refusal here, since a
@@ -1082,18 +1089,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         return result;
     }
 
-    bool    _reopened;
-    string? _heldFirstPrompt;
+    bool                  _reopened;
+    TaskCompletionSource? _turnsHeld;
 
     /// <inheritdoc cref="IAcpTranscriptSource.Reopened"/>
     public bool Reopened => _reopened;
 
     /// <inheritdoc cref="IAcpTranscriptSource.ReleaseFirstTurn"/>
     public void ReleaseFirstTurn() {
-        if (Interlocked.Exchange(ref _heldFirstPrompt, null) is not { } prompt) return;
+        if (Volatile.Read(ref _turnsHeld) is not { } held || !held.TrySetResult()) return;
 
-        try { _ = EnqueueTurn(prompt, acknowledgeWrite: false); }
-        catch (InputNotAdmittedException ex) { _logger.LogDebug(ex, "ACP: held first turn not queued — the runtime is already being torn down."); }
         ArmFirstOutputWatchdog();
     }
 
@@ -1224,6 +1229,16 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
 
                     if (!_pendingTurns.Reader.TryRead(out turn!))
                         continue;
+                }
+
+                if (Volatile.Read(ref _turnsHeld) is { } turnsHeld) {
+                    try {
+                        await turnsHeld.Task.WaitAsync(ct).ConfigureAwait(false);
+                    } catch (OperationCanceledException) {
+                        turn.Written?.TrySetException(new InvalidOperationException(
+                            "ACP session ended while this input was pending delivery."));
+                        throw;
+                    }
                 }
 
                 // Pre-gate admission: decide park-or-register under the reconnect lock. This turn's

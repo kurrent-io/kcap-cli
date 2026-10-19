@@ -81,22 +81,25 @@ public class AcpHostedAgentRuntimeRestartResumeTests {
     }
 
     [Test]
-    public async Task A_resume_loads_the_session_drops_its_replay_and_holds_the_nudge_until_released() {
+    public async Task A_resume_loads_the_session_drops_its_replay_and_holds_every_turn_until_released() {
         await using var h = new Harness();
         h.Fake.SetSessionLoadReplay([FakeAcpAgent.DefaultAgentMessageChunkUpdate(ResumedSession, "replayed-history")]);
         h.Fake.EnqueuePromptScript(
             [FakeAcpAgent.DefaultAgentMessageChunkUpdate(ResumedSession, "after-the-nudge")],
             JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
+        h.Fake.EnqueuePromptScript([], JsonDocument.Parse("""{"stopReason":"end_turn"}""").RootElement.Clone());
 
         await h.StartAsync("the nudge", ResumedSession);
+        await h.Runtime.SendUserInputAsync("typed during the hold").WaitAsync(HangGuard);
 
         await WaitHarness.PollUntilAsync(() => h.Envelopes().Count > 0);
         await Assert.That(h.Runtime.Reopened).IsTrue();
         await Assert.That(h.Envelopes()[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Task.Delay(200);
         await Assert.That(h.Fake.ReceivedCalls.Select(c => c.Method)).DoesNotContain("session/prompt");
 
         h.Runtime.ReleaseFirstTurn();
-        await WaitHarness.PollUntilAsync(() => h.Envelopes().Any(e => e.Text?.Contains("after-the-nudge") == true));
+        await WaitHarness.PollUntilAsync(() => h.Fake.ReceivedCalls.Count(c => c.Method == "session/prompt") == 2);
 
         var calls = h.Fake.ReceivedCalls;
         await Assert.That(calls.Select(c => c.Method)).DoesNotContain("session/new");
@@ -105,16 +108,17 @@ public class AcpHostedAgentRuntimeRestartResumeTests {
         await Assert.That(load.GetProperty("sessionId").GetString()).IsEqualTo(ResumedSession);
         await Assert.That(load.GetProperty("cwd").GetString()).IsEqualTo("/abs/worktree");
 
-        var prompts = calls.Where(c => c.Method == "session/prompt").ToArray();
-        await Assert.That(prompts.Length).IsEqualTo(1);
-        await Assert.That(prompts[0].Params!.Value.GetProperty("sessionId").GetString()).IsEqualTo(ResumedSession);
-        await Assert.That(prompts[0].Params!.Value.GetProperty("prompt")[0].GetProperty("text").GetString()).IsEqualTo("the nudge");
+        var prompts = calls.Where(c => c.Method == "session/prompt").Select(c => c.Params!.Value).ToArray();
+        await Assert.That(prompts.Select(p => p.GetProperty("sessionId").GetString()!)).IsEquivalentTo([ResumedSession, ResumedSession]);
+        await Assert.That(prompts.Select(p => p.GetProperty("prompt")[0].GetProperty("text").GetString()!))
+            .IsEquivalentTo(["the nudge", "typed during the hold"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
+        await Assert.That(h.Envelopes().Any(e => e.Text?.Contains("after-the-nudge") == true)).IsTrue();
 
         await Assert.That(h.Runtime.SessionId).IsEqualTo(ResumedSession);
         await Assert.That(h.Envelopes().Any(e => e.Text?.Contains("replayed-history") == true)).IsFalse();
 
         h.Runtime.ReleaseFirstTurn();
-        await Assert.That(h.Fake.ReceivedCalls.Count(c => c.Method == "session/prompt")).IsEqualTo(1);
+        await Assert.That(h.Fake.ReceivedCalls.Count(c => c.Method == "session/prompt")).IsEqualTo(2);
     }
 
     /// <summary>A vendor's command list can arrive while the load's suppression is still on; it is the
