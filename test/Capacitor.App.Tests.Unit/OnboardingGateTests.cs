@@ -3,6 +3,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -302,6 +303,34 @@ public class OnboardingGateTests {
         await Assert.That(profiles).IsNotNull();
         await Assert.That(profiles.Name).IsEqualTo(ProfileName);
         await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(ServerUrl);
+    }
+
+    OnboardingGate GateWithSetupJournal() {
+        var root = new LocalRoot(Config.PathTo("local"));
+        root.EnsureCreated();
+        LocalStateFiles.WriteJournal(root, new(LocalSetupState.Operation, "committing", ServerStart.Deny, null,
+            DateTimeOffset.UnixEpoch, new Dictionary<string, string>()));
+
+        return new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, root, TimeProvider.System);
+    }
+
+    [Test]
+    public async Task Pending_local_setup_is_incomplete_even_with_a_none_stamped_local_profile() {
+        WriteConfig(SingleProfileConfig(new Profile {
+            ServerUrl    = ServerUrl,
+            AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl),
+        }));
+
+        var result = (await GateWithSetupJournal().EvaluateAsync(CancellationToken.None)).Result;
+
+        await AssertIncomplete(result, GateReason.LocalSetupPending);
+    }
+
+    [Test]
+    public async Task Pending_local_setup_is_incomplete_before_any_profile_exists() {
+        var result = (await GateWithSetupJournal().EvaluateAsync(CancellationToken.None)).Result;
+
+        await AssertIncomplete(result, GateReason.LocalSetupPending);
     }
 
     static async Task AssertIncomplete(GateResult result, GateReason expected) {

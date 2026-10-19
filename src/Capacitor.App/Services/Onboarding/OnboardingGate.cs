@@ -12,7 +12,7 @@ public abstract record GateResult {
 
 // EvaluationFailed is the degrade for an unexpected exception: from EvaluateAsync when the
 // evaluation throws (the resolution survives), from App.EvaluateGateSafelyAsync when the resolve does.
-public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBinding, TokenUnusableExpired, EvaluationFailed }
+public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBinding, TokenUnusableExpired, EvaluationFailed, LocalSetupPending }
 
 /// <summary>
 /// First-run trigger: local, side-effect-free except the shared resolution path's own
@@ -59,6 +59,12 @@ public sealed class OnboardingGate(
     /// independent resolves racing a concurrent active-profile change could otherwise evaluate the
     /// gate against a different profile than the one the daemon graph builds for.
     public async Task<GateResult> EvaluateResolvedAsync(string? profileName, Profile? profile, CancellationToken ct) {
+        // A setup entry outranks every profile verdict: a half-installed local edition is not set up
+        // even when its profile already carries a complete-looking stamp.
+        if (LocalSetupState.Pending(local)) {
+            return new GateResult.Incomplete(GateReason.LocalSetupPending);
+        }
+
         if (profile is null || string.IsNullOrEmpty(profileName)) {
             return new GateResult.Incomplete(GateReason.NoProfile);
         }
