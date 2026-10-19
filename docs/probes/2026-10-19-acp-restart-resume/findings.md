@@ -23,7 +23,9 @@ actually performs. Design: `docs/superpowers/specs/2026-10-17-daemon-restart-age
    itself never sends SIGTERM (`ProcessTree.Kill` is SIGKILL only).
 5. A fresh process: `initialize`, `session/load {sessionId, cwd, mcpServers: []}`; every update before
    the load response counts as replay, conversation updates in a 3 s window after it count as barrier
-   violations. A refused load is retried once after 15 s.
+   violations. The reader switches to the after-response window the moment it records the response,
+   so an update dispatched before the caller resumes is not counted as replay. A refused load is
+   retried once after 15 s.
 6. One prompt on the loaded session asks for the codeword. A load that answers but restores nothing
    fails here.
 
@@ -34,18 +36,18 @@ originating session's scratchpad.
 
 | Vendor (version) | Stop | Exit on | Load | Replayed updates | Updates after response | Codeword recalled |
 |---|---|---|---|---|---|---|
-| Copilot (1.0.85) | idle / daemon | stdin EOF, 0.45 s, exit 0 | ok | 7 | 0 | yes |
-| | idle / sigterm | stdin EOF, 0.48 s | ok | 7 | 0 | yes |
-| | mid-turn / daemon | stdin EOF, 0.89 s | ok | 9 | 0 | yes |
-| | mid-turn / sigterm | stdin EOF, 1.31 s | ok | 9 | 0 | yes |
-| Cursor (2026.09.15-d2fe57e) | idle / daemon | **SIGKILL** after 5 s | ok | 8 | 0 | yes |
+| Copilot (1.0.98) | idle / daemon | stdin EOF, 0.76 s, exit 0 | ok | 7 | 0 | yes |
+| | idle / sigterm | stdin EOF, 0.58 s | ok | 7 | 0 | yes |
+| | mid-turn / daemon | stdin EOF, 0.97 s | ok | 9 | 0 | yes |
+| | mid-turn / sigterm | stdin EOF, 1.30 s | ok | 9 | 0 | yes |
+| Cursor (2026.09.15-d2fe57e) | idle / daemon | **SIGKILL** after 5 s | ok | 17 | 0 | yes |
 | | idle / sigterm | SIGTERM (143), group outlived the leader | ok | 17 | 0 | yes |
-| | mid-turn / daemon | **SIGKILL** after 5 s | ok | 10 | 0 | yes |
+| | mid-turn / daemon | **SIGKILL** after 5 s | ok | 19 | 0 | yes |
 | | mid-turn / sigterm | SIGTERM (143), group outlived the leader | ok | 19 | 0 | yes |
-| OpenCode (1.18.31, `OPENCODE_PURE=1`) | idle / daemon | stdin EOF, 0.47 s, exit 0 | ok | 16 | 0 | yes |
-| | idle / sigterm | stdin EOF, 0.25 s | ok | 92 | 0 | yes |
-| | mid-turn / daemon | stdin EOF, 0.28 s | ok | 13 | 0 | yes |
-| | mid-turn / sigterm | stdin EOF, 0.29 s | ok | 11 | 0 | yes |
+| OpenCode (1.18.31, `OPENCODE_PURE=1`) | idle / daemon | stdin EOF, 0.30 s, exit 0 | ok | 9 | 0 | yes |
+| | idle / sigterm | stdin EOF, 0.25 s | ok | 9 | 0 | yes |
+| | mid-turn / daemon | stdin EOF, 0.27 s | ok | 13 | 0 | yes |
+| | mid-turn / sigterm | stdin EOF, 0.27 s | ok | 10 | 0 | yes |
 | Gemini (0.60.0) | all four | — | not reached | — | — | — |
 | Grok | — | not probed | | | | |
 | Kiro | — | not probed | | | | |
