@@ -252,6 +252,23 @@ public class PermissionPromptBrokerTests {
             sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsTrue();
     }
 
+    /// A late notice cannot spend a call owed to a prompt registered after it was sent, so that
+    /// prompt's own notice is still the one that consumes it.
+    [Test]
+    public async Task A_late_notice_does_not_spend_a_later_prompts_owed_call() {
+        var broker = new PermissionPromptBroker();
+        var input = Json("""{"command":"ls"}""");
+        _ = broker.Register(Dto("allowed", input: """{"command":"ls"}"""));
+        broker.TrySettle("allowed", Allow, "allow", "app");
+        var waiting = broker.Register(Dto("waiting", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_old", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(-1))).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_own", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
     /// A turn that outgrows the bound on what it is owed stops matching by name and input until it
     /// ends, rather than forgetting an owed call and retiring the wrong prompt.
     [Test]

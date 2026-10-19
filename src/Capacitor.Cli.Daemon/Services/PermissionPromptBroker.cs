@@ -29,7 +29,12 @@ internal static class PermissionSettlements {
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
 internal sealed class PermissionPromptBroker {
     sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId, long Seq);
-    sealed record AllowedCall(string AgentId, string SessionId, string? SubagentId, string? ToolUseId, string ToolName, JsonElement? Input);
+    sealed record AllowedCall(PermissionPendingDto Dto, string? SubagentId, JsonElement? Input) {
+        public string AgentId => Dto.AgentId;
+        public string SessionId => Dto.SessionId;
+        public string? ToolUseId => Dto.ToolUseId;
+        public string ToolName => Dto.ToolName;
+    }
 
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
@@ -115,8 +120,8 @@ internal sealed class PermissionPromptBroker {
     /// without a tool id (Claude's hook sends none) matches the same subagent's call by tool name and
     /// input instead, the oldest first, so one finished call retires one prompt. A call that an
     /// allowed prompt is still owed is that prompt's, and retires nothing.
-    /// <param name="sentAt">When the hook sent the notice: a prompt registered after it is a later
-    /// call's, whatever its name and input.</param>
+    /// <param name="sentAt">When the hook sent the notice: a prompt registered after it, pending or
+    /// owed, is a later call's, whatever its name and input.</param>
     public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId,
             string? subagentId = null, string? toolName = null, JsonElement? toolInput = null, DateTimeOffset? sentAt = null) {
         lock (_gate) {
@@ -124,6 +129,7 @@ internal sealed class PermissionPromptBroker {
                 e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
             if (entry is null && toolName is not null && toolInput is { } input) {
                 var owed = _allowedCalls.FindIndex(c => c.AgentId == agentId && c.SessionId == sessionId
+                    && (sentAt is null || RequestedBy(c.Dto, sentAt.Value))
                     && (c.ToolUseId == toolUseId
                      || c.ToolUseId is null && c.SubagentId == subagentId && c.ToolName == toolName
                         && c.Input is { } ran && JsonElement.DeepEquals(ran, input)));
@@ -172,8 +178,7 @@ internal sealed class PermissionPromptBroker {
         if (decision.Behavior == PermissionSettlements.Allow && entry.Dto.Vendor == "claude") {
             var turn = (entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId);
             if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
-            else _allowedCalls.Add(new AllowedCall(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolUseId,
-                entry.Dto.ToolName, decision.UpdatedInput ?? entry.Dto.ToolInput));
+            else _allowedCalls.Add(new AllowedCall(entry.Dto, entry.SubagentId, decision.UpdatedInput ?? entry.Dto.ToolInput));
         }
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
