@@ -10,6 +10,8 @@ using Microsoft.Extensions.Time.Testing;
 namespace Capacitor.App.Tests.Unit;
 
 public class LocalServerRecoveryViewModelTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static readonly ProcessResult Started = new(0, "Local server is running.\n", "", false);
 
     sealed class Recorder {
@@ -159,8 +161,7 @@ public class LocalServerRecoveryViewModelTests {
 
     [Test]
     public async Task Sign_in_is_never_requested_for_a_local_server() {
-        using var tmp = new TempDir();
-        var root = new LocalRoot(tmp.CreateDir("local"));
+        var root = new LocalRoot(Tmp.CreateDir("local"));
         LocalStateFiles.PublishRegistry(root, InstallRegistry.Empty.WithActive(
             new("0123456789abcdef0123456789abcdef", 5108, "http://localhost:5108", "1.0.0")));
         Action openSignIn = () => { };

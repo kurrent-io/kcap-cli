@@ -31,7 +31,9 @@ public class LocalSetupStateTests {
 
     [Test]
     public async Task An_unreadable_journal_is_pending() {
-        File.WriteAllText(Root.JournalPath, "{not json");
+        var journal = Tmp.CreateFile(["local", "journal.json"], "{not json");
+
+        await Assert.That(journal).IsEqualTo(Root.JournalPath);
 
         await Assert.That(LocalSetupState.Pending(Root)).IsTrue();
     }
