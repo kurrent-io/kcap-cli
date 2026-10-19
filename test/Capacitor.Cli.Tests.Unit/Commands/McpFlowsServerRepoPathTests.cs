@@ -8,8 +8,8 @@ using WireMock.Server;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-/// <summary>A start may name the checkout it reviews: the hosted repository moves to that checkout's
-/// root, while the requester stays the session.</summary>
+/// <summary>A start may name the checkout it reviews: the hosted repository and the cwd a same-machine
+/// borrow probes move to that checkout's root, while the session stays the requester.</summary>
 public class McpFlowsServerRepoPathTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempDir] public required TempDir Checkout { get; init; }
@@ -50,7 +50,7 @@ public class McpFlowsServerRepoPathTests {
     }
 
     [Test]
-    public async Task A_named_checkout_is_the_hosted_repository_and_the_session_stays_the_requester() {
+    public async Task A_named_checkout_is_hosted_and_borrowed_and_the_session_stays_the_requester() {
         Directory.CreateDirectory(Path.Combine(Checkout.Path, ".git"));
         var nested = Directory.CreateDirectory(Path.Combine(Checkout.Path, "src", "deep")).FullName;
         using var server = RefusingServer();
@@ -58,13 +58,14 @@ public class McpFlowsServerRepoPathTests {
 
         await Server().HandleToolCallAsync(
             JsonNode.Parse("1")!, StartRequest(nested), client, server.Url!,
-            cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null);
+            cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null, requestingSessionId: "s1");
 
         var body = JsonNode.Parse(server.LogEntries.Single(e => e.RequestMessage.Path == StartV2).RequestMessage.Body!)!.AsObject();
         var root = new DirectoryInfo(Checkout.Path).FullName;
         await Assert.That(body["repo_path"]!.GetValue<string>()).IsEqualTo(root);
         await Assert.That(body["requesting_repo_root"]!.GetValue<string>()).IsEqualTo(root);
-        await Assert.That(body["requesting_cwd"]!.GetValue<string>()).IsEqualTo("/tmp/session");
+        await Assert.That(body["requesting_cwd"]!.GetValue<string>()).IsEqualTo(root);
+        await Assert.That(body["requesting_session_id"]!.GetValue<string>()).IsEqualTo("s1");
     }
 
     [Test]
