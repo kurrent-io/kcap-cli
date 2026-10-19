@@ -93,6 +93,53 @@ public class WizardSimpleStepsTests {
         }
     }
 
+    sealed class ScriptedInstaller(ShimResult result) : ICliPathInstaller {
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(result);
+    }
+
+    static readonly ShimResult[] UnfinishedShims = [
+        new(ShimOutcome.InstalledButNotOnPath, null, null),
+        new(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null),
+        new(ShimOutcome.Failed, "Permission denied.", "sudo ln -s /x /usr/local/bin/kcap"),
+    ];
+
+    static async Task<List<string?>> PathFixMessagesAsync(bool onLocalPath) =>
+        await AvaloniaSession.DispatchAsync(async () => {
+            var messages = new List<string?>();
+            foreach (var result in UnfinishedShims) {
+                var vm = new PathFixViewModel(new ScriptedInstaller(result), new FakeAppStateStore(), "/x", () => onLocalPath);
+                await vm.InstallAsync();
+                messages.Add(vm.Message);
+            }
+
+            return messages;
+        });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_path_fix_on_the_local_path_names_no_terminal_command() {
+        var messages = await PathFixMessagesAsync(onLocalPath: true);
+
+        foreach (var message in messages) {
+            await Assert.That(message).IsNotNull();
+            await Assert.That(message!).DoesNotContain("kcap ");
+            await Assert.That(message).DoesNotContain("sudo");
+            await Assert.That(message).DoesNotContain("export PATH");
+        }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_path_fix_on_the_cloud_path_keeps_its_terminal_recovery() {
+        var messages = await PathFixMessagesAsync(onLocalPath: false);
+
+        await Assert.That(messages[0]).Contains("run kcap --version");
+        await Assert.That(messages[1]).Contains("export PATH");
+        await Assert.That(messages[2]).Contains("sudo ln -s");
+    }
+
     sealed class ShimHarness : IDisposable {
         readonly TempDir _tmp = new();
         public string TempDir => _tmp.Path;

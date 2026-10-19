@@ -12,8 +12,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string LocalTitle = "For you, locally";
     public const string LocalDetail =
-        "For a Mac one person uses, no account. The server runs on this Mac and your sessions never leave it. " +
-        "Free; a download of a few hundred MB.";
+        "For a Mac one person uses, no account. The server is downloaded to this Mac and runs there, so your sessions " +
+        "never leave it. Free.";
     public const string CloudTitle = "For your team, cloud";
     public const string CloudDetail =
         "A Team workspace on kcap.ai that your team shares. Sign in with your work account; Team is free for 60 days.";

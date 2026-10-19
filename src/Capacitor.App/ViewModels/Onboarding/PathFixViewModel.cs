@@ -8,15 +8,17 @@ public sealed class PathFixViewModel : ReactiveObject {
     readonly ICliPathInstaller _installer;
     readonly IAppStateStore    _store;
     readonly string?           _target;
+    readonly Func<bool>        _onLocalPath;
 
     bool    _offerClaimed;
     bool    _fixed;
     string? _message;
 
-    public PathFixViewModel(ICliPathInstaller installer, IAppStateStore store, string? target) {
-        _installer = installer;
-        _store     = store;
-        _target    = target;
+    public PathFixViewModel(ICliPathInstaller installer, IAppStateStore store, string? target, Func<bool>? onLocalPath = null) {
+        _installer   = installer;
+        _store       = store;
+        _target      = target;
+        _onLocalPath = onLocalPath ?? (() => false);
     }
 
     // An inconclusive PATH probe never offers an install.
@@ -70,13 +72,15 @@ public sealed class PathFixViewModel : ReactiveObject {
                 Message = null;
                 break;
             case ShimOutcome.InstalledButNotOnPath:
-                Message = result.Detail ?? "Installed, but your terminal cannot find kcap yet. Open a new terminal and run kcap --version.";
+                Message = _onLocalPath()
+                    ? "Installed, but your terminal cannot find it yet, so harnesses started from a terminal may not record."
+                    : result.Detail ?? "Installed, but your terminal cannot find kcap yet. Open a new terminal and run kcap --version.";
                 break;
             case ShimOutcome.Cancelled:
                 Message = "Cancelled. Nothing changed.";
                 break;
             default: // Failed
-                Message = result.SudoFallback is null
+                Message = result.SudoFallback is null || _onLocalPath()
                     ? $"Could not finish installing the terminal command. {result.Detail}".TrimEnd()
                     : $"Could not finish installing the terminal command. Run: {result.SudoFallback}";
                 break;

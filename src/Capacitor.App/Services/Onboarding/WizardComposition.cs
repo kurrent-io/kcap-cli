@@ -170,7 +170,7 @@ internal static class WizardComposition {
         var committedLocalAtStart = CommittedLocal();
         if (options.AlreadyAuthenticated && !committedLocalAtStart) signIn.RestoreCommitted();
         var pathFix  = options.ShimApplicable && options.ShimInstaller is { } installer
-            ? new PathFixViewModel(installer, options.AppState, options.ShimTarget)
+            ? new PathFixViewModel(installer, options.AppState, options.ShimTarget, OnLocalPath)
             : null;
         // The name persists to the same fresh identity the enabler gates on, falling back to ActiveProfile.
         var machineName = new MachineNameViewModel(options.Root, options.DefaultDaemonName, () => options.ResolveIdentity()?.Profile);
@@ -189,7 +189,7 @@ internal static class WizardComposition {
             () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
             onLocalPath: OnLocalPath);
         var history = new HistoryStepViewModel(
-            cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time);
+            cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time, OnLocalPath);
         var daemon = new DaemonEnabler(
             cli, options.RunMutation,
             // Gated on a committed sign-in or local install and resolved fresh per call, never the startup-cached profile.
