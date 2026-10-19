@@ -12,7 +12,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// </summary>
 public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string BusyText   = "Another kcap setup, upgrade or uninstall is running on this Mac.";
-    public const string LockedText = "The install did not finish.";
+    public const string LockedText     = "The install did not finish.";
+    public const string NotStartedText = "The local server didn't finish starting. Try again to finish the install.";
 
     readonly LocalInstallController _controller;
     readonly Func<string?>          _appProfile;
@@ -68,10 +69,16 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool FailureVisible => Failure is not null && !Running;
 
     public string? FailureMessage => Failure switch {
-        null                                        => null,
-        { Affordance: LocalInstallAffordance.Busy } => BusyText,
-        var failed                                  => failed.Message,
+        null                                         => null,
+        { Affordance: LocalInstallAffordance.Busy }  => BusyText,
+        { Affordance: LocalInstallAffordance.Retry } => RetryGuidance(Failure.Code),
+        var failed                                   => failed.Message,
     };
+
+    /// The CLI's own words behind a retryable failure. They can name a terminal command, so they never lead.
+    public string? FailureDetail => Failure is { Affordance: LocalInstallAffordance.Retry } failed ? failed.Message : null;
+
+    public bool FailureDetailVisible => FailureDetail is not null && !Running;
 
     public bool LockedVisible   => Failure is { LockedToLocal: true } && !Running;
     public bool TryAgainVisible => Failure is { Affordance: LocalInstallAffordance.Retry } && !Running;
@@ -137,6 +144,14 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
+    static string RetryGuidance(string? code) => code switch {
+        "download_failed"     => "The download didn't finish. Check your connection and try again.",
+        "verification_failed" => "The download didn't pass its signature check. Try again to download it again.",
+        "cancelled"           => "The install was cancelled.",
+        null                  => "The install stopped before it finished. Try again.",
+        _                     => NotStartedText,
+    };
+
     Task TryAgainAsync() => TryAgainVisible ? _controller.RetryAsync(_lifetime) : Task.CompletedTask;
 
     void OnSettled(LocalInstallOutcome outcome) {
@@ -160,6 +175,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(Satisfied));
         this.RaisePropertyChanged(nameof(FailureVisible));
         this.RaisePropertyChanged(nameof(FailureMessage));
+        this.RaisePropertyChanged(nameof(FailureDetail));
+        this.RaisePropertyChanged(nameof(FailureDetailVisible));
         this.RaisePropertyChanged(nameof(LockedVisible));
         this.RaisePropertyChanged(nameof(TryAgainVisible));
         this.RaisePropertyChanged(nameof(CancelVisible));

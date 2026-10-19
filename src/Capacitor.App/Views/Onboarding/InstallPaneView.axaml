@@ -67,6 +67,13 @@
                                IsVisible="{Binding LockedVisible}" />
                     <TextBlock x:Name="FailureText" Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
                                TextWrapping="Wrap" Text="{Binding FailureMessage}" />
+                    <StackPanel Spacing="2" IsVisible="{Binding FailureDetailVisible}">
+                        <TextBlock Text="Details from the installer" FontSize="11"
+                                   Foreground="{StaticResource FrDimBrush}" />
+                        <SelectableTextBlock x:Name="FailureDetailText" Text="{Binding FailureDetail}"
+                                             TextWrapping="Wrap" FontSize="11" LineHeight="16"
+                                             Foreground="{StaticResource FrDimBrush}" />
+                    </StackPanel>
                     <Button x:Name="TryAgainButton" Classes="frPrimary" Content="Try again" HorizontalAlignment="Left"
                             Command="{Binding TryAgainCommand}" IsVisible="{Binding TryAgainVisible}" />
                 </StackPanel>

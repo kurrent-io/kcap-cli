@@ -702,7 +702,7 @@ public class WizardStartupTests {
                     graph.ViewModel.RequestClose();
                 } else {
                     buildsWhenReopened = builds;
-                    reopenedMessage = graph.Steps.OfType<InstallStepViewModel>().Single().FailureMessage;
+                    reopenedMessage = graph.Steps.OfType<InstallStepViewModel>().Single().FailureDetail;
                     shutdown.Cancel(); // ends the test's loop; a quit builds nothing either
                 }
 

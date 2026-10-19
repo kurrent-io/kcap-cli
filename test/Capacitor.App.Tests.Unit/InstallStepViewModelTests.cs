@@ -146,6 +146,29 @@ public class InstallStepViewModelTests {
         await Assert.That(message).IsEqualTo(cliMessage);
     }
 
+    /// A retryable failure's CLI message names the terminal command; the page leads with Try again instead
+    /// and keeps the CLI's words as the detail.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retryable_failure_leads_with_app_guidance_and_keeps_the_cli_message_as_detail() {
+        const string cliMessage = "The local server did not confirm it left setup mode. The setup journal is kept; run kcap setup --local again to finish it.";
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("commit_failed", cliMessage)),
+        };
+
+        var (message, detail, detailVisible) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (install.FailureMessage, install.FailureDetail, install.FailureDetailVisible);
+        });
+
+        await Assert.That(message).IsEqualTo(InstallStepViewModel.NotStartedText);
+        await Assert.That(message!).DoesNotContain("kcap ");
+        await Assert.That(detail).IsEqualTo(cliMessage);
+        await Assert.That(detailVisible).IsTrue();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Unlocked_transient_failure_offers_retry_and_back_and_try_again_reruns() {
