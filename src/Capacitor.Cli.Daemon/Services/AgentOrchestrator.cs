@@ -6192,7 +6192,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Kept the worktree of agent {AgentId} at {Path} (branch {Branch}): it holds {Reason}. Remove it with `git worktree remove` once the work is saved")]
     partial void LogWorktreeKept(string agentId, string path, string branch, string reason);
 
-    /// <summary>Removes an owned worktree, and says where it is when it was kept for holding work.</summary>
     async Task RemoveOwnedWorktreeAsync(WorktreeInfo worktree, string agentId) {
         var removal = await WorktreeManager.RemoveAsync(worktree, _time);
         if (removal.KeptBecause is { } reason) LogWorktreeKept(agentId, worktree.Path, worktree.Branch, reason);

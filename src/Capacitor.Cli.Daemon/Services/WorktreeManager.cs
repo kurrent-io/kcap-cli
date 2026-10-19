@@ -269,7 +269,7 @@ public partial class WorktreeManager(
                 // so concurrent review launches in the same source repo can't
                 // race on each other's fetches. The unique ref carries the
                 // worktree name so it's traceable and easy to clean up.
-                var fetchedRef = $"refs/kcap/review/{name}";
+                var fetchedRef = FetchedRefFor(name);
                 // Fetch OUTSIDE the metadata gate: it's already collision-free (per-worktree ref) and
                 // it's the slow, network-bound half. But a plain fetch ends by running automatic
                 // maintenance, whose task list includes worktree-prune — which WOULD touch
@@ -520,7 +520,8 @@ public partial class WorktreeManager(
             StripWorkspaceMcpConfig(created.Path);
             RecordDaemonBaseline(created.Path);
         } catch {
-            try { await RemoveAsync(created, time); } catch { /* keep the original failure */ }
+            // A half-created worktree holds nothing of the agent's: its empty index reads as every file deleted.
+            try { await RemoveAsync(created, time, keepUnsavedWork: false); } catch { /* keep the original failure */ }
             throw;
         }
     }
@@ -625,7 +626,8 @@ public partial class WorktreeManager(
     /// <summary>Removes the worktree and its branch, unless the worktree holds work that exists nowhere
     /// else: then both stay where they are and the result says why. A borrowed snapshot is the
     /// daemon's own copy and is always removed.</summary>
-    public static async Task<WorktreeRemoval> RemoveAsync(WorktreeInfo worktree, TimeProvider time, bool deleteBranch = true) {
+    public static async Task<WorktreeRemoval> RemoveAsync(
+            WorktreeInfo worktree, TimeProvider time, bool deleteBranch = true, bool keepUnsavedWork = true) {
         if (worktree.IsStandalone) {
             var root = worktree.SnapshotRoot ?? worktree.Path;
 
@@ -642,7 +644,7 @@ public partial class WorktreeManager(
             return WorktreeRemoval.Removed;
         }
 
-        if (await UnsavedWorkAsync(worktree, time) is { } unsaved) return WorktreeRemoval.Keep(unsaved);
+        if (keepUnsavedWork && await UnsavedWorkAsync(worktree, time) is { } unsaved) return WorktreeRemoval.Keep(unsaved);
 
         // Both of these touch the same metadata tree as `worktree add`: the removal mutates it, and
         // `branch -D` READS it — git refuses to delete a branch checked out in any worktree, so it
@@ -749,7 +751,15 @@ public partial class WorktreeManager(
     internal static async Task<string?> UnsavedWorkAsync(WorktreeInfo worktree, TimeProvider time) {
         if (!Directory.Exists(worktree.Path)) return null;
 
-        var status = await RunGitCaptureResultUnproven(
+        try {
+            return await UnsavedWorkReadAsync(worktree, time);
+        } catch (GitConfigTransportException) {
+            return "its git state could not be read safely";
+        }
+    }
+
+    static async Task<string?> UnsavedWorkReadAsync(WorktreeInfo worktree, TimeProvider time) {
+        var status = await RunGitCaptureResult(
             worktree.Path, GitTimeout, time, sourceReadOnly: true, [], "status", "--porcelain=v1", "-z", "--untracked-files=all");
         if (status.ExitCode != 0) return "its git status could not be read";
 
@@ -762,13 +772,16 @@ public partial class WorktreeManager(
         uniqueCommits = [.. uniqueCommits, "--branches", "--remotes"];
         if (!string.IsNullOrEmpty(worktree.FetchedRef)) uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];
 
-        var commits = await RunGitCaptureResultUnproven(worktree.Path, GitTimeout, time, sourceReadOnly: true, [], uniqueCommits);
+        var commits = await RunGitCaptureResult(worktree.Path, GitTimeout, time, sourceReadOnly: true, [], uniqueCommits);
         if (commits.ExitCode != 0 || !int.TryParse(commits.Stdout.Trim(), out var count)) return "its commits could not be read";
 
         return count > 0 ? $"{count} {(count == 1 ? "commit" : "commits")} on no other branch or remote" : null;
     }
 
     static bool IsDaemonEdit(WorktreeInfo worktree, Dictionary<string, string>? baseline, (string Code, string Path) entry) {
+        // Attachments the daemon fetched for the agent are copies of uploads, not work.
+        if (entry.Code == "??" && entry.Path.StartsWith(".attached/", StringComparison.Ordinal)) return true;
+
         // Unstaged and still exactly as the daemon left it; anything staged is the agent's.
         if (baseline?.GetValueOrDefault(entry.Path) is { } recorded)
             return (entry.Code[0] == ' ' || entry.Code == "??") && SafeStamp(Path.Combine(worktree.Path, entry.Path)) == recorded;
@@ -1654,25 +1667,40 @@ public partial class WorktreeManager(
     }
 
     /// <summary>Why a left-behind directory must be kept, or null when it holds nothing to lose. A
-    /// directory that is no longer a git worktree cannot be checked, so it is kept unless empty.</summary>
+    /// directory that is no longer a git worktree cannot be checked, so it is kept unless empty; a
+    /// standalone snapshot is the daemon's own copy and is removed, as at teardown.</summary>
     async Task<string?> LeftBehindWorkAsync(string dir) {
-        if (!Path.Exists(Path.Combine(dir, ".git")))
-            return Directory.EnumerateFileSystemEntries(dir).Any() ? "files outside any git worktree" : null;
+        try {
+            var dotGit = Path.Combine(dir, ".git");
+            if (Directory.Exists(dotGit)) return null;
+            if (!File.Exists(dotGit))
+                return Directory.EnumerateFileSystemEntries(dir).Any() ? "files outside any git worktree" : null;
 
-        return await UnsavedWorkAsync(await LeftWorktreeAsync(dir), time);
+            return await UnsavedWorkAsync(await LeftWorktreeAsync(dir), time);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or GitConfigTransportException) {
+            return "it could not be read";
+        }
     }
 
     /// <summary>The git worktree a left-behind directory is; its source is read from the worktree's own
     /// common git dir.</summary>
     async Task<WorktreeInfo> LeftWorktreeAsync(string dir) {
-        var common = await RunGitCaptureResultUnproven(
+        var common = await RunGitCaptureResult(
             dir, GitTimeout, time, sourceReadOnly: true, [], "rev-parse", "--path-format=absolute", "--git-common-dir");
-        var branch = await RunGitCaptureResultUnproven(
+        var branch = await RunGitCaptureResult(
             dir, GitTimeout, time, sourceReadOnly: true, [], "branch", "--show-current");
         var source = common.ExitCode == 0 ? Path.GetDirectoryName(common.Stdout.Trim().TrimEnd('/', '\\')) : null;
 
-        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source ?? dir);
+        // A review launch's base was fetched into a ref named after its worktree.
+        var fetchedRef = FetchedRefFor(Path.GetFileName(dir));
+        var fetched    = await RunGitCaptureResult(
+            dir, GitTimeout, time, sourceReadOnly: true, [], "rev-parse", "--verify", "--quiet", fetchedRef);
+
+        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source ?? dir,
+            FetchedRef: fetched.ExitCode == 0 ? fetchedRef : null);
     }
+
+    static string FetchedRefFor(string worktreeName) => $"refs/kcap/review/{worktreeName}";
 
     /// <summary>Whether <paramref name="candidate"/> is, or contains, an active worktree.</summary>
     static bool IsActive(string candidate, string[] activePaths) {

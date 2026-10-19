@@ -187,12 +187,12 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
-    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange }
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange, AttachmentOnly }
 
     /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
     /// file or a commit no other ref has keeps the worktree and its branch. The daemon's own edits (the
     /// MCP config it deletes at creation, the config a launch writes, a file identical to the source
-    /// checkout's) are not work; that config edited after the daemon recorded it is, as is a staged
+    /// checkout's, a fetched attachment) are not work; that config edited after the daemon recorded it is, as is a staged
     /// change to it, and so is a link, even to an identical file, since the link itself would be lost.</summary>
     [Test]
     [Arguments(WorktreeState.Clean, false)]
@@ -206,6 +206,7 @@ public class WorktreeManagerTests {
     [Arguments(WorktreeState.LaunchConfigEditedAfter, true)]
     [Arguments(WorktreeState.AgentEditBeforeRelaunch, true)]
     [Arguments(WorktreeState.StagedConfigChange, true)]
+    [Arguments(WorktreeState.AttachmentOnly, false)]
     public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
         var source = repo.Clone;
@@ -259,6 +260,9 @@ public class WorktreeManagerTests {
                 tree.CreateFile(".mcp.json", """{"mcpServers":{"mine":{}}}""");
                 tree.Do("add", ".mcp.json");
                 break;
+            case WorktreeState.AttachmentOnly:
+                tree.CreateFile(".attached/upload.png", "image");
+                break;
             case WorktreeState.LinkToOverlay:
                 Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI lacks");
                 File.CreateSymbolicLink(Path.Combine(worktree.Path, "notes.txt"), source.PathTo("notes.txt"));
@@ -278,7 +282,8 @@ public class WorktreeManagerTests {
     }
 
     /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
-    /// still clears one that holds none.</summary>
+    /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
+    /// standalone snapshot, are the daemon's own.</summary>
     [Test]
     public async Task CleanupOrphaned_keeps_a_left_behind_worktree_holding_work() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
@@ -286,13 +291,23 @@ public class WorktreeManagerTests {
             NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var working = await manager.CreateAsync(repo.Clone, name: "working");
         var clean   = await manager.CreateAsync(repo.Clone, name: "clean");
+        var review  = await manager.CreateAsync(repo.Clone, name: "review", baseRef: "refs/pull/1/head");
         GitRepo.At(working.Path).CreateFile("new.txt", "work");
+        var standalone = Path.Combine(repo.Clone.Path, ".capacitor", "worktrees", "standalone");
+        Directory.CreateDirectory(standalone);
+        GitRepo.At(standalone).Do("init", "-q");
+        GitRepo.At(standalone).Do("config", "user.email", "test@example.com");
+        GitRepo.At(standalone).Do("config", "user.name", "Test");
+        GitRepo.At(standalone).CreateFile("a.txt", "snapshot");
+        GitRepo.At(standalone).CommitAll("Initial snapshot");
 
         try {
             await manager.CleanupOrphanedAsync([]);
 
             await Assert.That(Directory.Exists(working.Path)).IsTrue();
             await Assert.That(Directory.Exists(clean.Path)).IsFalse();
+            await Assert.That(Directory.Exists(review.Path)).IsFalse();
+            await Assert.That(Directory.Exists(standalone)).IsFalse();
         } finally {
             repo.Clone.Try("worktree", "remove", "--force", working.Path);
             repo.Clone.Try("worktree", "prune");
