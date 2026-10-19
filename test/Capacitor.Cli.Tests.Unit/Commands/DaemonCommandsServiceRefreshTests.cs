@@ -285,7 +285,7 @@ public class DaemonCommandsServiceRefreshTests {
         Seed("a", LaunchdUnit.Plist(Spec("a")).Replace("Standard", "Adaptive"));
         using var child = StartDaemon("a");
         var acked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = FakeControlSocket.AnswerOnce(Daemons.Store, "a", LocalFrame.ShutdownAck("stopping"), afterReply: () => acked.SetResult());
+        _ = FakeControlSocket.AnswerOnce(Daemons.Store, "a", LocalFrame.ShutdownAck("stopping"), afterReply: acked.SetResult);
         var calls   = new List<string[]>();
         var manager = Manager(calls, new() { ["a"] = "adaptive (6)" },
             onCall: args => { if (args[0] == "bootout") { child.Kill(); child.WaitForExit(); } });

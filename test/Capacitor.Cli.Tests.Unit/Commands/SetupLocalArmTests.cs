@@ -283,7 +283,7 @@ internal sealed class SetupLocalArmTests {
         (int Exit, string[] Stdout, string Spectre, string Stderr) run;
 
         try {
-            run = await RunWith(null, () => text.ToString(), "setup", "--local", "--single-user", "--no-prompt");
+            run = await RunWith(null, text.ToString, "setup", "--local", "--single-user", "--no-prompt");
         } finally {
             AnsiConsole.Console = original;
         }

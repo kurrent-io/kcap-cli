@@ -888,7 +888,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnStopAgentV2          += HandleStopAgentV2;
         _server.OnAckProcessedPrefix   += ack => _processor?.AckPrefix(ack);
         _server.OnRequestStatusReport  += () => SendDaemonStatusReportOnceAsync();
-        _server.OnRequestStatusReport2 += nonce => SendDaemonStatusReportOnceAsync(nonce);
+        _server.OnRequestStatusReport2 += SendDaemonStatusReportOnceAsync;
         _server.GetHighestAcceptedSeq  =  () => _processor?.HighestAcceptedSeq;
         _server.GetLastProcessedSeq    =  () => _processor?.LastProcessedSeq;
         _server.GetQuarantined         =  () => [.. QuarantineSnapshot()];

@@ -105,7 +105,7 @@ public class PermissionPromptBrokerTests {
         for (var round = 0; round < 200; round++) {
             var broker = new PermissionPromptBroker();
             _ = broker.Register(Dto());
-            var subscribe = Task.Run(() => broker.Subscribe());
+            var subscribe = Task.Run(broker.Subscribe);
             var settle    = Task.Run(() => broker.TrySettle("r1", Allow, "allow", "app"));
             var (id, reader) = await subscribe;
             await settle;

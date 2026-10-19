@@ -124,7 +124,7 @@ public class DaemonCommandsStopTests {
         var ledger   = SeedLedger(("agent-1", ResumeState.Running, null));
         var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
-            afterReply: () => acked.SetResult());
+            afterReply: acked.SetResult);
         var time = new FakeTimeProvider();
         using var console = ConsoleOutput.StartCapture();
 
@@ -155,7 +155,7 @@ public class DaemonCommandsStopTests {
         var identity = PidIdentity.Capture(child.Pid);
         var ledger   = SeedLedger(("running-1", ResumeState.Running, null), ("saved-1", ResumeState.Resuming, null));
         var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: () => acked.SetResult());
+        _ = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"), afterReply: acked.SetResult);
         var time = new FakeTimeProvider();
         using var console = ConsoleOutput.StartCapture();
 
@@ -184,7 +184,7 @@ public class DaemonCommandsStopTests {
         var ledger   = SeedLedger(("agent-1", ResumeState.Resuming, null));
         var acked    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, Name, LocalFrame.ShutdownAck("stopping"),
-            afterReply: () => acked.SetResult());
+            afterReply: acked.SetResult);
         var time = new FakeTimeProvider();
         using var console = ConsoleOutput.StartFullCapture();
 
