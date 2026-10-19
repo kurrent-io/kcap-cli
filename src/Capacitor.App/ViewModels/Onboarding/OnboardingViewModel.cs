@@ -48,7 +48,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public string SkipLabel => Current.SkipLabel;
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
-    public bool BackVisible => PreviousShownIndex() >= 0;
+    public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -161,7 +161,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
             case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
             case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
-                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip):
+                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip)
+                or nameof(IWizardStep.BackVisible):
                 RestateActions();
                 break;
             case nameof(SignInStepViewModel.TenantPickerVisible)

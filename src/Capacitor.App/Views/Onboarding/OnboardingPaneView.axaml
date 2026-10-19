@@ -51,6 +51,10 @@
             </StackPanel>
         </DataTemplate>
 
+        <DataTemplate DataType="vm:InstallStepViewModel">
+            <views:InstallPaneView />
+        </DataTemplate>
+
         <DataTemplate DataType="vm:SignInStepViewModel">
             <views:SignInPaneView />
         </DataTemplate>

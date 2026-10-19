@@ -1,0 +1,76 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
+             xmlns:icons="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.Onboarding.InstallPaneView"
+             x:DataType="vm:InstallStepViewModel">
+    <StackPanel Spacing="14">
+        <Border Classes="frWarning" IsVisible="{Binding RefusalVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                               Foreground="{StaticResource KcapWarningBrush}" />
+                <TextBlock Grid.Column="1" x:Name="RefusalText" Classes="frBody" TextWrapping="Wrap"
+                           Text="{Binding RefusalMessage}" />
+            </Grid>
+        </Border>
+
+        <Border Classes="frCard" IsVisible="{Binding ProgressVisible}">
+            <StackPanel Spacing="12">
+                <TextBlock Classes="frNote" Text="Finishing an earlier setup" IsVisible="{Binding Progress.Recovering}" />
+                <TextBlock Classes="frNote" Text="Undoing the partial install" IsVisible="{Binding Progress.RollingBack}" />
+                <TextBlock Classes="frNote" Text="Already installed" IsVisible="{Binding Progress.Reused}" />
+
+                <ItemsControl x:Name="InstallRows" ItemsSource="{Binding Rows}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="10" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="vm:InstallStepRow">
+                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+                                <Panel Width="14" Height="14" VerticalAlignment="Center">
+                                    <icons:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource FrMutedBrush}"
+                                                   IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Pending}" />
+                                    <Panel Classes="frSpinner"
+                                           IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}">
+                                        <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource FrAccentBrush}"
+                                                       Classes.kcapSpinning="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}" />
+                                    </Panel>
+                                    <icons:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
+                                                   IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Done}" />
+                                </Panel>
+                                <TextBlock Grid.Column="1" Classes="frBody" VerticalAlignment="Center" Text="{Binding Label}" />
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100"
+                             Value="{Binding DownloadPercent}" IsIndeterminate="{Binding DownloadIndeterminate}"
+                             Background="{StaticResource FrDividerBrush}" Foreground="{StaticResource FrAccentBrush}"
+                             IsVisible="{Binding DownloadBarVisible}" />
+
+                <Button x:Name="CancelInstallButton" Classes="frLink" Content="Cancel" HorizontalAlignment="Left"
+                        AutomationProperties.Name="Cancel the install"
+                        Command="{Binding CancelCommand}" IsVisible="{Binding CancelVisible}" />
+            </StackPanel>
+        </Border>
+
+        <Border Classes="frWarning" IsVisible="{Binding FailureVisible}">
+            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
+                               Foreground="{StaticResource KcapDangerBrush}" />
+                <StackPanel Grid.Column="1" Spacing="8">
+                    <TextBlock Classes="frLabel" FontSize="12.5" Text="{x:Static vm:InstallStepViewModel.LockedText}"
+                               IsVisible="{Binding LockedVisible}" />
+                    <TextBlock x:Name="FailureText" Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
+                               TextWrapping="Wrap" Text="{Binding FailureMessage}" />
+                    <Button x:Name="TryAgainButton" Classes="frPrimary" Content="Try again" HorizontalAlignment="Left"
+                            Command="{Binding TryAgainCommand}" IsVisible="{Binding TryAgainVisible}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </StackPanel>
+</UserControl>

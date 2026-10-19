@@ -1,0 +1,254 @@
+using System.Reactive.Threading.Tasks;
+using Avalonia.Threading;
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.ViewModels.Onboarding;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
+using TUnit.Assertions.Enums;
+
+namespace Capacitor.App.Tests.Unit;
+
+public class InstallStepViewModelTests {
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
+
+    TelemetryProbe Probe() => TelemetryProbe.Live("setup", Config.Root);
+
+    static InstallStepViewModel Step(LocalInstallController controller, string? appProfile = "default", string? active = "default") =>
+        new(controller, () => appProfile, () => active, () => true);
+
+    static LocalInstallController Controller(FakeKcapCli cli, LocalRoot root, TelemetryProbe probe, Action<Action>? post = null) =>
+        new(() => cli, root, () => false, post ?? (action => action()), probe.Funnel);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_immediate_install_advances_once() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var (current, advances) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            var advances = 0;
+            install.AdvanceRequested += () => advances++;
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition), install,
+                new FakeWizardStep(WizardStepId.Harnesses), new FakeWizardStep(WizardStepId.Done),
+            ]);
+            await vm.PendingEnterForTesting;
+
+            await vm.NextCommand.Execute().ToTask();
+            await vm.PendingAdvanceForTesting;
+
+            return (vm.Current.Id, advances);
+        });
+
+        await Assert.That(current).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(advances).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_late_install_advances_once() {
+        var exit = new TaskCompletionSource<StreamingResult>();
+        Action<StreamedLine>? print = null;
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = (onLine, _, _) => {
+                print = onLine;
+                return exit.Task;
+            },
+        };
+
+        var (before, current, advances) = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe(), action => Dispatcher.UIThread.Post(action));
+            var install = Step(controller);
+            var advances = 0;
+            install.AdvanceRequested += () => advances++;
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition), install,
+                new FakeWizardStep(WizardStepId.Harnesses), new FakeWizardStep(WizardStepId.Done),
+            ]);
+            await vm.PendingEnterForTesting;
+            await vm.NextCommand.Execute().ToTask();
+            var before = vm.Current.Id;
+
+            var settled = new TaskCompletionSource();
+            controller.Settled += _ => settled.TrySetResult();
+            print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            exit.SetResult(new StreamingResult(0, false, []));
+            await settled.Task;
+            await vm.PendingAdvanceForTesting;
+
+            return (before, vm.Current.Id, advances);
+        });
+
+        await Assert.That(before).IsEqualTo(WizardStepId.Install);
+        await Assert.That(current).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(advances).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Locked_lifecycle_busy_offers_neither_retry_nor_back() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("lifecycle_busy")) };
+
+        var (tryAgain, back, locked, message, canBack) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (install.TryAgainVisible, install.BackVisible, install.LockedVisible, install.FailureMessage,
+                await install.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None));
+        });
+
+        await Assert.That(tryAgain).IsFalse();
+        await Assert.That(back).IsFalse();
+        await Assert.That(canBack).IsFalse();
+        await Assert.That(locked).IsTrue();
+        await Assert.That(message).IsEqualTo(InstallStepViewModel.BusyText);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Permanent_refusal_while_locked_shows_the_cli_message() {
+        const string cliMessage = "Port 5123 answers, but not as a Capacitor server.";
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("not_our_server", cliMessage)),
+        };
+
+        var (tryAgain, back, message) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (install.TryAgainVisible, install.BackVisible, install.FailureMessage);
+        });
+
+        await Assert.That(tryAgain).IsFalse();
+        await Assert.That(back).IsFalse();
+        await Assert.That(message).IsEqualTo(cliMessage);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Unlocked_transient_failure_offers_retry_and_back_and_try_again_reruns() {
+        var probe = Probe();
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed")) };
+
+        var (tryAgain, back, locked, canBack, runs) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), probe));
+            await install.OnEnterAsync(CancellationToken.None);
+            var shown = (install.TryAgainVisible, install.BackVisible, install.LockedVisible,
+                await install.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None));
+
+            await install.TryAgainCommand.Execute().ToTask();
+
+            return (shown.Item1, shown.Item2, shown.Item3, shown.Item4, cli.SetupLocalCallCount);
+        });
+
+        await Assert.That(tryAgain).IsTrue();
+        await Assert.That(back).IsTrue();
+        await Assert.That(locked).IsFalse();
+        await Assert.That(canBack).IsTrue();
+        await Assert.That(runs).IsEqualTo(2);
+        await Assert.That(probe.Names).IsEquivalentTo([
+            "cli_setup_local_install_started", "cli_setup_local_install_failed",
+            "cli_setup_local_install_retried",
+            "cli_setup_local_install_started", "cli_setup_local_install_failed",
+        ], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task While_running_cancel_is_offered_and_back_is_not() {
+        var cli = new FakeKcapCli {
+            SetupLocalBehavior = async (onLine, interrupt, _) => {
+                var exited = new TaskCompletionSource();
+                await using var reg = interrupt.Register(() => exited.TrySetResult());
+                await exited.Task;
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("cancelled")));
+                return new StreamingResult(130, false, []);
+            },
+        };
+
+        var (cancel, back, canBack, canNext, after) = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            var install = Step(controller);
+            await install.OnEnterAsync(CancellationToken.None);
+            var shown = (install.CancelVisible, install.BackVisible,
+                await install.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None),
+                await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None));
+
+            await install.CancelCommand.Execute().ToTask();
+            await controller.SettleAsync();
+
+            return (shown.Item1, shown.Item2, shown.Item3, shown.Item4, install.TryAgainVisible);
+        });
+
+        await Assert.That(cancel).IsTrue();
+        await Assert.That(back).IsFalse();
+        await Assert.That(canBack).IsFalse();
+        await Assert.That(canNext).IsFalse();
+        await Assert.That(after).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Profile_override_refuses_before_starting() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var (refusal, visible) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), appProfile: "work", active: "personal");
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (install.RefusalMessage, install.RefusalVisible);
+        });
+
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
+        await Assert.That(visible).IsTrue();
+        await Assert.That(refusal).Contains("\"work\"");
+        await Assert.That(refusal).Contains("\"personal\"");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Pass_through_off_the_local_path_and_once_installed() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+        var onLocal = false;
+
+        var (offPath, onPathBefore, onPathAfter) = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            var install = new InstallStepViewModel(controller, () => null, () => null, () => onLocal);
+            var offPath = install.PassThrough;
+            onLocal = true;
+            var before = install.PassThrough;
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (offPath, before, install.PassThrough);
+        });
+
+        await Assert.That(offPath).IsTrue();
+        await Assert.That(onPathBefore).IsFalse();
+        await Assert.That(onPathAfter).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_shell_hides_back_while_the_install_runs_and_shows_it_after_an_unlocked_failure() {
+        var exit = new TaskCompletionSource<StreamingResult>();
+        var cli = new FakeKcapCli { SetupLocalBehavior = (_, _, _) => exit.Task };
+
+        var (running, failed) = await AvaloniaSession.DispatchAsync(async () => {
+            var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition), Step(controller), new FakeWizardStep(WizardStepId.Done),
+            ]);
+            await vm.PendingEnterForTesting;
+            await vm.NextCommand.Execute().ToTask();
+            var running = vm.BackVisible;
+
+            exit.SetResult(new StreamingResult(1, false, []));
+            await controller.SettleAsync();
+
+            return (running, vm.BackVisible);
+        });
+
+        await Assert.That(running).IsFalse();
+        await Assert.That(failed).IsTrue();
+    }
+}

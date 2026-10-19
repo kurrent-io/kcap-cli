@@ -1634,8 +1634,13 @@ sealed class FakeKcapCli : IKcapCli {
         return ImportBehavior(request, onLine, ct);
     }
 
-    public Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
-        Task.FromResult(new StreamingResult(0, false, []));
+    public int SetupLocalCallCount;
+    public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> SetupLocalBehavior =
+        (_, _, _) => Task.FromResult(new StreamingResult(0, false, []));
+    public Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        SetupLocalCallCount++;
+        return SetupLocalBehavior(onLine, interrupt, ct);
+    }
 
     public Task<ProcessResult> LocalStartAsync(CancellationToken ct) =>
         Task.FromResult(new ProcessResult(0, "", "", false));
