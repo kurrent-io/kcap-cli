@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia;
@@ -84,7 +85,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             activityFlyout.Closed += (_, _) => { _activityOpen = false; UpdateActivityVisibility(); };
         }
 
+        var switchCover = new WorkspaceSwitchCover(ContentPane, SwitchCover, SwitchCoverStill);
         this.WhenActivated(disposables => {
+            var coverTracking = new SerialDisposable().DisposeWith(disposables);
+            this.WhenAnyValue(x => x.ViewModel)
+                .Subscribe(vm => coverTracking.Disposable = vm is null ? null : switchCover.Track(vm))
+                .DisposeWith(disposables);
             // Switched over the ViewModel, not read once: an onboarding window activates before
             // the main surface hands it one.
             Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
