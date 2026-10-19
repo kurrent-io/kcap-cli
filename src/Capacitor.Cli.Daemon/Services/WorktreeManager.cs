@@ -692,15 +692,28 @@ public partial class WorktreeManager(
         if (entry.Code.Contains('D') && WorkspaceMcpConfigPaths.Contains(entry.Path)) return true;
         if (entry.Code != "??") return false;
 
-        var copy = Path.Combine(worktree.SourceRepo, entry.Path);
-        var file = Path.Combine(worktree.Path, entry.Path);
+        // Ordinary files only: a link is the entry itself, and would be lost even if its target matched.
+        var copy = new FileInfo(Path.Combine(worktree.SourceRepo, entry.Path));
+        var file = new FileInfo(Path.Combine(worktree.Path, entry.Path));
         try {
-            return File.Exists(copy) && new FileInfo(copy).Length == new FileInfo(file).Length
-                && File.ReadAllBytes(copy).AsSpan().SequenceEqual(File.ReadAllBytes(file));
+            return copy is { Exists: true, LinkTarget: null } && file is { Exists: true, LinkTarget: null }
+                && copy.Length == file.Length && SameContent(copy, file);
         } catch (IOException) {
             return false;
         } catch (UnauthorizedAccessException) {
             return false;
+        }
+    }
+
+    static bool SameContent(FileInfo a, FileInfo b) {
+        using var left  = a.OpenRead();
+        using var right = b.OpenRead();
+        Span<byte> l = stackalloc byte[8192];
+        Span<byte> r = stackalloc byte[8192];
+        while (true) {
+            var read = left.ReadAtLeast(l, l.Length, throwOnEndOfStream: false);
+            if (right.ReadAtLeast(r, r.Length, throwOnEndOfStream: false) != read || !l[..read].SequenceEqual(r[..read])) return false;
+            if (read < l.Length) return true;
         }
     }
 
