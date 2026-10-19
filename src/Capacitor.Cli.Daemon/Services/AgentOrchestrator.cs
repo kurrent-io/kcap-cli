@@ -5392,8 +5392,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // true. Started under the gate a stop's report takes, so it can never follow that report.
                     Task? statusSend;
                     lock (agent.StatusSendGate) {
-                        if (agent.StopRequested) break;
-                        if (!TrySendAgentStatus(agent, agent.Status, null, out statusSend))
+                        // The stop state and the status together, under the lock a stop marks itself requested by.
+                        string? status;
+                        lock (_ledgerLock) status = agent.StopRequested ? null : agent.Status;
+                        if (status is null) break;
+                        if (!TrySendAgentStatus(agent, status, null, out statusSend))
                             break; // verdict published → terminal Failed; skip this agent's re-registration
                     }
                     await statusSend;
