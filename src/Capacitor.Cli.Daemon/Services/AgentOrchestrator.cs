@@ -1064,7 +1064,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     void HandleToolSettled(string agentId, ToolSettledNotice notice) {
         if (notice.ToolUseId is { } toolUseId)
             _permissionBroker.TryWithdrawTool(agentId, notice.SessionId, toolUseId, notice.SubagentId, notice.ToolName, notice.ToolInput, notice.SentAt);
-        else _permissionBroker.WithdrawTurn(agentId, notice.SessionId, notice.SubagentId);
+        else _permissionBroker.WithdrawTurn(agentId, notice.SessionId, notice.SubagentId, notice.SentAt);
     }
 
     /// The bridge's subagent report for a hosted Claude session: applied to the attributed agent's

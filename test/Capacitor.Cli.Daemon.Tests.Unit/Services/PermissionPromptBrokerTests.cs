@@ -262,6 +262,53 @@ public class PermissionPromptBrokerTests {
         await Assert.That((await WaitBounded(held, "the matching call withdrew it")).Source).IsEqualTo(PermissionSettlements.SourceToolSettled);
     }
 
+    /// A turn's end that reaches the daemon late can find the next turn's prompt already waiting,
+    /// so it retires only what was registered before the hook sent it.
+    [Test]
+    public async Task A_turn_end_withdraws_only_prompts_registered_before_it_was_sent() {
+        var broker = new PermissionPromptBroker();
+        var held = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.WithdrawTurn("a1", "s1", null, DateTimeOffset.UtcNow.AddMinutes(-1))).IsEqualTo(0);
+        await Assert.That(held.IsCompleted).IsFalse();
+        await Assert.That(broker.WithdrawTurn("a1", "s1", null, DateTimeOffset.UtcNow.AddMinutes(1))).IsEqualTo(1);
+    }
+
+    /// A call the next turn is owed outlives a late turn end, or its notice would retire an
+    /// identical prompt still waiting.
+    [Test]
+    public async Task A_turn_end_keeps_the_calls_owed_after_it_was_sent() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+        broker.WithdrawTurn("a1", "s1", null, DateTimeOffset.UtcNow.AddMinutes(-1));
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+    }
+
+    /// A prompt whose input was over the cap is held without it, so its call cannot be told from an
+    /// identical prompt's; matching by name and input stops for the scope until the turn ends.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_prompt_held_without_its_input_stops_name_and_input_matching_until_the_turn_ends(bool allowed) {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1") with { Vendor = "codex" });
+        if (allowed) await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+        var other = broker.Register(Dto("r2", input: """{"command":"ls"}""") with { Vendor = "codex" });
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "exec-1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(other.IsCompleted).IsFalse();
+
+        broker.WithdrawTurn("a1", "s1", null, DateTimeOffset.UtcNow.AddMinutes(1));
+        var next = broker.Register(Dto("r3", input: """{"command":"ls"}""") with { Vendor = "codex" });
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "exec-2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""),
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(2))).IsTrue();
+        await Assert.That(next.IsCompleted).IsTrue();
+    }
+
     /// Codex's hook answer has no updated input, so an allow that carries one still runs the
     /// prompt's own call, and that is the call owed.
     [Test]

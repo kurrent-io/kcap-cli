@@ -96,6 +96,7 @@ public class CodexHookToolSettledRelayTests {
         await Assert.That(body["tool_use_id"]).IsNull();
         await Assert.That(body["subagent_id"]).IsNull();
         await Assert.That(body["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
+        await Assert.That(body["sent_at"]!.GetValue<long>()).IsGreaterThan(0).Because("a late turn end must not retire the next turn's prompt");
         await Assert.That(bridge.LogEntries.Any(e => e.RequestMessage.Path == "/tok/codex/input-wait")).IsTrue();
     }
 

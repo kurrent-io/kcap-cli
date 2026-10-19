@@ -278,10 +278,12 @@ public sealed class ClaudeHookCommand(
                 clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "stop" && agentId is null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining,
+                sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "subagent-stop" && subagentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining,
+                sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         // A subagent's hook (agent_id set) runs with the parent's environment but is not the
         // parent's turn: it reports the subagent alive or gone and never touches the parent's

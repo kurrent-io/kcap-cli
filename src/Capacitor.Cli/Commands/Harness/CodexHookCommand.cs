@@ -321,13 +321,14 @@ sealed class CodexHookCommand(
         var cwd        = TryGetString(node, "cwd");
         var subagentId = SubagentIdOf(node);
         var budget     = clock.Budget(Ceiling).Remaining;
+        var sentAt     = clock.Time.GetUtcNow().ToUnixTimeMilliseconds();
 
         return eventName switch {
             "PostToolUse" when TryGetString(node, "tool_use_id") is { } toolUseId =>
                 DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "codex", sessionId, cwd, toolUseId, subagentId, budget,
-                    TryGetString(node, "tool_name"), node["tool_input"]?.DeepClone(), clock.Time.GetUtcNow().ToUnixTimeMilliseconds()),
+                    TryGetString(node, "tool_name"), node["tool_input"]?.DeepClone(), sentAt),
             "Stop" when subagentId is null =>
-                DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "codex", sessionId, cwd, toolUseId: null, subagentId: null, budget),
+                DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "codex", sessionId, cwd, toolUseId: null, subagentId: null, budget, sentAtMs: sentAt),
             _ => Task.CompletedTask,
         };
     }

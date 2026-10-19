@@ -42,10 +42,11 @@ internal sealed class PermissionPromptBroker {
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
     // A prompt settled before its call's notice arrived: that notice is its own, and must not
     // retire an identical prompt still waiting. Kept until the notice or the turn's end, and only
-    // for a vendor whose hook sends both. A turn that outgrows the bound stops matching by name
-    // and input until it ends, rather than forgetting what it owes.
+    // for a vendor whose hook sends both. A turn that outgrows the bound, or holds a prompt whose
+    // input was over the cap, stops matching by name and input until a turn end sent after the
+    // latest such prompt, rather than forgetting what it owes.
     readonly List<AllowedCall> _allowedCalls = [];
-    readonly HashSet<(string AgentId, string SessionId, string? SubagentId)> _overflowed = [];
+    readonly Dictionary<(string AgentId, string SessionId, string? SubagentId), DateTimeOffset?> _overflowed = [];
     const int MaxAllowedCallsPerTurn = 64;
     readonly object _gate = new();
     long _seq;
@@ -67,6 +68,7 @@ internal sealed class PermissionPromptBroker {
             // Completed while the gate is held: a continuation running inline would re-enter it.
             var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId, ++_seq,
                 MatchKey(dto.Vendor, dto.ToolName, dto.ToolInput));
+            if (ReportsCalls(dto.Vendor) && dto.ToolUseId is null && dto.ToolInput is null) LoseCountLocked(dto, subagentId);
             if (!_pending.TryAdd(dto.RequestId, entry))
                 throw new InvalidOperationException($"permission request {dto.RequestId} is already pending");
             Broadcast(new PermissionStreamItem.Pending(dto));
@@ -114,7 +116,7 @@ internal sealed class PermissionPromptBroker {
         lock (_gate) {
             _withdrawnAgents.Add(agentId);
             _allowedCalls.RemoveAll(c => c.AgentId == agentId);
-            _overflowed.RemoveWhere(s => s.AgentId == agentId);
+            foreach (var scope in _overflowed.Keys.Where(s => s.AgentId == agentId).ToList()) _overflowed.Remove(scope);
             foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId).ToList())
                 SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone);
         }
@@ -144,7 +146,7 @@ internal sealed class PermissionPromptBroker {
                     _allowedCalls.RemoveAt(owed);
                     return false;
                 }
-                if (_overflowed.Contains((agentId, sessionId, subagentId))) return false;
+                if (_overflowed.ContainsKey((agentId, sessionId, subagentId))) return false;
                 entry = _pending.Values
                     .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
                              && e.SubagentId == subagentId && e.Dto.ToolName == toolName
@@ -161,13 +163,17 @@ internal sealed class PermissionPromptBroker {
     /// for a null subagentId, otherwise that subagent's. A background subagent's prompt outlives
     /// the parent's turn, which is why the scope matters. Unlike an exit, a turn's end says nothing
     /// about the agent's next request.
-    public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
+    /// <param name="sentAt">When the hook sent the notice: what was registered after it belongs to
+    /// a later turn and is left alone. Null only from a hook too old to stamp it.</param>
+    public int WithdrawTurn(string agentId, string sessionId, string? subagentId, DateTimeOffset? sentAt = null) {
         lock (_gate) {
-            _allowedCalls.RemoveAll(c => c.AgentId == agentId && c.SessionId == sessionId && c.SubagentId == subagentId);
-            _overflowed.Remove((agentId, sessionId, subagentId));
+            var scope = (agentId, sessionId, subagentId);
+            _allowedCalls.RemoveAll(c => (c.AgentId, c.SessionId, c.SubagentId) == scope && (sentAt is null || RequestedBy(c.Dto, sentAt.Value)));
+            if (_overflowed.TryGetValue(scope, out var lostAt) && (sentAt is null || lostAt <= sentAt)) _overflowed.Remove(scope);
             var settled = 0;
             foreach (var e in _pending.Values.Where(e =>
-                         e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
+                         e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId
+                      && (sentAt is null || RequestedBy(e.Dto, sentAt.Value))).ToList())
                 if (SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled, owesCall: false)) settled++;
             return settled;
         }
@@ -206,8 +212,18 @@ internal sealed class PermissionPromptBroker {
     void OweLocked(PermissionPendingDto dto, string? subagentId, JsonElement? input) {
         if (!ReportsCalls(dto.Vendor) || _withdrawnAgents.Contains(dto.AgentId)) return;
         var turn = (dto.AgentId, dto.SessionId, subagentId);
-        if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
+        if (dto.ToolUseId is null && input is null
+         || _allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) LoseCountLocked(dto, subagentId);
         else _allowedCalls.Add(new AllowedCall(dto, subagentId, input));
+    }
+
+    // Caller holds _gate. Keeps the latest prompt's stamp; an unparsed one compares with nothing,
+    // so only an unstamped turn end clears it.
+    void LoseCountLocked(PermissionPendingDto dto, string? subagentId) {
+        var turn = (dto.AgentId, dto.SessionId, subagentId);
+        var at   = RequestedAt(dto);
+        if (_overflowed.TryGetValue(turn, out var prior) && (prior is null || prior >= at)) return;
+        _overflowed[turn] = at;
     }
 
     // The vendors whose hook reports each finished call with its name and input.
@@ -221,8 +237,10 @@ internal sealed class PermissionPromptBroker {
         vendor == "codex" && input is { } held ? CodexPermissionInput.MatchKey(toolName, held) : input;
 
     // An unparsed stamp is no ordering, so such a prompt is left to the turn's end.
-    static bool RequestedBy(PermissionPendingDto dto, DateTimeOffset sentAt) =>
-        DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) && at <= sentAt;
+    static bool RequestedBy(PermissionPendingDto dto, DateTimeOffset sentAt) => RequestedAt(dto) <= sentAt;
+
+    static DateTimeOffset? RequestedAt(PermissionPendingDto dto) =>
+        DateTimeOffset.TryParse(dto.RequestedAt, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var at) ? at : null;
 
     void Broadcast(PermissionStreamItem item) {
         foreach (var ch in _subscribers.Values) ch.Writer.TryWrite(item);
