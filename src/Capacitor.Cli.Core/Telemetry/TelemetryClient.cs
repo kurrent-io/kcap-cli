@@ -53,7 +53,11 @@ public sealed class TelemetryClient(
     }
 
     async Task<bool> FlushAfterAsync(Task<bool> prior, long start, string distinctId, string? orgGroup, TimeSpan budget) {
-        await prior;
+        try {
+            await prior;
+        } catch {
+            // An earlier flush's failure is its own; this one still runs and must not throw.
+        }
 
         List<TelemetryEvent> queued;
         lock (_queue) {
