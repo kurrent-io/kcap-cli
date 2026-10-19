@@ -227,7 +227,11 @@ public sealed partial class PullRequestContextViewModel {
         ? new(item.Id, (item.Path ?? "Unknown file") + (item.Line is { } line ? ":" + line.ToString(CultureInfo.InvariantCulture) : ""),
             Joined(item.IsResolved switch { true => "Resolved", false => "Unresolved", _ => null }, item.IsOutdated == true ? "Outdated" : null,
                 item.RootComment is { Availability: "available", Author: { } author } ? Author(author) : null),
-            item.RootComment?.Availability == "available" ? item.RootComment.Body : null, item.DiffHunk, PrLink(item.Url, subject),
+            item.RootComment?.Availability == "available"
+                ? SuggestionDiff.Rewrite(item.RootComment.Body, item.DiffHunk, item.HunkTruncated, item.DiffSide, item.Line ?? item.OriginalLine,
+                    item.Line is null ? item.OriginalStartLine : item.StartLine)
+                : null,
+            item.DiffHunk, PrLink(item.Url, subject),
             "available", item.HunkTruncated || item.RootComment?.BodyTruncated == true, IsThread: true)
         : Unavailable(item.Id, "Thread", PrLink(item.Url, subject), item.Availability);
 }
