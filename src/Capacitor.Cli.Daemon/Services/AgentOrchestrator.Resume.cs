@@ -1117,7 +1117,8 @@ internal partial class AgentOrchestrator {
             path,
             launch.WorktreeBranch ?? $"capacitor/{Path.GetFileName(path)}",
             launch.WorktreeSourceRepo ?? launch.RepoPath,
-            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git"))) {
+            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git")),
+            FetchedRef: WorktreeManager.FetchedRefFor(Path.GetFileName(path))) {
             GitRelativeCwd = launch.GitRelativeCwd
         };
     }

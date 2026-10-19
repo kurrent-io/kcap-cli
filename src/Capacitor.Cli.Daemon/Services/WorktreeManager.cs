@@ -767,16 +767,24 @@ public partial class WorktreeManager(
         var changes  = ParsePorcelainZ(status.Stdout).Count(entry => !IsDaemonEdit(worktree, baseline, entry));
         if (changes > 0) return $"{changes} uncommitted {(changes == 1 ? "change" : "changes")}";
 
-        string[] uniqueCommits = ["rev-list", "--count", "HEAD", "--not"];
+        // The worktree's own branch is deleted with it, so its commits count even with HEAD moved elsewhere.
+        var ownBranch = $"refs/heads/{worktree.Branch}";
+        var hasBranch = !string.IsNullOrEmpty(worktree.Branch) && await RefExistsAsync(worktree.Path, ownBranch, time);
+        string[] uniqueCommits = ["rev-list", "--count", "HEAD", .. hasBranch ? [ownBranch] : Array.Empty<string>(), "--not"];
         if (!string.IsNullOrEmpty(worktree.Branch)) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
         uniqueCommits = [.. uniqueCommits, "--branches", "--remotes"];
-        if (!string.IsNullOrEmpty(worktree.FetchedRef)) uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];
+        if (!string.IsNullOrEmpty(worktree.FetchedRef) && await RefExistsAsync(worktree.Path, worktree.FetchedRef, time))
+            uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];
 
         var commits = await RunGitCaptureResult(worktree.Path, GitTimeout, time, sourceReadOnly: true, [], uniqueCommits);
         if (commits.ExitCode != 0 || !int.TryParse(commits.Stdout.Trim(), out var count)) return "its commits could not be read";
 
         return count > 0 ? $"{count} {(count == 1 ? "commit" : "commits")} on no other branch or remote" : null;
     }
+
+    static async Task<bool> RefExistsAsync(string worktreePath, string reference, TimeProvider time) =>
+        (await RunGitCaptureResult(worktreePath, GitTimeout, time, sourceReadOnly: true, [],
+            "rev-parse", "--verify", "--quiet", $"{reference}^{{commit}}")).ExitCode == 0;
 
     static bool IsDaemonEdit(WorktreeInfo worktree, Dictionary<string, string>? baseline, (string Code, string Path) entry) {
         // Unstaged and still exactly as the daemon left it; anything staged is the agent's.
@@ -1673,31 +1681,30 @@ public partial class WorktreeManager(
             if (!File.Exists(dotGit))
                 return Directory.EnumerateFileSystemEntries(dir).Any() ? "files outside any git worktree" : null;
 
-            return await UnsavedWorkAsync(await LeftWorktreeAsync(dir), time);
+            return await LeftWorktreeAsync(dir) is { } worktree
+                ? await UnsavedWorkAsync(worktree, time)
+                : "its git dir could not be read";
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or GitConfigTransportException) {
             return "it could not be read";
         }
     }
 
     /// <summary>The git worktree a left-behind directory is; its source is read from the worktree's own
-    /// common git dir.</summary>
-    async Task<WorktreeInfo> LeftWorktreeAsync(string dir) {
+    /// common git dir. Null when that cannot be read: the directory itself is no source to compare against.</summary>
+    async Task<WorktreeInfo?> LeftWorktreeAsync(string dir) {
         var common = await RunGitCaptureResult(
             dir, GitTimeout, time, sourceReadOnly: true, [], "rev-parse", "--path-format=absolute", "--git-common-dir");
         var branch = await RunGitCaptureResult(
             dir, GitTimeout, time, sourceReadOnly: true, [], "branch", "--show-current");
-        var source = common.ExitCode == 0 ? Path.GetDirectoryName(common.Stdout.Trim().TrimEnd('/', '\\')) : null;
+        if (common.ExitCode != 0 || Path.GetDirectoryName(common.Stdout.Trim().TrimEnd('/', '\\')) is not { Length: > 0 } source)
+            return null;
 
-        // A review launch's base was fetched into a ref named after its worktree.
-        var fetchedRef = FetchedRefFor(Path.GetFileName(dir));
-        var fetched    = await RunGitCaptureResult(
-            dir, GitTimeout, time, sourceReadOnly: true, [], "rev-parse", "--verify", "--quiet", fetchedRef);
-
-        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source ?? dir,
-            FetchedRef: fetched.ExitCode == 0 ? fetchedRef : null);
+        return new WorktreeInfo(dir, branch.ExitCode == 0 ? branch.Stdout.Trim() : "", source,
+            FetchedRef: FetchedRefFor(Path.GetFileName(dir)));
     }
 
-    static string FetchedRefFor(string worktreeName) => $"refs/kcap/review/{worktreeName}";
+    /// <summary>The ref a review launch fetched its base into, named after its worktree.</summary>
+    internal static string FetchedRefFor(string worktreeName) => $"refs/kcap/review/{worktreeName}";
 
     /// <summary>Whether <paramref name="candidate"/> is, or contains, an active worktree.</summary>
     static bool IsActive(string candidate, string[] activePaths) {

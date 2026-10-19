@@ -187,13 +187,14 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
-    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange }
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange, CommitThenSwitchedAway }
 
     /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
-    /// file or a commit no other ref has keeps the worktree and its branch. The daemon's own edits (the
-    /// MCP config it deletes at creation, the config a launch writes, a file identical to the source
-    /// checkout's) are not work; that config edited after the daemon recorded it is, as is a staged
-    /// change to it, and so is a link, even to an identical file, since the link itself would be lost.</summary>
+    /// file or a commit no other ref has, on HEAD or on the worktree's own branch, keeps the worktree and
+    /// its branch. The daemon's own edits (the MCP config it deletes at creation, the config a launch
+    /// writes, a file identical to the source checkout's) are not work; that config edited after the
+    /// daemon recorded it is, as is a staged change to it, and so is a link, even to an identical file,
+    /// since the link itself would be lost.</summary>
     [Test]
     [Arguments(WorktreeState.Clean, false)]
     [Arguments(WorktreeState.ChangedFile, true)]
@@ -206,6 +207,7 @@ public class WorktreeManagerTests {
     [Arguments(WorktreeState.LaunchConfigEditedAfter, true)]
     [Arguments(WorktreeState.AgentEditBeforeRelaunch, true)]
     [Arguments(WorktreeState.StagedConfigChange, true)]
+    [Arguments(WorktreeState.CommitThenSwitchedAway, true)]
     public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
         var source = repo.Clone;
@@ -228,6 +230,12 @@ public class WorktreeManagerTests {
                 tree.CreateFile("new.txt", "work");
                 tree.Do("add", "new.txt");
                 tree.Commit("agent work");
+                break;
+            case WorktreeState.CommitThenSwitchedAway:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                tree.Do("checkout", "-q", "--detach", "HEAD~1");
                 break;
             case WorktreeState.CommitOnAnotherBranch:
                 tree.CreateFile("new.txt", "work");
