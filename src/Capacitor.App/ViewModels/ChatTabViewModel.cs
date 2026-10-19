@@ -6,6 +6,8 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Avalonia.Collections;
 using Avalonia.Threading;
 using Capacitor.App.Services;
@@ -65,6 +67,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     // AskUserQuestion's permission hook carries no tool-use id, so a finished ask is recognized
     // by question text. The latest overlapping ask is the one a card belongs to.
     readonly List<AskedQuestion> _questionAsks = [];
+    // Claude's permission hook carries no tool-use id for any tool, so its card matches a call by
+    // name and input instead; each call retires one card, kept here once claimed.
+    readonly Dictionary<string, RecordedCall> _calls = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> _callForRequest = new(StringComparer.Ordinal);
     readonly HashSet<string> _withdrawing = new(StringComparer.Ordinal);
     readonly Dictionary<string, int> _withdrawFailures = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<string, byte> _loggedFailures = new(StringComparer.Ordinal);
@@ -932,6 +938,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _pendingTools.Clear();
         _settledTools.Clear();
         _questionAsks.Clear();
+        _calls.Clear();
+        _callForRequest.Clear();
         _openGroup = null;
         _openShell = null;
         _marked.Clear();
@@ -1054,6 +1062,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _pendingTools.Clear();
                 _settledTools.Clear();
                 _questionAsks.Clear();
+                _calls.Clear();
+                _callForRequest.Clear();
                 _openGroup = null;
                 _openShell = null;
                 _marked.Clear();
@@ -1153,6 +1163,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         if (e.ToolCallId is { } id) {
                             _pendingTools[id] = item;
                             if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
+                            NoteCall(id, name, e.ToolInputJson);
                         }
                         if (_openGroup is null) {
                             _openGroup = new ToolGroupItem();
@@ -1165,6 +1176,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         if (e.ToolCallId is not { } resultId) break;
                         _settledTools.Add(resultId);
                         NoteQuestionResult(resultId, e.TimestampIso);
+                        if (_calls.TryGetValue(resultId, out var recorded))
+                            recorded.SettledAt ??= Timestamp(e.TimestampIso) ?? _time.GetUtcNow();
                         if (_pendingTools.Remove(resultId, out var call)) {
                             if (!e.ToolIsError && call.CardKind != ToolCardKind.None
                                 && ToolCards.Build(call.CardKind, call.InputJson, e.ToolResult) is { } card)
@@ -1269,23 +1282,50 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// (the vendor's own terminal prompt), so this tab is the one party that can retire it.
     /// AskUserQuestion's hook carries no tool-use id, so that card matches the latest ask with
     /// the same question text, and only once that ask's result is at or after the card. A card
-    /// whose requested time did not parse is left: that stamp is not an ordering. Sent once per
-    /// request; a failed send reopens it and retries on a bounded backoff.
+    /// whose requested time did not parse is left: that stamp is not an ordering. A card without a
+    /// tool-use id matches a settled call with its tool name and input, at or after the card, oldest
+    /// card first. Sent once per request; a failed send reopens it and retries on a bounded backoff.
     void WithdrawSettled() {
         if (_lifetimeToken.IsCancellationRequested) return;
-        foreach (var request in _requests.Values) {
-            if (!ShouldWithdraw(request) || !_withdrawing.Add(request.Key)) continue;
+        // A snapshot, so the live set is re-checked: a withdraw settling inline removes its request,
+        // and the next one's removal from the set can come back through here before this loop ends.
+        foreach (var request in _requests.Values.OrderBy(r => r.RequestedAt).ToList()) {
+            if (!_requests.ContainsKey(request.Key) || !ShouldWithdraw(request) || !_withdrawing.Add(request.Key)) continue;
             _ = WithdrawAsync(request);
         }
     }
 
     bool ShouldWithdraw(PendingPermissionRequest request) {
         if (request.ToolUseId is { } id && _settledTools.Contains(id)) return true;
-        if (!request.IsQuestion || request.RequestedAt == DateTimeOffset.MinValue) return false;
+        if (request.RequestedAt == DateTimeOffset.MinValue) return false;
+        if (!request.IsQuestion) return request.ToolUseId is null && ClaimsCall(request);
         AskedQuestion? latest = null;
         foreach (var ask in _questionAsks)
             if (request.OverlapsQuestion(ask.Fingerprints)) latest = ask;
         return latest is { SettledAt: { } settled } && request.RequestedAt <= settled;
+    }
+
+    bool ClaimsCall(PendingPermissionRequest request) {
+        if (_callForRequest.ContainsKey(request.Key)) return true;
+        if (request.ToolInputOmitted || Parse(request.ToolInputJson) is not { } input) return false;
+        var claimed = _callForRequest.Values.ToHashSet(StringComparer.Ordinal);
+        var call = _calls.Values
+            .Where(c => c.SettledAt is { } settled && settled >= request.RequestedAt && c.Name == request.ToolName
+                     && !claimed.Contains(c.CallId) && JsonNode.DeepEquals(Parse(c.InputJson), input))
+            .MinBy(c => c.SettledAt);
+        if (call is null) return false;
+        _callForRequest[request.Key] = call.CallId;
+        return true;
+    }
+
+    void NoteCall(string callId, string name, string? inputJson) {
+        if (_calls.ContainsKey(callId) || inputJson is null) return;
+        _calls[callId] = new RecordedCall(callId, name, inputJson) { SettledAt = _settledTools.Contains(callId) ? _time.GetUtcNow() : null };
+    }
+
+    static JsonNode? Parse(string? json) {
+        if (json is null) return null;
+        try { return JsonNode.Parse(json); } catch (JsonException) { return null; }
     }
 
     void NoteQuestionCall(string callId, string? inputJson) {
@@ -1304,6 +1344,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     static DateTimeOffset? Timestamp(string? iso) =>
         iso is not null && DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
+
+    sealed class RecordedCall(string callId, string name, string inputJson) {
+        public string CallId { get; } = callId;
+        public string Name { get; } = name;
+        public string InputJson { get; } = inputJson;
+        public DateTimeOffset? SettledAt { get; set; }
+    }
 
     sealed class AskedQuestion(string callId, HashSet<string> fingerprints) {
         public string CallId { get; } = callId;

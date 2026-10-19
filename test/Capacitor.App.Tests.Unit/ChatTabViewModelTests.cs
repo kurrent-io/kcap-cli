@@ -1185,6 +1185,41 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Claude's permission hook has no tool-use id, so a card is retired by a settled call with its
+    /// tool name and input, whatever their property order, settled at or after the card. One call
+    /// retires one card, the oldest; another input, and a card the call settled before, stay.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_settled_call_withdraws_the_oldest_id_less_card_with_its_name_and_input() {
+        await RunOnUiAsync(async () => {
+            const string status = """{"description":"status","command":"git status"}""";
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [
+                """{"type":"assistant","timestamp":"2026-08-28T10:00:02Z","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"git status","description":"status"}}]}}""",
+                """{"type":"user","timestamp":"2026-08-28T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"clean"}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            h.Permissions.Add(PermissionEntries.Entry("c-old",   toolInputJson: status, requestedAt: "2026-08-28T10:00:00.0000000+00:00"));
+            h.Permissions.Add(PermissionEntries.Entry("c-dup",   toolInputJson: status, requestedAt: "2026-08-28T10:00:01.0000000+00:00"));
+            h.Permissions.Add(PermissionEntries.Entry("c-other", toolInputJson: """{"command":"rm -rf x"}""", requestedAt: "2026-08-28T10:00:00.0000000+00:00"));
+            h.Permissions.Add(PermissionEntries.Entry("c-late",  toolInputJson: status, requestedAt: "2026-08-28T10:00:06.0000000+00:00"));
+            await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 1, what: "the oldest card withdrawn");
+            await Assert.That(h.Permissions.Withdrawn).IsEquivalentTo(["c-old"]);
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            File.AppendAllText(path,
+                """{"type":"assistant","timestamp":"2026-08-28T10:00:08Z","message":{"content":[{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"git status","description":"status"}}]}}""" + "\n" +
+                """{"type":"user","timestamp":"2026-08-28T10:00:09Z","message":{"content":[{"type":"tool_result","tool_use_id":"b2","content":"clean"}]}}""" + "\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 2, what: "the next card withdrawn");
+            await Assert.That(h.Permissions.Withdrawn[1]).IsEqualTo("c-dup");
+            await Assert.That(h.Chat.PendingCards.Count).IsEqualTo(2);
+            await h.TeardownAsync();
+        });
+    }
+
     /// AskUserQuestion's hook has no tool-use id, so the card is retired from the question text
     /// once that ask has a result. A different question, a plain prompt with no id, and a card
     /// requested after the result stay.

@@ -41,13 +41,19 @@ internal static class DaemonBridgeRelay {
     /// <summary>
     /// A tool ran, a subagent stopped (<paramref name="subagentId"/>) or, with neither id, the
     /// turn ended, so a prompt the daemon still holds for it can be retired: the answer was given
-    /// in the vendor's own terminal, which the daemon cannot see.
+    /// in the vendor's own terminal, which the daemon cannot see. A finished tool may also name
+    /// the subagent that ran it and carry its name and input, for a prompt held without its id.
     /// </summary>
     public static Task NotifyToolSettledAsync(
-            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget) {
+            HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget,
+            string? toolName = null, JsonNode? toolInput = null) {
         var payload = new JsonObject { ["session_id"] = sessionId, ["cwd"] = cwd };
         if (toolUseId is not null) payload["tool_use_id"] = toolUseId;
         if (subagentId is not null) payload["subagent_id"] = subagentId;
+        if (toolUseId is not null && toolName is not null && toolInput is not null) {
+            payload["tool_name"]  = toolName;
+            payload["tool_input"] = toolInput;
+        }
 
         return PostAsync(hosted, vendor, "tool-settled", payload, budget);
     }

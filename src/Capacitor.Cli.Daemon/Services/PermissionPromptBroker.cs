@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
@@ -26,12 +27,13 @@ internal static class PermissionSettlements {
 /// request as nothing, or Pending then Resolved, never Pending alone. The withdrawn set is
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
 internal sealed class PermissionPromptBroker {
-    sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId);
+    sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId, long Seq);
 
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
     readonly object _gate = new();
+    long _seq;
 
     public bool HasSubscriber => !_subscribers.IsEmpty;
 
@@ -44,7 +46,7 @@ internal sealed class PermissionPromptBroker {
                     PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone));
 
             // Completed while the gate is held: a continuation running inline would re-enter it.
-            var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId);
+            var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId, ++_seq);
             if (!_pending.TryAdd(dto.RequestId, entry))
                 throw new InvalidOperationException($"permission request {dto.RequestId} is already pending");
             Broadcast(new PermissionStreamItem.Pending(dto));
@@ -98,11 +100,20 @@ internal sealed class PermissionPromptBroker {
 
     /// A tool that has run was answered where the daemon cannot see, so its prompt is moot. The
     /// agent and the session are matched as well as the id: every hosted agent posts on the same
-    /// shared token, and a notice retires only what its own session registered.
-    public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId) {
+    /// shared token, and a notice retires only what its own session registered. A prompt registered
+    /// without a tool id (Claude's hook sends none) matches the same subagent's call by tool name and
+    /// input instead, the oldest first, so one finished call retires one prompt.
+    public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId,
+            string? subagentId = null, string? toolName = null, JsonElement? toolInput = null) {
         lock (_gate) {
             var entry = _pending.Values.FirstOrDefault(e =>
                 e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
+            if (entry is null && toolName is not null && toolInput is { } input)
+                entry = _pending.Values
+                    .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
+                             && e.SubagentId == subagentId && e.Dto.ToolName == toolName
+                             && e.Dto.ToolInput is { } held && JsonElement.DeepEquals(held, input))
+                    .MinBy(e => e.Seq);
             return entry is not null
                 && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled);
         }

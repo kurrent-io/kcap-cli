@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
@@ -7,8 +8,13 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class PermissionPromptBrokerTests {
     static readonly TimeSpan Bounded = TimeSpan.FromSeconds(10);
 
-    static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? toolUseId = null) =>
-        new(id, agent, "s1", "claude", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"), toolUseId);
+    static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? toolUseId = null, string? input = null) =>
+        new(id, agent, "s1", "claude", "Bash", input is null ? null : Json(input), null, false, false, DateTimeOffset.UtcNow.ToString("O"), toolUseId);
+
+    static JsonElement Json(string json) {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
 
     static PermissionDecision Allow => new("allow", null, null);
 
@@ -170,6 +176,40 @@ public class PermissionPromptBrokerTests {
         await Assert.That(s2.IsCompleted).IsFalse();
         await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1")).IsFalse();
+    }
+
+    /// Claude's prompt carries no tool id, so a finished call matches it by tool name and input,
+    /// whatever order the input's properties arrive in. One call retires one prompt, the oldest.
+    [Test]
+    public async Task A_finished_call_retires_the_oldest_id_less_prompt_with_its_name_and_input() {
+        var broker = new PermissionPromptBroker();
+        var first  = broker.Register(Dto("r1", input: """{"command":"ls","description":"list"}"""));
+        var second = broker.Register(Dto("r2", input: """{"command":"ls","description":"list"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_9", toolName: "Bash",
+            toolInput: Json("""{"description":"list","command":"ls"}"""))).IsTrue();
+
+        await Assert.That((await WaitBounded(first, "oldest withdrawn")).Source).IsEqualTo("tool_settled");
+        await Assert.That(second.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_10", toolName: "Bash",
+            toolInput: Json("""{"command":"ls","description":"list"}"""))).IsTrue();
+        await Assert.That(second.IsCompleted).IsTrue();
+    }
+
+    /// A name-and-input match never reaches past what makes the call the prompt's own: another
+    /// input, another tool, another subagent, or a prompt that carries a tool id of its own.
+    [Test]
+    [Arguments("Bash", """{"command":"rm"}""", null,    null)]
+    [Arguments("Read", """{"command":"ls"}""", null,    null)]
+    [Arguments("Bash", """{"command":"ls"}""", "sub-1", null)]
+    [Arguments("Bash", """{"command":"ls"}""", null,    "toolu_1")]
+    public async Task A_name_and_input_match_spares_a_prompt_that_is_not_the_calls(
+            string toolName, string input, string? subagentId, string? promptToolUseId) {
+        var broker = new PermissionPromptBroker();
+        var held   = broker.Register(Dto("r1", toolUseId: promptToolUseId, input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_9", subagentId, toolName, Json(input))).IsFalse();
+        await Assert.That(held.IsCompleted).IsFalse();
     }
 
     /// The shared token admits every hosted agent, so a tool id is only honoured for the agent

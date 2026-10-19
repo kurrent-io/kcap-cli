@@ -988,8 +988,16 @@ internal sealed partial class LocalPermissionBridge(
             return;
         }
 
+        // Only a match key, never a scope: a name or input past the prompt's own caps was never
+        // held, so it is dropped and the notice still retires by id.
+        var toolName  = Str(node, "tool_name") is { Length: > 0 } name
+                     && Encoding.UTF8.GetByteCount(name) <= PermissionWire.MaxToolNameBytes ? name : null;
+        var toolInput = toolName is not null && ExtractElement(node, "tool_input") is { } input
+                     && Encoding.UTF8.GetByteCount(input.GetRawText()) <= PermissionWire.MaxElementBytes ? input : (JsonElement?)null;
+
         var attributed = AttributeHandler?.Invoke(new PermissionAttribution(Str(node, "agent_id"), sessionId, Str(node, "cwd")));
-        if (attributed is { } agent) ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId));
+        if (attributed is { } agent)
+            ToolSettledHandler?.Invoke(agent.AgentId, new ToolSettledNotice(sessionId, toolUseId, subagentId, toolName, toolInput));
 
         Close(context, 204);
     }
