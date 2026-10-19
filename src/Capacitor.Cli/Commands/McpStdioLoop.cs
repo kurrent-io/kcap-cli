@@ -58,15 +58,8 @@ static class McpStdioLoop {
             while (await reader.ReadLineAsync() is { } line) {
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
-                JsonObject? request;
-                try {
-                    request = JsonNode.Parse(line) as JsonObject;
-                } catch {
-                    continue;
-                }
-
                 // Notifications have no id and get no response.
-                if (request?["id"] is not { } id) continue;
+                if (TryParseRequest(line) is not { } request || request["id"] is not { } id) continue;
 
                 var method = request["method"] is JsonValue value && value.TryGetValue(out string? m) ? m : null;
                 if (method == "tools/call") {
@@ -91,6 +84,20 @@ static class McpStdioLoop {
         }
 
         await Task.WhenAll(inFlight);
+    }
+
+    /// <summary>Null for a line the loop must not act on. A JsonObject fills its property table
+    /// lazily, so a duplicated key surfaces on the first read rather than in Parse; forcing it here
+    /// keeps that inside the guard instead of ending the server.</summary>
+    internal static JsonObject? TryParseRequest(string line) {
+        try {
+            var request = JsonNode.Parse(line)?.AsObject();
+            _ = request?.Count;
+
+            return request;
+        } catch {
+            return null;
+        }
     }
 
     static string Error(JsonNode id, int code, string message) => new JsonObject {

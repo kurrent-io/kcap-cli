@@ -58,13 +58,15 @@ class McpFlowsServer(
         // Created on first use, so a session that never calls a flows tool stays local-only.
         using var sessionClient = new OnDemand<HttpClient>(async () => {
             var created = await http.ForSessionAsync();
-            // A start or round POST can be held open server-side: an admission wait on a
-            // current server, the whole round on an older blocking one. The default 100s
-            // timeout would abort it, which the server sees as a cancel and tears the
-            // reviewer down — so no client-wide deadline; each lane bounds its own requests.
+            // A start or round POST can be held open server-side for an admission wait or a
+            // whole round. The default 100s timeout would abort it, which the server sees as a
+            // cancel and tears the reviewer down — so no client-wide deadline; each lane bounds
+            // its own requests.
             created.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
             return created;
         });
+
+        var rounds = new FlowRoundGates();
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
@@ -75,6 +77,8 @@ class McpFlowsServer(
 
             try {
                 var client = await sessionClient.GetAsync();
+                using var round = await rounds.EnterAsync(
+                    McpTelemetry.SafeToolName(callRequest), (callRequest["params"] as JsonObject)?["arguments"] as JsonObject);
 
                 return await HandleToolCallAsync(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),

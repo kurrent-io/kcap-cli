@@ -26,7 +26,9 @@ public class McpStdioLoopTests {
         public IEnumerable<string> Ids => _lines.Select(l => l["id"]!.ToJsonString());
 
         public async Task WaitForAsync(int count) {
-            for (var i = _lines.Count; i < count; i++) await _written.WaitAsync(TimeSpan.FromSeconds(10));
+            while (_lines.Count < count)
+                if (!await _written.WaitAsync(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException($"Expected {count} responses, saw {_lines.Count}.");
         }
 
         protected override void Dispose(bool disposing) {
@@ -70,15 +72,20 @@ public class McpStdioLoopTests {
 
     [Test]
     public async Task Serial_calls_run_in_arrival_order_while_a_ping_is_still_answered() {
-        var release = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var started = new ConcurrentQueue<string>();
+        var release     = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started     = new ConcurrentQueue<string>();
         using var output = new Responses();
         var input = string.Join('\n', Call(1, "slow"), Call(2, "fast"), Request("3", "\"ping\""));
 
         var loop = McpStdioLoop.RunAsync(new StringReader(input), output, (id, request) => {
             started.Enqueue(Tool(request));
-            return Tool(request) == "slow" ? release.Task : Task.FromResult(Answer(id, "tools/call"));
+            if (Tool(request) != "slow") return Task.FromResult(Answer(id, "tools/call"));
+
+            slowStarted.SetResult();
+            return release.Task;
         }, (id, method, _) => Answer(id, method), "test", serialCalls: true);
+        await slowStarted.Task;
         await output.WaitForAsync(1);
 
         await Assert.That(string.Join(",", output.Ids)).IsEqualTo("3");
@@ -130,11 +137,13 @@ public class McpStdioLoopTests {
 
     [Test]
     public async Task Notifications_and_unreadable_lines_get_no_answer_and_a_non_string_method_reads_as_none() {
+        // A duplicated key surfaces on the first property read, not in Parse.
         using var output = new Responses();
         var input = string.Join('\n',
             """{"jsonrpc":"2.0","method":"notifications/initialized"}""",
             "not json",
             "[1,2]",
+            """{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}""",
             "",
             Request("\"a\"", "42"));
 
