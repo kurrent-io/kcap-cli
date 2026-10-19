@@ -1832,6 +1832,137 @@ public class ChatTabViewModelTests {
     }
 
     [Test]
+    [Arguments(ChatSendOutcome.Accepted, false)]
+    [Arguments(ChatSendOutcome.Accepted, true)]
+    [Arguments(ChatSendOutcome.Unconfirmed, false)]
+    [Arguments(ChatSendOutcome.Unconfirmed, true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_retry_echoes_preserve_a_send_between_retries(ChatSendOutcome outcome, bool echoBeforeRetry) {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, drafts: drafts);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.SendQueuedCommand.Execute(h.Chat.QueuedMessages.Single()).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+                var firstRetry = h.Chat.QueuedMessages.Single();
+
+                h.Chat.ComposerText = "look";
+                var independentSend = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(outcome);
+                await independentSend;
+                var independent = h.Chat.QueuedMessages[^1];
+                if (echoBeforeRetry) File.AppendAllText(path, User("look") + "\n");
+                retry = h.Chat.SendQueuedCommand.Execute(firstRetry).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+
+                await Assert.That(input.Sends).Count().IsEqualTo(4);
+                if (echoBeforeRetry) {
+                    await h.TickAsync();
+                    await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+                }
+                for (var echo = 0; echo < (echoBeforeRetry ? 2 : 3); echo++) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                    var expectedDraft = outcome == ChatSendOutcome.Unconfirmed ? "look" : "";
+                    await Assert.That(h.Chat.ComposerText).IsEqualTo(expectedDraft);
+                    await Assert.That(drafts.Get(AgentOrigin.Local, "a1")).IsEqualTo(expectedDraft);
+                    await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                    await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(independent);
+                }
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted)]
+    [Arguments(ChatSendOutcome.Unconfirmed)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_after_reset_of_an_acknowledged_retry_is_retired_by_its_echo(ChatSendOutcome outcome) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine, AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.SendQueuedCommand.Execute(h.Chat.QueuedMessages.Single()).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+
+                File.WriteAllLines(path, [AssistantLine]);
+                await h.TickAsync();
+                h.Chat.ComposerText = "look";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(outcome);
+                await send;
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_second_retry_refusal_preserves_echo_ownership(bool echoDuringRetry) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.SendQueuedCommand.Execute(h.Chat.QueuedMessages.Single()).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+                var firstRetry = h.Chat.QueuedMessages.Single();
+
+                h.Chat.ComposerText = "look";
+                var independentSend = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+                await independentSend;
+                var independent = h.Chat.QueuedMessages[^1];
+                retry = h.Chat.SendQueuedCommand.Execute(firstRetry).ToTask();
+                if (echoDuringRetry) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                }
+                input.Pending!.SetResult(ChatSendOutcome.Rejected);
+                await retry;
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(echoDuringRetry ? 1 : 2);
+                if (!echoDuringRetry) await Assert.That(h.Chat.QueuedMessages[^1]).IsSameReferenceAs(firstRetry);
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(independent);
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
     [Arguments(ChatSendOutcome.Accepted)]
     [Arguments(ChatSendOutcome.Rejected)]
     [NotInParallel("AvaloniaSession")]

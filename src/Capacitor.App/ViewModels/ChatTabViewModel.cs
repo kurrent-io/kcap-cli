@@ -762,6 +762,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     message.Text, includeTray: false, bypassRecall: true, ownsDraft: ownsDraft,
                     onQueued: row => {
                         replacement = row;
+                        RetargetSuperseded(message, row);
                         _superseded.Add((message, row));
                     });
             } finally {
@@ -776,6 +777,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             if (outcome is null or ChatSendOutcome.Rejected) {
                 _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message));
                 if (replacement?.Acknowledged == true) message.Acknowledged = true;
+                else if (replacement is not null) RetargetSuperseded(replacement, message);
                 RestoreQueuedRow(message);
             }
         });
@@ -963,7 +965,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     void RebaseQueuedMessages(long? offset) {
         _inputGeneration++;
         foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.Rebase(_inputGeneration, offset);
-        foreach (var (old, _) in _superseded) old.Rebase(_inputGeneration, offset);
+        foreach (var (old, replacement) in _superseded) {
+            old.Rebase(_inputGeneration, offset);
+            replacement.Rebase(_inputGeneration, offset);
+        }
         RefreshQueue();
     }
 
@@ -983,6 +988,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         queued.Acknowledged = true;
         _queuedMessages.Remove(queued);
         ConfirmDelivery(queued);
+    }
+
+    // Every predecessor follows the newest retry's ordering and transcript boundary. On refusal,
+    // only surviving links return to the previous attempt; an echo already consumed stays consumed.
+    void RetargetSuperseded(QueuedChatMessage previous, QueuedChatMessage replacement) {
+        for (var i = 0; i < _superseded.Count; i++) {
+            var pair = _superseded[i];
+            if (ReferenceEquals(pair.Replacement, previous)) _superseded[i] = (pair.Old, replacement);
+        }
     }
 
     // The replacement owns the first eligible echo; its retired predecessor absorbs a further
