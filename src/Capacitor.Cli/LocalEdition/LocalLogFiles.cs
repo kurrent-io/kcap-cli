@@ -48,8 +48,10 @@ static class LocalLogFiles {
             stream.ReadExactly(chunk);
 
             newlines += chunk.Count(b => b == (byte)'\n');
-            chunks.Insert(0, chunk);
+            chunks.Add(chunk);
         }
+
+        chunks.Reverse();
 
         var text  = System.Text.Encoding.UTF8.GetString([.. chunks.SelectMany(c => c)]);
         var lines = text.Split('\n');

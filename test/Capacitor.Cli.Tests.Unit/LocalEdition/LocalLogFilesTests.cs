@@ -1,8 +1,10 @@
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.LocalEdition;
 
+[ExcludeOn(OS.Windows)]
 public class LocalLogFilesTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
