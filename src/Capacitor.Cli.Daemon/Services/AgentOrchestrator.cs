@@ -3480,7 +3480,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? exitCode is null or 0 ? "Completed" : "Failed"
                 : "Failed";
 
-            if (agent.Status is not "Completed" and not "Failed" && ClaimRunReport(agent, RunReportSent)) {
+            // Under the lock a stop marks itself requested by, so a stop already under way keeps its report.
+            bool reportsItself;
+            lock (_ledgerLock)
+                reportsItself = agent.Status is not "Completed" and not "Failed" && !agent.StopRequested
+                    && ClaimRunReport(agent, RunReportSent);
+
+            if (reportsItself) {
                 if (!agent.Runtime.HasExited) LogOutputEndedWhileRunning(agent.Id);
 
                 // A startup failure means the process exited before establishing
@@ -4201,14 +4207,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             return false;
         } finally {
-            // The last stop to settle reports what it found, a stop that threw included. Counted under the
-            // lock that marks a stop requested, so no stop already under way is missed.
-            bool last;
-            lock (_ledgerLock) last = --agent.StopsInFlight == 0;
-            if (last) {
-                SendOwedStopReport(agent);
-                agent.StopSettled.TrySetResult();
+            // The last stop to settle reports what it found, a stop that threw included. Decided and claimed
+            // under the lock that registers a stop, so no stop already under way is missed.
+            bool last, claimed;
+            lock (_ledgerLock) {
+                last    = --agent.StopsInFlight == 0;
+                claimed = last && ClaimOwedStopReport(agent);
             }
+            if (claimed) SendStopReport(agent);
+            if (last) agent.StopSettled.TrySetResult();
         }
     }
 
@@ -4234,8 +4241,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// a stop must not wait on a hub that is reconnecting, and starting them before the stop settles is
     /// what orders them ahead of the session's end.</summary>
     void SendOwedStopReport(AgentInstance agent) {
-        if (Interlocked.CompareExchange(ref agent.RunReport, RunReportSent, RunReportOwedByStop) != RunReportOwedByStop) return;
+        if (ClaimOwedStopReport(agent)) SendStopReport(agent);
+    }
 
+    static bool ClaimOwedStopReport(AgentInstance agent) =>
+        Interlocked.CompareExchange(ref agent.RunReport, RunReportSent, RunReportOwedByStop) == RunReportOwedByStop;
+
+    void SendStopReport(AgentInstance agent) {
         var gone = agent.Runtime.HasExited;
         if (!gone) {
             LogStopUnconfirmed(agent.Id);
