@@ -51,11 +51,12 @@ sealed class UnattendedCredential(ChosenServerHttp http) {
                 answer = null;
             }
 
-            // A 401 or 403 is the server's verdict on the credential. A machine run must also get an answer: with no
-            // response or a 5xx nothing confirmed the token, and nothing later in an unattended run is sure to. A 404
-            // is a server without the probe, which cannot be asked.
+            // A 401 or 403 is the server's verdict on the credential. A machine run needs a 2xx to call it confirmed:
+            // nothing later in an unattended run is sure to check the token. A 404 is a server without the probe,
+            // which cannot be asked.
             var refused     = answer is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
-            var unconfirmed = answer is null || (int)answer.Value >= 500;
+            var unconfirmed = answer is not { } reply
+                           || reply != HttpStatusCode.NotFound && (int)reply is < 200 or >= 300;
 
             return (machine, refused, unconfirmed) switch {
                 (true, true, _)  => new Outcome.Rejected($"{serverUrl} refused the machine's token (HTTP {(int)answer!.Value})"),

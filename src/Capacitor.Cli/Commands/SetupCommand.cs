@@ -3107,6 +3107,9 @@ sealed class SetupCommand(
     /// <summary>Refuses a value that is only read after sign-in, so a script learns of it before anything is
     /// changed.</summary>
     internal static string? AnswerValueError(string[] args) {
+        foreach (var flag in (string[])["--default-visibility", "--use-provider-api-key"])
+            if (args.Contains(flag) && GetArg(args, flag) is null) return $"{flag} needs a value.";
+
         if (GetArg(args, "--default-visibility") is { } visibility && !AppConfig.ValidVisibilities.Contains(visibility.ToLowerInvariant()))
             return $"Invalid --default-visibility: {visibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}";
 

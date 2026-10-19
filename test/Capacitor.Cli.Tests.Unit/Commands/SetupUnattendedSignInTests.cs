@@ -154,6 +154,9 @@ public class SetupUnattendedSignInTests {
     [Test]
     [Arguments(500)]
     [Arguments(503)]
+    [Arguments(429)]
+    [Arguments(408)]
+    [Arguments(302)]
     public async Task A_machine_credential_the_server_cannot_confirm_fails(int status) {
         using var server = WorkOSServer(MachineToken);
         Mints(server, 200);

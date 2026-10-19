@@ -1983,6 +1983,24 @@ public class SetupCommandTests {
         await Assert.That(server.LogEntries).IsEmpty();
     }
 
+    /// <summary>A flag left as the last argument has no value; reading that as absent would apply the default the
+    /// script never chose.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility")]
+    [Arguments("--use-provider-api-key")]
+    public async Task HandleAsync_refuses_an_answer_flag_with_no_value(string flag) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync([.. BuildArgs("--server-url", server.Url!, "--no-prompt"), flag]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains($"{flag} needs a value");
+        await Assert.That(server.LogEntries).IsEmpty();
+    }
+
     // Presence, not value: a valueless --server-url parses as absent, and taking that as "no conflict"
     // turns a run meant to point at a workspace into one that creates a different one.
     [Test]

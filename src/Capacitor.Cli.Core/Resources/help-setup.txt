@@ -233,15 +233,16 @@ changes.
 
   Signing in: a machine credential (KCAP_CLIENT_ID and KCAP_CLIENT_SECRET, from
   kcap machine create) is checked with the server and used; if the server
-  refuses it or does not answer the check (no response or a 5xx), the run
-  fails rather than waiting for a person. A daemon service cannot
+  refuses it or does not confirm it (no response, or any status but 2xx),
+  the run fails rather than waiting for a person. A 404, from a server without
+  the check endpoint, is accepted. A daemon service cannot
   carry the secret, so none is installed: run `kcap daemon start -d` where the
   variables are set. Without one, a token stored for that server by an earlier
   `kcap login` is used. Otherwise setup signs in as it does interactively, with
   a device code someone has to approve.
 
-  Exit codes: 0 done; 1 failed (setup started changing the machine and did not
-  finish; re-running carries on); 2 refused (nothing attempted: a wrong
+  Exit codes: 0 done; 1 failed (setup did not finish; what it changed stays,
+  and re-running carries on); 2 refused (nothing attempted: a wrong
   argument, or an answer a run that cannot ask needs); 130 interrupted.
 
   --json with --no-prompt: one JSON object per line on stdout, the narration

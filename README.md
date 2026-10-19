@@ -366,7 +366,7 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 
 **Signing in with no one at the machine.** Against a server that needs a sign-in, `--no-prompt` tries, in order:
 
-1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If the server refuses it, or does not answer the check (no response or a 5xx), the run fails (exit 1) rather than falling back to a person. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
+1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If the server refuses it, or does not confirm it (no response, or any status but 2xx), the run fails (exit 1) rather than falling back to a person. A 404 is the exception: a server without the check endpoint cannot be asked, so setup carries on. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
 2. A token already stored for that server, from an earlier `kcap login` on this machine (`kcap login --device` signs in from a browser elsewhere).
 3. Otherwise the sign-in as today: a device code (or the browser, on a machine that has one) that someone has to approve.
 
@@ -394,7 +394,7 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 | Code | Meaning |
 |---|---|
 | 0 | Done. |
-| 1 | Failed: setup started changing the machine and did not finish. Re-running it carries on. |
+| 1 | Failed: setup did not finish. What it changed before stopping stays, and re-running it carries on. |
 | 2 | Refused: nothing was attempted — an argument was wrong, or a run that cannot ask was missing an answer. |
 | 130 | Interrupted (Ctrl+C or SIGTERM). |
 
@@ -416,7 +416,7 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 {"v":1,"event":"done","server_url":"https://acme.kcap.ai"}
 ```
 
-The steps are `server`, `sign_in`, `visibility`, `harnesses`, `daemon` and `import`. `credential` is `machine`, `stored`, `sign_in` or `none`; the daemon's `outcome` is `enabled`, `enabled_unverified`, `already_enabled`, `refused` or `failed` for its service, or `skipped` when none was set up; the import's is `ran` or `skipped`. With `--local`, the [install's own events](#local-edition) come inside the `server` step. A `failed` line names the step it stopped in and carries a `code`: the local install's codes, or `answer_required`, `invalid_arguments`, `server_unreachable`, `workspace_unavailable`, `sign_in_failed`, `machine_credential_rejected`, `daemon_name_held`, `cancelled`, or `setup_failed` for anything else, with the last error setup printed as its `message`. A refusal is a `failed` line alone.
+The steps are `server`, `sign_in`, `visibility`, `harnesses`, `daemon` and `import`. `credential` is `machine`, `stored`, `sign_in` or `none`; the daemon's `outcome` is `enabled`, `enabled_unverified`, `already_enabled`, `refused` or `failed` for its service, or `skipped` when none was set up; the import's is `ran` or `skipped`. With `--local`, the [install's own events](#local-edition) come inside the `server` step. A `failed` line names the step it stopped in and carries a `code`: the local install's codes, or `answer_required`, `invalid_arguments`, `server_unreachable`, `workspace_unavailable`, `sign_in_failed`, `machine_credential_rejected`, `daemon_name_held`, `cancelled`, or `setup_failed` for anything else, with the last error setup printed as its `message`. A refusal found before any step starts is a `failed` line alone; the local edition's consents are checked inside the `server` step, so their `answer_required` line follows its `step_started`.
 
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, `--skip-opencode-hooks`, `--skip-antigravity-hooks`, `--skip-mistral-vibe-hooks`, `--skip-grok-hooks`, and/or `--skip-muse-hooks` (with `--skip-muse-mcp` to leave Muse's MCP block alone). When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
 
