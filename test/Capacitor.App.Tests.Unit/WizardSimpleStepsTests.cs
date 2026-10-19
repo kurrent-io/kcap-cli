@@ -496,6 +496,61 @@ public class DoneStepViewModelTests {
         await Assert.That(opened).IsEquivalentTo(["https://acme.kcap.ai"]);
     }
 
+    static DoneFacts LocalFacts(string? dashboardUrl = "http://localhost:5050", HistoryImportRun? import = null) =>
+        new(["Claude Code"], false, false, import, true, "test-mac", null, null, true, dashboardUrl);
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_done_names_no_terminal_command() {
+        var texts = await AvaloniaSession.DispatchAsync(async () => {
+            var run = await FinishedRun(30, 3);
+            var all = new List<string>();
+            foreach (var facts in new[] { LocalFacts(), LocalFacts(import: run), LocalFacts() with { Recording = [] },
+                         LocalFacts() with { DaemonRunning = false, DaemonProblem = null } }) {
+                var vm = new DoneStepViewModel(() => facts);
+                await vm.OnEnterAsync(CancellationToken.None);
+                all.AddRange([vm.Lede, vm.FooterLine ?? "", vm.DaemonLine, vm.FailedBody, vm.NextLabel ?? ""]);
+            }
+
+            return all;
+        });
+
+        foreach (var text in texts) await Assert.That(text).DoesNotContain("kcap ");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_done_opens_the_dashboard_only_on_request() {
+        var (onEntry, afterCommand, workspaceVisible, next) = await AvaloniaSession.DispatchAsync(async () => {
+            var opener = new RecordingUrlOpener();
+            var vm = new DoneStepViewModel(() => LocalFacts(), opener);
+            await vm.OnEnterAsync(CancellationToken.None);
+            var entered = opener.Opened.Count;
+            vm.OpenDashboardCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+
+            return (entered, opener.Opened.ToList(), vm.WorkspaceVisible, vm.NextLabel);
+        });
+
+        await Assert.That(onEntry).IsEqualTo(0);
+        await Assert.That(afterCommand).IsEquivalentTo(["http://localhost:5050"]);
+        await Assert.That(workspaceVisible).IsFalse();
+        await Assert.That(next).IsEqualTo("Continue");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_done_hides_the_dashboard_when_its_url_is_unknown() {
+        var visible = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new DoneStepViewModel(() => LocalFacts(dashboardUrl: null), new RecordingUrlOpener());
+            await vm.OnEnterAsync(CancellationToken.None);
+
+            return vm.DashboardVisible;
+        });
+
+        await Assert.That(visible).IsFalse();
+    }
+
     sealed class RecordingUrlOpener : IUrlOpener {
         public readonly List<string> Opened = [];
         public void Open(string url) => Opened.Add(url);

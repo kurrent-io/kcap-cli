@@ -6,7 +6,7 @@
              x:Class="Capacitor.App.Views.Onboarding.HarnessesPaneView"
              x:DataType="vm:HarnessesStepViewModel">
     <StackPanel Spacing="14">
-        <Border x:Name="PrivacyCard" Classes="frCard">
+        <Border x:Name="PrivacyCard" Classes="frCard" IsVisible="{Binding VisibilityVisible}">
             <StackPanel Spacing="8">
                 <TextBlock Classes="frMicro" Text="WHO CAN READ NEW SESSIONS" />
                 <TextBlock Classes="frDetail" Text="Choose a privacy setting before continuing, even if you connect your harnesses later." />

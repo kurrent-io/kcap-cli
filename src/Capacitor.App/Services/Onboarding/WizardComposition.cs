@@ -175,7 +175,8 @@ internal static class WizardComposition {
             options.Root, pathFix,
             ct => options.Probe.SetVariablesAsync(HarnessesStepViewModel.ProviderKeys, ct),
             machine,
-            () => options.ResolveIdentity()?.Profile, options.ShutdownToken);
+            () => options.ResolveIdentity()?.Profile, options.ShutdownToken,
+            onLocalPath: OnLocalPath);
         var history = new HistoryStepViewModel(
             cli, () => harnesses.Recording, options.Bridges.Post, machine, options.Time);
         var daemon = new DaemonEnabler(
@@ -205,6 +206,7 @@ internal static class WizardComposition {
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => {
             var recording = harnesses.Rows.Where(r => r is { Record: true, Succeeded: true }).ToList();
+            var local = OnLocalPath();
 
             return new DoneFacts(
                 [.. recording.Select(r => r.Label)],
@@ -213,8 +215,10 @@ internal static class WizardComposition {
                 history.Run,
                 daemon.Satisfied,
                 machine,
-                Connected() ? options.ResolveIdentity()?.Server : null,
-                daemon.Problem);
+                !local && Connected() ? options.ResolveIdentity()?.Server : null,
+                daemon.Problem,
+                local,
+                local ? LocalEndpoints.Read(root).Active?.ServerUrl : null);
         }, options.UrlOpener);
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
 

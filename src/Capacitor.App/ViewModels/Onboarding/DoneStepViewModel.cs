@@ -22,13 +22,14 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         _opener = opener;
 
         OpenWorkspaceCommand = ReactiveCommand.Create(OpenWorkspace);
+        OpenDashboardCommand = ReactiveCommand.Create(OpenDashboard);
     }
 
     public WizardStepId Id         => WizardStepId.Done;
     public string       Eyebrow    => "Ready";
     public bool         Applicable => true;
     public bool         Satisfied  => true; // a summary step is never itself incomplete
-    public string?      NextLabel  => "Open Capacitor";
+    public string?      NextLabel  => _current.Local ? "Continue" : "Open Capacitor";
 
     HistoryImportRun? Import => _current.Import;
 
@@ -42,7 +43,9 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         :                   "No new recording connections";
 
     public string Lede =>
-        Import is null && !CapturePromised ? "Setup hasn't added recording connections. Any connections you already had are unchanged. You can connect more harnesses whenever you're ready."
+        _current.Local && Import is null && !CapturePromised ? "Setup hasn't added recording connections. You can connect more harnesses whenever you're ready."
+        : _current.Local && Import is null ? $"Capacitor keeps what your coding agents do on {_current.MachineName}, and gives them tools to search it back — so the next time you hit something, what you already worked out is there to find."
+        : Import is null && !CapturePromised ? "Setup hasn't added recording connections. Any connections you already had are unchanged. You can connect more harnesses whenever you're ready."
         : Import is null         ? $"Capacitor keeps what your coding agents do on {_current.MachineName}, and gives them tools to search it back — so the next time you hit something, what you already worked out is there to find."
         : Import.Running         ? "What has landed is already searchable, and the rest is still uploading in the background."
         : Import.Imported > 0    ? "Your agents can search all of it — ask one what you have already tried, and it looks here first."
@@ -75,13 +78,15 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public string FailedTitle => Import is { Failed: 0 } ? "History import did not finish"
         : Import is { Failed: 1 } ? "1 session failed to upload" : $"{Import?.Failed ?? 0} sessions failed to upload";
 
-    public string FailedBody =>
-        $"Your history is still on {_current.MachineName}. Go back to History to retry, or run kcap import later.";
+    public string FailedBody => _current.Local
+        ? $"Your history is still on {_current.MachineName}. Go back to History to retry."
+        : $"Your history is still on {_current.MachineName}. Go back to History to retry, or run kcap import later.";
 
     public bool NothingToCountVisible => Import is null && CapturePromised;
 
     public string? FooterLine =>
-        _current.Recording.Count == 0 ? "Connect a harness from Help and support → Set up Capacitor."
+        _current.Local ? "You can connect more harnesses from Help and support → Set up Capacitor."
+        : _current.Recording.Count == 0 ? "Connect a harness from Help and support → Set up Capacitor."
         : Import is null              ? "kcap import brings your existing history over whenever you want."
         :                               null;
 
@@ -99,9 +104,13 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
             ? $"{problem} The app tries again once setup closes."
             : $"The daemon is being set up as a service on {_current.MachineName}. The app keeps it running from here.";
 
-    public bool WorkspaceVisible => !string.IsNullOrEmpty(_current.WorkspaceUrl);
+    public bool WorkspaceVisible => !_current.Local && !string.IsNullOrEmpty(_current.WorkspaceUrl);
+
+    public bool DashboardVisible => _current.Local && !string.IsNullOrEmpty(_current.DashboardUrl);
 
     public ReactiveCommand<Unit, Unit> OpenWorkspaceCommand { get; }
+
+    public ReactiveCommand<Unit, Unit> OpenDashboardCommand { get; }
 
     /// Re-read on every entry: Back-then-forward can change what the earlier pages did.
     public Task OnEnterAsync(CancellationToken ct) {
@@ -124,6 +133,15 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
             _opener.Open(url);
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: could not open the workspace: {ex.Message}");
+        }
+    }
+
+    void OpenDashboard() {
+        if (_current.DashboardUrl is not { Length: > 0 } url || _opener is null) return;
+        try {
+            _opener.Open(url);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"Could not open the dashboard: {ex.Message}");
         }
     }
 

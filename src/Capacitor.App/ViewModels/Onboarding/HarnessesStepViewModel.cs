@@ -34,6 +34,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<string?>? _resolveProfileName;
     readonly Action<IEnumerable<HarnessId>> _stampOffered;
     readonly CancellationToken _shutdownToken;
+    readonly Func<bool>? _onLocalPath;
 
     bool _detected;
     bool _installed;
@@ -54,7 +55,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             PathFixViewModel? pathFix,
             Func<CancellationToken, Task<IReadOnlySet<string>?>> providerKeys,
             string machineName,
-            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default) {
+            Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default,
+            Func<bool>? onLocalPath = null) {
+        _onLocalPath = onLocalPath;
         _cli = cli;
         _detect = detect;
         _declined = declined;
@@ -118,6 +121,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public string? CurrentVisibilityNote { get; private set; }
 
+    /// A local install keeps sessions on this machine, so there is no audience to choose.
+    public bool VisibilityVisible => _onLocalPath?.Invoke() != true;
+
     bool HasVisibilityChoice => Visibility is { } value && AppConfig.ValidVisibilities.Contains(value);
 
     /// Set when the terminal exports a provider key a recording harness would otherwise have kcap scrub.
@@ -175,6 +181,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public async Task OnEnterAsync(CancellationToken ct) {
         if (_detected) return; // re-entering must not stomp the user's choices
+        if (_onLocalPath?.Invoke() == true) Visibility = "private";
+        this.RaisePropertyChanged(nameof(VisibilityVisible));
         Busy = true;
         try {
 
