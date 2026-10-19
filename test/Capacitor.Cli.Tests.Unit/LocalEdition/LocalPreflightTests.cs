@@ -278,4 +278,12 @@ public class LocalPreflightTests {
 
         await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.InvalidArguments);
     }
+
+    /// <summary>The edition choice offers local on the same predicate the preflight refuses by.</summary>
+    [Test]
+    [Arguments(true, false, false, Architecture.Arm64, true)]
+    [Arguments(true, false, false, Architecture.X64, false)]
+    [Arguments(false, true, false, Architecture.Arm64, false)]
+    public async Task Only_an_Apple_silicon_Mac_supports_the_local_edition(bool mac, bool linux, bool musl, Architecture arch, bool expected) =>
+        await Assert.That(new LocalPlatform(mac, linux, musl, arch).SupportsLocalEdition).IsEqualTo(expected);
 }

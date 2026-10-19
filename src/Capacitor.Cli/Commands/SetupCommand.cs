@@ -558,8 +558,8 @@ sealed class SetupCommand(
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
     internal Func<IReadOnlyList<string>, string?>? PickHandoffVendor { get; set; }
 
-    /// <summary>Whether the edition choice offers the local edition, which runs on macOS only.</summary>
-    internal bool LocalEditionAvailable { get; init; } = OperatingSystem.IsMacOS();
+    /// <summary>Whether the edition choice offers the local edition, which runs on Apple silicon Macs only.</summary>
+    internal bool LocalEditionAvailable { get; init; } = LocalPlatform.Current().SupportsLocalEdition;
 
     /// <summary>The whole run's JSON report, set only while a <c>--json --no-prompt</c> run is in progress.</summary>
     SetupJsonReport? _json;

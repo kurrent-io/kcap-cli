@@ -455,6 +455,38 @@ internal sealed class SetupLocalArmTests : IDisposable {
         await Assert.That(ActiveProfile().AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, ActiveProfile().ServerUrl!));
     }
 
+    /// <summary>The process exits as the deferral is disposed, so the closing line has to be on stdout by then: read
+    /// at the moment <see cref="InteractiveLifetime.Exit"/> is called, not after the faked exit returns.</summary>
+    [Test]
+    public async Task Json_interrupt_after_the_commit_ends_with_cancelled_before_the_exit() {
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var spectre = new SpectreCapture();
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        string? atExit   = null;
+        var     original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = _ => atExit ??= capture.GetCapturedOutput();
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            await Command(null).HandleAsync([
+                "setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+            ]);
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        var lines = atExit!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(Events(lines)).Contains("committed");
+
+        var last = JsonNode.Parse(lines[^1])!;
+        await Assert.That(last["event"]?.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(last["code"]?.GetValue<string>()).IsEqualTo("cancelled");
+    }
+
     /// <summary>Interrupts at the first readiness probe and holds it until the interrupt has cancelled the install,
     /// so the cancellation lands before the commit whatever the scheduling.</summary>
     sealed class InterruptOnReady(HttpMessageHandler inner) : DelegatingHandler(inner) {

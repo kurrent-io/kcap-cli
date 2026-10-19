@@ -81,7 +81,12 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         try {
             var committed = await installer.InstallAsync(new(SingleUser: true, Confirmed: confirmed, embeddings), progress, deferral.Token);
 
-            return deferral.Interrupted ? (SetupExit.Interrupted, null) : (SetupExit.Done, committed);
+            if (!deferral.Interrupted) return (SetupExit.Done, committed);
+
+            // The process exits as the deferral is disposed, before the caller could close the report.
+            report?.Failed(SetupFailureCodes.Cancelled, "Interrupted after the local install committed; run kcap setup again to finish the other steps.");
+
+            return (SetupExit.Interrupted, null);
         } catch (Exception ex) {
             return await FailAsync(LocalSetupJsonLines.Classify(ex));
         }
