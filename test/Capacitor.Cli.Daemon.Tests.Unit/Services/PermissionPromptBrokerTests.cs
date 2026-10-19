@@ -196,6 +196,41 @@ public class PermissionPromptBrokerTests {
         await Assert.That(second.IsCompleted).IsTrue();
     }
 
+    /// A prompt allowed in the app before its call finished is owed that call's notice, so the
+    /// notice does not retire an identical prompt that is still waiting; the next call does.
+    [Test]
+    public async Task A_call_owed_to_an_allowed_prompt_retires_nothing() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        var waiting = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(waiting.IsCompleted).IsTrue();
+    }
+
+    /// A denied prompt runs no call, and a finished turn has run all of its own, so neither leaves
+    /// a call owed that would keep a later prompt from being retired.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_denied_prompt_or_a_finished_turn_owes_no_call(bool allowThenTurnEnd) {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        if (allowThenTurnEnd) {
+            broker.TrySettle("r1", Allow, "allow", "app");
+            broker.WithdrawTurn("a1", "s1", subagentId: null);
+        } else {
+            broker.TrySettle("r1", PermissionSettlements.DenyDecision, "deny", "app");
+        }
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(later.IsCompleted).IsTrue();
+    }
+
     /// A name-and-input match never reaches past what makes the call the prompt's own: another
     /// input, another tool, another subagent, or a prompt that carries a tool id of its own.
     [Test]

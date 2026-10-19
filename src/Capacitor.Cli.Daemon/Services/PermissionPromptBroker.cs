@@ -28,10 +28,14 @@ internal static class PermissionSettlements {
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
 internal sealed class PermissionPromptBroker {
     sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId, long Seq);
+    sealed record AllowedCall(string AgentId, string SessionId, string? SubagentId, string ToolName, JsonElement Input);
 
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
+    // An id-less prompt allowed before its call finished: that call's notice is its own, and must
+    // not retire an identical prompt still waiting. Kept until the notice or the turn's end.
+    readonly List<AllowedCall> _allowedCalls = [];
     readonly object _gate = new();
     long _seq;
 
@@ -93,6 +97,7 @@ internal sealed class PermissionPromptBroker {
     public void WithdrawForAgent(string agentId) {
         lock (_gate) {
             _withdrawnAgents.Add(agentId);
+            _allowedCalls.RemoveAll(c => c.AgentId == agentId);
             foreach (var e in _pending.Values.Where(e => e.Dto.AgentId == agentId).ToList())
                 SettleLocked(e.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone);
         }
@@ -102,18 +107,26 @@ internal sealed class PermissionPromptBroker {
     /// agent and the session are matched as well as the id: every hosted agent posts on the same
     /// shared token, and a notice retires only what its own session registered. A prompt registered
     /// without a tool id (Claude's hook sends none) matches the same subagent's call by tool name and
-    /// input instead, the oldest first, so one finished call retires one prompt.
+    /// input instead, the oldest first, so one finished call retires one prompt. A call that an
+    /// allowed prompt is still owed is that prompt's, and retires nothing.
     public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId,
             string? subagentId = null, string? toolName = null, JsonElement? toolInput = null) {
         lock (_gate) {
             var entry = _pending.Values.FirstOrDefault(e =>
                 e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
-            if (entry is null && toolName is not null && toolInput is { } input)
+            if (entry is null && toolName is not null && toolInput is { } input) {
+                var owed = _allowedCalls.FindIndex(c => c.AgentId == agentId && c.SessionId == sessionId
+                    && c.SubagentId == subagentId && c.ToolName == toolName && JsonElement.DeepEquals(c.Input, input));
+                if (owed >= 0) {
+                    _allowedCalls.RemoveAt(owed);
+                    return false;
+                }
                 entry = _pending.Values
                     .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
                              && e.SubagentId == subagentId && e.Dto.ToolName == toolName
                              && e.Dto.ToolInput is { } held && JsonElement.DeepEquals(held, input))
                     .MinBy(e => e.Seq);
+            }
             return entry is not null
                 && SettleLocked(entry.Dto.RequestId, PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceToolSettled);
         }
@@ -125,6 +138,7 @@ internal sealed class PermissionPromptBroker {
     /// about the agent's next request.
     public int WithdrawTurn(string agentId, string sessionId, string? subagentId) {
         lock (_gate) {
+            _allowedCalls.RemoveAll(c => c.AgentId == agentId && c.SessionId == sessionId && c.SubagentId == subagentId);
             var settled = 0;
             foreach (var e in _pending.Values.Where(e =>
                          e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.SubagentId == subagentId).ToList())
@@ -141,6 +155,10 @@ internal sealed class PermissionPromptBroker {
     bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source) {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
+        // The call runs with the input the answer gave it, when it gave one.
+        if (decision.Behavior == PermissionSettlements.Allow && entry.Dto.ToolUseId is null
+            && (decision.UpdatedInput ?? entry.Dto.ToolInput) is { } ran)
+            _allowedCalls.Add(new AllowedCall(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolName, ran));
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;

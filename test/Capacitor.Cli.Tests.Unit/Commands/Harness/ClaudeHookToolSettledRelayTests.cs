@@ -57,10 +57,10 @@ public class ClaudeHookToolSettledRelayTests {
     }
 
     async Task<(int Exit, int ServerPosts)> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "",
-            string toolInput = """{"command":"ls"}""") {
+            string toolInput = """{"command":"ls"}""", string toolName = "Bash") {
         var handler = new CountingHandler();
         using var client = new HttpClient(handler);
-        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{{{toolInput}}}{{{extraFields}}}}""";
+        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"{{{toolName}}}","tool_input":{{{toolInput}}}{{{extraFields}}}}""";
         var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
         return (exit, handler.Posts);
@@ -102,15 +102,16 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(Relayed(bridge)!["subagent_id"]!.GetValue<string>()).IsEqualTo(Sub);
     }
 
-    /// An input past the prompt's cap was never held, and sending it would push the notice past the
-    /// bridge's body cap, so it is left out and the id still goes.
+    /// A name or input past the prompt's caps was never held, and sending it would push the notice
+    /// past the bridge's body cap, so both are left out and the id still goes.
     [Test, NotInParallel]
-    public async Task An_oversized_input_is_left_out_and_the_id_still_relayed() {
+    [Arguments(513, 10)]
+    [Arguments(4, 64 * 1024)]
+    public async Task An_oversized_match_key_is_left_out_and_the_id_still_relayed(int nameLength, int commandLength) {
         using var bridge = Bridge();
-        var big = new string('x', 64 * 1024);
 
-        var (exit, _) = await RunAsync(HostedOn(bridge), "PostToolUse",
-            extraFields: ",\"tool_use_id\":\"toolu_03Z\"", toolInput: $"{{\"command\":\"{big}\"}}");
+        var (exit, _) = await RunAsync(HostedOn(bridge), "PostToolUse", extraFields: ",\"tool_use_id\":\"toolu_03Z\"",
+            toolInput: $"{{\"command\":\"{new string('x', commandLength)}\"}}", toolName: new string('B', nameLength));
 
         await Assert.That(exit).IsEqualTo(0);
         var body = Relayed(bridge)!;
