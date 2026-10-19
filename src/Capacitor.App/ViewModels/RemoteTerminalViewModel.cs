@@ -216,8 +216,9 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _generation++;
         _receiving = false;
         Phase = phase;
-        if (!_subscribed) return;
+        if (!_subscribed && !_strayMembership) return;
         _subscribed = false;
+        _strayMembership = false;
         _ = ReleaseAsync();
     }
 
@@ -250,8 +251,9 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _receiving = false;
         _disposables.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
-        if (_subscribed) {
+        if (_subscribed || _strayMembership) {
             _subscribed = false;
+            _strayMembership = false;
             await ReleaseAsync();
         }
         Surface = null;
