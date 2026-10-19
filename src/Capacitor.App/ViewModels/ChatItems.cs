@@ -103,8 +103,10 @@ public sealed class ShellCommandItem : ChatItemViewModel {
 public enum ToolOutcome { Running, Done, Error }
 
 public sealed class ToolCallItem(string name, string detail, ToolCategory category, string? label = null,
-        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null) : ChatItemViewModel {
+        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null, string? chip = null) : ChatItemViewModel {
     public string Name { get; } = name;
+    /// Lone-call header when the category word ("Tool") would hide which server this is.
+    public string? Chip { get; } = chip;
     public string Detail { get; } = detail;
     public ToolCategory Category { get; } = category;
     /// The verb phrase a row opens with; null when a built-in call carries its own prose
@@ -236,7 +238,7 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     public bool ShowsKindChip => _calls.Count == 1;
 
     public string KindChip =>
-        _calls.Count == 1 ? ToolSummary.ChipLabel(_calls[0].Category) : "";
+        _calls.Count == 1 ? _calls[0].Chip ?? ToolSummary.ChipLabel(_calls[0].Category) : "";
 
     public LucideIconKind? HeaderIconKind {
         get {

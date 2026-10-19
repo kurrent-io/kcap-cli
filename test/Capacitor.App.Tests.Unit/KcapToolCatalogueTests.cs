@@ -87,6 +87,7 @@ public class KcapToolCatalogueTests {
     [Arguments("mcp__linear__create_issue", "Linear · create issue")]
     [Arguments("mcp__plugin_linear_linear__save_issue", "Linear · save issue")]
     [Arguments("mcp__github__create_pull_request", "Github · create pull request")]
+    [Arguments("mcp__claude_ai_Linear__list_issues", "Linear · list issues")]
     public async Task A_foreign_mcp_name_reads_as_server_and_tool(string name, string expected) {
         await Assert.That(KcapToolCatalogue.ForeignLabel(name)).IsEqualTo(expected);
     }
@@ -99,6 +100,14 @@ public class KcapToolCatalogueTests {
     [Arguments(null)]
     public async Task A_name_without_the_mcp_shape_has_no_foreign_label(string? name) {
         await Assert.That(KcapToolCatalogue.ForeignLabel(name)).IsNull();
+    }
+
+    [Test]
+    public async Task A_claude_ai_server_chip_is_the_product_name() {
+        await Assert.That(KcapToolCatalogue.ForeignServer("mcp__claude_ai_Linear__list_issues")).IsEqualTo("Linear");
+        await Assert.That(KcapToolCatalogue.ForeignServer("mcp__plugin_linear_linear__save_issue")).IsEqualTo("Linear");
+        await Assert.That(KcapToolCatalogue.ForeignServer("Bash")).IsNull();
+        await Assert.That(KcapToolCatalogue.ForeignServer("mcp__plugin_kcap_kcap-plans__get_plan")).IsNull();
     }
 
     [Test]

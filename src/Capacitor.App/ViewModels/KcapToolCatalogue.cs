@@ -176,7 +176,19 @@ public static class KcapToolCatalogue {
         if (cut <= 0) return ("", cut < 0 ? rest : rest[(cut + Separator.Length)..]);
         var server = rest[..cut];
         if (server.StartsWith("plugin_", StringComparison.Ordinal)) server = server[(server.LastIndexOf('_') + 1)..];
+        // Claude.ai remote MCP ids are `claude_ai_<Product>`. The product is the name a person reads.
+        const string claudeAi = "claude_ai_";
+        if (server.StartsWith(claudeAi, StringComparison.Ordinal) && server.Length > claudeAi.Length)
+            server = server[claudeAi.Length..];
         return (server, rest[(cut + Separator.Length)..]);
+    }
+
+    /// The server word a lone foreign MCP call shows in place of "Tool". Null for a kcap tool or a bare name.
+    public static string? ForeignServer(string? toolName) {
+        if (string.IsNullOrEmpty(toolName)) return null;
+        var (server, tool) = Split(toolName);
+        if (string.IsNullOrEmpty(server) || tool.Length == 0 || ServerCategories.ContainsKey(server)) return null;
+        return Humanise(server);
     }
 
     static string Humanise(string token) {
