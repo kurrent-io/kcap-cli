@@ -61,6 +61,18 @@ public sealed class PullRequestToneCache : IDisposable {
     public IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>> Summaries => _summaryPublished;
     public IReadOnlyDictionary<string, RailPullRequestSummary> CurrentSummaries => _summaryPublished.Value;
 
+    /// A workspace discovered new links; recheck this session without waiting for the background poll.
+    public void Refresh(string session) {
+        lock (_lock) {
+            if (_disposed || !_sessions.Contains(session)) return;
+            // An older in-flight list must not publish after the workspace's newer discovery.
+            _versions[session] = ++_nextVersion;
+            _readAt.Remove(session);
+            _refreshAfter.Remove(session);
+        }
+        Tick();
+    }
+
     void Tick() {
         List<(string Session, long Version)> due;
         CancellationToken ct;
@@ -145,7 +157,13 @@ public sealed class PullRequestToneCache : IDisposable {
             }
         } catch (OperationCanceledException) {
         } finally {
-            lock (_lock) _inFlight.Remove(session);
+            bool refresh;
+            lock (_lock) {
+                _inFlight.Remove(session);
+                refresh = !_readAt.ContainsKey(session);
+            }
+            // Refresh may have invalidated this read while it was in flight.
+            if (refresh) Tick();
         }
     }
 

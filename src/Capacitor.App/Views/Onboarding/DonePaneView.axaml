@@ -111,6 +111,14 @@
                     <views:AppIcon Kind="ArrowRight" Size="14" />
                 </StackPanel>
             </Button>
+            <Button Grid.Column="1" x:Name="OpenDashboardButton" Classes="frLink"
+                    AutomationProperties.Name="Open web dashboard"
+                    Command="{Binding OpenDashboardCommand}" IsVisible="{Binding DashboardVisible}">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <TextBlock Text="Open web dashboard" VerticalAlignment="Center" />
+                    <views:AppIcon Kind="ArrowRight" Size="14" />
+                </StackPanel>
+            </Button>
         </Grid>
     </StackPanel>
 </UserControl>

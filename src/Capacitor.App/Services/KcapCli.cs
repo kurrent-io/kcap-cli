@@ -80,6 +80,14 @@ public interface IKcapCli {
     /// (imports are long; ct cancellation is the only bound).
     Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct);
 
+    /// `setup --local --json --single-user --yes`, streamed live via onLine. No internal timeout:
+    /// <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops only
+    /// through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
+    Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
+
+    /// `local start`, bounded above the CLI's own readiness budget.
+    Task<ProcessResult> LocalStartAsync(CancellationToken ct);
+
     /// `import --discover --json` for these vendors; null when the run failed or printed no report.
     Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct);
 }
@@ -102,6 +110,11 @@ public sealed class KcapCli : IKcapCli {
     static readonly TimeSpan StatusTimeout = TimeSpan.FromSeconds(10);
     // Above MutationTimeout's 60s — bounds the wrapper without killing a still-forking detach (ProcessOnly).
     static readonly TimeSpan DetachedStartTimeout = TimeSpan.FromSeconds(75);
+    // Sits above the CLI's ten-minute readiness budget so the CLI reports its own failure first.
+    static readonly TimeSpan LocalStartTimeout = TimeSpan.FromMinutes(11);
+    // A cancelled setup still finishes recovery and commit, which may run back to back: two 10 min readiness waits,
+    // a 210 s service stop, two 60 s unit-lock waits, two 10 s lift polls and a 10 s lease wait, 26 min in all.
+    static readonly TimeSpan SetupInterruptGrace = TimeSpan.FromMinutes(30);
 
     // Overlay variable names every app-initiated spawn carries — the lane and KcapCliTests reference these.
     public const string SpawnNoTelemetryVar   = "KCAP_APP_SPAWN_NO_TELEMETRY";
@@ -262,6 +275,22 @@ public sealed class KcapCli : IKcapCli {
 
         return await _runner.RunStreamingAsync(cliPath, args.ToArray(),
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, ct).ConfigureAwait(false);
+    }
+
+    public async Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        if (CliPath is not { } cliPath)
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
+
+        return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes"],
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: SetupInterruptGrace),
+            onLine, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> LocalStartAsync(CancellationToken ct) {
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        return await _runner.RunAsync(cliPath, ["local", "start"],
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: LocalStartTimeout), ct).ConfigureAwait(false);
     }
 
     public async Task<ImportDiscoveryReport?> ImportDiscoverAsync(IReadOnlyList<string> vendorFlags, CancellationToken ct) {

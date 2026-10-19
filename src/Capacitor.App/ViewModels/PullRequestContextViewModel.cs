@@ -23,6 +23,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     readonly TimeProvider _time;
     readonly IUrlOpener _opener;
     readonly Action _openReader;
+    readonly Action<string>? _linksChanged;
     readonly Func<PullRequestRepository?>? _primaryRepo;
     readonly IPullRequestReaders? _readers;
     readonly CompositeDisposable _subscriptions = new();
@@ -134,8 +135,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
-        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null) {
+        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null,
+        Action<string>? linksChanged = null) {
         _source = source;
+        _linksChanged = linksChanged;
         _readBranch = readBranch ?? GitRepository.CurrentBranch;
         _hasCustomBranchReader = readBranch is not null;
         _time = time;

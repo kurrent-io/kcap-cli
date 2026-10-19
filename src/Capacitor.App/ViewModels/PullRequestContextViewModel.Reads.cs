@@ -80,10 +80,13 @@ public sealed partial class PullRequestContextViewModel {
                 }
                 _listRetryAt = null;
                 _pollAfter = Math.Max(15, links.PollAfterSeconds);
+                var linksChanged = !_hasListed || !_sessionItems.Select(PullRequestWire.Subject).ToHashSet()
+                    .SetEquals(links.Data.Items.Select(PullRequestWire.Subject));
                 _sessionItems.Clear();
                 _sessionItems.AddRange(links.Data.Items);
                 _hasListed = true;
                 ApplyChoices(listed: true);
+                if (linksChanged) _linksChanged?.Invoke(session);
             };
         }, () => _refreshing = false);
     }

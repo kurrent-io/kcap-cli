@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -5,6 +6,7 @@ using Avalonia.VisualTree;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.App.Tests.Unit;
@@ -24,7 +26,7 @@ public class EditionStepViewModelTests {
         var probe = Probe();
 
         var current = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel);
+            var edition = new EditionStepViewModel(probe.Funnel, () => null);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn), new FakeWizardStep(WizardStepId.Done)]);
             await vm.PendingEnterForTesting;
 
@@ -43,27 +45,65 @@ public class EditionStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Local_stops_at_its_hand_off_and_next_cannot_carry_it_into_sign_in() {
+    public async Task Local_advances_to_install() {
         var probe = Probe();
 
-        var (pending, afterChoice, afterNext) = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel);
-            var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
+        var current = await AvaloniaSession.DispatchAsync(async () => {
+            var edition = new EditionStepViewModel(probe.Funnel, () => null);
+            var vm = new OnboardingViewModel([
+                edition, new FakeWizardStep(WizardStepId.Install), new FakeWizardStep(WizardStepId.SignIn),
+            ]);
             await vm.PendingEnterForTesting;
 
             await edition.ChooseLocalCommand.Execute().ToTask();
             await vm.PendingAdvanceForTesting;
-            var afterChoice = vm.Current.Id;
 
-            await vm.NextCommand.Execute().ToTask();
-
-            return (edition.LocalPending, afterChoice, vm.Current.Id);
+            return vm.Current.Id;
         });
 
-        await Assert.That(pending).IsTrue();
-        await Assert.That(afterChoice).IsEqualTo(WizardStepId.Edition);
-        await Assert.That(afterNext).IsEqualTo(WizardStepId.Edition);
+        await Assert.That(current).IsEqualTo(WizardStepId.Install);
         await Assert.That(Edition(probe.Only("cli_setup_edition_chosen"))).IsEqualTo("local");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_is_unavailable_off_macos() {
+        var (reason, canChoose) = await AvaloniaSession.DispatchAsync(async () => {
+            using var harness = new WizardFixtures.GraphHarness(Config.Root) { LocalEditionSupported = false };
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            var edition = graph.Steps.OfType<EditionStepViewModel>().Single();
+
+            return (edition.LocalUnavailableReason, await edition.ChooseLocalCommand.CanExecute.FirstAsync());
+        });
+
+        await Assert.That(reason).IsEqualTo("The local edition isn't available on this platform yet.");
+        await Assert.That(canChoose).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_inactive_cloud_profile_makes_local_unavailable() {
+        WizardCompositionFixtures.WriteConfig(Config.Root, new ProfileConfig {
+            ActiveProfile = "default",
+            Profiles = new() {
+                ["default"] = new Profile(),
+                ["work"]    = new Profile { ServerUrl = "https://acme.kcap.ai" },
+            },
+        });
+
+        var (reason, canChoose) = await AvaloniaSession.DispatchAsync(async () => {
+            using var harness = new WizardFixtures.GraphHarness(Config.Root);
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            var edition = graph.Steps.OfType<EditionStepViewModel>().Single();
+
+            return (edition.LocalUnavailableReason, await edition.ChooseLocalCommand.CanExecute.FirstAsync());
+        });
+
+        await Assert.That(reason).IsEqualTo(
+            "This Mac is set up for a cloud workspace. Moving it to local comes in a later release.");
+        await Assert.That(canChoose).IsFalse();
     }
 
     [Test]
@@ -72,7 +112,7 @@ public class EditionStepViewModelTests {
         var probe = Probe();
 
         var current = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(probe.Funnel);
+            var edition = new EditionStepViewModel(probe.Funnel, () => null);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
             await vm.PendingEnterForTesting;
 
@@ -110,7 +150,7 @@ public class EditionStepViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task The_pane_shows_the_cards_in_place_of_next_and_the_cloud_card_reaches_sign_in() {
         var (localShown, cloudShown, signInShown, nextShown, after) = await AvaloniaSession.DispatchAsync(async () => {
-            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel);
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
             var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
             await vm.PendingEnterForTesting;
 

@@ -146,7 +146,7 @@ internal sealed record AcpVendorDescriptor {
     /// capability — all four registered vendors advertise it, and two measurably cannot honor it
     /// across a crashed owner (<c>docs/probes/2026-08-04-acp-reconnect-c0/</c>): Kiro refuses with a
     /// durable stale-owner lock ("Session is active in another process", identical at 0/15/60s), and
-    /// Gemini never persists a crash-killed session ("No previous sessions found"). Flipping a
+    /// Gemini answers session/load before most of its replay. Flipping a
     /// vendor to <see langword="true"/> requires a passing re-run of that probe, because the resume
     /// path additionally relies on the vendor honoring the ACP session/load response-after-replay
     /// barrier — a violation would duplicate transcript content. Runtime eligibility is conjunctive
@@ -629,12 +629,13 @@ internal static class AcpVendorDescriptors {
         // so receiving one means the launch contract regressed (a dropped flag, a vendor change) and the
         // honest response is to reap the reviewer rather than auto-approve whatever it asked for (§3.4).
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail,
-        // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Gemini
-        // advertises loadSession but a crash-killed session is never persisted — session/load
-        // refuses with "No previous sessions found for this project", so there is nothing to
-        // resume. Gemini also self-re-execs (a sandbox wrapper spawns an inner process with
-        // identical argv), so "the spawned pid exited" and "the agent died" are different events;
-        // any future enablement must re-probe BOTH persistence and process-tree semantics.
+        // Ineligible: Gemini answers session/load before most of its replay, and replay suppression
+        // ends once that response is in, so the rest would reach the transcript as live output.
+        // Gemini also self-re-execs, so "the spawned pid exited" and "the agent died" are different
+        // events.
+        // TODO: enable once a gemini-cli release fixes google-gemini/gemini-cli#29707 and the probe
+        // in docs/probes/2026-08-04-acp-reconnect-c0/ passes on it, with that release as a version
+        // floor.
         SupportsReconnectResume: false
     );
 }

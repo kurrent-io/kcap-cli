@@ -20,6 +20,24 @@ public class LocalServerUnitTests {
     }
 
     [Test]
+    public async Task Without_an_embedding_model_the_unit_names_no_embedding_settings() {
+        await Assert.That(Unit.Environment.Select(e => e.Key)).IsEquivalentTo([LocalRoot.EnvVar, "Local__Port"]);
+    }
+
+    [Test]
+    public async Task A_recorded_embedding_model_reaches_the_server_as_environment() {
+        var root = new LocalRoot(Tmp.CreateDir("embedded"));
+        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
+
+        var unit = LocalServerUnit.ForInstallation(root, 51234);
+
+        await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Provider", "ollama"));
+        await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Ollama__Model", "mxbai-embed-large"));
+        await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Ollama__BaseUrl", "http://localhost:11434"));
+        await Assert.That(LocalServerSystemdUnit.Unit(unit)).Contains("Environment=Embedding__Ollama__Model=mxbai-embed-large\n");
+    }
+
+    [Test]
     public async Task The_plist_restarts_a_crashed_server_and_gives_it_time_to_stop_postgres() {
         var dict = XDocument.Parse(LocalServerLaunchdUnit.Plist(Unit)).Root!.Element("dict")!;
 

@@ -118,12 +118,8 @@ sealed class LocalPreflight(LocalRoot root, ConfigRoot config, LocalPlatform pla
     void CheckProfiles(ProfileConfig cfg) {
         var endpoints = LocalEndpoints.Read(root);
 
-        foreach (var (name, profile) in cfg.Profiles) {
-            if (string.IsNullOrWhiteSpace(profile.ServerUrl)) continue;
-            if (endpoints.Classify(profile.ServerUrl) is LocalEndpointClass.Local) continue;
-
+        if (LocalSetupState.FindForeignServerProfile(cfg, endpoints) is var (name, profile))
             throw Refuse(LocalInstallFailureCode.OtherServer, $"The profile \"{name}\" points at {profile.ServerUrl}, which is not this machine's local installation. Converting a machine that uses a cloud server arrives in a later release.");
-        }
     }
 
     void CheckSlot() {

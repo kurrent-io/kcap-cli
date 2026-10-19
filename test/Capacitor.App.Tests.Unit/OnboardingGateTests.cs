@@ -3,6 +3,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -302,6 +303,47 @@ public class OnboardingGateTests {
         await Assert.That(profiles).IsNotNull();
         await Assert.That(profiles.Name).IsEqualTo(ProfileName);
         await Assert.That(profiles.Resolution.ServerUrl).IsEqualTo(ServerUrl);
+    }
+
+    OnboardingGate GateWithSetupJournal() {
+        var root = new LocalRoot(Config.PathTo("local"));
+        root.EnsureCreated();
+        LocalStateFiles.WriteJournal(root, new(LocalSetupState.Operation, "committing", ServerStart.Deny, null,
+            DateTimeOffset.UnixEpoch, new Dictionary<string, string>()));
+
+        return new(Config.Root, AuthFixtures.NewTokenStore(Config.Root), ProfileOverrides.None, root, TimeProvider.System);
+    }
+
+    [Test]
+    public async Task Pending_local_setup_is_incomplete_even_with_a_none_stamped_local_profile() {
+        WriteConfig(SingleProfileConfig(new Profile {
+            ServerUrl    = ServerUrl,
+            AuthProvider = new AuthProviderStamp(AuthProvider.None, ServerUrl),
+        }));
+
+        var result = (await GateWithSetupJournal().EvaluateAsync(CancellationToken.None)).Result;
+
+        await AssertIncomplete(result, GateReason.LocalSetupPending);
+    }
+
+    [Test]
+    public async Task Pending_local_setup_is_incomplete_before_any_profile_exists() {
+        var result = (await GateWithSetupJournal().EvaluateAsync(CancellationToken.None)).Result;
+
+        await AssertIncomplete(result, GateReason.LocalSetupPending);
+    }
+
+    /// Settings grades each profile through the per-profile seam; a setup journal is the startup's
+    /// concern, so a cloud profile there keeps its own verdict.
+    [Test]
+    public async Task A_setup_journal_does_not_grade_a_resolved_cloud_profile() {
+        var profile = new Profile { ServerUrl = ServerUrl };
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(ProfileName,
+            MakeToken(AuthProvider.GitHubApp, expired: false, serverUrl: ServerUrl));
+
+        var result = await GateWithSetupJournal().EvaluateResolvedAsync(ProfileName, profile, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<GateResult.Complete>();
     }
 
     static async Task AssertIncomplete(GateResult result, GateReason expected) {

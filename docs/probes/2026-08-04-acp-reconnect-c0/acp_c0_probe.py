@@ -47,7 +47,9 @@ VENDORS = {
     "gemini":  {"argv": ["gemini", "--experimental-acp", "--skip-trust",
                           "--allowed-mcp-server-names", "__kcap_probe_unmatchable__"],
                  "model": None,
-                 "env": {"GOOGLE_CLOUD_PROJECT": "capacitortesting"}},
+                 # Vertex needs both; the project must have billing enabled.
+                 "env": {"GOOGLE_CLOUD_PROJECT": os.environ.get("KCAP_PROBE_GCP_PROJECT", "capacitortesting"),
+                         "GOOGLE_CLOUD_LOCATION": os.environ.get("KCAP_PROBE_GCP_LOCATION", "global")}},
 }
 
 
@@ -87,7 +89,7 @@ class AcpClient:
         self.proc = await asyncio.create_subprocess_exec(
             *self.argv, cwd=self.cwd, env=env,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=stderr_f)
+            stderr=stderr_f, start_new_session=True)
         self.reader_task = asyncio.create_task(self._read_loop())
         self.record("mark", {"event": "spawned", "pid": self.proc.pid, "argv": self.argv})
 
@@ -201,9 +203,11 @@ class AcpClient:
         return fut
 
     def sigkill(self):
+        # The whole process group: Gemini self-re-execs, and killing only the spawned pid
+        # orphans the real agent with the pipes still open.
         self.record("mark", {"event": "sigkill", "pid": self.proc.pid})
         try:
-            self.proc.send_signal(signal.SIGKILL)
+            os.killpg(self.proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
 

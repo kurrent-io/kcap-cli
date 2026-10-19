@@ -6,6 +6,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <param name="Import">The history import, while it runs and after; null when none started.</param>
 /// <param name="WorkspaceUrl">The workspace this machine signed in to, or null.</param>
 /// <param name="DaemonProblem">Why the daemon is not running, or null while it is being set up.</param>
+/// <param name="Local">The machine runs its own local server, so the page names no terminal command.</param>
+/// <param name="DashboardUrl">The local server's web dashboard, or null when unknown.</param>
 public sealed record DoneFacts(
     IReadOnlyList<string> Recording,
     bool                  CodexRecording,
@@ -14,6 +16,8 @@ public sealed record DoneFacts(
     bool                  DaemonRunning,
     string                MachineName,
     string?               WorkspaceUrl,
-    string?               DaemonProblem = null) {
+    string?               DaemonProblem = null,
+    bool                  Local = false,
+    string?               DashboardUrl = null) {
     public static readonly DoneFacts Empty = new([], false, false, null, false, "this machine", null);
 }
