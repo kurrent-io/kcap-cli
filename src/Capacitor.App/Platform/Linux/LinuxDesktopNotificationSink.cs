@@ -53,6 +53,7 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
                 else CloseNative(id);
             });
         } catch (Exception error) {
+            dispatch(() => { if (_pending.ContainsValue(pending)) _pending.Remove(notification.Id); });
             DesktopNotifications.Report(error);
         }
     }
