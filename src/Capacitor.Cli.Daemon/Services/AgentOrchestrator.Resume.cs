@@ -506,9 +506,10 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Sorts the predecessor's ledger into candidates and entries interrupted at boot. Runs
     /// after the orphan reaper, whose unresolved records it reads, and before the server connect that
-    /// claims the candidates.</summary>
-    internal void LoadResumeLedger() {
-        if (ResumeLedger is not { } ledger) return;
+    /// claims the candidates. False when the ledger could not be read: the keep-sets are then empty, and
+    /// a sweep against them would delete what the ledger protects.</summary>
+    internal bool LoadResumeLedger() {
+        if (ResumeLedger is not { } ledger) return true;
 
         IReadOnlyList<ResumeLedgerEntry> entries;
 
@@ -516,9 +517,15 @@ internal partial class AgentOrchestrator {
             entries = ledger.ReadAll();
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogResumeLedgerUnreadable(ex);
-            return;
+            return false;
         }
 
+        SortResumeLedger(entries);
+
+        return true;
+    }
+
+    void SortResumeLedger(IReadOnlyList<ResumeLedgerEntry> entries) {
         var blocked = (_orphanReaper?.BlockedCandidates() ?? []).Select(c => c.AgentId).ToHashSet(StringComparer.Ordinal);
         var beat    = DaemonHeartbeat.LastBeat(_config.Store, _config.Name);
         var now     = _time.GetUtcNow();

@@ -802,11 +802,12 @@ public static partial class DaemonRunner {
                 // handler. Under the daemon lock; best-effort (swallows its own faults).
                 orchestrator = host.Services.GetRequiredService<AgentOrchestrator>();
                 await orchestrator.ReapOrphansOnceAsync();
-                orchestrator.LoadResumeLedger();
+                // An unreadable ledger leaves empty keep-sets; a sweep against them would delete what it protects.
+                var ledgerReadable = orchestrator.LoadResumeLedger();
 
                 await host.Services.GetRequiredService<TranscriptJournalSweep>().RunOnceAsync(lifetime.ApplicationStopping);
 
-                orchestrator.AttachmentStore.SweepOrphans(orchestrator.IsLiveAttachmentStem, logger);
+                if (ledgerReadable) orchestrator.AttachmentStore.SweepOrphans(orchestrator.IsLiveAttachmentStem, logger);
 
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
@@ -823,7 +824,7 @@ public static partial class DaemonRunner {
                 }
 
                 var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-                await worktreeManager.CleanupOrphanedAsync(orchestrator.LedgerWorktreePaths());
+                if (ledgerReadable) await worktreeManager.CleanupOrphanedAsync(orchestrator.LedgerWorktreePaths());
                 _ = orchestrator.ResumeOnBootAsync(lifetime.ApplicationStopping);
 
                 // Instantiate EvalRunner so it wires the per-phase eval handlers

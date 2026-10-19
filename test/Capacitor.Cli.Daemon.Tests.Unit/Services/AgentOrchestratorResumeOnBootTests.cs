@@ -6,6 +6,7 @@ using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -198,6 +199,28 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-ro")).IsNotNull();
         await Assert.That(f.Orch.LedgerOnlyAgents().Select(r => r.Entry.AgentId)).Contains("resume-ro");
         await Assert.That(f.Orch.ResumingClaims().Select(c => c.AgentId)).Contains("resume-ro");
+    }
+
+    /// <summary>An unreadable ledger leaves the keep-sets empty, so the boot must know not to sweep against them.</summary>
+    [Test]
+    [ExcludeOn(OS.Windows), System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task LoadResumeLedger_reports_an_unreadable_ledger() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "unreadable-1");
+        var dir  = Path.GetDirectoryName(f.Orch.ResumeLedger!.RingPath("unreadable-1"))!;
+        var mode = File.GetUnixFileMode(dir);
+        File.SetUnixFileMode(dir, UnixFileMode.None);
+
+        try {
+            await Assert.That(f.Orch.LoadResumeLedger()).IsFalse();
+            await Assert.That(f.Orch.LedgerWorktreePaths()).IsEmpty();
+        } finally {
+            File.SetUnixFileMode(dir, mode);
+        }
+
+        await Assert.That(f.Orch.LoadResumeLedger()).IsTrue();
+        await Assert.That(f.Orch.LedgerWorktreePaths().Count).IsEqualTo(1);
     }
 
     [Test]
