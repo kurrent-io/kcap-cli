@@ -22,8 +22,16 @@ public static class CliResolver {
         var overridePath = getEnv("KCAP_APP_CLI_PATH");
         if (!string.IsNullOrEmpty(overridePath)) return fileExists(overridePath) ? overridePath : null;
 
+        return BundledPath(fileExists, baseDirectory, cliFileName) ?? "kcap";
+    }
+
+    /// The CLI shipped beside this executable, or null when there is none (a dev run, a bare build).
+    public static string? BundledPath(Func<string, bool> fileExists, string baseDirectory) =>
+        BundledPath(fileExists, baseDirectory, BundledCliFileName);
+
+    static string? BundledPath(Func<string, bool> fileExists, string baseDirectory, string cliFileName) {
         var sibling = Path.Combine(baseDirectory, cliFileName);
-        return fileExists(sibling) ? sibling : "kcap";
+        return fileExists(sibling) ? sibling : null;
     }
 
     /// Strict: stdout must be exactly one non-empty line "kcap &lt;version&gt;"; multiline, a

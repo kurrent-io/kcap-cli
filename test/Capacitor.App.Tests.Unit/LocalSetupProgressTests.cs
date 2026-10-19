@@ -63,6 +63,31 @@ public class LocalSetupProgressTests {
         await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Running);
     }
 
+    /// The CLI picks the port before it downloads, so only one row runs at a time in its real order.
+    [Test]
+    public async Task One_row_runs_at_a_time_in_the_order_the_cli_reports() {
+        var p = Run("{\"v\":1,\"event\":\"port_chosen\",\"port\":5000}",
+            "{\"v\":1,\"event\":\"downloading\",\"url\":\"u\",\"bytes\":10}");
+
+        await Assert.That(p.Download.State).IsEqualTo(RowState.Running);
+        await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Pending);
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"verified\",\"sha256\":\"x\"}")!);
+
+        await Assert.That(p.Verify.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Install.State).IsEqualTo(RowState.Running);
+        await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Pending);
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"unpacked\",\"path\":\"/p\"}")!);
+
+        await Assert.That(p.Install.State).IsEqualTo(RowState.Running);
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}")!);
+
+        await Assert.That(p.Install.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Running);
+    }
+
     [Test]
     public async Task Committed_after_reused_is_one_success() {
         var p = Run(
