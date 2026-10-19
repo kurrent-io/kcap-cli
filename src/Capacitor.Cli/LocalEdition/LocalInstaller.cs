@@ -137,9 +137,8 @@ sealed class LocalInstaller(
             await StageAsync(details, ct);
             // Before the unit is written, so the first start already has the model; a rollback deletes it with data/.
             var previous = LocalEmbeddingFile.Read(root);
-
-            if (await DecideEmbeddingsAsync(answers, ct) is { } setting && LocalEmbeddingStep.Record(root, setting, _progress))
-                LocalEmbeddingStep.Applied(previous, setting, _progress);
+            var setting  = await DecideEmbeddingsAsync(answers, ct);
+            var recorded = setting is not null && LocalEmbeddingStep.Record(root, setting, _progress);
 
             entry = lease.Advance(entry, LocalSetupJournal.Unit, ServerStart.Fenced);
 
@@ -148,6 +147,8 @@ sealed class LocalInstaller(
             service.Install(unit);
             unitLock.Dispose();
             unitLock = null;
+
+            if (recorded) LocalEmbeddingStep.Applied(previous, setting!, _progress);
 
             _progress.Report(new LocalInstallEvent.Starting(unit.Label));
 

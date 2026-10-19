@@ -506,6 +506,17 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task A_unit_that_fails_to_install_reports_no_configured_model() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        Service.InstallFailure = new LocalLifecycleException("launchctl bootstrap failed");
+
+        await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(YesWithOllama, ollama: ollama));
+
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingModelReady>()).IsNotEmpty();
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsConfigured>()).IsEmpty();
+    }
+
+    [Test]
     public async Task A_rolled_back_install_takes_its_embedding_model_with_it() {
         using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
         Server.WhileFenced = FakeAuthConfig.Lifted;
