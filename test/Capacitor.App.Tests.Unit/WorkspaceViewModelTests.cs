@@ -458,6 +458,22 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// An interrupted row can stay for the ledger's whole retention, so it is not held back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_is_built_for_an_interrupted_row_without_runtime_metadata() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: null) with { Status = "Interrupted" });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.Chat).IsNotNull();
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Chat_is_built_on_the_first_dto_of_any_vendor_with_the_reader_the_format_names() {

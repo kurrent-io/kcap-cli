@@ -467,8 +467,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             if (preCheck?.Invoke() is { } early) return early;
 
             var evidence = await observation.ObserveAsync(request, ct).ConfigureAwait(false);
-            var leg = EvidenceFailureLeg(evidence, request)
-                   ?? (staleInstance is not null && evidence!.InstanceId == staleInstance ? PredecessorLeg : null);
+            var leg = EvidenceFailureLeg(evidence, request, staleInstance);
             if (leg is null) return null;
 
             var remaining = deadline - _time.GetUtcNow();
@@ -484,7 +483,8 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     // returns the name of the first failing leg, or null once evidence is fully positive. Structural:
     // pid/instance presence is checked directly, never inferred from the observation's own
     // IdentityConsistent flag (which a broken/legacy adapter could report true without backing it).
-    static string? EvidenceFailureLeg(ObservedEvidence? evidence, MutationRequest request) {
+    // `staleInstance`, when set, is an instance that must not be the one answering.
+    static string? EvidenceFailureLeg(ObservedEvidence? evidence, MutationRequest request, string? staleInstance = null) {
         if (evidence is not { Reachable: true }) return UnreachableLeg;
 
         if (!ServerIdentity.Matches(evidence.ServerUrl, request.CanonicalServer) || evidence.DaemonName != request.DaemonName)
@@ -497,6 +497,8 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (evidence.Capabilities is null || !evidence.Capabilities.Contains(ConsentFlipCoordinator.ConsentV3Capability)) return "missing_capability_consent_3";
 
         if (!KcapCliCompatibility.Satisfies(evidence.DaemonVersion)) return "daemon_below_floor";
+
+        if (staleInstance is not null && evidence.InstanceId == staleInstance) return PredecessorLeg;
 
         return null;
     }

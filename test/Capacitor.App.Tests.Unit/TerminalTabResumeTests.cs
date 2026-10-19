@@ -364,6 +364,38 @@ public class TerminalTabResumeTests {
         });
     }
 
+    /// A dial that fails outright while the ledger says the agent is resuming is the restart, not a fault.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_dial_while_resuming_waits_for_the_resume() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Resuming) };
+            var client = await rig.AttachAsync();
+
+            await rig.DropAsync(client, new AttachOutcome.Failed("Connection refused"));
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+        });
+    }
+
+    /// The window bounds the reattach too: a resume that publishes after it has run out is not chased.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_resume_that_publishes_after_the_window_is_not_reattached() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Resuming) };
+            var client = await rig.AttachAsync();
+            var deadline = rig.Time.GetUtcNow() + Window;
+            rig.Gate = () => rig.Time.GetUtcNow() >= deadline ? Ledger(ResumeState.Running, startedAt: SecondStart) : Ledger(ResumeState.Resuming);
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+
+            for (var waited = TimeSpan.Zero; waited <= Window; waited += TerminalTabViewModel.ResumeRetryGap) await rig.TickAsync();
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(1);
+        });
+    }
+
     /// An agent that simply finished keeps its exit, whatever stale status the cache still shows.
     [Test]
     [NotInParallel("AvaloniaSession")]

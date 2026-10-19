@@ -66,6 +66,18 @@ public class SettingsViewModelTests {
     });
 
     [Test]
+    public Task Closing_settings_right_after_a_toggle_still_saves_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        var vm = Make(store, Connected());
+
+        vm.AutoResume = false;
+        vm.Dispose();
+
+        await WaitUntilAsync(() => store.Load().AutoResume == false);
+        await Assert.That(store.Load().AutoResume).IsFalse();
+    });
+
+    [Test]
     public Task Toggling_auto_resume_back_and_forth_saves_the_last_selection() => AvaloniaSession.RunOnUiAsync(async () => {
         var store = Seed();
         using var vm = Make(store, Connected());

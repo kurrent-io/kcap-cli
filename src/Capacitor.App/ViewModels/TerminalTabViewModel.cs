@@ -706,10 +706,13 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// counts as a drop. An exit waits only for a runtime other than the one the tab attached to, so
     /// the attached runtime finishing normally keeps its exit.
     TerminalSessionState? ResumeVerdict(AttachOutcome outcome) {
+        if (outcome is not (AttachOutcome.ConnectionLost or AttachOutcome.Failed or AttachOutcome.Exited)
+            || ReadLedger() is not { } entry) return null;
         var drop = outcome is AttachOutcome.ConnectionLost
                 || outcome is AttachOutcome.Failed(var message)
-                   && (ResumeDeadline is not null || message.StartsWith(LocalFrame.NoSuchAgentPrefix, StringComparison.Ordinal));
-        if (!drop && outcome is not AttachOutcome.Exited || ReadLedger() is not { } entry) return null;
+                   && (ResumeDeadline is not null || entry.State == ResumeState.Resuming
+                       || message.StartsWith(LocalFrame.NoSuchAgentPrefix, StringComparison.Ordinal));
+        if (!drop && outcome is not AttachOutcome.Exited) return null;
         if (entry.State == ResumeState.Interrupted) return TerminalSessionState.Interrupted(entry.LastError);
         if (!drop && !IsSuccessor(entry)) return null;
 
@@ -779,14 +782,15 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             if (Retired(generation)) return;
 
             var entry = ReadLedger();
-            if (entry is { State: ResumeState.Running }) {
+            var expired = _time.GetUtcNow() >= ResumeDeadline;
+            if (entry is { State: ResumeState.Running } && !expired) {
                 await TryStartAttemptAsync().ConfigureAwait(false);
                 return;
             }
 
             var end = entry is null ? TerminalSessionState.Failed("This session did not come back after the daemon restarted; see `kcap agent ls`.")
                     : entry.State == ResumeState.Interrupted ? TerminalSessionState.Interrupted(entry.LastError)
-                    : _time.GetUtcNow() >= ResumeDeadline ? TerminalSessionState.Failed(LostConnection)
+                    : expired ? TerminalSessionState.Failed(LostConnection)
                     : null;
             if (end is null) continue;
 

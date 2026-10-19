@@ -126,16 +126,23 @@ internal partial class AgentOrchestrator {
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
                 TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
 
-    static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) => new(
-        entry.AgentId, KindText(LaunchKind.Default), entry.Vendor, entry.Launch.RepoPath, status,
-        entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
-        string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
-        HasTerminal: entry.HasTerminal, Title: entry.Launch.Title, WorktreePath: entry.Launch.WorktreePath,
-        WorkLocation: entry.Launch.Work == WorkLocation.OwnedWorktree ? WorkLocationText.Owned : WorkLocationText.Borrowed,
-        SessionId: entry.SessionId,
-        Branch: string.IsNullOrWhiteSpace(entry.Launch.WorktreeBranch) ? null : entry.Launch.WorktreeBranch,
-        TranscriptFormat: entry.TranscriptFormat,
-        Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
+    /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
+    static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
+        var worktree = ResumedWorktree(entry);
+        var checkout = AgentCheckout.Resolve(worktree, entry.Launch.Work, borrowedSnapshotSource: null);
+
+        return new(
+            entry.AgentId, KindText(LaunchKind.Default), entry.Vendor, checkout.Repository, status,
+            entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
+            string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
+            HasTerminal: entry.HasTerminal, Title: entry.Launch.Title, WorktreePath: checkout.Worktree,
+            WorkLocation: checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
+            BorrowedFrom: checkout.BorrowedFrom,
+            SessionId: entry.SessionId,
+            Branch: string.IsNullOrWhiteSpace(worktree.Branch) ? null : worktree.Branch,
+            TranscriptFormat: entry.TranscriptFormat,
+            Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
+    }
 
     /// <summary>
     /// Serves the legacy <c>Stop</c> frame from older clients that predate --force. That frame

@@ -703,6 +703,22 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(rows["gone-1"].TranscriptFormat).IsEqualTo(TranscriptFormats.Envelopes);
     }
 
+    /// <summary>A borrowed launch's row names its checkout as the live agent's does, so the rail keeps it in place.</summary>
+    [Test]
+    public async Task A_borrowed_entrys_status_row_reports_the_borrowed_checkout() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Entry(f, "borrowed-1", state: ResumeState.Interrupted);
+        f.Orch.ResumeLedger!.Write(entry with { Launch = entry.Launch with { Work = WorkLocation.BorrowedCwd, WorktreePath = f.Repo } });
+
+        f.Orch.LoadResumeLedger();
+        var row = f.Orch.SnapshotAgentsForStatus().Single();
+
+        await Assert.That(row.WorkLocation).IsEqualTo(WorkLocationText.Borrowed);
+        await Assert.That(row.BorrowedFrom).IsEqualTo(f.Repo);
+        await Assert.That(row.WorktreePath).IsEqualTo(f.Repo);
+    }
+
     /// <summary>An interruption changes nothing else the status payload reads, so it must pulse on its own.</summary>
     [Test]
     public async Task An_interrupted_resume_pulses_the_status_notifier() {

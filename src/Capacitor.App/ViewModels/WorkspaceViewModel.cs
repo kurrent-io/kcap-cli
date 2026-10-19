@@ -300,10 +300,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _disposables.Add(StopCommand);
     }
 
-    /// A resuming or interrupted row the daemon has no runtime answers for; the reader and input chosen
-    /// from it would be the older-daemon fallbacks, for good.
+    /// A resuming row the daemon has no runtime answers for; the reader and input chosen from it would be
+    /// the older-daemon fallbacks, for good. A resume publishes the agent with them. An interrupted row
+    /// is not held back: it may stay interrupted for its whole retention, and a fallback chat beats none.
     static bool LacksRuntimeMetadata(AgentStatusDto dto) =>
-        dto.Status is "Resuming" or "Interrupted" && dto.HasTerminal is null && dto.TranscriptFormat is null;
+        dto.Status == "Resuming" && dto.HasTerminal is null && dto.TranscriptFormat is null;
 
     static AgentPresence Accumulate(AgentPresence state, IChangeSet<AgentStatusDto, string> changes) {
         var dto = state.Dto;

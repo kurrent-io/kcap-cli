@@ -128,20 +128,15 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     }
 
     // Saves run one at a time and each writes the selection current when it starts, so the last one
-    // to finish holds the latest selection whatever order the toggles' writes were scheduled in.
+    // to finish holds the latest selection whatever order the toggles' writes were scheduled in. A
+    // save outlives the window: closing Settings right after a toggle must not drop the choice.
     async Task SaveAutoResumeAsync() {
         string? message;
-        try {
-            await _autoResumeSaves.WaitAsync(_lifetime.Token);
-        } catch (OperationCanceledException) {
-            return;
-        }
+        await _autoResumeSaves.WaitAsync(CancellationToken.None);
         try {
             var value = Volatile.Read(ref _autoResume);
-            await _settings.SaveAutoResumeAsync(value, _lifetime.Token);
+            await _settings.SaveAutoResumeAsync(value, CancellationToken.None);
             message = value == Volatile.Read(ref _autoResume) ? "Saved. The daemon reads this when it starts." : null;
-        } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
-            return;
         } catch (Exception ex) {
             message = $"Could not save the setting: {ex.Message}";
         } finally {
