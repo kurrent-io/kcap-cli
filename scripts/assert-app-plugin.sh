@@ -7,8 +7,10 @@ version="${2:?version required}"
 source_dir="$here/../kcap"
 if [ -d "$bundle/Contents/Resources" ]; then
   plugin="$bundle/Contents/Resources/kcap"
+  cli="$bundle/Contents/MacOS/kcap"
 else
   plugin="$bundle/kcap"
+  cli="$bundle/kcap.exe"
 fi
 test -f "$plugin/.claude-plugin/plugin.json"
 grep -qF '"version": "'"$version"'"' "$plugin/.claude-plugin/plugin.json"
@@ -20,3 +22,10 @@ while IFS= read -r -d '' file; do
   fi
 done < <(find "$source_dir" -type f -print0)
 echo "bundled plugin payload is complete and stamped $version"
+# Carrying the payload is not enough: the bundled CLI must also resolve it.
+scratch="$(mktemp -d)"
+(cd "$scratch" && env -u KCAP_PLUGIN_DIR KCAP_CONFIG_DIR="$scratch/config" DO_NOT_TRACK=1 \
+  "$cli" plugin install --project --no-update-check)
+test -f "$scratch/.claude/settings.local.json"
+rm -rf "$scratch"
+echo "bundled CLI resolves the bundled plugin"
