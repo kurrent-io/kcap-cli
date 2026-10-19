@@ -920,6 +920,11 @@ public class AcpHostedAgentRuntimeTests {
         var fromChannel = new List<AcpEventEnvelope>();
         while (fromChannel.Count < 2) fromChannel.Add(await h.Runtime.Envelopes.ReadAsync(h.Cts.Token).AsTask().WaitAsync(HangGuard));
 
+        // The runtime records an envelope just after the channel write a reader can already see, so
+        // the journal completes only once the runtime is gone, as teardown orders it.
+        await h.Runtime.DisposeAsync();
+        using var drainGuard = new CancellationTokenSource(HangGuard);
+        await foreach (var e in h.Runtime.Envelopes.ReadAllAsync(drainGuard.Token)) fromChannel.Add(e);
         await journal.CompleteAsync();
         var fromJournal = JournalEnvelopes(journal.Path).Skip(1).ToList(); // header first
 
