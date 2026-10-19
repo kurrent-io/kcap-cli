@@ -300,7 +300,8 @@ public partial class App : Application {
                     laneRunner, pinnedPath, request.DaemonName, request.Profile, laneProbe.TerminalPathAsync,
                     canonicalServer: request.CanonicalServer),
                 _ => new OneShotObservation(_daemonStore, _time, OneShotProbeTimeout),
-                _time);
+                _time,
+                () => CliResolver.BundledPath(File.Exists, AppContext.BaseDirectory));
             _lane = lane;
 
             var (gate, profiles) = await ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token);
