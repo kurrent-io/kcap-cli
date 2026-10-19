@@ -87,13 +87,22 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
     }
 
     void Render(LocalInstallEvent e) {
-        var line = e switch {
+        if (Line(e, _version) is { } line) AnsiConsole.MarkupLine($"  {Markup.Escape(line)}");
+
+        if (e is LocalInstallEvent.Reused reused && reused.InstalledVersion != _version)
+            AnsiConsole.MarkupLine($"  [dim]This kcap is {Markup.Escape(_version)}; upgrades arrive with kcap local upgrade.[/]");
+    }
+
+    /// <summary>The status line for an event, or null for one that has none. The <c>kcap local</c> commands render a
+    /// recovery with it too.</summary>
+    public static string? Line(LocalInstallEvent e, string version) =>
+        e switch {
             LocalInstallEvent.PreflightPassed { Plan: PlanHint.Reuse } p => $"Reusing the local installation in {p.Root}",
             LocalInstallEvent.PreflightPassed p => $"Installing Capacitor local {p.Version} in {p.Root}",
             LocalInstallEvent.Recovering r      => $"Finishing an interrupted {r.Operation} (stopped at {r.Phase})…",
             LocalInstallEvent.Recovered r       => $"Finished the interrupted {r.Operation}",
             LocalInstallEvent.PortChosen p      => $"Using port {p.Port}",
-            LocalInstallEvent.Downloading d     => $"Downloading Capacitor local {_version} ({Megabytes(d.Bytes)} MB)…",
+            LocalInstallEvent.Downloading d     => $"Downloading Capacitor local {version} ({Megabytes(d.Bytes)} MB)…",
             LocalInstallEvent.Verified          => "Verified",
             LocalInstallEvent.Unpacked u        => $"Unpacked into {u.Path}",
             LocalInstallEvent.Starting          => "Starting the local server…",
@@ -105,12 +114,6 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             LocalInstallEvent.Committed c       => $"Committed: Capacitor local {c.Version} on {c.ServerUrl}",
             _                                   => null,
         };
-
-        if (line is not null) AnsiConsole.MarkupLine($"  {Markup.Escape(line)}");
-
-        if (e is LocalInstallEvent.Reused reused && reused.InstalledVersion != _version)
-            AnsiConsole.MarkupLine($"  [dim]This kcap is {Markup.Escape(_version)}; upgrades arrive with kcap local upgrade.[/]");
-    }
 
     static string Megabytes(long bytes) => (bytes / (1024.0 * 1024.0)).ToString("0", CultureInfo.InvariantCulture);
 }
