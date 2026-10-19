@@ -445,6 +445,32 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
     }
 
+    /// The durable half of the local-path predicate is read at build, on Edition entry and on a settled
+    /// install, never per evaluation: a journal written between those reads is not seen until the next one.
+    [Test]
+    public async Task The_local_path_reads_durable_state_from_a_snapshot() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot = LocalSetupScript.NoSetup(Config);
+
+        var (before, unrefreshed, refreshed) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
+            var before = signIn.PassThrough;
+
+            LocalSetupScript.PendingSetup(Config);
+            var unrefreshed = signIn.PassThrough;
+
+            await graph.Steps.OfType<EditionStepViewModel>().Single().OnEnterAsync(CancellationToken.None);
+
+            return (before, unrefreshed, signIn.PassThrough);
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(before).IsFalse();
+        await Assert.That(unrefreshed).IsFalse();
+        await Assert.That(refreshed).IsTrue();
+    }
+
     [Test]
     public async Task Forced_setup_on_a_committed_local_machine_starts_at_harnesses_with_no_route_to_cloud() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);

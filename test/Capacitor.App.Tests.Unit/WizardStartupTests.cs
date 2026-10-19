@@ -145,7 +145,7 @@ static class WizardFixtures {
         // Matches DefaultDaemonName, so a sign-in keeps the name and writes no config of its own.
         public Func<string?> ConfiguredDaemonName = () => "daemon-a";
         public LocalRoot LocalRoot;
-        public bool IsMacOs = true;
+        public bool LocalEditionSupported = true;
         public string? ProfileOverride;
 
         public GraphHarness(ConfigRoot root) {
@@ -208,7 +208,7 @@ static class WizardFixtures {
             Time: Time,
             ShutdownToken: CancellationToken.None,
             LocalRoot: LocalRoot,
-            IsMacOs: IsMacOs,
+            LocalEditionSupported: LocalEditionSupported,
             ConfiguredDaemonName: ConfiguredDaemonName,
             ProfileOverride: ProfileOverride);
 
@@ -711,7 +711,7 @@ public class WizardStartupTests {
 
             await AppUnderTest.RunWizardThenBuildGraphAsync(
                     new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
-                    Reevaluate(harness), (_, _, _) => builds++, shutdown.Token)
+                    Reevaluate(harness), (_, _, _) => builds++, () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token)
                 .WaitAsync(TimeSpan.FromSeconds(10));
 
             return true;
@@ -723,6 +723,27 @@ public class WizardStartupTests {
         // The reopened wizard shows the settled failure; it does not start a second child unasked.
         await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(1);
         await Assert.That(reopenedMessage).IsEqualTo(message);
+    }
+
+    /// A gate that could not be read says nothing about the journal: pending setup still reopens the wizard.
+    [Test]
+    public async Task A_close_with_pending_setup_reopens_the_wizard_even_when_the_gate_cannot_be_read() {
+        var pending = true;
+        var shows = 0;
+        var builds = 0;
+
+        await AppUnderTest.RunWizardThenBuildGraphAsync(
+                new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true,
+                (_, _) => {
+                    if (++shows == 2) pending = false;
+                    return Task.FromResult(true);
+                },
+                () => Task.FromResult<(GateResult, ProfileContext?)>((new GateResult.Incomplete(GateReason.EvaluationFailed), null)),
+                (_, _, _) => builds++, () => pending, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(shows).IsEqualTo(2);
+        await Assert.That(builds).IsEqualTo(1);
     }
 
     [Test]
@@ -746,7 +767,7 @@ public class WizardStartupTests {
 
             await AppUnderTest.RunWizardThenBuildGraphAsync(
                     new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
-                    Reevaluate(harness), (gate, _, _) => built.Add(gate), CancellationToken.None)
+                    Reevaluate(harness), (gate, _, _) => built.Add(gate), () => LocalSetupState.Pending(harness.LocalRoot), CancellationToken.None)
                 .WaitAsync(TimeSpan.FromSeconds(10));
 
             return true;
@@ -780,7 +801,7 @@ public class WizardStartupTests {
 
             await AppUnderTest.RunWizardThenBuildGraphAsync(
                     new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
-                    Reevaluate(harness), (_, _, _) => builds++, shutdown.Token)
+                    Reevaluate(harness), (_, _, _) => builds++, () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token)
                 .WaitAsync(TimeSpan.FromSeconds(10));
             await quit!.WaitAsync(TimeSpan.FromSeconds(5));
 

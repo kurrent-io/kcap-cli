@@ -69,7 +69,7 @@ public class EditionStepViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Local_is_unavailable_off_macos() {
         var (reason, canChoose) = await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root) { IsMacOs = false };
+            using var harness = new WizardFixtures.GraphHarness(Config.Root) { LocalEditionSupported = false };
             var graph = WizardComposition.BuildGraph(harness.Options());
             await graph.ViewModel.PendingEnterForTesting;
             var edition = graph.Steps.OfType<EditionStepViewModel>().Single();

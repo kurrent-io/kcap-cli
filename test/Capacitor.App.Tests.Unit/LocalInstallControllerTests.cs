@@ -92,8 +92,9 @@ public class LocalInstallControllerTests {
     public async Task A_quit_interrupts_the_running_setup_once_and_never_kills_it() {
         var runner = new RollbackRunner();
         var cli = new KcapCli(runner, "kcap", "daemon-a", "work", terminalPathAsync: null, "https://cap.example.com:443");
+        var probe = Probe();
         var controller = new LocalInstallController(
-            () => cli, LocalSetupScript.NoSetup(Config), () => false, action => action(), Probe().Funnel);
+            () => cli, LocalSetupScript.NoSetup(Config), () => false, action => action(), probe.Funnel);
         using var shutdown = new CancellationTokenSource();
 
         await controller.StartAsync(shutdown.Token);
@@ -105,6 +106,8 @@ public class LocalInstallControllerTests {
         await Assert.That(runner.Interrupts).IsEqualTo(1);
         await Assert.That(runner.Kills).IsEqualTo(0);
         await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Code).IsEqualTo("cancelled");
+        // A quit is not an install failure.
+        await Assert.That(probe.Names).IsEquivalentTo(["cli_setup_local_install_started"]);
     }
 
     [Test]
@@ -124,12 +127,13 @@ public class LocalInstallControllerTests {
 
     [Test]
     public async Task No_cli_settles_retryable() {
+        var probe = Probe();
         var cli = new FakeKcapCli {
             CliPath = null,
             SetupLocalBehavior = (_, _, _) => Task.FromResult(
                 new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")])),
         };
-        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);
 
         await controller.StartAsync(CancellationToken.None);
         await controller.SettleAsync();
@@ -138,12 +142,14 @@ public class LocalInstallControllerTests {
         await Assert.That(failed.Affordance).IsEqualTo(LocalInstallAffordance.Retry);
         await Assert.That(failed.Message).IsEqualTo("kcap CLI not found");
         await Assert.That(failed.LockedToLocal).IsFalse();
+        await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("cli_missing");
     }
 
     [Test]
     public async Task A_throwing_run_settles_retryable_instead_of_hanging() {
+        var probe = Probe();
         var cli = new FakeKcapCli { SetupLocalBehavior = (_, _, _) => throw new InvalidOperationException("spawn refused") };
-        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);
 
         await controller.StartAsync(CancellationToken.None);
         await controller.SettleAsync();
@@ -151,10 +157,23 @@ public class LocalInstallControllerTests {
         var failed = (LocalInstallOutcome.Failed)controller.Outcome!;
         await Assert.That(failed.Affordance).IsEqualTo(LocalInstallAffordance.Retry);
         await Assert.That(failed.Message).Contains("spawn refused");
+        await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("spawn_failed");
     }
 
     [Test]
-    public async Task Started_on_spawn_and_committed_once_with_its_plan() {
+    public async Task A_nonzero_exit_without_a_failed_line_reports_no_failure_line() {
+        var probe = Probe();
+        var cli = new FakeKcapCli { SetupLocalBehavior = (_, _, _) => Task.FromResult(new StreamingResult(3, false, [])) };
+        var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);
+
+        await controller.StartAsync(CancellationToken.None);
+        await controller.SettleAsync();
+
+        await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("no_failure_line");
+    }
+
+    [Test]
+    public async Task Started_per_attempt_and_committed_once_with_its_plan() {
         var probe = Probe();
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);

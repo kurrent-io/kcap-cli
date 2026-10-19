@@ -75,9 +75,11 @@ public sealed class LocalInstallController(
 
     async Task RunAsync(LocalSetupProgress progress, CancellationToken interrupt, TaskCompletionSource exited, CancellationToken ct) {
         var sawLine = false;
+        var kcap = cli();
+        var unexplained = kcap.CliPath is null ? "cli_missing" : "no_failure_line";
         StreamingResult result;
         try {
-            result = await cli().SetupLocalAsync(line => {
+            result = await kcap.SetupLocalAsync(line => {
                 if (line.Kind != ProcessStreamKind.Stdout || LocalSetupLine.Parse(line.Text) is not { } parsed) return;
 
                 sawLine = true;
@@ -85,13 +87,16 @@ public sealed class LocalInstallController(
             }, interrupt, ct).ConfigureAwait(false);
         } catch (Exception ex) {
             result = new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, ex.Message)]);
+            unexplained = "spawn_failed";
         }
 
         var ranWithoutOutput = result.ExitCode == -1 && !sawLine;
-        post(() => Finish(progress, result, ranWithoutOutput, exited));
+        post(() => Finish(progress, result, ranWithoutOutput, unexplained, ct.IsCancellationRequested, exited));
     }
 
-    void Finish(LocalSetupProgress progress, StreamingResult result, bool ranWithoutOutput, TaskCompletionSource exited) {
+    void Finish(
+            LocalSetupProgress progress, StreamingResult result, bool ranWithoutOutput, string unexplained, bool quitting,
+            TaskCompletionSource exited) {
         var outcome = LocalInstallOutcome.Settle(progress, result.ExitCode, LockedToLocal());
         if (outcome is LocalInstallOutcome.Failed failed && ranWithoutOutput && StderrText(result) is { } stderr)
             outcome = failed with { Message = stderr };
@@ -104,8 +109,9 @@ public sealed class LocalInstallController(
             case LocalInstallOutcome.Installed installed:
                 funnel.LocalInstallCommitted(installed.Plan);
                 break;
-            case LocalInstallOutcome.Failed f:
-                funnel.LocalInstallFailed(f.Code ?? "none", f.LockedToLocal);
+            // A run the app's own quit stopped is not an install failure.
+            case LocalInstallOutcome.Failed f when !quitting:
+                funnel.LocalInstallFailed(f.Code ?? unexplained, f.LockedToLocal);
                 break;
         }
 

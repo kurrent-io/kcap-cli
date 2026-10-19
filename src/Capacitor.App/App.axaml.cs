@@ -309,7 +309,7 @@ public partial class App : Application {
                     alreadyAuthenticated: current is GateResult.Complete),
                 () => ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token),
                 (current, currentProfiles, laneQuiesced) => BuildDaemonGraph(desktop, lane, channel, current, currentProfiles, laneQuiesced),
-                _shutdown.Token);
+                () => LocalSetupState.Pending(_localRoot), _shutdown.Token);
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
             // A quit landing mid-startup (gate evaluation, the wizard's PATH probe, the post-wizard
             // re-resolve) is not a startup failure: the shutdown path already owns teardown, and an
@@ -463,14 +463,15 @@ public partial class App : Application {
             GateResult gate, ProfileContext? profiles, bool showWizard,
             Func<GateResult, ProfileContext?, Task<bool>> runWizard,
             Func<Task<(GateResult Gate, ProfileContext? Profiles)>> reevaluate,
-            Action<GateResult, ProfileContext?, bool> buildGraph, CancellationToken shutdown) {
+            Action<GateResult, ProfileContext?, bool> buildGraph, Func<bool> localSetupPending, CancellationToken shutdown) {
         var laneQuiesced = true;
         if (showWizard) {
             do {
                 laneQuiesced = await runWizard(gate, profiles).ConfigureAwait(true);
                 if (shutdown.IsCancellationRequested) return;
                 (gate, profiles) = await reevaluate().ConfigureAwait(true);
-            } while (gate is GateResult.Incomplete { Reason: GateReason.LocalSetupPending } && !shutdown.IsCancellationRequested);
+            } while ((gate is GateResult.Incomplete { Reason: GateReason.LocalSetupPending } || localSetupPending())
+                  && !shutdown.IsCancellationRequested);
 
             if (shutdown.IsCancellationRequested) return;
         }
@@ -1073,7 +1074,7 @@ public partial class App : Application {
             Time: _time,
             ShutdownToken: _shutdown.Token,
             LocalRoot: _localRoot,
-            IsMacOs: OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64,
+            LocalEditionSupported: OperatingSystem.IsMacOS() && RuntimeInformation.OSArchitecture == Architecture.Arm64,
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,

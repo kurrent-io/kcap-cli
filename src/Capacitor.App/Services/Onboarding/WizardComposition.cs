@@ -80,7 +80,7 @@ internal sealed record WizardGraphOptions(
     CancellationToken                                                            ShutdownToken,
     LocalRoot                                                                    LocalRoot,
     // The local edition ships for macOS on Apple silicon only.
-    bool                                                                         IsMacOs,
+    bool                                                                         LocalEditionSupported,
     bool                                                                         AlreadyAuthenticated = false,
     // The name the profile already carries, or null when none was ever saved.
     Func<string?>?                                                               ConfiguredDaemonName = null,
@@ -132,7 +132,6 @@ internal static class WizardComposition {
             options.Bridges.Telemetry.Funnel);
     }
 
-    // Read live: the profile, the journal and the user's choice all change during a run.
     static bool IsCommittedLocal(WizardGraphOptions options) =>
         !LocalSetupState.Pending(options.LocalRoot)
      && options.ResolveIdentity() is { } id
@@ -145,16 +144,31 @@ internal static class WizardComposition {
         options.GitHub, options.WorkOS, options.Profile, options.Bridges, claims, options.Time, options.Operation));
 
         var root = options.LocalRoot;
-        bool CommittedLocal() => IsCommittedLocal(options);
+
+        // The journal, config and registry are read here, on Edition entry and on a settled install,
+        // never per evaluation: PassThrough, BackVisible and bindings run on the UI thread.
+        var pending        = LocalSetupState.Pending(root);
+        var committedLocal = IsCommittedLocal(options);
+        void RefreshDurable() {
+            pending        = LocalSetupState.Pending(root);
+            committedLocal = IsCommittedLocal(options);
+        }
+        bool CommittedLocal() => committedLocal;
 
         var install = options.Install ?? NewInstallController(options);
         bool Installed() => install.Outcome is LocalInstallOutcome.Installed;
+        // Ahead of every other Settled handler, so the page that advances on it reads the new state.
+        void OnSettledRefresh(LocalInstallOutcome _) => RefreshDurable();
+        install.Settled += OnSettledRefresh;
 
         var edition = new EditionStepViewModel(
             options.Bridges.Telemetry.Funnel,
-            () => LocalUnavailableReason(options.IsMacOs, options.Root, root),
-            locked: () => Installed() || LocalSetupState.Pending(root) || CommittedLocal());
-        bool OnLocalPath() => edition.Choice == EditionChoice.Local || LocalSetupState.Pending(root) || CommittedLocal();
+            () => {
+                RefreshDurable();
+                return LocalUnavailableReason(options.LocalEditionSupported, options.Root, root);
+            },
+            locked: () => Installed() || pending || CommittedLocal());
+        bool OnLocalPath() => edition.Choice == EditionChoice.Local || pending || CommittedLocal();
         var installStep = new InstallStepViewModel(
             install,
             appProfile: () => options.ResolveIdentity()?.Profile ?? options.ProfileOverride,
@@ -234,7 +248,7 @@ internal static class WizardComposition {
         }, options.UrlOpener);
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
 
-        var startAt = LocalSetupState.Pending(root) ? WizardStepId.Install
+        var startAt = pending ? WizardStepId.Install
             : options.AlreadyAuthenticated || committedLocalAtStart ? WizardStepId.Harnesses
             : (WizardStepId?)null;
         var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
@@ -243,6 +257,7 @@ internal static class WizardComposition {
         var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface, startAt, canFinishLater);
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
+            install.Settled -= OnSettledRefresh;
             install.Settled -= OnInstallSettled;
             installStep.Detach();
         };
@@ -254,8 +269,8 @@ internal static class WizardComposition {
 
     /// Why this machine cannot take the local edition, or null when it can. A cloud profile anywhere
     /// in the config is the CLI's own refusal, so the card says so before the install would.
-    internal static string? LocalUnavailableReason(bool isMacOs, ConfigRoot config, LocalRoot root) {
-        if (!isMacOs) return EditionStepViewModel.UnsupportedPlatform;
+    internal static string? LocalUnavailableReason(bool localEditionSupported, ConfigRoot config, LocalRoot root) {
+        if (!localEditionSupported) return EditionStepViewModel.UnsupportedPlatform;
 
         return ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(config), out var profiles)
             && LocalSetupState.HasForeignServerProfile(profiles, LocalEndpoints.Read(root))
