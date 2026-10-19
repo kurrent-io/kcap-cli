@@ -60,6 +60,14 @@ public class SuggestionDiffTests {
     }
 
     [Test]
+    [Arguments("@@ -1 +99999999999 @@\n a")]
+    [Arguments("no header\n a")]
+    public async Task A_hunk_without_a_readable_header_leaves_the_comment(string hunk) {
+        const string body = "```suggestion\nE\n```";
+        await Assert.That(SuggestionDiff.Rewrite(body, false, hunk, false, "right", null, 1, null)).IsEqualTo(body);
+    }
+
+    [Test]
     public async Task A_comment_without_a_suggestion_is_unchanged() =>
         await Assert.That(SuggestionDiff.Rewrite("```csharp\nx\n```", false, Hunk, false, "right", null, 4, null)).IsEqualTo("```csharp\nx\n```");
 }

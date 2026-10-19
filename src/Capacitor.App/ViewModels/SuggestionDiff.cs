@@ -48,8 +48,8 @@ public static partial class SuggestionDiff {
     /// has no file headers, so a line starting `+++` is an added line like any other.
     static IEnumerable<(int Number, string Text)> NewSide(string hunk) {
         var lines = hunk.Replace("\r\n", "\n").Split('\n');
-        if (lines.Length == 0 || Header().Match(lines[0]) is not { Success: true } header) yield break;
-        var number = int.Parse(header.Groups["start"].Value, CultureInfo.InvariantCulture);
+        if (lines.Length == 0 || Header().Match(lines[0]) is not { Success: true } header
+            || !int.TryParse(header.Groups["start"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var number)) yield break;
         foreach (var l in lines.Skip(1)) {
             if (l.Length == 0 || l[0] is not (' ' or '+')) continue;
             yield return (number++, l[1..]);
