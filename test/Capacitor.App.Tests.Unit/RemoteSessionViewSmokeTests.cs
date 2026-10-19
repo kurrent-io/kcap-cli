@@ -69,6 +69,12 @@ public class RemoteSessionViewSmokeTests {
             Settle();
         }
 
+        public void SetStatus(string status) {
+            var row = _directory.Rows.Items.Single();
+            _directory.Rows.AddOrUpdate(row with { Status = status });
+            Settle();
+        }
+
         public void Dispose() {
             Window.Close();
             _access.Dispose();
@@ -193,6 +199,56 @@ public class RemoteSessionViewSmokeTests {
                 .IsEqualTo("You no longer have access to this session");
 
             await host.Vm.TeardownAsync();
+            return true;
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_remote_running_turn_without_turn_details_can_be_interrupted_until_idle_or_disconnected(bool button) {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var host = new Host();
+            try {
+                await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+                var chat = host.View.FindControl<ChatTabView>("ChatHost")!;
+                var composer = chat.FindControl<TextBox>("ComposerInput")!;
+                var interrupt = chat.FindControl<Button>("InterruptButton")!;
+                await Assert.That(host.Vm.Chat.AgentStatus.IsRunningUnknownTurn).IsTrue();
+                await Assert.That(interrupt.IsEffectivelyVisible).IsTrue();
+                await Assert.That(interrupt.IsEffectivelyEnabled).IsTrue();
+
+                composer.Focus();
+                host.Window.KeyTextInput("keep this draft");
+                host.Settle();
+                if (button) {
+                    var point = interrupt.TranslatePoint(new Point(interrupt.Bounds.Width / 2, interrupt.Bounds.Height / 2), host.Window)!.Value;
+                    host.Window.MouseDown(point, MouseButton.Left);
+                    host.Window.MouseUp(point, MouseButton.Left);
+                } else host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 1, "interrupt delivered");
+                await Assert.That(host.Lane.SpecialKeys).IsEquivalentTo(new[] { ("a1", SpecialKeys.Escape) });
+                await Assert.That(composer.Text).IsEqualTo("keep this draft");
+                await Assert.That(host.Vm.Chat.ComposerText).IsEqualTo("keep this draft");
+
+                host.SetStatus("Idle");
+                await Assert.That(interrupt.IsVisible).IsFalse();
+                await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsFalse();
+                composer.Focus();
+                host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                host.Settle();
+                await Assert.That(host.Lane.SpecialKeys).Count().IsEqualTo(1);
+
+                host.SetStatus("Running");
+                await Assert.That(interrupt.IsEffectivelyVisible).IsTrue();
+                await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsTrue();
+                host.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+                host.Settle();
+                await Assert.That(host.Vm.Chat.ShowsInterrupt).IsFalse();
+                await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(host.Lane.SpecialKeys).Count().IsEqualTo(1);
+                await Assert.That(host.Vm.Chat.ComposerText).IsEqualTo("keep this draft");
+            } finally { await host.Vm.TeardownAsync(); }
             return true;
         });
     }
