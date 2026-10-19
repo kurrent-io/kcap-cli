@@ -20,16 +20,18 @@ public sealed record AppImageInstall(string Image) {
         var dataHome = getEnv("XDG_DATA_HOME") is { } xdg && Path.IsPathRooted(xdg)
             ? xdg
             : Path.Combine(home.Path, ".local", "share");
+        var bundlePlugin = BundleLayout.PluginDirectory(appDirectory);
         var root   = Path.Combine(dataHome, "kcap", "desktop");
         var target = Path.Combine(root, "bin");
+        var plugin = BundleLayout.PluginDirectory(root);
         var stamp  = Path.Combine(root, "image.stamp");
         var identity = ImageIdentity();
 
         try {
-            if (identity is not null && Staged(stamp, identity, bundleCli, target)) return target;
+            if (identity is not null && Staged(stamp, identity, bundleCli, target, bundlePlugin, plugin)) return target;
             Directory.CreateDirectory(target);
             foreach (var name in CliFiles) Stage(Path.Combine(bundleCli, name), Path.Combine(target, name));
-            StageTree(BundleLayout.PluginDirectory(appDirectory), BundleLayout.PluginDirectory(root));
+            StageTree(bundlePlugin, plugin);
             if (identity is not null) File.WriteAllText(stamp, identity);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             Console.Error.WriteLine($"kcap: could not copy the bundled CLI to {root}, running it from the AppImage: {ex.Message}");
@@ -45,9 +47,10 @@ public sealed record AppImageInstall(string Image) {
         return image.Exists ? $"{image.Length}:{image.LastWriteTimeUtc.Ticks}" : null;
     }
 
-    static bool Staged(string stamp, string identity, string bundleCli, string target) =>
+    static bool Staged(string stamp, string identity, string bundleCli, string target, string bundlePlugin, string plugin) =>
         File.Exists(stamp) && File.ReadAllText(stamp) == identity
-        && CliFiles.Where(name => File.Exists(Path.Combine(bundleCli, name))).All(name => File.Exists(Path.Combine(target, name)));
+        && CliFiles.Where(name => File.Exists(Path.Combine(bundleCli, name))).All(name => File.Exists(Path.Combine(target, name)))
+        && (!Directory.Exists(bundlePlugin) || Directory.Exists(plugin));
 
     static void Stage(string source, string destination) {
         if (!File.Exists(source) || SameContent(source, destination)) return;

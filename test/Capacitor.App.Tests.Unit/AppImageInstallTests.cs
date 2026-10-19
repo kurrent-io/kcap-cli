@@ -50,6 +50,8 @@ public class AppImageInstallTests {
         var image = Tmp.CreateFile("Kcap.AppImage", "image v1");
         Tmp.CreateFile("mount/bin/kcap", "cli v1");
         Tmp.CreateFile("mount/bin/kcap-daemon", "daemon v1");
+        Tmp.CreateFile("mount/kcap/.claude-plugin/plugin.json", "v1");
+        var plugin = Tmp.PathTo("home", ".local", "share", "kcap", "desktop", "kcap");
         var staged = Path.Combine(TakeCliOutOfMount(image), "kcap-daemon");
 
         File.WriteAllText(Tmp.PathTo("mount", "bin", "kcap-daemon"), "daemon v2");
@@ -59,6 +61,10 @@ public class AppImageInstallTests {
         File.Delete(staged);
         TakeCliOutOfMount(image);
         await Assert.That(File.ReadAllText(staged)).IsEqualTo("daemon v2");
+
+        Directory.Delete(plugin, recursive: true);
+        TakeCliOutOfMount(image);
+        await Assert.That(File.Exists(Path.Combine(plugin, ".claude-plugin", "plugin.json"))).IsTrue();
 
         File.WriteAllText(Tmp.PathTo("mount", "bin", "kcap-daemon"), "daemon v3");
         File.WriteAllText(image, "image v2 is longer");
