@@ -33,6 +33,9 @@ public partial class ChatTabView : UserControl {
     bool _edgeScrollQueued;
     Point _dragInScroll;
     MarkdownView? _dragView;
+    /// A press is in flight. Follow-tail must not move the transcript under that pointer, or a
+    /// link click is measured as a drag and dropped.
+    bool _primaryDown;
     double? _thumbFraction;
     double _smoothRemaining;
     bool _smoothFrameQueued;
@@ -103,6 +106,7 @@ public partial class ChatTabView : UserControl {
         _readerGesture = false;
         _dragSelecting = false;
         _dragView = null;
+        _primaryDown = false;
         _followTail = true;
         base.OnDataContextChanged(e);
     }
@@ -114,6 +118,7 @@ public partial class ChatTabView : UserControl {
         _thumbFraction = null;
         _dragSelecting = false;
         _dragView = null;
+        _primaryDown = false;
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
@@ -124,6 +129,10 @@ public partial class ChatTabView : UserControl {
     internal bool CanPreserveReadingPosition => !_followTail && _anchorItem is null && _thumbFraction is null;
 
     void OnReaderGesture(object? sender, RoutedEventArgs e) {
+        if (e.RoutedEvent == PointerPressedEvent)
+            _primaryDown = e is PointerPressedEventArgs pressed && pressed.GetCurrentPoint(ChatItems).Properties.IsLeftButtonPressed;
+        else if (e.RoutedEvent == PointerReleasedEvent)
+            _primaryDown = false;
         _listInputVersion++;
         // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
         // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
@@ -397,7 +406,7 @@ public partial class ChatTabView : UserControl {
         var reachedEstimatedEnd = e.OffsetDelta.Y > 0 && e.ExtentDelta.Y > 0
             && ChatItems.ItemsPanelRoot is ChatVirtualizingPanel { MeasuredAtEstimatedEnd: true };
         _followTail = _readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd;
-        if (_followTail && !atBottom) scroll.ScrollToEnd();
+        if (_followTail && !atBottom && !_primaryDown) scroll.ScrollToEnd();
     }
 
     void OnSelectionDrag(object? sender, PointerEventArgs e) {
