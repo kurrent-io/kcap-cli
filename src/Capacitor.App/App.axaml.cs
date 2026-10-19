@@ -1267,14 +1267,14 @@ public partial class App : Application {
         errorWindow.Show();
     }
 
-    // Last-resort UI for a startup failure: Console.Error above is invisible on a normal GUI
-    // launch (OutputType=WinExe has no console), so this window is the only channel that
-    // actually reaches the user. SelectableTextBlock (not TextBlock) keeps the stack trace
-    // copyable for a bug report.
     /// The app theme's brush, or null before the theme has loaded, which leaves the default.
     static IBrush? KcapBrush(string key) =>
         Current?.TryGetResource(key, null, out var brush) == true ? brush as IBrush : null;
 
+    // Last-resort UI for a startup failure: Console.Error above is invisible on a normal GUI
+    // launch (OutputType=WinExe has no console), so this window is the only channel that
+    // actually reaches the user. SelectableTextBlock (not TextBlock) keeps the stack trace
+    // copyable for a bug report.
     internal static Window BuildStartupErrorWindow(Exception ex) =>
         new() {
             Title = "Kurrent Capacitor — startup failed",

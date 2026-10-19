@@ -521,8 +521,6 @@
         <Style Selector="Button.kcapGhost.kcapQuiet:disabled /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
-        <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
-             the danger colour. Rest and hover both pin KcapDangerBrush. -->
         <!-- A destructive primary: filled like kcapPrimary so it reads as the action, never bound to
              Enter, so the default key cannot remove or stop anything. -->
         <Style Selector="Button.kcapDangerFill">
@@ -550,6 +548,8 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
+             the danger colour. Rest and hover both pin KcapDangerBrush. -->
         <Style Selector="Button.kcapDanger">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
