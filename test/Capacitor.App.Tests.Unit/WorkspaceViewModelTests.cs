@@ -236,6 +236,7 @@ public class WorkspaceViewModelTests {
 
             await Assert.That(vm.HasAgent).IsFalse();
             await Assert.That(vm.ShowsStop).IsTrue();
+            await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsTrue();
 
             ops.QueueStop(new StopAgentResult(true, "stopped", null));
             await vm.StopCommand.Execute();

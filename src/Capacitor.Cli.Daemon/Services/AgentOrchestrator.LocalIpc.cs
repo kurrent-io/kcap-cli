@@ -205,7 +205,8 @@ internal partial class AgentOrchestrator {
             // A launch under the same id would otherwise start under the id just stopped; the one that
             // published this agent may still be finishing, so the agent is stopped once they settle. One
             // that outlasts the wait stops the agent under this id itself when it settles.
-            var ok = await SettleCancelledLaunchesAsync(starting) && await StopAgentCoreAsync(agent);
+            var ok = await SettleCancelledLaunchesAsync(starting)
+                && (_agents.GetValueOrDefault(agentId) is not { } current || await StopAgentCoreAsync(current));
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
             return;
@@ -292,7 +293,7 @@ internal partial class AgentOrchestrator {
         if (force || starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is not { } protectedLaunch) return false;
 
         await FrameCodec.WriteAsync(stream, LocalFrame.Error(
-            $"{agentId} is a starting {protectedLaunch.Kind} launch. Pass --force to cancel it anyway."), ct);
+            $"{agentId} is a starting {KindText(protectedLaunch.Kind)} launch. Pass --force to cancel it anyway."), ct);
 
         return true;
     }

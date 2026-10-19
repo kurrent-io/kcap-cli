@@ -293,7 +293,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _disposables.Add(OpenInWebCommand);
 
         var stopKey = AgentActionService.StopKey(AgentOrigin.Local, agentId);
-        var canStop = presence.Select(p => !p.SessionEnded)
+        var canStop = presence.StartWith(new AgentPresence(null, false)).Select(p => !p.SessionEnded)
             .CombineLatest(actions.StopsInFlight, (alive, inFlight) => alive && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(() => {
             var dto = _latestDto;
