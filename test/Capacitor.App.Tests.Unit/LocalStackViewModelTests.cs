@@ -17,6 +17,8 @@ public class LocalStackViewModelTests {
         public readonly LocalStackViewModel Vm;
         public int Reconnects;
         public int Reads;
+        public int Starts;
+        public Func<ProcessResult> StartResult = () => new ProcessResult(0, "Local server is running.\n", "", false);
         /// What the registry names; the view model reads it, never the run's target.
         public string? Registry;
 
@@ -26,7 +28,10 @@ public class LocalStackViewModelTests {
             Vm = new LocalStackViewModel(() => {
                 Reads++;
                 return Registry;
-            }, Status, Upgrade, () => {
+            }, Status, Upgrade, _ => {
+                Starts++;
+                return Task.FromResult(StartResult());
+            }, () => {
                 Reconnects++;
                 return Task.CompletedTask;
             }, CancellationToken.None, ImmediateScheduler.Instance);
@@ -41,7 +46,7 @@ public class LocalStackViewModelTests {
         public void Dispose() => Vm.Dispose();
     }
 
-    static IEnumerable<string?> ShownText(LocalStackViewModel vm) => [vm.Headline, vm.Detail, vm.Guidance, vm.StateText];
+    static IEnumerable<string?> ShownText(LocalStackViewModel vm) => [vm.Headline, vm.Detail, vm.Guidance, vm.StateText, vm.StartMessage];
 
     [Test]
     public async Task The_rail_shows_the_installed_version_and_the_servers_state() {
@@ -142,22 +147,91 @@ public class LocalStackViewModelTests {
         });
     }
 
+    /// Another kcap holding the installation is not a failure of the stack: a quiet note, the server's
+    /// own state in the rail, and Try again.
     [Test]
-    public async Task A_busy_failure_says_another_change_is_running() {
+    public async Task A_busy_upgrade_is_a_note_that_keeps_the_servers_state() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
 
-            await h.RunAsync(1, UpgradeScript.Failed("lifecycle_busy", "Another kcap local command holds the lifecycle lock.", false));
+            await h.RunAsync(1, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                UpgradeScript.Failed("lifecycle_busy", "Another kcap local command holds the lifecycle lock.", false));
 
-            await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.BusyGuidance);
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.IsNote).IsTrue();
+            await Assert.That(h.Vm.Attention).IsFalse();
+            await Assert.That(h.Vm.StateText).IsEqualTo("running");
+            await Assert.That(h.Vm.Headline).IsEqualTo("The upgrade to Capacitor local 1.3.0 is waiting");
+            await Assert.That(h.Vm.Detail).IsEqualTo(LocalStackViewModel.BusyDetail);
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
         });
     }
 
-    /// The new version stays selected and stopped: running the upgrade again changes nothing, so the
-    /// way forward is the local server's Start, and the failure clears once the server is back.
+    /// The other kcap's change ends with the server coming back, which is when the upgrade can run.
     [Test]
-    public async Task A_failure_after_the_switch_points_at_start_and_clears_once_the_server_is_back() {
+    public async Task A_busy_upgrade_is_retried_when_the_server_comes_back() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.RunAsync(1, UpgradeScript.Failed("lifecycle_busy", "Another kcap local command holds the lifecycle lock.", false));
+            h.Cli.LocalUpgradeBehavior = UpgradeScript.Prints(3, UpgradeScript.NothingToDo("current", "1.3.0", "1.3.0"));
+
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Cli.LocalUpgradeCallCount).IsEqualTo(2);
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+        });
+    }
+
+    /// Exit 2 can come after Ready, with the server up and the upgrade journaled: connectivity proves
+    /// nothing, so Start stays offered until it succeeds.
+    [Test]
+    public async Task A_failure_after_the_switch_offers_start_while_the_server_is_connected() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.Registry = "1.3.0";
+
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
+                "{\"v\":1,\"event\":\"ready\",\"server_url\":\"http://localhost:5123\"}",
+                UpgradeScript.Failed("start_failed", "Capacitor local 1.3.0 is selected, but the upgrade journal could not be cleared (busy). Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.", true));
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.StartVisible).IsTrue();
+            await Assert.That(h.Vm.SuppressesServerStart).IsTrue();
+
+            await h.Vm.StartCommand.Execute().ToTask();
+
+            await Assert.That(h.Starts).IsEqualTo(1);
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+            await Assert.That(h.Vm.SuppressesServerStart).IsFalse();
+            await Assert.That(h.Reconnects).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    public async Task A_failed_start_after_the_switch_keeps_the_failure_and_says_why_without_terminal_advice() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            h.StartResult = () => new ProcessResult(1, "", "Capacitor local 1.3.0 did not become ready. kcap local logs shows why.\n", false);
+
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
+                UpgradeScript.Failed("start_failed", "Capacitor local 1.3.0 did not start.", true));
+            await h.Vm.StartCommand.Execute().ToTask();
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.StartVisible).IsTrue();
+            await Assert.That(h.Vm.StartMessage).IsEqualTo("Capacitor local 1.3.0 did not become ready.");
+            await Assert.That(h.Reconnects).IsEqualTo(0);
+        });
+    }
+
+    /// The new version stays selected and stopped: running the upgrade again changes nothing, so the
+    /// way forward is Start, and the failure stays until it succeeds.
+    [Test]
+    public async Task A_failure_after_the_switch_points_at_start() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
             h.Registry = "1.3.0";
@@ -170,12 +244,12 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local 1.3.0 did not start after the upgrade");
             await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.StartGuidance);
             await Assert.That(h.Vm.TryAgainVisible).IsFalse();
+            await Assert.That(h.Vm.StartVisible).IsTrue();
             foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap ");
 
             h.Status.OnNext(new(ServerLaneState.Connected));
 
-            await Assert.That(h.Vm.BannerVisible).IsFalse();
-            await Assert.That(h.Vm.StateText).IsEqualTo("running");
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
         });
     }
 

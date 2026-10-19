@@ -10,7 +10,7 @@ namespace Capacitor.App.ViewModels;
 
 /// The launcher's "local server is not running" banner. Its evidence is the server lane alone, so a
 /// stopped server behind a healthy daemon still offers Start; a cloud server never does. While
-/// <c>busy</c> (an upgrade holding the stack) the server still reads down but Start is not offered.
+/// <c>busy</c> (the upgrade banner owns the stack) the server still reads down but Start is not offered here.
 public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     const int MessageTailLines = 12;
 

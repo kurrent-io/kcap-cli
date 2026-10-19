@@ -688,15 +688,16 @@ public partial class App : Application {
         // The bundled CLI's own coordinator, never a hook: the stack follows the CLI this app ships.
         var localUpgrade = isLocalServer ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
         _localUpgrade = localUpgrade;
-        IObservable<bool>? upgrading = null;
-        if (localUpgrade is not null) upgrading = localUpgrade.WhenAnyValue(x => x.Running);
+        var localStack = localUpgrade is null ? null : new LocalStackViewModel(
+            () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
+            () => serverLane.RestartAsync(), _shutdown.Token);
+        _localStack = localStack;
+        IObservable<bool>? stackOwnsStart = null;
+        if (localStack is not null) stackOwnsStart = localStack.WhenAnyValue(x => x.SuppressesServerStart);
         var localServer = new LocalServerRecoveryViewModel(
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
-            busy: upgrading);
+            busy: stackOwnsStart);
         _localServer = localServer;
-        var localStack = localUpgrade is null ? null : new LocalStackViewModel(
-            () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, () => serverLane.RestartAsync(), _shutdown.Token);
-        _localStack = localStack;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a

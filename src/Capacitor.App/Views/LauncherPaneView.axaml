@@ -196,7 +196,21 @@
                                Foreground="{StaticResource KcapTextBrush}" FontSize="12" LineHeight="18"
                                TextWrapping="Wrap"
                                IsVisible="{Binding LocalStack.Guidance, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="LocalUpgradeStarting" Text="Starting the local server…"
+                               Foreground="{StaticResource KcapMutedBrush}" FontSize="12" LineHeight="18"
+                               IsVisible="{Binding LocalStack.IsStarting, FallbackValue=False}" />
+                    <SelectableTextBlock x:Name="LocalUpgradeStartMessage" Text="{Binding LocalStack.StartMessage}"
+                                         Foreground="{StaticResource KcapMutedBrush}" FontSize="12" LineHeight="18"
+                                         TextWrapping="Wrap"
+                                         IsVisible="{Binding LocalStack.StartMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button x:Name="LocalUpgradeStartButton" Classes="kcapChip" Content="Start"
+                                Command="{Binding LocalStack.StartCommand}"
+                                IsVisible="{Binding LocalStack.StartVisible, FallbackValue=False}"
+                                Background="{StaticResource KcapSurfaceRaisedBrush}"
+                                BorderBrush="{StaticResource KcapBorderBrush}"
+                                Foreground="{StaticResource KcapTextBrush}"
+                                CornerRadius="7" Padding="14,6" />
                         <Button x:Name="LocalUpgradeTryAgainButton" Classes="kcapChip" Content="Try again"
                                 Command="{Binding LocalStack.TryAgainCommand}"
                                 IsVisible="{Binding LocalStack.TryAgainVisible, FallbackValue=False}"
