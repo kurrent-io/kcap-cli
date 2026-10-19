@@ -617,12 +617,12 @@ internal static class AcpVendorDescriptors {
         // so receiving one means the launch contract regressed (a dropped flag, a vendor change) and the
         // honest response is to reap the reviewer rather than auto-approve whatever it asked for (§3.4).
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail,
-        // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Gemini
-        // advertises loadSession but a crash-killed session is never persisted — session/load
-        // refuses with "No previous sessions found for this project", so there is nothing to
-        // resume. Gemini also self-re-execs (a sandbox wrapper spawns an inner process with
-        // identical argv), so "the spawned pid exited" and "the agent died" are different events;
-        // any future enablement must re-probe BOTH persistence and process-tree semantics.
+        // Measured ineligible (docs/probes/2026-08-04-acp-reconnect-c0/): from 0.64.0 a crash-killed
+        // session persists and loads, but the session/load response arrives before most of the
+        // replay, so the barrier suppression ends on would let history through as live output
+        // (google-gemini/gemini-cli#29707). Enabling needs a release with that fixed, a passing
+        // re-probe on it, and that release as a version floor. Gemini also self-re-execs, so "the
+        // spawned pid exited" and "the agent died" are different events.
         SupportsReconnectResume: false
     );
 }
