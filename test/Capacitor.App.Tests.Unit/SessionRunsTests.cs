@@ -537,17 +537,21 @@ public class SessionRunsTests {
         await Assert.That(Only(s).StateText).IsEqualTo("running · 0s");
         s.Tick();
         await Assert.That(Only(s).StateText).IsEqualTo("running · 6m 18s");
+        await Assert.That(Only(s).ElapsedText).IsEqualTo("6m 18s");
 
         var raised = new List<string?>();
         Only(s).PropertyChanged += (_, e) => raised.Add(e.PropertyName);
         s.Apply(Result("c1", at: T0.AddMinutes(7)));
         await Assert.That(Only(s).StateText).IsEqualTo("7m 00s");
+        await Assert.That(Only(s).ElapsedText).IsEqualTo("7m 00s");
         await Assert.That(raised).Contains(nameof(RunRow.State));
         await Assert.That(raised).Contains(nameof(RunRow.StateText));
+        await Assert.That(raised).Contains(nameof(RunRow.ElapsedText));
 
         clock.Advance(TimeSpan.FromHours(1));
         s.Tick();
         await Assert.That(Only(s).StateText).IsEqualTo("7m 00s");
+        await Assert.That(Only(s).ElapsedText).IsEqualTo("7m 00s");
 
         var unstamped = new SessionRuns(clock);
         unstamped.Apply(Signals(Started("c9", clock.GetUtcNow())));

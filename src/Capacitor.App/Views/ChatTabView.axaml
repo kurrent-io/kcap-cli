@@ -317,15 +317,16 @@
                                 <DataTemplate x:DataType="vm:RunRow">
                                     <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" ToolTip.Tip="{Binding Description}">
                                         <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
-                                                Background="{StaticResource KcapPurpleBrush}" views:PulseClock.IsActive="{Binding IsRunning}" />
+                                                Background="{StaticResource KcapPurpleBrush}" views:PulseClock.IsActive="{Binding IsRunning}"
+                                                ToolTip.Tip="{Binding StateText}" AutomationProperties.Name="{Binding StateText}" />
                                         <Grid Grid.Column="1" ColumnDefinitions="Auto,*">
                                             <views:AppIcon Kind="Terminal" Size="12" Margin="0,0,5,0" VerticalAlignment="Center"
                                                            Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
                                             <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
-                                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                                       AutomationProperties.HelpText="{Binding StateText}" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
                                         </Grid>
-                                        <TextBlock Grid.Column="2" Text="{Binding StateText}" FontSize="13.5"
+                                        <TextBlock Grid.Column="2" Text="{Binding ElapsedText}" FontSize="13.5"
                                                    Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                                     </Grid>
                                 </DataTemplate>

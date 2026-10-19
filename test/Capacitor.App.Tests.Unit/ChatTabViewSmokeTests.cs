@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -1965,8 +1966,13 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.IsVisible).IsTrue();
             var shown = banner.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(shown).Contains("Explore");
-            await Assert.That(shown.Any(t => t!.StartsWith("running in background · ", StringComparison.Ordinal))).IsTrue();
-            await Assert.That(banner.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsTrue();
+            var row = host.Chat.RunningRuns.Single();
+            await Assert.That(shown).Contains(row.ElapsedText);
+            await Assert.That(shown.Any(t => t!.Contains("running", StringComparison.OrdinalIgnoreCase))).IsFalse();
+            var dot = banner.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible);
+            await Assert.That(ToolTip.GetTip(dot)).IsEqualTo(row.StateText);
+            var name = banner.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "Explore");
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(name)!.GetHelpText()).IsEqualTo(row.StateText);
             await Assert.That(queued.IsVisible).IsFalse();
 
             await host.AppendLinesAndTickAsync(path, AgentFinishLine);
@@ -2034,7 +2040,7 @@ public class ChatTabViewSmokeTests {
 
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
             var state = banner.GetVisualDescendants().OfType<TextBlock>()
-                .Single(t => t.IsEffectivelyVisible && t.Text!.StartsWith("running in background · ", StringComparison.Ordinal));
+                .Single(t => t.IsEffectivelyVisible && t.Text == host.Chat.RunningRuns.Single().ElapsedText);
             var right = state.TranslatePoint(new Point(state.Bounds.Width, 0), banner)!.Value.X;
             await Assert.That(right).IsLessThanOrEqualTo(banner.Bounds.Width);
             await Assert.That(state.Bounds.Width).IsGreaterThan(0);
