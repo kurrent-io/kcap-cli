@@ -1168,7 +1168,7 @@ public partial class App : Application {
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
         void OnClosing(object? sender, WindowClosingEventArgs e) {
-            var userClose = e.CloseReason == WindowCloseReason.WindowClosing && shuttingDown?.Invoke() != true;
+            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false } && shuttingDown?.Invoke() != true;
             if (WizardWindowClosing(wizard, install, userClose)) e.Cancel = true;
         }
         window.Closing += OnClosing;
