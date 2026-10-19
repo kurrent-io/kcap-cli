@@ -182,6 +182,10 @@ internal partial class AgentOrchestrator {
             return;
         }
 
+        // Read before the live agent: a launch publishes its agent before it leaves this set, so one that
+        // settles between the two reads is still found live.
+        var starting = CancellableLaunchesFor(agentId);
+
         if (_agents.TryGetValue(agentId, out var agent)) {
             if (!force && agent.Kind != LaunchKind.Default) {
                 // A flow participant going away mid-round strands the flow; a plain hosted
@@ -204,7 +208,6 @@ internal partial class AgentOrchestrator {
 
         // A launch queued or starting has no agent yet: cancel it, and answer once it has settled. Before
         // the resume discard below, which would otherwise remove a starting launch's worktree under it.
-        var starting = CancellableLaunchesFor(agentId);
         if (!force && starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is { } protectedLaunch) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error(
                 $"{agentId} is a starting {protectedLaunch.Kind} launch. Pass --force to cancel it anyway."), ct);
