@@ -4190,14 +4190,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // child is usually not reaped yet; poll briefly before calling the stop a failure.
             if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(2));
 
-            SendOwedStopReport(agent);
-
             return agent.Runtime.HasExited;
         } catch (Exception ex) {
             LogStopError(ex, agentId);
 
             return false;
         } finally {
+            // Every settled stop reports what it found, a stop that threw included.
+            SendOwedStopReport(agent);
             agent.StopSettled.TrySetResult();
         }
     }
