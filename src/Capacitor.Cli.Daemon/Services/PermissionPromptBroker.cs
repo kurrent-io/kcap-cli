@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Daemon.Harness.Codex;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -28,7 +29,7 @@ internal static class PermissionSettlements {
 /// request as nothing, or Pending then Resolved, never Pending alone. The withdrawn set is
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
 internal sealed class PermissionPromptBroker {
-    sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId, long Seq);
+    sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId, long Seq, JsonElement? MatchInput);
     sealed record AllowedCall(PermissionPendingDto Dto, string? SubagentId, JsonElement? Input) {
         public string AgentId => Dto.AgentId;
         public string SessionId => Dto.SessionId;
@@ -39,10 +40,10 @@ internal sealed class PermissionPromptBroker {
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
-    // A Claude prompt settled before its call's notice arrived: that notice is its own, and must not
+    // A prompt settled before its call's notice arrived: that notice is its own, and must not
     // retire an identical prompt still waiting. Kept until the notice or the turn's end, and only
-    // for Claude, whose hook sends both. A turn that outgrows the bound stops matching by name and
-    // input until it ends, rather than forgetting what it owes.
+    // for a vendor whose hook sends both. A turn that outgrows the bound stops matching by name
+    // and input until it ends, rather than forgetting what it owes.
     readonly List<AllowedCall> _allowedCalls = [];
     readonly HashSet<(string AgentId, string SessionId, string? SubagentId)> _overflowed = [];
     const int MaxAllowedCallsPerTurn = 64;
@@ -64,7 +65,8 @@ internal sealed class PermissionPromptBroker {
                     PermissionSettlements.DenyDecision, PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone));
 
             // Completed while the gate is held: a continuation running inline would re-enter it.
-            var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId, ++_seq);
+            var entry = new Entry(dto, new(TaskCreationOptions.RunContinuationsAsynchronously), subagentId, ++_seq,
+                MatchKey(dto.Vendor, dto.ToolInput));
             if (!_pending.TryAdd(dto.RequestId, entry))
                 throw new InvalidOperationException($"permission request {dto.RequestId} is already pending");
             Broadcast(new PermissionStreamItem.Pending(dto));
@@ -121,9 +123,10 @@ internal sealed class PermissionPromptBroker {
     /// A tool that has run was answered where the daemon cannot see, so its prompt is moot. The
     /// agent and the session are matched as well as the id: every hosted agent posts on the same
     /// shared token, and a notice retires only what its own session registered. A prompt registered
-    /// without a tool id (Claude's hook sends none) matches the same subagent's call by tool name and
-    /// input instead, the oldest first, so one finished call retires one prompt. A call that a
-    /// settled prompt is still owed is that prompt's, and retires nothing.
+    /// without a tool id (neither Claude's nor Codex's permission hook sends one) matches the same
+    /// subagent's call by tool name and input instead, the oldest first, so one finished call
+    /// retires one prompt. A call that a settled prompt is still owed is that prompt's, and retires
+    /// nothing.
     /// <param name="sentAt">When the hook sent the notice: a prompt registered after it, pending or
     /// owed, is a later call's, whatever its name and input.</param>
     public bool TryWithdrawTool(string agentId, string sessionId, string toolUseId,
@@ -136,7 +139,7 @@ internal sealed class PermissionPromptBroker {
                     && (sentAt is null || RequestedBy(c.Dto, sentAt.Value))
                     && (c.ToolUseId == toolUseId
                      || c.ToolUseId is null && c.SubagentId == subagentId && c.ToolName == toolName
-                        && c.Input is { } ran && JsonElement.DeepEquals(ran, input)));
+                        && c.Input is { } ran && JsonElement.DeepEquals(ran, MatchKey(c.Dto.Vendor, input)!.Value)));
                 if (owed >= 0) {
                     _allowedCalls.RemoveAt(owed);
                     return false;
@@ -146,7 +149,7 @@ internal sealed class PermissionPromptBroker {
                     .Where(e => e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId is null
                              && e.SubagentId == subagentId && e.Dto.ToolName == toolName
                              && (sentAt is null || RequestedBy(e.Dto, sentAt.Value))
-                             && e.Dto.ToolInput is { } held && JsonElement.DeepEquals(held, input))
+                             && e.MatchInput is { } held && JsonElement.DeepEquals(held, MatchKey(e.Dto.Vendor, input)!.Value))
                     .MinBy(e => e.Seq);
             }
             return entry is not null
@@ -182,11 +185,12 @@ internal sealed class PermissionPromptBroker {
     bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source, bool owesCall = true) {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
-        // An allow runs the call with the input it gave, when it gave one; any other answer did not
-        // run the call, so a call the terminal ran carries the prompt's own input.
+        // An allow runs the call with the input it gave, when it gave one the vendor takes; any
+        // other answer did not run the call, so a call the terminal ran carries the prompt's own.
         if (owesCall)
             OweLocked(entry.Dto, entry.SubagentId,
-                decision.Behavior == PermissionSettlements.Allow ? decision.UpdatedInput ?? entry.Dto.ToolInput : entry.Dto.ToolInput);
+                decision.Behavior == PermissionSettlements.Allow && TakesUpdatedInput(entry.Dto.Vendor) && decision.UpdatedInput is { } updated
+                    ? MatchKey(entry.Dto.Vendor, updated) : entry.MatchInput);
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;
@@ -195,16 +199,26 @@ internal sealed class PermissionPromptBroker {
     /// A call allowed without a prompt (by the agent's policy) is owed its notice just the same, so
     /// the notice does not retire an identical prompt still waiting for the user.
     public void OweCall(PermissionPendingDto dto, string? subagentId) {
-        lock (_gate) OweLocked(dto, subagentId, dto.ToolInput);
+        lock (_gate) OweLocked(dto, subagentId, MatchKey(dto.Vendor, dto.ToolInput));
     }
 
     // Caller holds _gate.
     void OweLocked(PermissionPendingDto dto, string? subagentId, JsonElement? input) {
-        if (dto.Vendor != "claude" || _withdrawnAgents.Contains(dto.AgentId)) return;
+        if (!ReportsCalls(dto.Vendor) || _withdrawnAgents.Contains(dto.AgentId)) return;
         var turn = (dto.AgentId, dto.SessionId, subagentId);
         if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
         else _allowedCalls.Add(new AllowedCall(dto, subagentId, input));
     }
+
+    // The vendors whose hook reports each finished call with its name and input.
+    static bool ReportsCalls(string vendor) => vendor is "claude" or "codex";
+
+    // Codex's hook answer carries a behavior and nothing else.
+    static bool TakesUpdatedInput(string vendor) => vendor == "claude";
+
+    // What a prompt's input is matched on, taken the same way from the call that ran.
+    static JsonElement? MatchKey(string vendor, JsonElement? input) =>
+        vendor == "codex" && input is { } held ? CodexPermissionInput.MatchKey(held) : input;
 
     // An unparsed stamp is no ordering, so such a prompt is left to the turn's end.
     static bool RequestedBy(PermissionPendingDto dto, DateTimeOffset sentAt) =>
