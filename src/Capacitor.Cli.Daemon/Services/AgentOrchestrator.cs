@@ -2031,6 +2031,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         public bool              IsCancelled => _cts.IsCancellationRequested;
         public Task              Settled     => _settled.Task;
 
+        /// <summary>The agent this launch published, if it got that far.</summary>
+        public AgentInstance?    Published   { get; set; }
+
         public void Cancel() {
             try { _cts.Cancel(); } catch (ObjectDisposedException) { /* already settled */ }
         }
@@ -2278,10 +2281,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         try {
             if (launch.TryStart()) {
-                var outcome = await HandleAdmittedLaunchAsync(cmd, hold, launch.Token);
-                // Cancelled past its last cancellation point, with no stopper left waiting to stop what it published.
-                if (launch.SettleAbandoned() && outcome.Kind == CommandOutcomeKind.LaunchExecuted
-                    && _agents.GetValueOrDefault(cmd.AgentId) is { } published)
+                var outcome = await HandleAdmittedLaunchAsync(cmd, hold, launch.Token, agent => launch.Published = agent);
+                // Cancelled past its last cancellation point, with no stopper left waiting to stop what it
+                // published: that instance only, never another the id has come to hold since.
+                if (launch.SettleAbandoned() && launch.Published is { } published
+                    && ReferenceEquals(_agents.GetValueOrDefault(cmd.AgentId), published))
                     _ = StopAgentCoreAsync(published);
 
                 return outcome;
@@ -2305,7 +2309,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
     /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
     /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
-    async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default) {
+    async Task<CommandOutcome> HandleAdmittedLaunchAsync(
+            LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
         var agentId = cmd.AgentId;
 
         // A caller-selected ACP permission preset is a pure, side-effect-free rejection (wrong-vendor /
@@ -2351,7 +2356,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
-        return await LaunchAdmittedAsync(cmd, consent, hold, cancel: cancel);
+        return await LaunchAdmittedAsync(cmd, consent, hold, cancel: cancel, onPublished: onPublished);
     }
 
     /// <summary>The admitted launch after its consent decision. A <paramref name="resume"/> relaunches a
@@ -2359,7 +2364,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// worktree and the ledger entry in place for the fallback.</summary>
     async Task<CommandOutcome> LaunchAdmittedAsync(
             LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null,
-            CancellationToken cancel = default) {
+            CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
         var agentId       = cmd.AgentId;
         var isPrivate     = resume?.IsPrivate ?? false;
         var prompt        = cmd.Prompt;
@@ -2972,6 +2977,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
             published = true;
+            onPublished?.Invoke(agent);
             storeLease?.Keep();
             if (resume is null) WriteLedger(agent, cmd, "server", consent);
             hold.Dispose();
