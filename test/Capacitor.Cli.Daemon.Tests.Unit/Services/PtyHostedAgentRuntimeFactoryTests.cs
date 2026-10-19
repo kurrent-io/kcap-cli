@@ -199,9 +199,10 @@ public class PtyHostedAgentRuntimeFactoryTests {
     }
 
     /// <summary>Any local user can read a command line, and <c>pkill -f</c> matches it, so the prompt
-    /// never appears there, even when it is short.</summary>
+    /// never appears there, even when it is short. The file lives until the runtime is disposed: an
+    /// agent slow to start reads it long after spawn.</summary>
     [Test]
-    public async Task A_prompt_is_read_from_an_owner_only_file_that_is_removed_when_the_agent_exits() {
+    public async Task A_prompt_is_read_from_an_owner_only_file_that_is_removed_with_the_runtime() {
         var (factory, pty, process, root) = NewPromptFactory();
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
 
@@ -218,10 +219,10 @@ public class PtyHostedAgentRuntimeFactoryTests {
             }
 
             process.Exit();
-            var dir      = Path.GetDirectoryName(file)!;
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (Directory.Exists(dir) && DateTime.UtcNow < deadline) await Task.Delay(20);
-            await Assert.That(Directory.Exists(dir)).IsFalse();
+            await Assert.That(File.Exists(file)).IsTrue();
+
+            await start.Runtime.DisposeAsync();
+            await Assert.That(Directory.Exists(Path.GetDirectoryName(file))).IsFalse();
         } finally {
             process.Exit();
             await start.Runtime.DisposeAsync();

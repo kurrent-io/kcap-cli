@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// writer; the graceful stop only tries for it (see <see cref="RequestGracefulStopAsync"/>).
 /// </summary>
 internal sealed class PtyHostedAgentRuntime(
-        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false) : IHostedAgentRuntime {
+        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false, string? promptFile = null) : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
@@ -155,5 +155,6 @@ internal sealed class PtyHostedAgentRuntime(
     public async ValueTask DisposeAsync() {
         await pty.DisposeAsync();
         _lane.Dispose();
+        if (promptFile is not null) PromptFile.Delete(promptFile);
     }
 }

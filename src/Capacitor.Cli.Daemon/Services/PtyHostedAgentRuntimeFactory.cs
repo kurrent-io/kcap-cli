@@ -153,12 +153,9 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             throw;
         }
 
-        if (promptFile is not null)
-            _ = pty.WaitForExitAsync().ContinueWith(_ => PromptFile.Delete(promptFile), TaskScheduler.Default);
-
         // Gate the multi-CR submit spray on whether this launch turned off approval prompts — the
         // launcher is the authority (it set the flags). See PtyHostedAgentRuntime.SubmitAsync.
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, launcher.DisablesApprovalPrompts(launcherCtx));
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, launcher.DisablesApprovalPrompts(launcherCtx), promptFile);
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }
