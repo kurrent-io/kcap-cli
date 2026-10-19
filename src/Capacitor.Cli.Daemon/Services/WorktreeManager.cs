@@ -1684,7 +1684,8 @@ public partial class WorktreeManager(
             return await LeftWorktreeAsync(dir) is { } worktree
                 ? await UnsavedWorkAsync(worktree, time)
                 : "its git dir could not be read";
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or GitConfigTransportException) {
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            // A git that times out or cannot start must not take the startup sweep down; the directory stays.
             return "it could not be read";
         }
     }
