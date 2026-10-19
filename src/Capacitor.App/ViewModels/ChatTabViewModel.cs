@@ -204,7 +204,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// baseline, and its echo can land inside the history that Reset replays, where nothing acknowledges it.
     public bool HasSeed {
         get => _hasSeed;
-        private set => this.RaiseAndSetIfChanged(ref _hasSeed, value);
+        private set {
+            if (_hasSeed == value) return;
+            this.RaiseAndSetIfChanged(ref _hasSeed, value);
+            RefreshQueuedSend();
+        }
     }
 
     ChatTabPhase _phase;
@@ -493,7 +497,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// A send still uploading keeps CanAcceptText true, so the busy flag closes that window too.
     bool AgentCanTakeQueuedNow =>
         AgentIsIdle && !IsReadOnlyParticipant && !HasTerminalMenu && _input.CanAcceptText
-        && !_sendCommandExecuting && !_queuedSendBusy.Value;
+        && !_sendCommandExecuting && !_queuedSendBusy.Value && CanSendBeforeSeed;
+
+    /// A remote send needs the transcript's seed to be acknowledged against; a local one does not.
+    bool CanSendBeforeSeed => HasSeed || _origin != AgentOrigin.Remote;
 
     void RefreshQueuedSend() {
         var idle = AgentIsIdle;
@@ -752,8 +759,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             this.WhenAnyValue(x => x.HasTerminalMenu),
             _queuedSendBusy,
             this.WhenAnyValue(x => x.HasSeed),
-            (text, can, readOnly, menu, busy, seeded) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text)
-                && (seeded || _origin != AgentOrigin.Remote));
+            (text, can, readOnly, menu, busy, _) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text)
+                && CanSendBeforeSeed);
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
