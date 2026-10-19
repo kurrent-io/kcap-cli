@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Telemetry;
@@ -158,9 +159,22 @@ class McpFlowsServer(
         return 0;
     }
 
+    /// <summary>The repository a PR-shaped <c>target_ref</c> names, when it is not the session's own:
+    /// <c>owner/repo#N</c> or a PR or merge-request URL. A checkout whose own repository is unknown keeps the
+    /// borrow: it may be that repository.</summary>
+    internal static RepositoryPayload? OtherRepository(JsonObject? arguments, string? repoRoot, RepositoryPayload? session) {
+        if (arguments?["target_ref"] is not JsonValue value || !value.TryGetValue<string>(out var targetRef)
+            || !PrRefParser.TryParse(targetRef, out var owner, out var repo, out _)) return null;
+        if (repoRoot is not null && session is not { Owner.Length: > 0, RepoName.Length: > 0 }) return null;
+        if (string.Equals(session?.Owner, owner, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(session?.RepoName, repo, StringComparison.OrdinalIgnoreCase)) return null;
+
+        return new RepositoryPayload { Owner = owner, RepoName = repo };
+    }
+
     /// <summary>The checkout a call names in <c>repo_path</c>: its repository root and remote identity. The
     /// path is the caller's to choose; the daemon still decides whether it hosts it.</summary>
-    async Task<(string Cwd, string? Root, RepositoryPayload? Info)> ResolveNamedCheckoutAsync(string path) {
+    async Task<(string? Cwd, string? Root, RepositoryPayload? Info)> ResolveNamedCheckoutAsync(string path) {
         if (!Path.IsPathFullyQualified(path))
             throw new ArgumentException("repo_path must be an absolute path to a checkout on this machine.");
         // FindRoot walks up from any path, so a mistyped one would quietly review its nearest checkout.
@@ -217,9 +231,14 @@ class McpFlowsServer(
             // The checkout a start or vendor lookup is for: the session's own, or one the call names.
             // A named checkout replaces the cwd as well, since a same-machine borrow probes the cwd;
             // the session id, the machine and the run ledger stay the session's.
-            var (hostCwd, hostRoot, hostInfo) = toolName is "start_review_flow" or "start_flow" or "list_reviewer_vendors"
-                && McpToolArguments.OptionalString(arguments, "repo_path") is { } named
-                    ? await ResolveNamedCheckoutAsync(named)
+            var named = toolName is "start_review_flow" or "start_flow" or "list_reviewer_vendors"
+                ? McpToolArguments.OptionalString(arguments, "repo_path")
+                : null;
+            var (hostCwd, hostRoot, hostInfo) = named is not null
+                ? await ResolveNamedCheckoutAsync(named)
+                : toolName is "start_review_flow" or "start_flow" && OtherRepository(arguments, repoRoot, repoInfo) is { } other
+                    // No local checkout to borrow: a daemon that hosts that repository reviews it.
+                    ? ((string?)null, (string?)null, other)
                     : (cwd, repoRoot, repoInfo);
 
             // The start/submit tools (and their generic aliases) may need async poll — handle separately.
@@ -1172,7 +1191,7 @@ class McpFlowsServer(
             HttpClient         client,
             string             apiRoot,
             JsonObject?        arguments,
-            string             cwd,
+            string?            cwd,
             string?            repoRoot,
             RepositoryPayload? repoInfo,
             string             kindArgName,
@@ -2521,7 +2540,7 @@ class McpFlowsServer(
                 new() {
                     ["kind"]         = new("string", "Review flow kind. Valid values: 'spec-review' (for specs and design documents), 'code-review' (for code changes and PRs)."),
                     ["target_kind"]  = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
-                    ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
+                    ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.). A PR URL or owner/repo#N in a repository other than this session's, with no repo_path, is reviewed on a daemon that hosts that repository, without a local checkout: uncommitted work is not seen."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["session_title"] = new("string", SessionTitleDescription("reviewer's", "'Review PR #1302: deliver flow results through a server restart'")),
                     ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of THIS SESSION's project directory (or of repo_path when given), not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your checkout was NOT borrowed, so inline anything uncommitted that matters."),
@@ -2596,7 +2615,7 @@ class McpFlowsServer(
                     ["definition_id"]   = new("string", "Flow definition id from the catalog (e.g. 'code-review', or a custom definition). Provide exactly one of definition_id or definition_yaml — never both, never neither."),
                     ["definition_yaml"] = new("string", "Inline flow-definition YAML document for a dynamic (non-catalog) flow — the full definition, same schema as catalog definitions. Provide exactly one of definition_id or definition_yaml — never both, never neither. Requires a server with dynamic flows enabled. Every participant MUST declare 'workspace: none' (the parser rejects a missing workspace) and a concrete model id (no 'default')."),
                     ["target_kind"]    = new("string", "What is being reviewed: 'pr', 'branch', 'file', 'spec', 'plan', etc."),
-                    ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
+                    ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.). A PR URL or owner/repo#N in a repository other than this session's, with no repo_path, is reviewed on a daemon that hosts that repository, without a local checkout: uncommitted work is not seen."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["session_title"]  = new("string", SessionTitleDescription("participant agent's", "'Test the hook spool drain against a 401'")),
                     ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of THIS SESSION's project directory (or of repo_path when given), not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs."),

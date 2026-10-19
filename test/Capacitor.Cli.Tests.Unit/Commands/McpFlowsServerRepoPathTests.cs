@@ -20,13 +20,13 @@ public class McpFlowsServerRepoPathTests {
         new(Config.Root, Resolutions.None(Config.Root), AuthFixtures.NewTokenStore(Config.Root),
             new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System);
 
-    static JsonObject StartRequest(string? repoPath) => new() {
+    static JsonObject StartRequest(string? repoPath, string targetRef = "123") => new() {
         ["params"] = new JsonObject {
             ["name"] = "start_review_flow",
             ["arguments"] = new JsonObject {
                 ["kind"]          = "code-review",
                 ["target_kind"]   = "pr",
-                ["target_ref"]    = "123",
+                ["target_ref"]    = targetRef,
                 ["target_title"]  = "some PR",
                 ["session_title"] = "Review the thing",
                 ["context"]       = "some context",
@@ -66,6 +66,45 @@ public class McpFlowsServerRepoPathTests {
         await Assert.That(body["requesting_repo_root"]!.GetValue<string>()).IsEqualTo(root);
         await Assert.That(body["requesting_cwd"]!.GetValue<string>()).IsEqualTo(root);
         await Assert.That(body["requesting_session_id"]!.GetValue<string>()).IsEqualTo("s1");
+    }
+
+    static readonly RepositoryPayload SessionRepo = new() { Owner = "kurrent-io", RepoName = "kcap-server" };
+
+    async Task<JsonObject> PostedStart(string targetRef, string? repoRoot, RepositoryPayload? repoInfo) {
+        using var server = RefusingServer();
+        using var client = new HttpClient();
+
+        await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, StartRequest(null, targetRef), client, server.Url!,
+            cwd: "/tmp/session", repoRoot: repoRoot, repoInfo: repoInfo, requestingSessionId: "s1");
+
+        return JsonNode.Parse(server.LogEntries.Single(e => e.RequestMessage.Path == StartV2).RequestMessage.Body!)!.AsObject();
+    }
+
+    [Test]
+    [Arguments("https://github.com/kurrent-io/kcap-cli/pull/42", "/tmp/session")]
+    [Arguments("kurrent-io/kcap-cli#42", "/tmp/session")]
+    [Arguments("kurrent-io/kcap-cli#42", null)]
+    public async Task A_pr_in_another_repository_is_hosted_by_that_repository_with_nothing_to_borrow(string targetRef, string? repoRoot) {
+        var body = await PostedStart(targetRef, repoRoot, repoRoot is null ? null : SessionRepo);
+
+        await Assert.That(body["repo_owner"]!.GetValue<string>()).IsEqualTo("kurrent-io");
+        await Assert.That(body["repo_name"]!.GetValue<string>()).IsEqualTo("kcap-cli");
+        await Assert.That(body["requesting_cwd"]).IsNull();
+        await Assert.That(body["requesting_repo_root"]).IsNull();
+        await Assert.That(body["repo_path"]).IsNull();
+        await Assert.That(body["requesting_session_id"]!.GetValue<string>()).IsEqualTo("s1");
+    }
+
+    [Test]
+    [Arguments("https://github.com/Kurrent-IO/KCAP-Server/pull/42", true)]
+    [Arguments("123", true)]
+    [Arguments("kurrent-io/kcap-cli#42", false)]
+    public async Task The_session_checkout_stays_borrowed_unless_the_pr_is_known_to_be_elsewhere(string targetRef, bool sessionRepoKnown) {
+        var body = await PostedStart(targetRef, "/tmp/session", sessionRepoKnown ? SessionRepo : null);
+
+        await Assert.That(body["requesting_cwd"]!.GetValue<string>()).IsEqualTo("/tmp/session");
+        await Assert.That(body["requesting_repo_root"]!.GetValue<string>()).IsEqualTo("/tmp/session");
     }
 
     [Test]
