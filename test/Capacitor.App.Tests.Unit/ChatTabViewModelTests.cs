@@ -3433,6 +3433,33 @@ public class ChatTabViewModelTests {
 
     /// A refusal with nothing on screen replaces the wait with its reason; the next read that is
     /// not one clears it.
+    /// A remote prompt sent before the transcript's seed has nothing to be acknowledged against: its
+    /// echo can land inside the replayed history. Send waits for the seed; a local pane does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(AgentOrigin.Remote, false)]
+    [Arguments(AgentOrigin.Local, true)]
+    public async Task Send_waits_for_the_transcript_seed_on_the_remote_lane(AgentOrigin origin, bool beforeSeed) {
+        await RunOnUiAsync(async () => {
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feed = new ScriptedFeed();
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", origin, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            chat.ComposerText = "do it";
+
+            await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsEqualTo(beforeSeed);
+
+            feed.ResetNext = true;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            await chat.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_refused_read_says_why_in_place_of_the_wait_until_a_read_is_not_refused() {

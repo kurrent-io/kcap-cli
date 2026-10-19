@@ -199,6 +199,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
     public bool HasPendingCards => _hasPendingCards.Value;
 
+    bool _hasSeed;
+    /// Whether the current feed has delivered its first Reset. A remote send made before it has no
+    /// baseline, and its echo can land inside the history that Reset replays, where nothing acknowledges it.
+    public bool HasSeed {
+        get => _hasSeed;
+        private set => this.RaiseAndSetIfChanged(ref _hasSeed, value);
+    }
+
     ChatTabPhase _phase;
     public ChatTabPhase Phase {
         get => _phase;
@@ -743,7 +751,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
             this.WhenAnyValue(x => x.HasTerminalMenu),
             _queuedSendBusy,
-            (text, can, readOnly, menu, busy) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text));
+            this.WhenAnyValue(x => x.HasSeed),
+            (text, can, readOnly, menu, busy, seeded) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text)
+                && (seeded || _origin != AgentOrigin.Remote));
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -964,6 +974,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _feedKey = key;
         var previous = _lease;
         _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation), SignalFeedRead);
+        HasSeed = false;
         previous?.Dispose();
         RebaseQueuedMessages(CurrentOffset);
         _failureNote = null;
@@ -1229,6 +1240,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
                 return;
             case FeedStatus.Reset:
+                HasSeed = true;
                 // Skip everything the new source replays: it may be history, not receipts. The feed
                 // names where that history ends — anything past it arrived after and can acknowledge.
                 RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
