@@ -88,6 +88,17 @@ public class McpFlowsServerRepoPathTests {
     public async Task A_pr_in_another_repository_is_hosted_by_that_repository_with_nothing_to_borrow(string targetRef, string? repoRoot) {
         var body = await PostedStart(targetRef, repoRoot, repoRoot is null ? null : SessionRepo);
 
+        await AssertHostedWithoutBorrow(body);
+    }
+
+    [Test]
+    public async Task A_session_with_no_checkout_borrows_nothing_even_for_its_own_repository() {
+        var body = await PostedStart("kurrent-io/kcap-cli#42", null, new RepositoryPayload { Owner = "kurrent-io", RepoName = "kcap-cli" });
+
+        await AssertHostedWithoutBorrow(body);
+    }
+
+    static async Task AssertHostedWithoutBorrow(JsonObject body) {
         await Assert.That(body["repo_owner"]!.GetValue<string>()).IsEqualTo("kurrent-io");
         await Assert.That(body["repo_name"]!.GetValue<string>()).IsEqualTo("kcap-cli");
         await Assert.That(body["requesting_cwd"]).IsNull();

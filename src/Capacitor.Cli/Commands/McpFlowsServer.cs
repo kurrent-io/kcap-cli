@@ -159,17 +159,20 @@ class McpFlowsServer(
         return 0;
     }
 
-    /// <summary>The repository a PR-shaped <c>target_ref</c> names, when it is not the session's own:
-    /// <c>owner/repo#N</c> or a PR or merge-request URL. A checkout whose own repository is unknown keeps the
-    /// borrow: it may be that repository.</summary>
+    /// <summary>The repository a PR-shaped <c>target_ref</c> names (<c>owner/repo#N</c> or a PR or merge-request
+    /// URL) when the session has no checkout of it to borrow. A checkout whose own repository is unknown keeps
+    /// the borrow: it may be that repository.</summary>
     internal static RepositoryPayload? OtherRepository(JsonObject? arguments, string? repoRoot, RepositoryPayload? session) {
         if (arguments?["target_ref"] is not JsonValue value || !value.TryGetValue<string>(out var targetRef)
             || !PrRefParser.TryParse(targetRef, out var owner, out var repo, out _)) return null;
-        if (repoRoot is not null && session is not { Owner.Length: > 0, RepoName.Length: > 0 }) return null;
-        if (string.Equals(session?.Owner, owner, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(session?.RepoName, repo, StringComparison.OrdinalIgnoreCase)) return null;
+        var target = new RepositoryPayload { Owner = owner, RepoName = repo };
+        if (repoRoot is null) return target;
+        if (session is not { Owner.Length: > 0, RepoName.Length: > 0 }) return null;
 
-        return new RepositoryPayload { Owner = owner, RepoName = repo };
+        return string.Equals(session.Owner, owner, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(session.RepoName, repo, StringComparison.OrdinalIgnoreCase)
+                ? null
+                : target;
     }
 
     /// <summary>The checkout a call names in <c>repo_path</c>: its repository root and remote identity. The
