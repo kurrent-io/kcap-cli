@@ -112,13 +112,30 @@ public class AcpHostedAgentRuntimeRestartResumeTests {
         await Assert.That(prompts.Select(p => p.GetProperty("sessionId").GetString()!)).IsEquivalentTo([ResumedSession, ResumedSession]);
         await Assert.That(prompts.Select(p => p.GetProperty("prompt")[0].GetProperty("text").GetString()!))
             .IsEquivalentTo(["the nudge", "typed during the hold"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
-        await Assert.That(h.Envelopes().Any(e => e.Text?.Contains("after-the-nudge") == true)).IsTrue();
+        await WaitHarness.PollUntilAsync(() => h.Envelopes().Any(e => e.Text?.Contains("after-the-nudge") == true));
 
         await Assert.That(h.Runtime.SessionId).IsEqualTo(ResumedSession);
         await Assert.That(h.Envelopes().Any(e => e.Text?.Contains("replayed-history") == true)).IsFalse();
 
         h.Runtime.ReleaseFirstTurn();
         await Assert.That(h.Fake.ReceivedCalls.Count(c => c.Method == "session/prompt")).IsEqualTo(2);
+    }
+
+    /// <summary>A turn still queued behind the hold when the runtime is disposed is never sent, so a caller
+    /// awaiting its write is told so rather than left waiting.</summary>
+    [Test]
+    public async Task Turns_still_held_at_dispose_fail_their_write() {
+        var h = new Harness();
+        await h.StartAsync("the nudge", ResumedSession);
+
+        var first  = h.Runtime.SendUserInputAndWaitForWriteAsync("one");
+        var second = h.Runtime.SendUserInputAndWaitForWriteAsync("two");
+
+        await h.DisposeAsync();
+
+        await Assert.That(async () => await first.WaitAsync(HangGuard)).Throws<InvalidOperationException>();
+        await Assert.That(async () => await second.WaitAsync(HangGuard)).Throws<InvalidOperationException>();
+        await Assert.That(h.Fake.ReceivedCalls.Select(c => c.Method)).DoesNotContain("session/prompt");
     }
 
     /// <summary>A vendor's command list can arrive while the load's suppression is still on; it is the

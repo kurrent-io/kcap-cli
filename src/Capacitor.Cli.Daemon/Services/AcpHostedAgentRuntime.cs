@@ -2094,6 +2094,14 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 // Best-effort — a stuck turn worker must never hang dispose.
             }
 
+            // The channel's single reader is gone and its writer completed, so nothing still queued will
+            // ever be sent: a caller awaiting a turn's write would otherwise wait forever.
+            if (_turnWorkerTask.IsCompleted) {
+                while (_pendingTurns.Reader.TryRead(out var undelivered))
+                    undelivered.Written?.TrySetException(new InvalidOperationException(
+                        "ACP session ended while this input was pending delivery."));
+            }
+
             // Session-end flush: a belt-and-suspenders flush of any still-open aggregation run. In the
             // normal shutdown path ProcessAdmittedTurnAsync's own finally already flushed the active turn's
             // buffer above, making this a no-op — it only matters for the (currently unreachable in
