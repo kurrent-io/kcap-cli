@@ -14,6 +14,13 @@ sealed class LocalStack(
 
     public ILocalServerService Service => service;
 
+    public UserHome Home => home;
+
+    /// <summary>Sends no credential and follows no redirect.</summary>
+    public HttpClient Local => local;
+
+    public TimeProvider Time => time;
+
     /// <summary>No lock and no writes, so another command may be changing what this reads. Without the identity probe
     /// a unit naming this root by another spelling is <see cref="OwnerDecision.Unknown"/>.</summary>
     public LocalStackState Read() =>

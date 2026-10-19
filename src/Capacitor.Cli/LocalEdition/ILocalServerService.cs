@@ -32,4 +32,7 @@ interface ILocalServerService {
     /// <summary>The root the loaded job and the unit file each name; the unit is per user, so they may name
     /// another installation's.</summary>
     UnitOwner Owner(LocalServerUnit unit);
+
+    /// <summary>Reads only; whoever the unit serves.</summary>
+    UnitActivity Activity(LocalServerUnit unit);
 }

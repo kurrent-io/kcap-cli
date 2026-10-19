@@ -23,7 +23,13 @@ static class LocalStackProbe {
         var run = Path.Combine(root.Directory, "run");
 
         if (LockHeld(Path.Combine(run, ServerLockName))) return "the server still holds its instance lock";
-        if (Accepting(Path.Combine(run, PostgresSocketName))) return "Postgres still accepts connections on its socket";
+
+        return FindLivePostgres(root);
+    }
+
+    /// <summary>Unlike <see cref="FindLive"/> this takes nothing, so it is safe while the server may be starting.</summary>
+    public static string? FindLivePostgres(LocalRoot root) {
+        if (Accepting(Path.Combine(root.Directory, "run", PostgresSocketName))) return "Postgres still accepts connections on its socket";
         if (PostmasterRunning(PostmasterPidPath(root)) is { } pid) return $"the Postgres postmaster (pid {pid}) is still running";
 
         return null;

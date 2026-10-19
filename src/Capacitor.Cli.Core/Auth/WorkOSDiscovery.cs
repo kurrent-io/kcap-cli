@@ -225,9 +225,7 @@ public static class WorkOSDiscovery {
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
             TimeProvider                                                time,
             CancellationToken                                           ct) {
-        var picked = ready.Picked;
-
-        if (!ServerIdentity.TryCanonicalizeForStamping(picked.Origin, out var canonical, out var identityError)) {
+        if (!ServerIdentity.TryCanonicalizeForStamping(ready.Picked.Origin, out var canonical, out var identityError)) {
             progress.Error($"Error: {identityError}");
 
             return new AuthResult.Failed(identityError);
@@ -251,21 +249,20 @@ public static class WorkOSDiscovery {
             return new AuthResult.Failed(settleError);
         }
 
-        var request = new CommitRequest(
-            [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
-            PublishTokens: async saved => {
-                var outcome = await store.SaveGuardedAsync(
-                    picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
-                if (outcome == GuardedWriteOutcome.Written) saved();
-                else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
+        var result = await CommitBoundary.CommitNamedAsync(root, ready.Tenants, ready.Picked, (tenants, picked) => new CommitRequest(
+                [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
+                ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
+                PublishTokens: async saved => {
+                    var outcome = await store.SaveGuardedAsync(
+                        picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
+                    if (outcome == GuardedWriteOutcome.Written) saved();
+                    else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
 
-                return ready.Username;
-            });
+                    return ready.Username;
+                }),
+            beforeCommit, progress, ct);
 
-        var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
-
-        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
+        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {ready.Picked.Label}");
 
         return result;
     }

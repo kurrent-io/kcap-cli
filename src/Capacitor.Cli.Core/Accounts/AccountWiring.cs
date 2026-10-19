@@ -49,7 +49,8 @@ public static class AccountWiring {
             }
             case HarnessId.Codex: {
                 var hooks = AccountLayouts.Codex(home, account.Directory).UserHooksJson;
-                if (IsMalformed(hooks)) return RecordingState.Broken;
+                // Codex refuses a file with a byte-order mark; rewiring rewrites it without one.
+                if (IsMalformed(hooks) || CodexHooksInstaller.StartsWithByteOrderMark(hooks)) return RecordingState.Broken;
                 return CodexHooksInstaller.ReferencesKcapHook(hooks) ? RecordingState.Installed : RecordingState.NotWired;
             }
             default:

@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
@@ -31,11 +32,15 @@ public class LocalUninstallCommandTests {
         public LocalStack Create() => create();
     }
 
+    sealed class NoBrowser : IBrowserLauncher {
+        public bool TryOpen(string url) => throw new InvalidOperationException("The command opened a browser.");
+    }
+
     async Task<(int Exit, string Out, string Err)> RunAsync(params string[] args) {
         var config  = new ConfigRoot(Tmp.CreateDir("cfg"));
         var command = new LocalCommand(
             new StackFactory(() => new(Root, Home, Service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders(_log), config)),
-            new FakeOutgoingRecorders(_log), config, Home);
+            new NoBrowser(), new FakeOutgoingRecorders(_log), config, Home);
 
         using var capture = ConsoleOutput.StartFullCapture();
 

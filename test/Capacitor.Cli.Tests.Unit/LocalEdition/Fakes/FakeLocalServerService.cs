@@ -23,6 +23,15 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
     /// <summary>The root the loaded job serves, or null when no job is loaded.</summary>
     public string? LoadedRoot { get; set; }
 
+    /// <summary>Answered by <see cref="Activity"/>, one per call, before anything else.</summary>
+    public Queue<UnitActivity> Activities { get; } = new();
+
+    /// <summary>Replaces the activity <see cref="Activity"/> would otherwise derive.</summary>
+    public UnitActivity? ActivityOverride { get; set; }
+
+    /// <summary>Set by an install or start, cleared by a stop or uninstall.</summary>
+    public bool Running { get; private set; }
+
     public string Describe => "fake unit";
 
     void Log(string entry) {
@@ -34,6 +43,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
         if (InstallFailure is { } failure) throw failure;
 
         LoadedRoot = unit.Root.Directory;
+        Running    = true;
 
         var file = UnitFile(unit);
         Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -42,12 +52,14 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
     public void Start(LocalServerUnit unit) {
         Log("start");
+        Running = true;
         OnStart?.Invoke();
     }
 
     public Task StopAsync(LocalServerUnit unit, CancellationToken ct) {
         Log("stop");
         if (StopFailure is { } failure) throw failure;
+        Running = false;
         return Task.CompletedTask;
     }
 
@@ -58,6 +70,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
         if (UninstallFailure is { } failure) throw failure;
 
         LoadedRoot = null;
+        Running    = false;
 
         if (LocalStackProbe.FindLive(unit.Root) is { } live)
             throw new LocalLifecycleException($"The fake unit stopped, but {live}.");
@@ -84,4 +97,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
             LoadedRoot is { } loaded ? new OwnerReading.Root(loaded) : OwnerReading.Absent.Instance,
             File.Exists(file) ? new OwnerReading.Root(File.ReadAllText(file)) : OwnerReading.Absent.Instance);
     }
+
+    public UnitActivity Activity(LocalServerUnit unit) =>
+        Activities.TryDequeue(out var next) ? next : ActivityOverride ?? (Running ? new UnitActivity.Running(Environment.ProcessId) : UnitActivity.Stopped.Instance);
 }

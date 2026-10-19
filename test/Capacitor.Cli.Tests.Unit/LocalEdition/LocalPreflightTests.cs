@@ -28,6 +28,7 @@ public class LocalPreflightTests {
         public string UnitFile(LocalServerUnit unit) => throw new NotSupportedException();
         public bool IsInstalled(LocalServerUnit unit) => throw new NotSupportedException();
         public UnitOwner Owner(LocalServerUnit unit) => owner ?? new(OwnerReading.Absent.Instance, OwnerReading.Absent.Instance);
+        public UnitActivity Activity(LocalServerUnit unit) => throw new NotSupportedException();
     }
 
     // A temp directory on macOS is already ~85 bytes, so tests off the socket subject lift the limit; the

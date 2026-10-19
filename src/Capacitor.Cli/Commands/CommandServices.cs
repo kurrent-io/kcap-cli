@@ -134,6 +134,7 @@ public static class CommandServices {
         services.AddTransient<SetupCommand>();
         services.AddTransient<ILocalInstallerFactory, LocalInstallerFactory>();
         services.AddTransient<ILocalStackFactory, LocalStackFactory>();
+        services.AddTransient<LocalCommand>();
         services.AddSingleton<ChosenServerHttp>();
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();

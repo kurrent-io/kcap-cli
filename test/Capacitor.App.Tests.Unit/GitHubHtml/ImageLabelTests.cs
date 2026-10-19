@@ -13,8 +13,16 @@ public class ImageLabelTests {
     [Arguments("", "", "image")]
     [Arguments(null, null, "image")]
     [Arguments("", "https://h/", "image")]
+    [Arguments("", "data:image/gif;base64,R0lGODlhAQABAAAAACw=", "image")]
+    [Arguments(null, " DATA:image/png;base64,iVBORw0KGgo=", "image")]
     public async Task The_label_is_the_alt_then_the_file_name_then_a_word(string? alt, string? url, string expected) =>
         await Assert.That(ImageLabel.For(alt, url)).IsEqualTo(expected);
+
+    [Test]
+    public async Task A_file_name_longer_than_any_filesystem_allows_reads_as_a_word() {
+        await Assert.That(ImageLabel.For("", "https://h/" + new string('a', 255))).IsEqualTo(new string('a', 255));
+        await Assert.That(ImageLabel.For("", "https://h/" + new string('a', 256))).IsEqualTo("image");
+    }
 
     /// Pins normalisation coming last: unescaping a file name can produce a line end, and a line
     /// end inside a run hangs layout.

@@ -9,7 +9,7 @@ public static class InlineText {
         var builder = new StringBuilder(text.Length);
         var inWhitespace = false;
         foreach (var c in text) {
-            if (char.IsWhiteSpace(c)) {
+            if (Collapses(c)) {
                 if (!inWhitespace) builder.Append(' ');
                 inWhitespace = true;
             } else {
@@ -19,6 +19,10 @@ public static class InlineText {
         }
         return builder.ToString();
     }
+
+    /// HTML's ASCII whitespace plus every other mandatory line break: a line break inside a run
+    /// hangs layout, while a no-break space must survive as github.com keeps it.
+    static bool Collapses(char c) => c is ' ' or '\t' or '\n' or '\v' or '\f' or '\r' or '\u0085' or '\u2028' or '\u2029';
 
     public static string Plain(ContainerInline container) =>
         container.FirstChild is { } first ? Plain(first, null) : "";
