@@ -80,13 +80,13 @@ internal record AgentInstance(
 
     bool _reopenedTranscriptRefused;
 
-    /// Set when the server will take no events for an ACP session this agent reopened: the bind or the
-    /// cursor read was refused, or the binding is already terminal. A native resume judged with this set
-    /// has failed.
+    /// Set when the bind or the cursor read of an ACP session this agent reopened was refused: the server
+    /// will record nothing it says, so a native resume judged with this set has failed.
     public bool ReopenedTranscriptRefused {
         get => Volatile.Read(ref _reopenedTranscriptRefused);
         set => Volatile.Write(ref _reopenedTranscriptRefused, value);
     }
+
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }

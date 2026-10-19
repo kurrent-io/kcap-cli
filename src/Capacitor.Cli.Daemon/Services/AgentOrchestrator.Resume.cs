@@ -480,8 +480,9 @@ internal partial class AgentOrchestrator {
     const string StoppedDuringResume     = "stopped";
     const string TranscriptRefusedReason = "acp_binding_unavailable";
 
-    /// <summary>A reopened ACP session whose binding the server holds as terminal drops the first new
-    /// event, which stops the forwarder: the vendor conversation survived, but nothing it says is recorded.</summary>
+    /// <summary>Whether the server takes no events for the ACP session this agent reopened. A binding it
+    /// holds as terminal shows only when it drops the first new event and the forwarder stops: the vendor
+    /// conversation survived, but nothing it says from here would be recorded.</summary>
     static bool TranscriptRefused(AgentInstance agent) =>
         agent.ReopenedTranscriptRefused || agent.AcpForwarder?.Forwarder.IsTerminal == true;
 
