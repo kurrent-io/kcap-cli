@@ -27,6 +27,10 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
 
     public string AcceptButtonText { get; }
 
+    /// Removing a profile cannot be undone, so its Accept is styled as destructive and Enter does
+    /// not press it.
+    public bool AcceptIsDestructive { get; }
+
     /// Null when PathDegraded is false — bound with StringConverters.IsNotNullOrEmpty so the
     /// degraded-PATH line collapses instead of reserving dead space (ConsentPromptWindow's same
     /// pattern for its countdown/phase lines).
@@ -66,6 +70,8 @@ public sealed class LifecyclePromptViewModel : ReactiveObject {
             LifecyclePrompt.KindSetup          => "Restart and continue",
             _                                  => "Continue",
         };
+
+        AcceptIsDestructive = prompt.Kind == LifecyclePrompt.KindRemoveProfile;
 
         AcceptCommand  = ReactiveCommand.Create(() => Resolve(tcs, true));
         DeclineCommand = ReactiveCommand.Create(() => Resolve(tcs, false));
