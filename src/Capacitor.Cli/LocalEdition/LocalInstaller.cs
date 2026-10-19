@@ -189,13 +189,20 @@ sealed class LocalInstaller(
         var unit    = LocalServerUnit.ForInstallation(root, existing.Port);
         var details = new SetupDetails(existing.Id, existing.Port, existing.Version, existing.ServerUrl, Path.GetFullPath(config.Directory), ActiveProfile());
 
-        try {
-            if (!File.Exists(unit.ServerBinary)) await RestageAsync(details, ct);
+        LocalInstallFailure NotOurs() => new(LocalInstallFailureCode.NotOurServer,
+            $"The {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed.");
 
-            LocalOwnUnit.Ensure(root, unit, service,
-                () => new LocalInstallFailure(LocalInstallFailureCode.NotOurServer,
-                    $"The {service.Describe} {unit.Label} ({service.UnitFile(unit)}) is not provably this installation's, so it was left alone and the profile was not changed."),
-                startPresent: true);
+        try {
+            if (!File.Exists(unit.ServerBinary)) {
+                // Decided before bin/ is touched: a refusal must leave the installation as it found it.
+                var owner = service.Owner(unit);
+                if (owner is not { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent } && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
+                    throw NotOurs();
+
+                await RestageAsync(details, ct);
+            }
+
+            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true);
         } finally {
             unitLock.Dispose();
         }

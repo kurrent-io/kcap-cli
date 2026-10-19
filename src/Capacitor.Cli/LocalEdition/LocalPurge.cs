@@ -13,9 +13,18 @@ namespace Capacitor.Cli.LocalEdition;
 /// </summary>
 static class LocalPurge {
     /// <summary>Under the lease, with the unit stopped and nothing alive.</summary>
-    public static LifecycleJournalEntry Begin(LifecycleLease lease, LocalInstallation installation, string configDir, string watcherDir) =>
-        lease.Begin(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, installation.Id,
-            LocalPurgeJournal.Build(installation, Path.GetFullPath(configDir), Path.GetFullPath(watcherDir)));
+    /// <summary>Refuses, writing nothing, an installation whose journal this build could not act on again.</summary>
+    public static LifecycleJournalEntry Begin(LifecycleLease lease, LocalInstallation installation, string configDir, string watcherDir) {
+        var details = LocalPurgeJournal.Build(installation, Path.GetFullPath(configDir), Path.GetFullPath(watcherDir));
+        var draft   = new LifecycleJournalEntry(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, installation.Id,
+            DateTimeOffset.MinValue, details);
+
+        if (!LocalPurgeJournal.TryRead(draft, out _, out var error))
+            throw new LocalLifecycleException(
+                $"The installation registry {lease.Root.RegistryPath} names an installation this kcap cannot purge ({error}). Its service is stopped; nothing was removed.");
+
+        return lease.Begin(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, installation.Id, details);
+    }
 
     /// <summary>From either phase to a cleared journal. A failure leaves the journal, so the next lifecycle command
     /// carries on from it.</summary>
@@ -46,11 +55,13 @@ static class LocalPurge {
 
         var config = new ConfigRoot(details.ConfigDir);
 
-        ForgetServer(config, details.ServerUrl);
-        FaultPoints.Hit("purge:after-caches");
-
+        // Profiles first: a hook that still resolves the installation spools what it is refused, and once no profile
+        // names it, nothing new resolves it.
         await ClearProfilesAsync(config, details, home);
         FaultPoints.Hit("purge:after-profile");
+
+        ForgetServer(config, details.Port);
+        FaultPoints.Hit("purge:after-caches");
 
         lease.Complete();
     }
@@ -73,7 +84,7 @@ static class LocalPurge {
 
     /// <summary>The recordings spooled for it and the caches keyed by its identity. While an installation exists the
     /// machine records to nothing else, so the spools hold only its recordings.</summary>
-    static void ForgetServer(ConfigRoot config, string serverUrl) {
+    static void ForgetServer(ConfigRoot config, int port) {
         // Deleted outright rather than after an existence check, which reads an unreadable directory as absent.
         foreach (var dir in new[] { HookSpool.DirName, TranscriptSpool.DirName }) {
             try {
@@ -83,9 +94,12 @@ static class LocalPurge {
             }
         }
 
-        ServerVersionStore.Forget(serverUrl, config);
-        PlanEntitlementStore.Forget(serverUrl, config);
-        SessionStartFlowsCatalogCache.Default(config).Forget(serverUrl);
+        // Each store keys its entries by the URL as it was spelled, and the installation answers to three spellings.
+        foreach (var serverUrl in new[] { $"http://localhost:{port}", $"http://127.0.0.1:{port}", $"http://[::1]:{port}" }) {
+            ServerVersionStore.Forget(serverUrl, config);
+            PlanEntitlementStore.Forget(serverUrl, config);
+            SessionStartFlowsCatalogCache.Default(config).Forget(serverUrl);
+        }
     }
 
     /// <summary>Clears the URL and the provider stamp of every profile naming the installation, in any loopback

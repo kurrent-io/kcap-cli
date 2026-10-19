@@ -107,4 +107,15 @@ public class PendingLaunchStatusTests {
 
         await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
     }
+
+    /// <summary>Consent, worktree and attachments run before a launch is pending; it is admitted throughout.</summary>
+    [Test]
+    public async Task The_busy_count_holds_an_admitted_launch_before_it_is_pending() {
+        await using var orch = Build();
+
+        using (orch.Admission.TryAdmit())
+            await Assert.That(orch.BusyForStatus()).IsEqualTo(1);
+
+        await Assert.That(orch.BusyForStatus()).IsEqualTo(0);
+    }
 }

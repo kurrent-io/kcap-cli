@@ -2,6 +2,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
+using System.Net.WebSockets;
 using System.Text.Json;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -10,6 +11,7 @@ using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Eventuous.SignalR.Client;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.Http.Connections.Client;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -251,12 +253,33 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         }
     }
 
+    /// <summary>What SignalR's own WebSocket transport sends, after the destination check its handler factory cannot
+    /// see.</summary>
+    async ValueTask<WebSocket> ConnectWebSocketAsync(WebSocketConnectionContext context, CancellationToken ct) {
+        LocalDestination.Check(context.Uri, _localRoot, _serverUrl, _refusal);
+
+        var socket = new ClientWebSocket();
+        socket.Options.SetRequestHeader("X-Requested-With", "XMLHttpRequest");
+
+        if (context.Options.AccessTokenProvider is { } provider && await provider() is { Length: > 0 } token)
+            socket.Options.SetRequestHeader("Authorization", $"Bearer {token}");
+
+        try {
+            await socket.ConnectAsync(context.Uri, ct);
+            return socket;
+        } catch {
+            socket.Dispose();
+            throw;
+        }
+    }
+
     HubConnection Build() {
         var builder = new HubConnectionBuilder()
             .WithUrl($"{_serverUrl}/hubs/sessions", o => {
                 o.AccessTokenProvider = _token;
-                // Every negotiation, reconnects included, goes through it before a WebSocket is opened.
+                // Every negotiation and every WebSocket upgrade, reconnects included.
                 o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal) { InnerHandler = inner };
+                o.WebSocketFactory = ConnectWebSocketAsync;
             });
         if (_hubLogging is { } logging) builder.ConfigureLogging(logging);
         var hub = (_reconnectDelays is { } delays ? builder.WithAutomaticReconnect(delays) : builder.WithAutomaticReconnect())

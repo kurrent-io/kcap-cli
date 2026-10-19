@@ -76,12 +76,9 @@ public class LocalUninstallTests {
         return committed;
     }
 
-    /// <summary>The root sits under the resolved home, which <see cref="TempDir"/>'s own helpers do not reach.</summary>
-    void WriteUnderRoot(string relative, string content) {
-        var path = Dir(relative);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, content);
-    }
+    /// <summary>The root is the default one under the test's home.</summary>
+    void WriteUnderRoot(string relative, string content) =>
+        Tmp.CreateFile(Path.Combine("home", ".config", "kcap", "local", relative), content);
 
     Task<LocalUninstallOutcome> UninstallAsync(bool purge, bool force = false) =>
         Stack.RunAsync(_events,
@@ -245,6 +242,48 @@ public class LocalUninstallTests {
 
         await Assert.That(again.InstallationId).IsEqualTo(installed.InstallationId);
         await Assert.That(Directory.Exists(Path.Combine(Dir("bin"), ".staging-dead"))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_reinstall_refused_for_a_foreign_unit_leaves_the_binaries_alone() {
+        await InstallAsync();
+        await UninstallAsync(purge: false);
+        WriteUnderRoot(Path.Combine("bin", ".staging-dead", "archive.tar.gz"), "partial");
+        var other = Tmp.CreateDir("other-root");
+        Service.OwnerOverride = new(new OwnerReading.Root(other), new OwnerReading.Root(other));
+        Bundle.Requests.Clear();
+
+        var refused = await Assert.ThrowsAsync<LocalInstallFailure>(
+            () => Installer().InstallAsync(new(SingleUser: true, Confirmed: false), _events, CancellationToken.None));
+
+        await Assert.That(refused!.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(File.Exists(Path.Combine(Dir("bin"), ".staging-dead", "archive.tar.gz"))).IsTrue();
+        await Assert.That(Bundle.Requests).IsEmpty();
+    }
+
+    [Test]
+    public async Task Purge_forgets_caches_kept_under_any_loopback_spelling() {
+        var installed = await InstallAsync();
+        var alias = $"http://127.0.0.1:{installed.Port}";
+        ServerVersionStore.Set(alias, "1.2.3", Config, TimeProvider.System);
+
+        await UninstallAsync(purge: true);
+
+        await Assert.That(ServerVersionStore.Get(alias, Config)).IsNull();
+    }
+
+    [Test]
+    public async Task A_registry_entry_a_purge_could_not_recover_is_refused_before_the_journal() {
+        Root.EnsureCreated();
+        LocalStateFiles.PublishRegistry(Root, InstallRegistry.Empty.WithActive(new("not-hex", 9473, "http://localhost:9473", Version)));
+        WriteUnderRoot(Path.Combine("data", "PG_VERSION"), "18");
+
+        var refused = await Assert.ThrowsAsync<LocalLifecycleException>(() => UninstallAsync(purge: true));
+
+        await Assert.That(refused!.Message).Contains("installation_id");
+        await Assert.That(JournalAbsent()).IsTrue();
+        await Assert.That(Directory.Exists(Dir("data"))).IsTrue();
+        await Assert.That(Registry().Active?.Id).IsEqualTo("not-hex");
     }
 
     [Test]

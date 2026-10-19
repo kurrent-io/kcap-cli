@@ -20,7 +20,7 @@ static class LocalPurgeJournal {
     public static IReadOnlyDictionary<string, string> Build(LocalInstallation installation, string configDir, string watcherDir) =>
         new Dictionary<string, string>(StringComparer.Ordinal) {
             [PortKey]      = installation.Port.ToString(CultureInfo.InvariantCulture),
-            [ServerUrlKey] = installation.ServerUrl,
+            [ServerUrlKey] = $"http://localhost:{installation.Port.ToString(CultureInfo.InvariantCulture)}",
             [ConfigDirKey] = configDir,
             [WatcherDirKey] = watcherDir,
         };
