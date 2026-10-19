@@ -1,13 +1,17 @@
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
 using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia;
+using MarkView.Avalonia.Rendering.Inlines;
 using MarkView.Avalonia.SyntaxHighlighting;
 
 namespace Capacitor.App.Views;
@@ -68,6 +72,7 @@ public sealed class MarkdownView : ContentControl {
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
+        AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
@@ -77,6 +82,16 @@ public sealed class MarkdownView : ContentControl {
     internal void ExtendSelection(Point pointInView) {
         if (Content is MarkdownViewer) MarkViewSelection.Extend(_viewer, pointInView);
     }
+
+    void OnPointerMoved(object? sender, PointerEventArgs e) {
+        var link = FindHyperlinkAt(_viewer, e.GetPosition(_viewer));
+        var tip = link?.NavigateUri?.ToString();
+        if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
+            ToolTip.SetTip(_viewer, tip);
+    }
+
+    [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "FindHyperlinkAt")]
+    static extern MarkdownHyperlink? FindHyperlinkAt(MarkdownViewer viewer, Point point);
 
     public bool HasSelection => Content is SelectableTextBlock plain
         ? !string.IsNullOrEmpty(plain.SelectedText)
