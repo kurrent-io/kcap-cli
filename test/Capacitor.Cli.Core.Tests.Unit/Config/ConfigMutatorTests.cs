@@ -50,15 +50,22 @@ public class ConfigMutatorTests {
         await ConfigMutator.MutateAsync(Config.Root, c => c with { MachineId = "0" });
         var path = AppConfig.GetConfigPath(Config.Root);
 
+        using var reading = new ManualResetEventSlim();
         var writer = Task.Run(() => {
+            reading.Wait();
             for (var i = 1; i <= 200; i++) ConfigMutator.Mutate(Config.Root, c => c with { MachineId = $"{i}" });
         });
         var unreadable = 0;
-        while (!writer.IsCompleted)
+        var overlapping = 0;
+        do {
             if (!ConfigMutator.TryLoadPure(path, out _)) unreadable++;
+            overlapping++;
+            reading.Set();
+        } while (!writer.IsCompleted);
         await writer;
 
         await Assert.That(unreadable).IsEqualTo(0);
+        await Assert.That(overlapping).IsGreaterThan(1);
     }
 
     [Test]
