@@ -6,6 +6,8 @@ namespace Capacitor.App.Services.LocalSetup;
 /// by <see cref="LocalUpgradeOutcome.Settle"/>; unknown events are ignored.
 public sealed class LocalUpgradeProgress : ReactiveObject {
     long _bytes;
+    // Between `recovering` and `recovered` the lines are an earlier, interrupted run's.
+    bool _recovering;
     LocalUpgradePhase _phase;
     double? _downloadFraction;
     string? _from, _to, _switchedTo;
@@ -52,11 +54,17 @@ public sealed class LocalUpgradeProgress : ReactiveObject {
         var root = line.Root;
         switch (line.Event) {
             case "recovering":
-                Phase = LocalUpgradePhase.Recovering;
-                break;
+                _recovering = true;
+                Phase       = LocalUpgradePhase.Recovering;
+                return;
             case "recovered":
-                Phase = LocalUpgradePhase.Waiting;
-                break;
+                _recovering = false;
+                Phase       = LocalUpgradePhase.Waiting;
+                return;
+        }
+        if (_recovering && line.Event is not "failed") return;
+
+        switch (line.Event) {
             case "upgrade_planned":
                 From = root.Str("from_version") ?? From;
                 To   = root.Str("version") ?? To;

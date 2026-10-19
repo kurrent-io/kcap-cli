@@ -1,4 +1,4 @@
-using System.Reactive.Linq;
+using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
@@ -16,13 +16,20 @@ public class LocalStackViewModelTests {
         public readonly LocalUpgradeController Upgrade;
         public readonly LocalStackViewModel Vm;
         public int Reconnects;
+        public int Reads;
+        /// What the registry names; the view model reads it, never the run's target.
+        public string? Registry;
 
         public Harness(string? installed = "1.2.0") {
+            Registry = installed;
             Upgrade = new LocalUpgradeController(() => Cli, action => action());
-            Vm = new LocalStackViewModel(Observable.Return(installed), Status, Upgrade, () => {
+            Vm = new LocalStackViewModel(() => {
+                Reads++;
+                return Registry;
+            }, Status, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
-            }, CancellationToken.None);
+            }, CancellationToken.None, ImmediateScheduler.Instance);
         }
 
         public async Task RunAsync(int exitCode, params string[] lines) {
@@ -82,6 +89,7 @@ public class LocalStackViewModelTests {
     public async Task An_upgrade_moves_the_rail_to_the_new_version_and_reconnects() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
+            h.Registry = "1.3.0";
 
             await h.RunAsync(0, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
                 UpgradeScript.Upgraded("1.2.0", "1.3.0"));
@@ -124,6 +132,7 @@ public class LocalStackViewModelTests {
             foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap ");
 
             h.Cli.LocalUpgradeBehavior = UpgradeScript.Prints(0, UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+            h.Registry = "1.3.0";
             await h.Vm.TryAgainCommand.Execute().ToTask();
             await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -151,6 +160,7 @@ public class LocalStackViewModelTests {
     public async Task A_failure_after_the_switch_points_at_start_and_clears_once_the_server_is_back() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
+            h.Registry = "1.3.0";
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"), UpgradeScript.Failed("start_failed",
                 "Capacitor local 1.3.0 did not start: not ready. It stays selected and stopped. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.", true));
@@ -166,6 +176,37 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.BannerVisible).IsFalse();
             await Assert.That(h.Vm.StateText).IsEqualTo("running");
+        });
+    }
+
+    /// A failure the CLI marks as possibly switched, with no switch line, may have left the registry on
+    /// either version: the rail names what the registry says, not the run's target.
+    [Test]
+    public async Task A_switch_that_was_not_confirmed_keeps_the_registrys_version() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                UpgradeScript.Failed("commit_failed", "The switch to Capacitor local 1.3.0 could not be confirmed (disk full).", true));
+
+            await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
+        });
+    }
+
+    /// A version change made outside the app restarts the server, and the reconnect rereads it.
+    [Test]
+    public async Task A_reconnect_rereads_the_registry() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var before = h.Reads;
+
+            h.Registry = "1.4.0";
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(h.Vm.Version).IsEqualTo("1.4.0");
+            await Assert.That(h.Reads).IsEqualTo(before + 1);
         });
     }
 

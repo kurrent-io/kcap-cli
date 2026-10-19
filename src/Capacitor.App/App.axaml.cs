@@ -343,13 +343,14 @@ public partial class App : Application {
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane);
+                _lifecycle, _lane, _localUpgrade);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
             _service = null;
             _lifecycle = null;
             _lane = null;
+            _localUpgrade = null;
             _shimOffer = null; // no disposal of its own (see field comment) — just drop the reference
             _consentFlip = null; // same — no disposal of its own
             _tray = null;
@@ -694,8 +695,7 @@ public partial class App : Application {
             busy: upgrading);
         _localServer = localServer;
         var localStack = localUpgrade is null ? null : new LocalStackViewModel(
-            Observable.Start(() => LocalEndpoints.Read(_localRoot).Active?.Version, ReactiveUI.Reactive.RxSchedulers.TaskpoolScheduler),
-            serverLane.Status, localUpgrade, () => serverLane.RestartAsync(), _shutdown.Token);
+            () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, () => serverLane.RestartAsync(), _shutdown.Token);
         _localStack = localStack;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
@@ -1294,7 +1294,7 @@ public partial class App : Application {
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
-            DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null) {
+            DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null) {
         // The dependent goes first (it subscribes to service's streams) — same ordering rule as
         // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
         // token and waits out any mutation it started; that wait is unbounded here on purpose — a
@@ -1324,6 +1324,12 @@ public partial class App : Application {
             } catch (Exception disposeEx) {
                 Console.Error.WriteLine($"kcap app failed to dispose the daemon mutation lane during startup-failure cleanup: {disposeEx}");
             }
+        }
+        // The error window's close shuts down directly, so a running upgrade settles here or not at
+        // all; the cancel first keeps one whose journal read is still in flight from spawning.
+        if (upgrade is not null) {
+            shutdown.Cancel();
+            await upgrade.SettleAsync();
         }
         // Same rule, same reason, for whatever the success path had already built when it threw
         // (tray icon first): the error window's close handler force-shuts-down, so this is their

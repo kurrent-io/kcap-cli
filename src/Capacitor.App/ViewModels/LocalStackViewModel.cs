@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -27,28 +28,32 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     readonly LocalUpgradeController _upgrade;
     readonly Func<Task> _reconnect;
+    readonly Func<string?> _readVersion;
+    readonly IScheduler _readScheduler;
     readonly CompositeDisposable _disposables = new();
-    string? _installed, _upgradedTo;
+    readonly SerialDisposable _read = new();
+    string? _installed;
     ServerLaneState? _lane;
     LocalUpgradeOutcome? _shown;
 
+    /// <param name="readVersion">The version the installation registry names; a disk read, run on
+    /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
     public LocalStackViewModel(
-            IObservable<string?> installedVersion, IObservable<ServerLaneStatus> status, LocalUpgradeController upgrade,
-            Func<Task> reconnect, CancellationToken shutdown) {
-        _upgrade   = upgrade;
-        _reconnect = reconnect;
+            Func<string?> readVersion, IObservable<ServerLaneStatus> status, LocalUpgradeController upgrade,
+            Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
+        _upgrade       = upgrade;
+        _reconnect     = reconnect;
+        _readVersion   = readVersion;
+        _readScheduler = readScheduler ?? RxSchedulers.TaskpoolScheduler;
+        _read.DisposeWith(_disposables);
 
-        installedVersion
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(v => {
-                _installed = v;
-                Refresh();
-            })
-            .DisposeWith(_disposables);
+        ReadVersion();
 
         status
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(s => {
+                // A version changed outside the app restarts the server, so a reconnect rereads it.
+                if (s.State == ServerLaneState.Connected && _lane is not null and not ServerLaneState.Connected) ReadVersion();
                 _lane = s.State;
                 if (s.State == ServerLaneState.Connected && _shown is LocalUpgradeOutcome.Failed { Switched: true }) _shown = null;
                 Refresh();
@@ -75,7 +80,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     public bool Upgrading => _upgrade.Running;
 
-    public string? Version => _upgradedTo ?? (Upgrading ? Progress.SwitchedTo : null) ?? _installed;
+    public string? Version => (Upgrading ? Progress.SwitchedTo : null) ?? _installed;
 
     public string? StateText =>
         Upgrading ? "upgrading"
@@ -151,25 +156,21 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> DismissCommand { get; }
 
     void OnSettled(LocalUpgradeOutcome outcome) {
-        switch (outcome) {
-            case LocalUpgradeOutcome.Upgraded upgraded:
-                _upgradedTo = upgraded.To ?? Progress.To;
-                _shown      = null;
-                _ = ReconnectAsync();
-                break;
-            case LocalUpgradeOutcome.Failed { Switched: true } failed:
-                _upgradedTo = Progress.SwitchedTo ?? failed.To;
-                _shown      = outcome;
-                break;
-            case LocalUpgradeOutcome.Failed or LocalUpgradeOutcome.NotPublished:
-                _shown = outcome;
-                break;
-            default:
-                _shown = null;
-                break;
-        }
+        // A confirmed switch holds until the registry read lands.
+        _installed = Progress.SwitchedTo ?? _installed;
+        _shown = outcome is LocalUpgradeOutcome.Failed or LocalUpgradeOutcome.NotPublished ? outcome : null;
+        if (outcome is LocalUpgradeOutcome.Upgraded) _ = ReconnectAsync();
+        ReadVersion();
         Refresh();
     }
+
+    void ReadVersion() =>
+        _read.Disposable = Observable.Start(_readVersion, _readScheduler)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(v => {
+                _installed = v;
+                Refresh();
+            }, ex => Console.Error.WriteLine($"kcap app: reading the local installation's version failed: {ex.Message}"));
 
     // The lane would find the new server on its own backoff; this skips the wait.
     async Task ReconnectAsync() {

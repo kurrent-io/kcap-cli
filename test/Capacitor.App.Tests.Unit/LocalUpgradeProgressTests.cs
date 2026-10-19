@@ -88,6 +88,21 @@ public class LocalUpgradeProgressTests {
         await Assert.That(p.From).IsEqualTo("1.3.0");
     }
 
+    /// A resumed upgrade's switch is the earlier run's, not this one's: counting it would turn a failure
+    /// before this run's own switch into one after it.
+    [Test]
+    public async Task A_switch_inside_a_recovery_is_not_this_runs_switch() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"recovering\",\"operation\":\"upgrade\",\"phase\":\"switching\"}",
+            UpgradeScript.Switched("1.2.5"),
+            "{\"v\":1,\"event\":\"starting\",\"unit\":\"io.kurrent.kcap.local\"}",
+            "{\"v\":1,\"event\":\"recovered\",\"operation\":\"upgrade\",\"phase\":\"switching\"}",
+            UpgradeScript.Planned("1.2.5", "1.3.0"));
+
+        await Assert.That(p.SwitchedTo).IsNull();
+        await Assert.That(p.Phase).IsEqualTo(LocalUpgradePhase.Waiting);
+    }
+
     [Test]
     public async Task A_recovery_shows_until_it_is_done() {
         var recovering = Run("{\"v\":1,\"event\":\"recovering\",\"operation\":\"upgrade\",\"phase\":\"starting\"}");

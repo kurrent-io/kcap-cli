@@ -39,7 +39,7 @@ public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> po
         if (!updateRelaunch || !committedLocal) return false;
         // Resumes on the caller's context: StartAsync changes bound properties.
         try {
-            if (await Task.Run(setupPending, ct)) return false;
+            if (await Task.Run(setupPending, ct) || ct.IsCancellationRequested) return false;
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             return false;
         }
@@ -48,9 +48,10 @@ public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> po
         return true;
     }
 
-    /// Spawns the child and returns; a no-op while a run is in flight.
+    /// Spawns the child and returns; a no-op while a run is in flight or once <paramref name="ct"/>, the
+    /// app's shutdown, is cancelled: a quit's settle may already have found nothing to wait for.
     public Task StartAsync(CancellationToken ct) {
-        if (Running) return Task.CompletedTask;
+        if (Running || ct.IsCancellationRequested) return Task.CompletedTask;
 
         var progress  = new LocalUpgradeProgress();
         var interrupt = new CancellationTokenSource();

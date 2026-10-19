@@ -170,6 +170,35 @@ public class LocalUpgradeControllerTests {
         await Assert.That(cli.LocalUpgradeCallCount).IsEqualTo(0);
     }
 
+    /// A quit that lands while the journal is read must not leave a child spawned after the quit's
+    /// settle found nothing to wait for.
+    [Test]
+    public async Task A_shutdown_during_the_journal_read_spawns_nothing() {
+        var cli = new FakeKcapCli();
+        var controller = Controller(cli);
+        using var shutdown = new CancellationTokenSource();
+
+        var started = await controller.StartAfterUpdateAsync(true, true, () => {
+            shutdown.Cancel();
+            return false;
+        }, shutdown.Token);
+
+        await Assert.That(started).IsFalse();
+        await Assert.That(cli.LocalUpgradeCallCount).IsEqualTo(0);
+        await Assert.That(controller.Running).IsFalse();
+    }
+
+    [Test]
+    public async Task Start_after_shutdown_spawns_nothing() {
+        var cli = new FakeKcapCli();
+        var controller = Controller(cli);
+
+        await controller.StartAsync(new CancellationToken(canceled: true));
+
+        await Assert.That(cli.LocalUpgradeCallCount).IsEqualTo(0);
+        await Assert.That(controller.Running).IsFalse();
+    }
+
     [Test]
     public async Task An_update_relaunch_on_a_committed_local_machine_upgrades() {
         var cli = new FakeKcapCli();
