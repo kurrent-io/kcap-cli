@@ -631,6 +631,58 @@ public class KcapCliTests {
     }
 
     [Test]
+    public async Task SetupLocalAsync_builds_argv_env_and_interrupt_with_no_timeout() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var interrupt = new CancellationTokenSource();
+
+        await cli.SetupLocalAsync(_ => { }, interrupt.Token, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_with_null_CliPath_returns_a_synthesized_no_cli_result() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.SetupLocalAsync(_ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(-1);
+        await Assert.That(result.Tail).IsEquivalentTo(
+            [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    public async Task LocalStartAsync_builds_argv_env_and_the_eleven_minute_bound() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.LocalStartAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(["local", "start"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromMinutes(11));
+    }
+
+    [Test]
+    public async Task LocalStartAsync_with_null_CliPath_returns_127_without_calling_the_runner() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.LocalStartAsync(CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(127);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
     [Arguments("\"loaded_spawn_type\":\"adaptive\",", "adaptive")]
     [Arguments("\"loaded_spawn_type\":null,", null)]
     [Arguments("", null)]
