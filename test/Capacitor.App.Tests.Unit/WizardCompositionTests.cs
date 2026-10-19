@@ -633,7 +633,8 @@ public class WizardCompositionLocalPathTests {
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
             exit.SetResult(new StreamingResult(0, false, []));
             await WizardFixtures.WaitUntilAsync(
-                () => graph.Install.Outcome is LocalInstallOutcome.Installed, what: "the install to settle");
+                () => graph.Install.Outcome is LocalInstallOutcome.Installed && !graph.ViewModel.Navigating,
+                what: "the install to settle and its advance to land");
 
             return (before, during, await finishLater.CanExecute.FirstAsync());
         }).WaitAsync(TimeSpan.FromSeconds(30));
