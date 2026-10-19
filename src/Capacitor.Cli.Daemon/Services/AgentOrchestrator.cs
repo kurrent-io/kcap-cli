@@ -3543,7 +3543,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // agent and reported it; the session ends only after that report.
                 try { await agent.StopSettled.Task.WaitAsync(StopSettleWait, _time); } catch (TimeoutException) { /* report what is known */ }
 
-                await SendOwedStopReportAsync(agent);
+                SendOwedStopReport(agent);
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -4190,7 +4190,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // child is usually not reaped yet; poll briefly before calling the stop a failure.
             if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(2));
 
-            await SendOwedStopReportAsync(agent);
+            SendOwedStopReport(agent);
 
             return agent.Runtime.HasExited;
         } catch (Exception ex) {
@@ -4209,31 +4209,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>The report a stop owes the server, sent at most once: Completed and a user stop when the
     /// agent is confirmed gone, Failed when it is not, since a live agent must never read as stopped. A
     /// published launch-failure verdict has already reported Failed, so only the stop event follows it.
-    /// The finalizer sends it only when a stop stalled past its wait. Never throws.</summary>
-    async Task SendOwedStopReportAsync(AgentInstance agent) {
+    /// The finalizer sends it only when a stop stalled past its wait. The sends are started, not awaited:
+    /// a stop must not wait on a hub that is reconnecting, and starting them before the stop settles is
+    /// what orders them ahead of the session's end.</summary>
+    void SendOwedStopReport(AgentInstance agent) {
         if (Interlocked.Exchange(ref agent.StopReportOwed, 0) == 0) return;
 
         var gone = agent.Runtime.HasExited;
         if (!gone) {
             LogStopUnconfirmed(agent.Id);
             SetAgentStatus(agent, "Failed");
+            TrySendAgentStatus(agent, "Failed", null, out _);
+        } else if (!VerdictForbidsNonFailureStatus(agent)) {
+            TrySendAgentStatus(agent, "Completed", null, out _);
         }
 
-        try {
-            if (!gone) {
-                if (TrySendAgentStatus(agent, "Failed", null, out var failed)) await failed;
-            } else if (!VerdictForbidsNonFailureStatus(agent) && TrySendAgentStatus(agent, "Completed", null, out var completed)) {
-                await completed;
-            }
-        } catch (Exception ex) {
-            LogCleanupStepFailed(ex, "reporting the stop", agent.Id);
-        }
-
-        try {
-            await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(gone ? "user" : "failed", null));
-        } catch (Exception ex) {
-            LogCleanupStepFailed(ex, "recording the stop", agent.Id);
-        }
+        _ = _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(gone ? "user" : "failed", null));
     }
 
     /// <summary>Observes an abandoned graceful-stop send (see <see cref="StopAgentCoreAsync"/>) so its
