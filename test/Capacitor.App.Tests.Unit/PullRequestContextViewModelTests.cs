@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
@@ -111,6 +112,34 @@ public class PullRequestContextViewModelTests {
             await Assert.That(h.Vm.IsReading).IsFalse();
         } finally {
             await h.Dispose();
+        }
+    });
+
+    /// A card rebuilt for a session it already showed has its list and overview before any read
+    /// lands, and still lists again.
+    [Test]
+    public Task A_reopened_session_shows_its_last_card_while_it_reads_again() => RunOnUiAsync(async () => {
+        var snapshots = new LastReads<PullRequestSnapshot>();
+        var first = new Harness(snapshots: snapshots);
+        try {
+            first.Push();
+            await first.Show();
+        } finally {
+            await first.Dispose();
+        }
+
+        var second = new Harness(snapshots: snapshots);
+        try {
+            second.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            second.Push();
+            second.Vm.SetForeground(true);
+
+            await Assert.That(second.Vm.CanReveal).IsTrue();
+            await Assert.That(second.Vm.HasListed).IsTrue();
+            await WaitUntilAsync(() => second.Source.Lists == 1, what: "the list read again");
+            second.Source.ListGate.SetResult();
+        } finally {
+            await second.Dispose();
         }
     });
 
@@ -1019,10 +1048,12 @@ public class PullRequestContextViewModelTests {
         internal PullRequestContextViewModel Vm { get; }
         internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
-        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null) {
+        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null,
+                LastReads<PullRequestSnapshot>? snapshots = null) {
             Source = new(Time);
             Clock = new(Time);
-            Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch);
+            Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch,
+                snapshots: snapshots);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }

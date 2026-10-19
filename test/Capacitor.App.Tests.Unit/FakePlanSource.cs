@@ -23,6 +23,10 @@ sealed class FakePlanSource : IPlanSource {
         return gate;
     }
 
+    /// What Cached answers, per session; a test fills it to stand in for an earlier pane's read.
+    public readonly Dictionary<string, SessionPlansRead> Last = new(StringComparer.Ordinal);
+    public SessionPlansRead? Cached(string sessionId) => Last.GetValueOrDefault(sessionId);
+
     public async Task<SessionPlansRead> ReadAsync(string sessionId, CancellationToken ct) {
         Requested.Add(sessionId);
         if (_gates.Count > 0) return await _gates.Dequeue().Task.WaitAsync(ct);

@@ -629,7 +629,10 @@ public partial class App : Application {
         // than coalesces, so RefreshAfterReauthAsync deliberately does not also await it. The model
         // catalog reloads here too: the endpoint needs auth, so a signed-out start left it empty and
         // only a successful sign-in can fill it.
+        // Before any pane's own sign-in handler, which runs on the UI thread after this.
+        var pullRequestSnapshots = new LastReads<PullRequestSnapshot>();
         serverClients.SignInCompleted.Subscribe(signedIn => {
+            pullRequestSnapshots.Clear();
             _ = serverLane.RestartAsync();
             _ = modelCatalog.LoadAsync(_shutdown.Token);
             _ = reportCliSetup(_shutdown.Token);
@@ -669,6 +672,7 @@ public partial class App : Application {
         var workspaceOpener = new AgentLinkOpener(opener, profiles?.Resolution.ServerUrl,
             agentId => _coordinator?.Window?.DataContext is MainWindowViewModel vm && vm.OpenSession(agentId));
         var drafts = new ComposerDrafts();
+        var transcripts = new LocalTranscripts();
         WorkspaceViewModel BuildWorkspace(string agentId) => new(
             agentId, service, actions, attachFactory, () => new XtermTerminalSurface(80, 24, PtyDumpPath), _time, workspaceOpener, permissions,
             workContext, ops, uploader,
@@ -676,7 +680,8 @@ public partial class App : Application {
             linkGitHub: linkGitHub,
             access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
             commands: commands, drafts: drafts, inputSending: attention.ReplySending,
-            resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id));
+            resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
+            pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -685,7 +690,8 @@ public partial class App : Application {
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
-                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending)
+                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
+                    pullRequestSnapshots: pullRequestSnapshots)
                 : null;
 
         _coordinator = new MainWindowCoordinator(

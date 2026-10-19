@@ -25,6 +25,10 @@ sealed class FakePlanArtifactSource : IPlanArtifactSource {
         return gate;
     }
 
+    /// What Cached answers, per session; a test fills it to stand in for an earlier pane's read.
+    public readonly Dictionary<string, PlanArtifactsRead> Last = new(StringComparer.Ordinal);
+    public PlanArtifactsRead? Cached(string sessionId) => Last.GetValueOrDefault(sessionId);
+
     public async Task<PlanArtifactsRead> ReadAsync(string sessionId, CancellationToken ct) {
         Requested.Add(sessionId);
         if (_gates.Count > 0) {

@@ -208,7 +208,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
-            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null) {
+            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
+            LastReads<PullRequestSnapshot>? pullRequestSnapshots = null) {
         _drafts = drafts;
         _row = row;
         _opener = opener;
@@ -234,7 +235,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
-            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository);
+            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository, snapshots: pullRequestSnapshots);
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
                 .Subscribe(state => {

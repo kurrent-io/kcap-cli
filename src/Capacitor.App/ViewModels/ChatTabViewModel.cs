@@ -560,10 +560,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// The dedup is per pane, not per feed: a projection failure that survives a transcript switch
     /// would otherwise be logged again by every feed the pane opens.
-    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time) {
+    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time, LocalTranscripts? transcripts) {
         var logged = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        return path => new LocalTranscriptFeed(path, projection, agentId, time,
-            reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); });
+        Action<string> log = reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); };
+        return path => transcripts?.Open(path, projection, agentId, time, log) ?? new LocalTranscriptFeed(path, projection, agentId, time, log);
     }
 
     /// Test-only seam: the read in flight, or the last one started. A switch that loses the
@@ -579,9 +579,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null)
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
-               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
+               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
                drafts: drafts) { }
 

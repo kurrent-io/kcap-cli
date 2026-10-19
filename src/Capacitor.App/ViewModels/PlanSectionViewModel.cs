@@ -61,7 +61,8 @@ public sealed class PlanSectionViewModel : ReactiveObject {
             },
             Apply,
             "plan section",
-            onSettled: RaiseLoading);
+            onSettled: RaiseLoading,
+            cached: id => _source?.Cached(id));
         _activity = activity;
         ToggleCommand = ReactiveCommand.Create(() => { IsExpanded = !IsExpanded; });
         _settle = time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(Refresh), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);

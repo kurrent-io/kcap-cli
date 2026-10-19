@@ -8,6 +8,8 @@ namespace Capacitor.App.Services;
 
 public sealed class ServerPlanArtifactSource : IPlanArtifactSource, IAsyncDisposable {
     readonly AuthenticatedServerReads<PlanArtifactsClient> _reads;
+    // Fewer than the other sources keep: these reads carry the document bodies.
+    readonly LastReads<PlanArtifactsRead> _last = new(capacity: 16);
 
     public ServerPlanArtifactSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
             MachineAuth machine, AuthenticatedServerReads<PlanArtifactsClient>.ClientFactory? factory = null,
@@ -15,10 +17,16 @@ public sealed class ServerPlanArtifactSource : IPlanArtifactSource, IAsyncDispos
         _reads = new(config, profiles, env, machine, (http, url) => new PlanArtifactsClient(http, url), factory, localRoot: localRoot);
     }
 
-    public Task<PlanArtifactsRead> ReadAsync(string sessionId, CancellationToken ct) => _reads.ReadAsync(
+    public Task<PlanArtifactsRead> ReadAsync(string sessionId, CancellationToken ct) => _last.RecordAsync(sessionId, () => _reads.ReadAsync(
         (channel, token) => channel.ReadAsync(sessionId, token), read => read.Kind == SessionPlansReadKind.SignedOut,
-        PlanArtifactsRead.Of(SessionPlansReadKind.SignedOut), PlanArtifactsRead.Of(SessionPlansReadKind.Unreachable), ct);
+        PlanArtifactsRead.Of(SessionPlansReadKind.SignedOut), PlanArtifactsRead.Of(SessionPlansReadKind.Unreachable), ct),
+        read => read.Kind switch { SessionPlansReadKind.Ready => true, SessionPlansReadKind.Unreachable => null, _ => false });
+
+    public PlanArtifactsRead? Cached(string sessionId) => _last.Get(sessionId);
 
     public ValueTask DisposeAsync() => _reads.DisposeAsync();
-    public void InvalidateAuthentication() => _reads.Invalidate();
+    public void InvalidateAuthentication() {
+        _last.Clear();
+        _reads.Invalidate();
+    }
 }

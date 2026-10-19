@@ -18,6 +18,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     static readonly TimeSpan SnapshotGrace = TimeSpan.FromMinutes(5);
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
+    readonly LastReads<PullRequestSnapshot>? _snapshots;
     readonly Func<string?, string?> _readBranch;
     readonly bool _hasCustomBranchReader;
     readonly TimeProvider _time;
@@ -134,8 +135,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
-        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null) {
+        Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null,
+        LastReads<PullRequestSnapshot>? snapshots = null) {
         _source = source;
+        _snapshots = snapshots;
         _readBranch = readBranch ?? GitRepository.CurrentBranch;
         _hasCustomBranchReader = readBranch is not null;
         _time = time;
@@ -174,6 +177,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             // so only BorrowedFrom still has the branch live discovery matches.
             _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
+            var snapshot = _snapshots?.Get(id);
             CancelReads();
             if (_session is not null) _requestedSubject = null;
             _session = id;
@@ -193,7 +197,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
-            SetNotice("Loading pull requests…");
+            SetNotice(snapshot is null ? "Loading pull requests…" : "");
+            if (snapshot is not null) Seed(snapshot);
             RequestRefresh();
         }).DisposeWith(_subscriptions);
         signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {

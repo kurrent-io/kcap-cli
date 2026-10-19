@@ -83,6 +83,7 @@ public sealed partial class PullRequestContextViewModel {
                 _sessionItems.Clear();
                 _sessionItems.AddRange(links.Data.Items);
                 _hasListed = true;
+                _snapshots?.Set(session, new([.. links.Data.Items], _snapshots.Get(session)?.Overview));
                 ApplyChoices(listed: true);
             };
         }, () => _refreshing = false);
@@ -101,6 +102,7 @@ public sealed partial class PullRequestContextViewModel {
                     var headChanged = _overview?.HeadSha is { } old && old != read.Data.HeadSha;
                     var rollupMoved = _overview?.Checks?.Rollup != read.Data.Checks?.Rollup;
                     _overview = read.Data; _overviewRead = read;
+                    _snapshots?.Set(session, new([.. _sessionItems], read));
                     _notice = "";
                     if (Learn(choice.Subject, read.Data.Lifecycle) && ReconsiderDefault()) return;
                     // Check rows are a snapshot while the summary tracks the overview: reload them while
@@ -207,14 +209,28 @@ public sealed partial class PullRequestContextViewModel {
         RememberRetry(read);
         var reason = Reason(read);
         // Access loss invalidates peer reads too; a late page must not reopen protected content.
-        if (read.Kind == PullRequestReadKind.Restart && read.Reason is "identity_changed" or "integration_changed" || read.Reason == "no_reader") { CancelReads(); ClearProtected(); }
+        if (read.Kind == PullRequestReadKind.Restart && read.Reason is "identity_changed" or "integration_changed" || read.Reason == "no_reader") { CancelReads(); ClearProtected(); ForgetOverview(); }
         else if (read.AccessFailure == "transient" || read.Kind is PullRequestReadKind.Ready or PullRequestReadKind.Stale
             || read.AccessFailure is null && read.Reason is "timeout" or "provider_unavailable" or "rate_limited" or "budget_exhausted" or "capacity_exhausted") {
             EnterGrace(reason);
             if (_grace) return;
         }
-        else { CancelReads(); ClearProtected(); }
+        else { CancelReads(); ClearProtected(); ForgetOverview(); }
         SetNotice(reason);
+    }
+    /// A session reopened shows its last list at once, and its overview only while that read's
+    /// access still stands; the refresh that follows replaces both.
+    void Seed(PullRequestSnapshot snapshot) {
+        _sessionItems.AddRange(snapshot.Links);
+        _hasListed = true;
+        ApplyChoices(listed: true);
+        if (snapshot.Overview is not { Data: { } overview } read || !AcceptAccess(read)) return;
+        _overview = overview; _overviewRead = read;
+        Notify();
+    }
+    void ForgetOverview() {
+        if (_session is { } session && _snapshots?.Get(session) is { Overview: not null } snapshot)
+            _snapshots.Set(session, snapshot with { Overview = null });
     }
     void ApplyChoices(bool listed) {
         if (_selected is null) ApplyRequestedSubject();
@@ -280,12 +296,14 @@ public sealed partial class PullRequestContextViewModel {
         return true;
     }
     void ForgetChoices() {
+        if (_session is { } session) _snapshots?.Forget(session);
         if (_explicitSelection && _selected is not null) _requestedSubject = _selected.Subject;
         CancelReads(); _choices.Clear(); _sessionItems.Clear(); _selected = null;
     }
     void FailProtocol(string? reader) {
         CancelReads();
         ClearProtected();
+        ForgetOverview();
         SetNotice(reader is null ? "The server returned an inconsistent PR response. Retry after updating the server and app."
             : $"{reader} returned an inconsistent PR response. Refresh to reload it.");
     }
