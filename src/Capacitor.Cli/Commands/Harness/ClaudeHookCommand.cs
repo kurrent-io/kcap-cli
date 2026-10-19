@@ -236,7 +236,8 @@ public sealed class ClaudeHookCommand(
         try { body = await stdin.ReadToEndAsync(); } catch { return 0; }
 
         // Minimal parse (no auth/git) so we can spool AND start the watcher even if client creation hangs.
-        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null;
+        string? command = null, sessionId = null, transcriptPath = null, cwd = null, source = null, agentId = null, toolUseId = null, toolName = null;
+        JsonNode? toolInput = null;
         try {
             var node = JsonNode.Parse(body);
             var ev   = node?["hook_event_name"]?.GetValue<string>();
@@ -247,11 +248,15 @@ public sealed class ClaudeHookCommand(
             source         = node?["source"]?.GetValue<string>();
             agentId        = node?["agent_id"]?.GetValue<string>();
             toolUseId      = node?["tool_use_id"]?.GetValue<string>();
+            toolName       = node?["tool_name"]?.GetValue<string>();
+            toolInput      = node?["tool_input"]?.DeepClone();
 
             // Ahead of both arms below, since each claims the new session before it posts.
             if (node is JsonObject hook && PreviousSession.Stamp(hook, config, () => ProcessHelpers.GetCodingAgentPid("claude", allowFallback: false)))
                 body = hook.ToJsonString();
         } catch { }
+
+        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
 
         var budget = clock.Budget(Ceiling(command));
 
@@ -266,11 +271,13 @@ public sealed class ClaudeHookCommand(
         // Retiring a held prompt goes first: it and the heartbeat below share this hook's budget
         // and each post caps at 1s, so a wedged bridge must not let the heartbeat starve the notice
         // that frees a prompt the daemon still holds — a stale subagent count instead recovers by
-        // its own expiry. A finished tool names itself; a finished turn covers a terminal deny,
+        // its own expiry. A finished tool names itself, with its name and input as well, since
+        // Claude's permission prompt carries no tool id; a finished turn covers a terminal deny,
         // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
         // ending says nothing about a background subagent's.
         if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId: null, budget.Remaining);
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget.Remaining, toolName, toolInput,
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "stop" && agentId is null)
             await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining);
@@ -527,6 +534,8 @@ public sealed class ClaudeHookCommand(
         // Normalize Claude's PascalCase event names to the kebab-case server
         // route convention (`SessionStart` → `session-start`).
         var command = ToKebab(eventName);
+
+        if (command == "session-end" && ResumeEndSuppression.ShouldSuppress(hosted)) return 0;
 
         // Taken out here, where the event is finally known. Its own rather than the caller's: this is
         // an entry point in its own right, and a budget is nothing but a ceiling read off the shared

@@ -680,6 +680,14 @@ jobs:
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      # The same rule picks the npm dist-tag, so GitHub and npm agree on what a prerelease is.
+      - name: Derive release channel
+        id: disttag
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: echo "TAG=$(bash scripts/npm-dist-tag.sh "$VERSION")" >> "$GITHUB_OUTPUT"
+
       - name: Download all release archives
         uses: actions/download-artifact@v8
         with:
@@ -722,6 +730,7 @@ jobs:
         with:
           files: release-artifacts/*
           generate_release_notes: true
+          prerelease: ${{ steps.disttag.outputs.TAG == 'beta' }}
 
   # The script installer's manifests, served by kcap-web from the bucket's cli/ prefix. The
   # archives stay on the GitHub Release: the checksum and the bytes it covers come from two hosts.
@@ -1204,11 +1213,16 @@ jobs:
           chmod +x fetch.sh
           bash scripts/verify-desktop-immutables.sh releases "${{ steps.version.outputs.VERSION }}" ./fetch.sh win-x64
 
+      # vpk uploads every asset the manifest lists, and the build renamed the installer it lists;
+      # the next step publishes the renamed one.
       - name: Upload the feed and packages
-        run: >
-          vpk upload s3 --channel win-x64 --outputDir releases --endpoint "${{ secrets.R2_ENDPOINT }}"
-          --bucket "${{ secrets.R2_BUCKET }}" --prefix desktop/win-x64
-          --keyId "${{ secrets.R2_ACCESS_KEY_ID }}" --secret "${{ secrets.R2_SECRET_ACCESS_KEY }}"
+        run: |
+          set -euo pipefail
+          jq '[.[] | select(.Type != "Installer")]' releases/assets.win-x64.json > assets.tmp
+          mv assets.tmp releases/assets.win-x64.json
+          vpk upload s3 --channel win-x64 --outputDir releases --endpoint "${{ secrets.R2_ENDPOINT }}" \
+            --bucket "${{ secrets.R2_BUCKET }}" --prefix desktop/win-x64 \
+            --keyId "${{ secrets.R2_ACCESS_KEY_ID }}" --secret "${{ secrets.R2_SECRET_ACCESS_KEY }}"
 
       - name: Upload the installer and promote aliases
         shell: bash

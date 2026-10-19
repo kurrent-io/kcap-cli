@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
@@ -7,8 +8,13 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class PermissionPromptBrokerTests {
     static readonly TimeSpan Bounded = TimeSpan.FromSeconds(10);
 
-    static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? toolUseId = null) =>
-        new(id, agent, "s1", "claude", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"), toolUseId);
+    static PermissionPendingDto Dto(string id = "r1", string agent = "a1", string? toolUseId = null, string? input = null) =>
+        new(id, agent, "s1", "claude", "Bash", input is null ? null : Json(input), null, false, false, DateTimeOffset.UtcNow.ToString("O"), toolUseId);
+
+    static JsonElement Json(string json) {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
 
     static PermissionDecision Allow => new("allow", null, null);
 
@@ -170,6 +176,227 @@ public class PermissionPromptBrokerTests {
         await Assert.That(s2.IsCompleted).IsFalse();
         await Assert.That(broker.PendingSnapshot().Single().RequestId).IsEqualTo("r2");
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1")).IsFalse();
+    }
+
+    /// Claude's prompt carries no tool id, so a finished call matches it by tool name and input,
+    /// whatever order the input's properties arrive in. One call retires one prompt, the oldest.
+    [Test]
+    public async Task A_finished_call_retires_the_oldest_id_less_prompt_with_its_name_and_input() {
+        var broker = new PermissionPromptBroker();
+        var first  = broker.Register(Dto("r1", input: """{"command":"ls","description":"list"}"""));
+        var second = broker.Register(Dto("r2", input: """{"command":"ls","description":"list"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_9", toolName: "Bash",
+            toolInput: Json("""{"description":"list","command":"ls"}"""))).IsTrue();
+
+        await Assert.That((await WaitBounded(first, "oldest withdrawn")).Source).IsEqualTo("tool_settled");
+        await Assert.That(second.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_10", toolName: "Bash",
+            toolInput: Json("""{"command":"ls","description":"list"}"""))).IsTrue();
+        await Assert.That(second.IsCompleted).IsTrue();
+    }
+
+    /// A prompt allowed in the app before its call finished is owed that call's notice, so the
+    /// notice does not retire an identical prompt that is still waiting; the next call does.
+    [Test]
+    public async Task A_call_owed_to_an_allowed_prompt_retires_nothing() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        var waiting = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(waiting.IsCompleted).IsTrue();
+    }
+
+    /// An allowed prompt that carried its tool id is owed that call too, so the call's notice cannot
+    /// fall through to an identical id-less prompt still waiting.
+    [Test]
+    public async Task A_call_owed_by_id_does_not_fall_through_to_an_id_less_prompt() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", toolUseId: "toolu_1", input: """{"command":"ls"}"""));
+        var waiting = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
+    /// Only Claude's hook reports a finished call with its name and input, so another vendor's
+    /// allowed prompt is owed nothing and a later identical prompt is still retired.
+    [Test]
+    public async Task Another_vendors_allowed_prompt_owes_no_call() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}""") with { Vendor = "codex" });
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(later.IsCompleted).IsTrue();
+    }
+
+    /// A prompt registered after the hook sent its notice is a later call's, whatever its name and
+    /// input, so a notice that arrives late cannot retire it.
+    [Test]
+    public async Task A_notice_retires_only_a_prompt_registered_before_it_was_sent() {
+        var broker = new PermissionPromptBroker();
+        var held = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        var input = Json("""{"command":"ls"}""");
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(-1))).IsFalse();
+        await Assert.That(held.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsTrue();
+    }
+
+    /// A call the agent's policy allowed raises no prompt, but is owed its notice all the same, so
+    /// that notice does not retire an identical prompt still waiting for the user.
+    [Test]
+    public async Task A_policy_allowed_call_is_owed_its_notice() {
+        var broker = new PermissionPromptBroker();
+        var waiting = broker.Register(Dto("waiting", input: """{"command":"ls"}"""));
+        broker.OweCall(Dto("policy", input: """{"command":"ls"}"""), subagentId: null);
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_p", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
+    /// An agent that has exited is owed nothing: its id is never reused, so a record for it could
+    /// only sit there.
+    [Test]
+    public async Task An_exited_agent_is_owed_nothing() {
+        var broker = new PermissionPromptBroker();
+        broker.WithdrawForAgent("a2");
+        broker.OweCall(Dto("late", agent: "a2", input: """{"command":"ls"}"""), subagentId: null);
+        var other = broker.Register(Dto("other", agent: "a1", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
+        await Assert.That(other.IsCompleted).IsFalse();
+    }
+
+    /// A late notice cannot spend a call owed to a prompt registered after it was sent, so that
+    /// prompt's own notice is still the one that consumes it.
+    [Test]
+    public async Task A_late_notice_does_not_spend_a_later_prompts_owed_call() {
+        var broker = new PermissionPromptBroker();
+        var input = Json("""{"command":"ls"}""");
+        _ = broker.Register(Dto("allowed", input: """{"command":"ls"}"""));
+        broker.TrySettle("allowed", Allow, "allow", "app");
+        var waiting = broker.Register(Dto("waiting", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_old", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(-1))).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_own", toolName: "Bash", toolInput: input,
+            sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
+    /// A turn that outgrows the bound on what it is owed stops matching by name and input until it
+    /// ends, rather than forgetting an owed call and retiring the wrong prompt.
+    [Test]
+    public async Task A_turn_past_its_bound_matches_nothing_by_name_and_input() {
+        var broker = new PermissionPromptBroker();
+        for (var i = 0; i <= 64; i++) {
+            _ = broker.Register(Dto($"r{i}", input: $$"""{"command":"c{{i}}"}"""));
+            broker.TrySettle($"r{i}", Allow, "allow", "app");
+        }
+        var waiting = broker.Register(Dto("w", input: """{"command":"c64"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_x", toolName: "Bash", toolInput: Json("""{"command":"c64"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
+    /// A finished turn has run all of its own calls, and a prompt it retires was either denied in
+    /// the terminal or had its call reported before the next turn's prompts exist, so the turn's
+    /// end leaves nothing owed that would keep a later prompt from being retired.
+    [Test]
+    public async Task A_finished_turn_owes_no_call() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", Allow, "allow", "app");
+        _ = broker.Register(Dto("r-pending", input: """{"command":"ls"}"""));
+        broker.WithdrawTurn("a1", "s1", subagentId: null);
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(later.IsCompleted).IsTrue();
+    }
+
+    /// A deny settled here does not prove the call never ran: the terminal can have allowed the
+    /// same prompt first, with the card still showing. So the call is owed its notice like an
+    /// allowed prompt's, or that notice would retire an identical prompt still waiting. The cost
+    /// of a notice that never comes is one card left until the turn's end.
+    [Test]
+    public async Task A_prompt_denied_here_is_still_owed_the_call_the_terminal_may_have_started() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", PermissionSettlements.DenyDecision, "deny", "app");
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(later.IsCompleted).IsTrue();
+    }
+
+    /// The app withdraws a prompt as soon as the transcript shows its call's result, which can be
+    /// before the call's own hook has reported; that report is still owed.
+    [Test]
+    public async Task A_withdrawal_on_transcript_evidence_is_still_owed_the_call() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", PermissionSettlements.DenyDecision, "withdrawn", "tool_settled");
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// An input the answer rewrote applies only when that answer is the one that ran the call: a
+    /// call the terminal allowed ran with the prompt's own input, which is what its notice carries,
+    /// whatever a deny settled here attached.
+    [Test]
+    public async Task A_denied_prompt_is_owed_the_call_under_the_prompts_own_input() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", new PermissionDecision("deny", null, Json("""{"command":"rm -rf x"}""")), "deny", "app");
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// Only the call's own report settles without owing one: the report is the call's completion.
+    [Test]
+    public async Task A_withdrawal_by_the_calls_own_report_owes_nothing() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
+    }
+
+    /// A name-and-input match never reaches past what makes the call the prompt's own: another
+    /// input, another tool, another subagent, or a prompt that carries a tool id of its own.
+    [Test]
+    [Arguments("Bash", """{"command":"rm"}""", null,    null)]
+    [Arguments("Read", """{"command":"ls"}""", null,    null)]
+    [Arguments("Bash", """{"command":"ls"}""", "sub-1", null)]
+    [Arguments("Bash", """{"command":"ls"}""", null,    "toolu_1")]
+    public async Task A_name_and_input_match_spares_a_prompt_that_is_not_the_calls(
+            string toolName, string input, string? subagentId, string? promptToolUseId) {
+        var broker = new PermissionPromptBroker();
+        var held   = broker.Register(Dto("r1", toolUseId: promptToolUseId, input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_9", subagentId, toolName, Json(input))).IsFalse();
+        await Assert.That(held.IsCompleted).IsFalse();
     }
 
     /// The shared token admits every hosted agent, so a tool id is only honoured for the agent

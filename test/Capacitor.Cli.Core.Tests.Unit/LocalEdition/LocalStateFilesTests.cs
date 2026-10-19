@@ -80,13 +80,22 @@ public class LocalStateFilesTests {
         await Assert.That(new FileInfo(Root.RegistryPath).LinkTarget).IsNull();
     }
 
-    /// <summary>The server's bootstrap reads <c>phase</c> and starts only on <c>server_start</c> equal to
-    /// <c>"allow"</c>; these names and values are a contract with it.</summary>
+    /// <summary>An unset <see cref="ServerStart"/> must read as the refusing value.</summary>
     [Test]
-    [Arguments(true, "allow")]
-    [Arguments(false, "deny")]
-    public async Task The_journal_carries_what_the_server_reads(bool allowed, string expected) {
-        LocalStateFiles.WriteJournal(Root, Entry("staged", allowed));
+    public async Task An_unset_server_start_refuses() {
+        ServerStart unset = default;
+
+        await Assert.That(unset).IsEqualTo(ServerStart.Deny);
+    }
+
+    /// <summary>The server's bootstrap reads <c>phase</c> and starts on <c>"allow"</c>, starts fenced on
+    /// <c>"fenced"</c> and refuses anything else; these names and values are a contract with it.</summary>
+    [Test]
+    [Arguments(ServerStart.Allow, "allow")]
+    [Arguments(ServerStart.Fenced, "fenced")]
+    [Arguments(ServerStart.Deny, "deny")]
+    public async Task The_journal_carries_what_the_server_reads(ServerStart start, string expected) {
+        LocalStateFiles.WriteJournal(Root, Entry("staged", start));
 
         using var doc = JsonDocument.Parse(File.ReadAllText(Root.JournalPath));
 
@@ -96,14 +105,14 @@ public class LocalStateFilesTests {
 
     [Test]
     public async Task The_journal_round_trips() {
-        var entry = Entry("started", allowed: true);
+        var entry = Entry("started", ServerStart.Allow);
 
         LocalStateFiles.WriteJournal(Root, entry);
 
         var read = (StateRead<LifecycleJournalEntry>.Present)LocalStateFiles.ReadJournal(Root);
         await Assert.That(read.Value.Operation).IsEqualTo("setup");
         await Assert.That(read.Value.Phase).IsEqualTo("started");
-        await Assert.That(read.Value.ServerStartAllowed).IsTrue();
+        await Assert.That(read.Value.ServerStart).IsEqualTo(ServerStart.Allow);
         await Assert.That(read.Value.InstallationId).IsEqualTo("inst-1");
         await Assert.That(read.Value.StartedAt).IsEqualTo(entry.StartedAt);
         await Assert.That(read.Value.Details["port"]).IsEqualTo("51234");
@@ -121,14 +130,14 @@ public class LocalStateFilesTests {
 
     [Test]
     public async Task Clearing_the_journal_leaves_it_absent() {
-        LocalStateFiles.WriteJournal(Root, Entry("staged", allowed: false));
+        LocalStateFiles.WriteJournal(Root, Entry("staged", ServerStart.Deny));
 
         LocalStateFiles.ClearJournal(Root);
 
         await Assert.That(LocalStateFiles.ReadJournal(Root)).IsTypeOf<StateRead<LifecycleJournalEntry>.Absent>();
     }
 
-    static LifecycleJournalEntry Entry(string phase, bool allowed) =>
-        new("setup", phase, allowed, "inst-1", new DateTimeOffset(2026, 10, 16, 12, 0, 0, TimeSpan.Zero),
+    static LifecycleJournalEntry Entry(string phase, ServerStart start) =>
+        new("setup", phase, start, "inst-1", new DateTimeOffset(2026, 10, 16, 12, 0, 0, TimeSpan.Zero),
             new Dictionary<string, string> { ["port"] = "51234" });
 }

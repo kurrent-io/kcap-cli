@@ -23,22 +23,20 @@ namespace Capacitor.Cli.Daemon.Services;
 /// settings-overlay glitch never blocks launch (same contract as before the refactor,
 /// <c>AgentOrchestrator.LogPrepareSoftFailure</c>).
 /// </summary>
-/// <param name="windows">Test seam for the platform; null reads the ambient OS.</param>
-/// <param name="promptRoot">Test seam for where an overlong prompt is written; null is the temp directory.</param>
+/// <param name="promptRoot">Where launch prompts are written. It must be owner-only, which the
+/// daemon's state directory is and a shared temp directory is not.</param>
 internal sealed partial class PtyHostedAgentRuntimeFactory(
         IHostedAgentLauncher                  launcher,
         IPtyProcessFactory                    ptyFactory,
         ILogger<PtyHostedAgentRuntimeFactory> logger,
         TimeProvider                          time,
-        bool?                                 windows    = null,
-        string?                               promptRoot = null
+        string                                promptRoot
     ) : IHostedAgentRuntimeFactory {
-    readonly bool _windows = windows ?? OperatingSystem.IsWindows();
-
-    public string Vendor             => launcher.Vendor;
+    public string Vendor            => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
     public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
+    public bool   SupportsRestartResume(string? runtimeTransport) => launcher.SupportsResume;
     public string? BorrowedReviewContainment => launcher.BorrowedReviewContainment;
 
     /// <summary>PTY factories delegate reviewer-model resolution to their launcher-owned policy — the
@@ -78,7 +76,9 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             McpAllowlist = ctx.McpAllowlist,
             Work           = ctx.Work,
             CodexPosture   = ctx.CodexPosture,
-            PermissionMode = ctx.PermissionMode
+            PermissionMode = ctx.PermissionMode,
+            PinnedSessionId = ctx.PinnedSessionId,
+            ResumeSessionId = ctx.ResumeSessionId
         };
 
         try {
@@ -94,24 +94,33 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
         var launchArgs = launcher.BuildArgs(launcherCtx);
 
-        // Windows only: elsewhere the argument limit is far larger, and a prompt that fits keeps its
-        // usual place on the command line.
         string? promptFile = null;
-        if (_windows && launcherCtx.Prompt is { Length: > 0 } prompt && PromptFile.Overflows(launchArgs.Args)) {
-            promptFile  = PromptFile.Write(promptRoot ?? PromptFile.DefaultRoot, ctx.AgentId, prompt);
-            launcherCtx = launcherCtx with { PromptFile = promptFile };
-            launchArgs  = launcher.BuildArgs(launcherCtx);
+        if (launcherCtx.Prompt is { Length: > 0 } prompt
+            && launchArgs.Args.Contains(prompt)
+            && !StaysInline(prompt, launchArgs.Args)) {
+            promptFile = PromptFile.Write(promptRoot, ctx.AgentId, prompt);
+            try {
+                launcherCtx = launcherCtx with { PromptFile = promptFile };
+                launchArgs  = launcher.BuildArgs(launcherCtx);
+            } catch {
+                PromptFile.Delete(promptFile);
+                throw;
+            }
             LogPromptMovedToFile(ctx.AgentId, prompt.Length);
         }
 
         var args          = launchArgs.Args;
         var mcpConfigPath = launchArgs.McpConfigPath;
 
-        var env = new Dictionary<string, string> {
-            [HostedAgent.RenderedVar] = HostedAgent.Rendered,
-            [HostedAgent.AgentIdVar]  = ctx.AgentId
-        };
-        HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+        var env = new Dictionary<string, string>();
+
+        // A private agent gets what a --private local spawn gets: nothing that ties its session to
+        // the agent on the server.
+        if (!ctx.IsPrivate) {
+            env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
+            env[HostedAgent.AgentIdVar]  = ctx.AgentId;
+            HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+        }
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
         // OrphanReaper env-marker scan can reap a recordless survivor of a PRIOR incarnation of THIS
@@ -128,7 +137,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         // SignalR bridge. Bypasses Cloudflare's HTTP timeout on the server's
         // /hooks/permission-request long-poll. CLI falls back to KCAP_URL if this var is absent
         // (e.g. older CLI builds).
-        if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) {
+        if (!ctx.IsPrivate && !string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) {
             env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
         }
 
@@ -154,9 +163,14 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }
 
+    /// <summary>A slash command stays inline unless it is too long for a Windows command line, where
+    /// the spawn would fail outright.</summary>
+    static bool StaysInline(string prompt, IReadOnlyList<string> args) =>
+        PromptFile.IsSlashCommand(prompt) && !(OperatingSystem.IsWindows() && PromptFile.Overflows(args));
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
     partial void LogPrepareSoftFailure(Exception ex, string agentId);
 
-    [LoggerMessage(Level = LogLevel.Information, Message = "Agent {AgentId}'s {Length}-character prompt is too long for the command line; it reads it from a file")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} reads its {Length}-character prompt from a file")]
     partial void LogPromptMovedToFile(string agentId, int length);
 }

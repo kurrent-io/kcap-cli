@@ -1,3 +1,4 @@
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -580,9 +581,10 @@ static class SessionImporter {
     }
 
     /// <summary>
-    /// Thrown by <see cref="SendTranscriptBatches"/> when its <c>abortDelivery</c> predicate trips.
-    /// Distinct from a generic send failure so Cursor's best-effort session-end (see
-    /// <see cref="CursorImportSource.ImportSessionAsync"/>) can catch it ahead of a broader catch-all.
+    /// Thrown by <see cref="SendTranscriptBatches"/> when its <c>abortDelivery</c> predicate trips, or
+    /// when the server blocks a Cursor batch at a gap (409). Distinct from a generic send failure so
+    /// Cursor's best-effort session-end (see <see cref="CursorImportSource.ImportSessionAsync"/>) can
+    /// catch it ahead of a broader catch-all.
     /// </summary>
     internal sealed class TranscriptDeliveryAbortedException : Exception;
 
@@ -624,6 +626,16 @@ static class SessionImporter {
         try {
             using var resp = await httpClient.PostWithRetryAsync($"{baseUrl}/hooks/transcript", content, time);
 
+            // A blocked Cursor batch leaves the server's watermark at the gap; any later batch would
+            // move it past the blocked lines, and the next import resumes from the watermark.
+            if (vendor is HarnessId.Cursor && resp.StatusCode is HttpStatusCode.Conflict) {
+                // The server accepted every line before its next_line_number.
+                var blockedAt = BlockedAt(await resp.Content.ReadAsStringAsync(), batch.LineNumbers);
+                if (blockedAt > first) progress?.Report(new BatchFlushed(agentId, batch.LineNumbers.Count(n => n < blockedAt)));
+                progress?.Report(new BatchDropped(sessionId, agentId, blockedAt, last, "HTTP 409: the server blocked this batch at a gap"));
+                throw new TranscriptDeliveryAbortedException();
+            }
+
             loss = resp.IsSuccessStatusCode ? null : $"HTTP {(int)resp.StatusCode}";
         } catch (HttpRequestException ex) {
             loss  = ex.Message;
@@ -641,6 +653,20 @@ static class SessionImporter {
         batch.Clear();
 
         return flushed;
+    }
+
+    /// <summary>The first posted line a 409 left unaccepted, or the batch's first line when the body
+    /// does not name one inside the batch. A blank source line is never posted, so the server's
+    /// frontier can name one; the drop starts at the next line that was sent.</summary>
+    static int BlockedAt(string body, IReadOnlyList<int> lineNumbers) {
+        var first = lineNumbers[0];
+
+        try {
+            var next = JsonSerializer.Deserialize(body, CapacitorJsonContext.Default.TranscriptBatchAck).NextLineNumber;
+            return next > first && next <= lineNumbers[^1] ? lineNumbers.First(n => n >= next) : first;
+        } catch (JsonException) {
+            return first;
+        }
     }
 
     /// <summary>

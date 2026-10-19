@@ -60,6 +60,14 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
+    /// The shortest gap between two recoveries, so a daemon that dies straight after every start
+    /// cannot turn the attach loop into a reinstall loop. The service manager's own restart policy
+    /// covers a crash well inside it. It doubles with every recovery that no connect follows, up to
+    /// <see cref="MaxRecoveryInterval"/>: each ensure kicks a reattach, whose failure is itself the
+    /// next unreachable.
+    internal static readonly TimeSpan RecoveryInterval    = TimeSpan.FromSeconds(30);
+    internal static readonly TimeSpan MaxRecoveryInterval = TimeSpan.FromMinutes(30);
+
     readonly IDaemonClientService _client;
     readonly IKcapCli _cli;
     readonly ILoginShellProbe _probe;
@@ -98,6 +106,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     IDisposable? _subscription;
     bool _armClaimed;
+    DateTimeOffset? _lastRecovery; // under _lock
+    bool _recoveryPending;         // under _lock
+    int _recoveriesSinceConnect;   // under _lock
     bool _disposed;
     int _generation;
     (AttachState State, string? Reason) _lastObserved = (AttachState.Connecting, null);
@@ -120,7 +131,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
-    /// daemon_incompatible / a completed daemon_unreachable startup branch). Consumed by later
+    /// daemon_incompatible / a completed daemon_unreachable ensure branch). Consumed by later
     /// tasks (shim offer timing).
     public Task PhaseClosed => _phaseClosed.Task;
 
@@ -158,14 +169,16 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    // Every AttachStatus transition bumps the generation and records the last-observed outcome;
-    // only the FIRST terminal outcome (never Connecting) claims the once-per-run arm and acts.
+    // Every AttachStatus transition bumps the generation and records the last-observed outcome. The
+    // FIRST terminal outcome (never Connecting) claims the startup arm; every later daemon_unreachable
+    // is a daemon that went away, and gets the same ensure.
     void OnAttachStatus(AttachStatus status) {
         bool isFirstTerminalOutcome;
 
         lock (_lock) {
             _generation++;
             _lastObserved = (status.State, status.Reason);
+            if (status.State == AttachState.Connected) _recoveriesSinceConnect = 0;
 
             isFirstTerminalOutcome = status.State != AttachState.Connecting && !_armClaimed;
             if (isFirstTerminalOutcome) _armClaimed = true;
@@ -175,6 +188,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             // A later Connected is a daemon that came up after the arm, or came back after a reload
             // outside the app: read its spawn type, arm nothing.
             if (status.State == AttachState.Connected) _ = PassiveReadAsync();
+            else if (status.State == AttachState.Unreachable && status.Reason != IncompatibleReason
+                     && !_autoActionsPermanentlyClosed)
+                _ = RunRecoveryAsync((status.State, status.Reason));
             return;
         }
 
@@ -188,9 +204,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _ = RunReconciliationAsync(attached: false);
                 break;
             case AttachState.Unreachable:
-                // Closed: PhaseClosed still resolves here — only the startup matrix itself never admits.
+                // Closed: PhaseClosed still resolves here — only the ensure matrix itself never admits.
                 if (_autoActionsPermanentlyClosed) ClosePhase();
-                else _ = RunStartupBranchAsync((status.State, status.Reason));
+                else {
+                    lock (_lock) _lastRecovery = _time.GetUtcNow();
+                    _ = RunStartupBranchAsync((status.State, status.Reason));
+                }
                 break;
         }
     }
@@ -346,9 +365,46 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    /// The startup branch. Runs at most once per app run (the arm claimed synchronously in
-    /// OnAttachStatus); closes the startup phase only once this full flow — query, optional
-    /// txn-active wait, matrix decision, any mutation, and its confirmation wait — has completed.
+    /// A daemon that went away mid-run: the same ensure as at startup, at most once per
+    /// <see cref="CurrentRecoveryInterval"/>. One inside the interval is deferred to its end rather
+    /// than dropped, because the attach loop reports unreachable once per transition, not per retry.
+    async Task RunRecoveryAsync((AttachState State, string? Reason) triggering) {
+        TimeSpan wait;
+        lock (_lock) {
+            if (_recoveryPending) return;
+            _recoveryPending = true;
+            var interval = CurrentRecoveryInterval(_recoveriesSinceConnect);
+            var since    = _lastRecovery is { } last ? _time.GetUtcNow() - last : interval;
+            wait = since >= interval ? TimeSpan.Zero : interval - since;
+        }
+
+        try {
+            if (wait > TimeSpan.Zero) await Task.Delay(wait, _time, _lifetime.Token).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            lock (_lock) _recoveryPending = false;
+            return;
+        }
+
+        lock (_lock) {
+            _recoveryPending = false;
+            // Came back on its own (a service manager restart) while this waited, or came back too
+            // new or too old for this app, which no ensure fixes.
+            if (_lastObserved.State != AttachState.Unreachable || _lastObserved.Reason == IncompatibleReason) return;
+            _lastRecovery = _time.GetUtcNow();
+            _recoveriesSinceConnect++;
+        }
+
+        await RunStartupBranchAsync(triggering).ConfigureAwait(false);
+    }
+
+    internal static TimeSpan CurrentRecoveryInterval(int recoveriesSinceConnect) {
+        var doubled = RecoveryInterval * Math.Pow(2, Math.Min(recoveriesSinceConnect, 16));
+        return doubled < MaxRecoveryInterval ? doubled : MaxRecoveryInterval;
+    }
+
+    /// The ensure branch, at startup and on every recovery. Closes the startup phase only once this
+    /// full flow — query, optional txn-active wait, matrix decision, any mutation, and its
+    /// confirmation wait — has completed.
     async Task RunStartupBranchAsync((AttachState State, string? Reason) triggering) {
         try {
             if (_cli.CliPath is null) {
@@ -375,6 +431,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                     snap = await AwaitOneTxnActiveRequeryAsync(_lifetime.Token).ConfigureAwait(false);
                     if (snap is null || snap.TxnActive) return;
                 }
+
+                // A daemon that attached during the reads above needs nothing, whatever they saw.
+                if (IsCurrentlyAttached()) return;
 
                 await RunStartupMatrixAsync(snap, _lifetime.Token).ConfigureAwait(false);
             } finally {
@@ -404,7 +463,16 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (state == ServiceState.Installed) { // loaded, inactive
             if (!snap.UnitPresent) {
-                _surface.Attention("The daemon service label is loaded but its unit file is missing — needs repair.");
+                // A live pid could be another identity's daemon on this name, and a replace would kill it.
+                if (snap.DaemonPid is not null) {
+                    _surface.Attention("The daemon service label is loaded but its unit file is missing — needs repair.");
+                    return;
+                }
+
+                // Our own service, broken: repaired without asking, as setup would.
+                var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
+                if (missing is not null) _surface.Status(missing);
+                else await RunLaneMutationAsync(MutationVerb.Replace, ct).ConfigureAwait(false);
                 return;
             }
             if (snap.DaemonPid is not null) {
@@ -550,18 +618,16 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         PublishReloadState();
     }
 
-    /// Preconditions the repair dialog needs — unlike FailingPreconditionAsync (the silent-install
-    /// row), an unknown terminal PATH is not one of them: a dialoged install proceeds on disclosure
-    /// (the prompt's PathDegraded) rather than blocking. A missing install binary or an
-    /// unresolvable profile would make accept a guaranteed coded viability failure, so those still
-    /// gate the offer itself.
+    /// Preconditions every unit rewrite needs short of the silent install's terminal PATH: a repair,
+    /// and an install the user asked for, proceed without it. A missing install binary or an
+    /// unresolvable profile would make the rewrite a guaranteed coded viability failure.
     async Task<string?> FailingRepairPreconditionAsync(ServiceSnapshot snap) {
         if (snap.InstallBinaryPath is null)
-            return "kcap can't resolve its own daemon binary — skipping the repair offer.";
+            return "kcap can't resolve its own daemon binary — the daemon service was left as it is.";
 
         var profile = await _resolveProfileName().ConfigureAwait(false);
         if (profile is null)
-            return "No profile with a valid server URL is configured — skipping the repair offer.";
+            return "No profile with a valid server URL is configured — the daemon service was left as it is.";
 
         return null;
     }
@@ -632,11 +698,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
     }
 
-    /// The Start action. Branches on the loaded-label/job state BEFORE plist presence, same
-    /// precedence as the startup matrix — but unlike that matrix, a Start click is NEVER itself
-    /// consent to rewrite a unit: a mismatched/orphaned/coexisting
-    /// unit always goes through the dialoged repair affordance (OfferRepairAsync) instead of a
-    /// silent Attention. Public + caller-awaited from the UI, so every path here is exception-safe
+    /// The Start action: the ensure matrix on demand, always ending in the service, never a daemon
+    /// outside it. Only a manual daemon holding the name is replaced on the user's word
+    /// (OfferRepairAsync). Public + caller-awaited from the UI, so every path here is exception-safe
     /// — a click must never crash the app.
     public async Task StartActionAsync(CancellationToken ct) {
         try {
@@ -675,10 +739,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 }
 
                 if (state == ServiceState.Installed) {
-                    if (snap.UnitPresent && snap.DaemonPid is null)
+                    if (snap.DaemonPid is not null)
+                        await OfferRepairAsync(snap, lct).ConfigureAwait(false); // coexistence
+                    else if (snap.UnitPresent)
                         await ReportStartMutationAsync(MutationVerb.StartVerified, lct).ConfigureAwait(false);
                     else
-                        await OfferRepairAsync(snap, lct).ConfigureAwait(false); // orphan label or coexistence
+                        await ReportUnitRewriteAsync(snap, MutationVerb.Replace, lct).ConfigureAwait(false); // orphan label
                     return;
                 }
 
@@ -691,7 +757,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                     return;
                 }
 
-                await ReportStartMutationAsync(MutationVerb.DetachedStart, lct).ConfigureAwait(false); // nothing at all — no unit to rewrite
+                await ReportUnitRewriteAsync(snap, MutationVerb.Install, lct).ConfigureAwait(false); // nothing at all
             } finally {
                 _gate.Release();
             }
@@ -714,8 +780,17 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             : "Daemon start did not finish. Press Retry.");
     }
 
-    /// The Start button's repair affordance: a plist/pid combination Start refuses to silently
-    /// mutate into is offered as a dialoged replace instead.
+    async Task ReportUnitRewriteAsync(ServiceSnapshot snap, MutationVerb verb, CancellationToken ct) {
+        var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
+        if (missing is not null) {
+            _surface.Status(missing);
+            return;
+        }
+
+        await ReportStartMutationAsync(verb, ct).ConfigureAwait(false);
+    }
+
+    /// The Start button's one dialog: a manual daemon holds the name, and replacing it is the user's call.
     async Task OfferRepairAsync(ServiceSnapshot snap, CancellationToken ct) {
         var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
         if (missing is not null) {

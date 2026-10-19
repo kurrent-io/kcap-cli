@@ -119,6 +119,23 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await rig.Factory.StartAsync(ctx, CancellationToken.None).WaitAsync(HangGuard);
 
     [Test]
+    public async Task Interactive_resume_is_supported_and_review_flow_is_not() {
+        const string resumed = "01a13695-0736-75d0-8f4e-f121585b8453";
+        var rig = NewRig();
+
+        await Assert.That(rig.Factory.SupportsRestartResume(null)).IsTrue();
+
+        var start = await StartAsync(rig, Ctx(resume: resumed));
+        await using var _ = start.Runtime;
+        var resume = Params(await rig.Host.WaitForWriteAsync("session/resume"));
+        await Assert.That((string?)resume["sessionId"]).IsEqualTo(resumed);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await StartAsync(NewRig(), Ctx(isReviewFlow: true, prompt: "review", allowlist: ["kcap-sessions"], resume: resumed)));
+        await Assert.That(refused!.Message).StartsWith("muse_reviewer_resume_unsupported");
+    }
+
+    [Test]
     public async Task IsAvailable_follows_the_binary() {
         await Assert.That(NewRig(binary: true).Factory.IsAvailable()).IsTrue();
         await Assert.That(NewRig(binary: false).Factory.IsAvailable()).IsFalse();

@@ -172,7 +172,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
         );
     }
 
-    /// The main-window Start/Retry delegate: builds a DetachedStart MutationRequest at the profile
+    /// The main-window Start/Retry delegate: builds an Install MutationRequest (the daemon runs only as a service) at the profile
     /// this service was resolved for — the one the gate was evaluated on — and hands it to
     /// `runMutation`; a caller that cannot bind a canonical server never reaches it. A profile written after startup reaches it through a graph rebuild, which is the
     /// only thing that re-evaluates the gate too.
@@ -181,7 +181,7 @@ public sealed class DaemonClientService : IDaemonClientService, IAsyncDisposable
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation) =>
         ct => {
             var refusal = MutationRequestFactory.TryBuild(
-                MutationVerb.DetachedStart, profile?.ProfileName, profile?.ServerUrl, daemonName, out var request);
+                MutationVerb.Install, profile?.ProfileName, profile?.ServerUrl, daemonName, out var request);
             return refusal is not null ? Task.FromResult(refusal) : runMutation(request!, ct);
         };
 

@@ -338,7 +338,7 @@
                                     <DataTemplate x:DataType="vm:QueuedChatMessage">
                                         <Grid Margin="0,2" ColumnDefinitions="*,Auto">
                                             <StackPanel Spacing="2">
-                                                <TextBlock Text="{Binding Text}" ToolTip.Tip="{Binding Text}" FontSize="13.5"
+                                                <TextBlock Text="{Binding DisplayText}" ToolTip.Tip="{Binding DisplayText}" FontSize="13.5"
                                                            TextTrimming="CharacterEllipsis" MaxLines="1"
                                                            Foreground="{StaticResource KcapMutedBrush}" />
                                                 <TextBlock Text="{Binding PickupNote}"
@@ -349,8 +349,6 @@
                                                 <TextBlock Text="Queued by another client" IsVisible="{Binding IsForeign}"
                                                            FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                             </StackPanel>
-                                            <!-- Same send control as the composer. It only shows once the agent is
-                                                 idle: while a step is running the row is waiting, not sendable. -->
                                             <Button x:Name="SendQueuedButton" Grid.Column="1" Classes="kcapPrimary" Content="Send"
                                                     Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
                                                     CommandParameter="{Binding}"

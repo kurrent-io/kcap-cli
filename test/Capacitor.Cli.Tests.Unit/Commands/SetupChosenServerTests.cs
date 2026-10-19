@@ -35,7 +35,7 @@ public class SetupChosenServerTests {
             FakeImportRunner.Succeeding(),
             FakeBackgroundImportSpawner.Running(), FakeHandoffAgentLauncher.Ran(),
             new ChosenServerHttp(Config.Root, startup, ProfileOverrides.None, MachineAuth.None, local), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), local);
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), local, FakeLocalInstallerFactory.Unused);
     }
 
     /// A first run: nothing resolved a server before the command started, which is the case that

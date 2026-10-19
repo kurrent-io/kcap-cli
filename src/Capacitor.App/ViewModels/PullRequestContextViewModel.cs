@@ -232,6 +232,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _masked = true;
         _grace = false;
         _staleReason = null;
+        // Nothing polls in the background, and the return lists afresh anyway.
+        if (!foreground) _queuedRefresh = false;
         Notify();
         // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
         // already fresh; force only a genuine return, where a prior refresh could have gone stale.
@@ -241,6 +243,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (_disposed) return;
         _refreshDiscovery = true;
         RequestRefresh();
+    }
+    /// A list read describes the session with the primary repository it saw, and the registry's
+    /// live discovery needs one: list again once the hint arrives or names another repository.
+    public void PrimaryRepositoryChanged() {
+        if (_disposed || !_foreground || _stopped || _session is null) return;
+        _queuedRefresh = true;
+        RequestRefresh();
+        Notify();
     }
     /// The user's own refresh: rediscovers support and reloads the list, overview and open section.
     public void Refresh() { _userRefresh = true; RequestRefresh(manual: true); Notify(); }

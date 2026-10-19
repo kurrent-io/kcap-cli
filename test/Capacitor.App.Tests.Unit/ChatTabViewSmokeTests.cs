@@ -714,7 +714,7 @@ public class ChatTabViewSmokeTests {
         await RunOnUiAsync(async () => {
             var host = new Host();
             var path = Tmp.CreateFile("queue.jsonl", [UserLine]);
-            await host.AttachAsync(path);
+            var client = await host.AttachAsync(path);
             host.Type("queued follow-up");
             host.PressEnter(RawInputModifiers.None);
             host.Settle();
@@ -722,16 +722,23 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.IsVisible).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "queued follow-up")).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Delivery unconfirmed" && t.IsVisible)).IsFalse();
-            await Assert.That(host.Chat.QueuedMessages.Single().PickupNote).IsEqualTo(QueuedChatMessage.IdlePickupNote);
             // The paste is still in flight, so Send appears once the channel will take text.
             host.Time.Advance(CrDelay);
             await host.Terminal.PendingDeliveryForTesting!;
             host.Settle();
-            await Assert.That(host.Chat.QueuedMessages.Single().CanSendNow).IsTrue();
-            // Nothing is in a step, so the row offers Send instead of promising the step will end.
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.IdlePickupNote && t.IsVisible)).IsTrue();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
-            await Assert.That(banner.GetVisualDescendants().OfType<Button>().Any(b => b.Name == "SendQueuedButton" && b.IsVisible)).IsTrue();
+            var queued = host.Chat.QueuedMessages.Single();
+            var send = banner.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SendQueuedButton" && b.IsVisible);
+            host.Type("queued follow-up");
+            Click(host, send);
+            await WaitUntilAsync(() => client.SentInput.Count == 3, what: "queued text pasted a second time");
+            await Assert.That(client.SentInput[2]).IsEquivalentTo(TerminalInputEncoder.Paste("queued follow-up"));
+            await Assert.That(host.Chat.QueuedMessages.Single()).IsNotSameReferenceAs(queued);
+            await Assert.That(host.Composer.Text).IsEqualTo("queued follow-up");
+            host.Time.Advance(CrDelay);
+            await host.Terminal.PendingDeliveryForTesting!;
+            await Assert.That(client.SentInput[3]).IsEquivalentTo(new byte[] { 13 });
             host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = false });
             host.Settle();
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsTrue();
@@ -742,6 +749,7 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
             await host.AppendLinesAndTickAsync(path, UserLine.Replace("hello", "queued follow-up"));
             await Assert.That(banner.IsVisible).IsFalse();
+            await Assert.That(host.Composer.Text).IsEqualTo("queued follow-up");
             await host.CloseAsync();
         });
     }

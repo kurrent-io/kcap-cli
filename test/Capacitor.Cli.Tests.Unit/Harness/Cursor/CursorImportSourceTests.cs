@@ -1679,6 +1679,65 @@ public class CursorImportSourceTests {
         } finally { try { File.Delete(Markers.QuarantinePath(sessionId)); } catch { } }
     }
 
+    /// <summary>
+    /// A 409 means the server halted the source frontier at a gap: posting the later batch or the
+    /// children would move its watermark past the blocked lines, so delivery stops there and the
+    /// session is still closed.
+    /// </summary>
+    [Test]
+    public async Task import_session_stops_delivery_and_closes_when_the_server_blocks_a_batch() {
+        using var fx = new ProjectsDirFixture();
+        var parentIdWithDashes = Guid.NewGuid().ToString();
+        var parentId           = CursorImportSource.NormalizeCursorSessionId(parentIdWithDashes);
+        var childIdWithDashes  = Guid.NewGuid().ToString();
+        var lines       = string.Concat(Enumerable.Range(0, 150).Select(i => $$"""{"n":{{i}}}""" + "\n"));
+        var parentJsonl = fx.AddSession("Users-me-proj", parentIdWithDashes, lines);
+        var childJsonl  = fx.AddSession("Users-me-proj", childIdWithDashes, "{\"b\":1}\n");
+        var src         = new CursorImportSource(Config.Root, fx.ProjectsDir, fx.WorkspaceStorageDir, router: new GitProviderRouter(), time: TimeProvider.System);
+
+        var posted          = new List<string>();
+        var transcriptPosts = 0;
+        var progress        = new CollectingProgress();
+        using var handler = new StubHandler(postCapture: (req, _) => {
+            var path = req.RequestUri!.AbsolutePath;
+            posted.Add(path);
+            if (path != "/hooks/transcript") return new HttpResponseMessage(HttpStatusCode.OK);
+
+            transcriptPosts++;
+
+            return new HttpResponseMessage(HttpStatusCode.Conflict) {
+                Content = new StringContent("""{"processed":40,"next_line_number":40,"blocked":"RetryBlocked"}""")
+            };
+        });
+        using var client = new HttpClient(handler);
+
+        var outcome = await src.ImportSessionAsync(
+            new ImportCommand.SessionClassification {
+                SessionId  = parentId,
+                FilePath   = "",
+                EncodedCwd = "",
+                Meta       = new SessionMetadata(),
+                Status     = ImportCommand.ClassificationStatus.New,
+                Vendor     = HarnessId.Cursor,
+                SourceMeta = new Dictionary<string, object?> {
+                    ["TranscriptPath"]   = parentJsonl,
+                    ["SubagentChildren"] = new List<CursorImportSource.CursorSubagentChild> {
+                        new(CursorImportSource.NormalizeCursorSessionId(childIdWithDashes), childJsonl, "task"),
+                    },
+                },
+            },
+            new ImportContext(client, "http://localhost", ForcePrivate: false, Progress: progress),
+            CancellationToken.None
+        );
+
+        await Assert.That(outcome).IsEqualTo(ImportOutcome.Failed);
+        await Assert.That(transcriptPosts).IsEqualTo(1);
+        await Assert.That(progress.Events.OfType<BatchFlushed>().Sum(e => e.LinesAdded)).IsEqualTo(40);
+        await Assert.That(progress.Events.OfType<BatchDropped>().Single().FirstLineNumber).IsEqualTo(40);
+        await Assert.That(posted).DoesNotContain("/hooks/subagent-start");
+        await Assert.That(posted).Contains("/hooks/session-end/cursor");
+    }
+
     // the round-3 fix above only proved the SECOND of TWO
     // batches gets aborted; it never exercised a transcript that is a SINGLE (final and only)
     // batch, which is exactly the gap SendTranscriptBatches' round-3 wiring left open (no "next"
@@ -2172,9 +2231,7 @@ public class CursorImportSourceTests {
             File.WriteAllText(Path.Combine(dir, "workspace.json"), $$"""{"folder":"{{folderUri}}"}""");
         }
 
-        public void Dispose() {
-            try { Directory.Delete(Root, recursive: true); } catch { }
-        }
+        public void Dispose() => _root.Dispose();
     }
 
     sealed class StubHandler(
@@ -2190,5 +2247,10 @@ public class CursorImportSourceTests {
 
             return postCapture?.Invoke(request, body) ?? new HttpResponseMessage(HttpStatusCode.OK);
         }
+    }
+
+    sealed class CollectingProgress : IProgress<ImportProgress> {
+        public List<ImportProgress> Events { get; } = [];
+        public void Report(ImportProgress value) => Events.Add(value);
     }
 }

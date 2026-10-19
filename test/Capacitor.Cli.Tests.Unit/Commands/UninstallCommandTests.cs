@@ -650,8 +650,8 @@ public class UninstallCommandTests {
         return account;
     }
 
-    Task<int> RunUninstall(Fixture fixture, string? workdir = null, params string[] args) =>
-        new UninstallCommand(Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(workdir ?? AppContext.BaseDirectory), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", .. args]);
+    Task<int> RunUninstall(Fixture fixture, string? workdir = null, DaemonStore? store = null, params string[] args) =>
+        new UninstallCommand(store ?? Daemons.Store, fixture.Root, Resolutions.None(fixture.Root), fixture.UserHome, TestHarnesses.Under(fixture.UserHome), TestBinaries.None, new AgentsPaths(fixture.UserHome), TestWatchers.For(fixture.Root, Resolutions.None(fixture.Root), new FixedCapacitorHttpClient()), workdir: new WorkingDirectory(workdir ?? AppContext.BaseDirectory), time: TimeProvider.System).HandleAsync(["uninstall", "--yes", .. args]);
 
     [Test]
     public async Task Uninstall_unwires_every_registered_account_and_deletes_the_registry() {
@@ -684,6 +684,51 @@ public class UninstallCommandTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Uninstall_deletes_the_daemon_state_directory(bool keepConfig) {
+        await using var fixture = await Fixture.CreateAsync();
+        var store = new DaemonStore(DaemonStore.DefaultDirectory(fixture.UserHome));
+        Directory.CreateDirectory(store.StateDirectory("vscode"));
+        await File.WriteAllTextAsync(store.LockPath("vscode"), "x");
+        await File.WriteAllTextAsync(Path.Combine(store.StateDirectory("vscode"), "consent.json"), "{}");
+
+        var exit = await RunUninstall(fixture, store: store, args: keepConfig ? ["--keep-config"] : []);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(store.Directory)).IsFalse();
+    }
+
+    /// <summary>Pins that a default daemons directory which is a link is never cleaned: its target could
+    /// be anywhere.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Uninstall_leaves_a_linked_daemons_directory() {
+        await using var fixture = await Fixture.CreateAsync();
+        var store = new DaemonStore(DaemonStore.DefaultDirectory(fixture.UserHome));
+        Directory.CreateDirectory(Path.GetDirectoryName(store.Directory)!);
+        Directory.CreateSymbolicLink(store.Directory, Daemons.Directory);
+        var lockFile = Daemons.CreateFile("vscode.lock", "x");
+
+        var exit = await RunUninstall(fixture, store: store);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(File.Exists(lockFile)).IsTrue();
+    }
+
+    /// <summary>Pins that a daemons directory KCAP_DAEMONS_DIR moved is never cleaned: it may be shared,
+    /// so nothing in it can be taken for kcap's.</summary>
+    [Test]
+    public async Task Uninstall_leaves_a_daemons_directory_the_environment_moved() {
+        await using var fixture = await Fixture.CreateAsync();
+        var lockFile = Daemons.CreateFile("vscode.lock", "x");
+
+        var exit = await RunUninstall(fixture);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(File.Exists(lockFile)).IsTrue();
+    }
+
+    [Test]
     public async Task Uninstall_keeps_the_registry_when_an_account_cannot_be_unwired() {
         await using var fixture = await Fixture.CreateAsync();
         var accounts = AccountStore.Beside(Daemons.Store);
@@ -694,6 +739,7 @@ public class UninstallCommandTests {
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(File.Exists(Path.Combine(accounts.Directory, "accounts.json"))).IsTrue();
+        await Assert.That(Directory.Exists(Daemons.Directory)).IsTrue();
     }
 
     [Test, ExcludeOn(OS.Windows)]
@@ -737,7 +783,7 @@ public class UninstallCommandTests {
         using var tmp = new TempDir();
         tmp.CreateDir(".git");
 
-        var exit = await RunUninstall(fixture, tmp.Path, "--project");
+        var exit = await RunUninstall(fixture, tmp.Path, args: "--project");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Directory.Exists(accounts.Directory)).IsFalse();

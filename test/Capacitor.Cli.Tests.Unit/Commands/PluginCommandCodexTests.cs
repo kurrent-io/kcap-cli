@@ -441,6 +441,25 @@ public class PluginCommandCodexTests {
         await Assert.That(root["hooks"]).IsNull();
     }
 
+    /// A byte-order mark makes Codex refuse the file, so the refresh rewrites it even when the marker
+    /// says the entries are current.
+    [Test]
+    public async Task Install_codex_with_if_installed_strips_a_byte_order_mark_when_marker_matches() {
+        using var fakeHome = new TempDir();
+
+        var codexDir  = fakeHome.CreateDir(".codex");
+        var hooksPath = codexDir.PathTo("hooks.json");
+        PluginCommand.InstallCodexHooks(hooksPath);
+        fakeHome.CreateFile(".codex/hooks.json", "\uFEFF" + await File.ReadAllTextAsync(hooksPath));
+
+        var exit = await new PluginCommand(TestEnv(fakeHome.GetResolvedPath()), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleAsync(
+            ["plugin", "install", "--codex", "--if-installed"]);
+        await Assert.That(exit).IsEqualTo(0);
+
+        await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooksPath)).IsFalse();
+        await Assert.That(CodexHooksInstaller.ReferencesKcapHook(hooksPath)).IsTrue();
+    }
+
     [Test]
     public async Task InstallCodexHooks_stamps_marker_on_success() {
         using var tmp  = new TempDir();

@@ -167,6 +167,11 @@ internal sealed record AcpVendorDescriptor {
     /// vendor that reports it on its own extension method. Null for every vendor that does not.</summary>
     public Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>? TurnUsageReader { get; }
 
+    /// <summary>Reads a subagent's start or finish from a vendor notification, for a vendor that runs
+    /// subagents as child sessions on the same connection. Null for every vendor that does not, whose
+    /// updates all belong to the hosted agent.</summary>
+    public Func<Core.Acp.AcpNotification, AcpSubagentSignal?>? SubagentReader { get; }
+
     public AcpVendorDescriptor(
             HarnessId                   Harness,
             ImmutableArray<string>      Argv,
@@ -184,7 +189,9 @@ internal sealed record AcpVendorDescriptor {
             Func<bool, JsonObject>?     SessionNewMeta = null,
             UnattendedToolAdmitter?     ToolAdmitter = null,
             Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>?
-                                        TurnUsageReader = null
+                                        TurnUsageReader = null,
+            Func<Core.Acp.AcpNotification, AcpSubagentSignal?>?
+                                        SubagentReader = null
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -243,6 +250,7 @@ internal sealed record AcpVendorDescriptor {
         this.SessionNewMeta = SessionNewMeta;
         this.ToolAdmitter   = ToolAdmitter;
         this.TurnUsageReader = TurnUsageReader;
+        this.SubagentReader  = SubagentReader;
 
         if (UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove && ToolAdmitter is null)
             throw new ArgumentException(
@@ -537,7 +545,8 @@ internal static class AcpVendorDescriptors {
         ReviewFlowMcpTransport: AcpReviewFlowMcpTransport.SessionNew,
         SupportsReconnectResume: false,
         SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
-        TurnUsageReader:     GrokTurnUsage.Read
+        TurnUsageReader:     GrokTurnUsage.Read,
+        SubagentReader:      GrokSubagentSignals.Read
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).

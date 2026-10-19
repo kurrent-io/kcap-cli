@@ -59,6 +59,16 @@ internal sealed class SessionStartFlowsCatalogCache(string root) {
         }
     }
 
+    /// <summary>Deletes the entry, throwing when it cannot: unlike <see cref="Delete"/>, a caller can rely on it being
+    /// gone.</summary>
+    public void Forget(string baseUrl) {
+        try {
+            File.Delete(PathFor(baseUrl));
+        } catch (DirectoryNotFoundException) {
+            // No cache was ever written.
+        }
+    }
+
     public void Delete(string baseUrl) {
         try { File.Delete(PathFor(baseUrl)); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }

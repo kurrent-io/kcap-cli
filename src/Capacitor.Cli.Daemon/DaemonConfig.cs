@@ -2,6 +2,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon;
 
@@ -10,6 +11,22 @@ public class DaemonConfig {
     public string   ServerUrl           { get; set; } = "";
     public string[] AllowedRepoPaths    { get; set; } = [];
     public int      MaxConcurrentAgents { get; set; } = 5;
+
+    /// <summary>How long a self-detected restart waits for interactive agents to reach a turn boundary.</summary>
+    public TimeSpan RestartTurnWait { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>How many ledgered agents a booting daemon relaunches at once.</summary>
+    public int ResumeConcurrency { get; set; } = 2;
+
+    /// <summary>A ledgered agent last alive longer ago than this is interrupted rather than resumed.</summary>
+    public TimeSpan ResumeMaxAge { get; set; } = TimeSpan.FromHours(24);
+
+    /// <summary>Whether a booting daemon resumes its ledgered agents at all.</summary>
+    public bool AutoResume { get; set; } = true;
+
+    /// <summary>How long a resumed runtime must stay alive after publishing for the resume to count;
+    /// for a PTY vendor this is the whole handshake.</summary>
+    public TimeSpan ResumeReadinessWindow { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Absolute path of the native <c>kcap</c> CLI binary, resolved as the daemon's sibling
@@ -69,10 +86,19 @@ public class DaemonConfig {
     /// <summary>The profile this daemon resolved at boot. A separate process from the CLI, so it
     /// resolves its own; nothing re-resolves later, which is what keeps its token reads and its
     /// daemon identity naming one profile for the daemon's whole life.</summary>
+    /// <summary>The local installation's root, so every transport to the server is checked against its registry.</summary>
+    public LocalRoot? LocalRoot { get; set; }
+
     public ProfileContext Profiles {
-        get => field ?? throw new InvalidOperationException($"DaemonConfig.Profiles was never set; pass a {nameof(ProfileContext)} in from the entry point.");
-        set;
+        get => _profiles ?? throw new InvalidOperationException($"DaemonConfig.Profiles was never set; pass a {nameof(ProfileContext)} in from the entry point.");
+        set => _profiles = value;
     }
+
+    ProfileContext? _profiles;
+
+    /// <summary>Why <see cref="ServerUrl"/> may not be sent to, as resolved at boot; null when it may, or when nothing
+    /// was resolved.</summary>
+    public string? DestinationRefusal => _profiles is null ? null : LocalDestination.Refusal(ServerUrl, _profiles.Resolution.Endpoint);
 
     /// <summary>Phase B (D4): a fresh per-boot epoch (GUID). Written into each spawned child's
     /// <c>KCAP_DAEMON_EPOCH</c> env marker; the startup env-marker scan kills same-daemon children

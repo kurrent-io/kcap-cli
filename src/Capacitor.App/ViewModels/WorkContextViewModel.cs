@@ -40,7 +40,15 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         }
     }
     public bool ShowsLegacyLinks => PullRequests is null;
-    public PullRequestRepository? PrimaryRepository { get; private set; }
+    PullRequestRepository? _primaryRepository;
+    public PullRequestRepository? PrimaryRepository {
+        get => _primaryRepository;
+        private set {
+            var changed = value is not null && value != _primaryRepository;
+            _primaryRepository = value;
+            if (changed) PullRequests?.PrimaryRepositoryChanged();
+        }
+    }
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
     static readonly IReadOnlyList<HarnessOption> DefaultHarnessOptions = HostedHarnessCatalog.Build(null);
 

@@ -139,6 +139,7 @@ public sealed class ProfileCommand(ConfigRoot config, ICapacitorHttpClient http,
         await Console.Out.WriteLineAsync($"  update_check: {profile.UpdateCheck}");
         await Console.Out.WriteLineAsync($"  daemon.name: {profile.Daemon?.Name            ?? "(not set)"}");
         await Console.Out.WriteLineAsync($"  daemon.max_agents: {profile.Daemon?.MaxAgents ?? 5}");
+        await Console.Out.WriteLineAsync($"  daemon.auto_resume: {profile.Daemon?.AutoResume ?? true}");
 
         if (profile.Remotes is { Length: > 0 }) {
             await Console.Out.WriteLineAsync("  remotes:");

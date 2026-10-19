@@ -147,6 +147,9 @@ if (isHook && args.Contains("--claude")) {
 
     ClaudeSessionEnv.Persist(claudeHookBody, Environment.GetEnvironmentVariable(ClaudeSessionEnv.EnvFileVar), Console.Error);
 
+    if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ResumeEndSuppression.ShouldSuppress(HostedAgent.FromEnvironment()))
+        return 0;
+
     if (ClaudeSessionEndHandoff.IsDetached(args)) {
         ClaudeSessionEndHandoff.EnterDetached(claudeHookBody, config);
     } else if (ClaudeSessionEndHandoff.ShouldHandOff(args, claudeHookBody) && ClaudeSessionEndHandoff.TrySpawn(args, claudeHookBody, config, SystemProcessStarter.Instance)) {
@@ -269,7 +272,7 @@ if (args.Skip(1).Any(a => a is "--help" or "-h")) {
 // report-version: a no-server host must still hit ReportVersionCommand.HandleAsync's own
 // fail-open logic and return 0 silently, per its doc comment — never the generic
 // "No server configured" exit 1 this gate would otherwise produce.
-string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
+string[] offlineCommands = ["--help", "-h", "help", "--version", "-v", "logout", "cleanup", "config", "daemon", "setup", "local", "status", "harness", "update", "refresh", "plugin", "accounts", "profile", "use", "repos", "login", "ignore", "allow", "remap", "uninstall", "cursor-verify-appendonly", "agent", "report-version", "muse-assistant", RefreshTokenHandoff.Command];
 
 // `import --discover` reads local transcripts and never calls the server, so it belongs with the
 // offline commands — and it is most useful before setup has run, which is exactly when there is no
@@ -466,6 +469,8 @@ switch (command) {
         return await Run<AgentCommand>().HandleAsync(args, baseUrl);
     case "setup":
         return await Run<SetupCommand>().HandleAsync(args);
+    case "local":
+        return await Run<LocalCommand>().HandleAsync(args);
     case "muse-assistant":
         return await Run<MuseAssistantCommand>().HandleAsync(args);
     case "plugin":

@@ -108,19 +108,24 @@ sealed class ServiceVerify(
     Action? onCommitted = null,
     Func<string, string?>? gateEnv = null,
     Func<string, bool>? digestMatches = null,
-    Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
+    Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null,
+    Func<string, TimeSpan, Task>? endDaemon = null) {
     static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
     static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
     static readonly TimeSpan TargetProbeWait = TimeSpan.FromSeconds(5);
     static readonly TimeSpan FenceWait       = TimeSpan.FromSeconds(3);
 
+    /// <summary>How long a retirement waits for the old daemon to end its agents, capped at half the
+    /// forward budget; the bootout's own budget starts after it.</summary>
+    static readonly TimeSpan EndWait         = TimeSpan.FromSeconds(10);
+
     public static readonly TimeSpan DefaultForwardBudget   = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
 
-    /// <summary>The advertised transaction bound (30s at the defaults): forward cutoff + rollback
-    /// reserve. A caller's kill-timeout (the desktop app's mutation timeout) MUST sit strictly
-    /// above this. Two bounded phases can precede it — lock acquisition (≤ 10s) and, only on crash
+    /// <summary>The advertised transaction bound (40s at the defaults): a retirement's end wait
+    /// (<see cref="EndWait"/>) + forward cutoff + rollback reserve. A caller's kill-timeout (the desktop
+    /// app's mutation timeout) MUST sit strictly above this. Two bounded phases can precede it — lock acquisition (≤ 10s) and, only on crash
     /// residue, a recovery pre-phase (≤ the rollback reserve) — so for full headroom a caller should
     /// allow the sum. The one accepted exception is <see cref="KillWait"/> (≤ 5s) on the manual-owner
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
@@ -129,12 +134,16 @@ sealed class ServiceVerify(
     /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) PLUS the
     /// old daemon's fence (acquire and commit, each within <see cref="FenceWait"/>) on top of the sum
     /// above.</summary>
-    public static readonly TimeSpan AdvertisedBound = DefaultForwardBudget + DefaultRollbackReserve;
+    public static readonly TimeSpan AdvertisedBound = EndWait + DefaultForwardBudget + DefaultRollbackReserve;
 
     readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
         acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
     readonly TimeSpan _rollbackReserve  = rollbackReserve ?? DefaultRollbackReserve;
+
+    /// <summary>Asks a retired daemon to end its agents and exit, within the wait it is given.</summary>
+    readonly Func<string, TimeSpan, Task> _endDaemon = endDaemon ?? (Func<string, TimeSpan, Task>)(async (name, wait) =>
+        await Commands.DaemonShutdownClient.StopAndWaitAsync(store, name, new ShutdownRequestDto("end", "final"), wait, time, CancellationToken.None));
 
     /// <summary>A small slice reserved INSIDE the forward budget for the final recheck, so a primary
     /// readiness observation that lands right at the poll cutoff still gets one confirmation probe
@@ -1115,7 +1124,14 @@ sealed class ServiceVerify(
             return RetireRefusal("fence_unavailable");
         }
 
+        // The bootout alone reaches the daemon as SIGTERM, which keeps its agents for a successor this
+        // unit will never start. One that does not answer is left to the bootout, which keeps its whole
+        // forward budget however long the request took.
+        if (ticket.Fence is not null)
+            await _endDaemon(retireId, TimeSpan.FromTicks(Math.Min(EndWait.Ticks, _forwardBudget.Ticks / 2)));
+
         var deadline = time.GetUtcNow() + _forwardBudget;
+
         if (await ClearLabelAsync(retireId, deadline) is { } clearExit) return clearExit;
         if (!await WaitForStopConfirmedAsync(retireId, deadline)) {
             Say(VerifyExit.StopUnconfirmedToken);

@@ -52,10 +52,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
-    /// The row an idle resend dropped, paired with the replacement that took its place.
-    /// A line from before that replacement was sent belongs to the dropped row. The replacement's
-    /// own echo settles the replacement. A later copy is absorbed only when no send made since
-    /// the replacement can claim it.
+    // Keep retired sends eligible for late echoes without letting them consume a later send's receipt.
     readonly List<(QueuedChatMessage Old, QueuedChatMessage Replacement)> _superseded = new();
     int _nextSendOrder;
     /// The send the channel has not answered yet. It is tracked like a queued message but kept out
@@ -63,10 +60,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     QueuedChatMessage? _sending;
     QueuedChatMessage? _lastSent;
     bool _sendCommandExecuting;
-    /// True while an idle row send is in flight. The composer command stays shut for the same
-    /// window: this path does not execute it, so its own executing state never closes the gate.
+    // Row sends bypass SendCommand, so its IsExecuting cannot gate concurrent composer sends.
     readonly BehaviorSubject<bool> _queuedSendBusy = new(false);
-    ChatSendOutcome? _lastSendOutcome;
 
     IEnumerable<QueuedChatMessage> Tracked => _sending is { } sending ? _queuedMessages.Append(sending) : _queuedMessages;
     readonly Dictionary<string, ToolCallItem> _pendingTools = new(StringComparer.Ordinal);
@@ -359,6 +354,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// Set by the workspace hosting this chat; the card's fallback sends the user there.
     public Action? ShowTerminal { get; set; }
+    /// Called with the session id as a prompt goes out; the action it returns runs only if the
+    /// channel accepts the prompt. A reply answers the session's open questions, and no permission
+    /// response will ever say so.
+    public Func<string, Action>? InputSending { get; init; }
+    volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
     public string TerminalMenuSummary {
@@ -612,6 +612,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;
 
+        // A local session's id names an app-server session only while the local daemon reports
+        // that server; otherwise a match is another session's.
+        var onAppServer = origin == AgentOrigin.Remote ? Observable.Return(true) : localDaemonOnAppServer ?? Observable.Return(true);
+        sessionId?.CombineLatest(onAppServer, (id, admitted) => admitted ? id : null)
+            .Subscribe(id => _sessionId = id).DisposeWith(_disposables);
         Cards = new PendingCardsViewModel(
             agentId, origin, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
             localDaemonOnAppServer);
@@ -738,21 +743,27 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
-        // Drops the stuck row first, so the send below is the only copy the banner tracks.
-        // The composer and the tray stay as they are: this path delivers that one text alone,
-        // and a composer send stays shut until it returns.
+        // Only unchanged submitted or recalled text belongs to this row.
         SendQueuedCommand = ReactiveCommand.CreateFromTask<QueuedChatMessage>(async message => {
-            if (!message.CanSendNow || message.Acknowledged || message.IsForeign || message.DispatchId is not null) return;
+            if (_lifetimeToken.IsCancellationRequested || !AgentCanTakeQueuedNow
+                || !message.CanSendNow || !_queuedMessages.Contains(message)) return;
+            var ownsDraft = ComposerText == message.Text
+                && (_composerEdits == _recallEdits || _composerEdits == message.ComposerEdits);
             _queuedMessages.Remove(message);
             _unechoed.Remove(message);
             if (ReferenceEquals(_lastSent, message)) _lastSent = null;
             RefreshQueue();
             _queuedSendBusy.OnNext(true);
             RefreshQueuedSend();
+            ChatSendOutcome? outcome;
+            QueuedChatMessage? replacement = null;
             try {
-                await SendComposerAsync(
-                    message.Text, includeTray: false, bypassRecall: true, ownsDraft: false,
-                    onQueued: row => _superseded.Add((message, row)));
+                outcome = await SendComposerAsync(
+                    message.Text, includeTray: false, bypassRecall: true, ownsDraft: ownsDraft,
+                    onQueued: row => {
+                        replacement = row;
+                        _superseded.Add((message, row));
+                    });
             } finally {
                 // Teardown disposes this subject after cancelling the send. The await can resume
                 // once that has happened, and OnNext on a disposed subject throws.
@@ -762,8 +773,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
             }
             if (_lifetimeToken.IsCancellationRequested) return;
-            if (_lastSendOutcome is null or ChatSendOutcome.Rejected) {
+            if (outcome is null or ChatSendOutcome.Rejected) {
                 _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, message));
+                if (replacement?.Acknowledged == true) message.Acknowledged = true;
                 RestoreQueuedRow(message);
             }
         });
@@ -973,9 +985,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ConfirmDelivery(queued);
     }
 
-    // A line from before the replacement was sent can only be the dropped row. The first line
-    // the replacement can match is its echo. After that, a further copy is absorbed only when
-    // no send made since the replacement can claim it. One of those owns the line instead.
+    // The replacement owns the first eligible echo; its retired predecessor absorbs a further
+    // copy only when no later send can claim it. Transcript offsets cannot identify a dispatch.
     bool TakeSupersededEcho(string text, long offset) {
         for (var i = 0; i < _superseded.Count; i++) {
             var (old, replacement) = _superseded[i];
@@ -984,7 +995,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 AbsorbSuperseded(old);
                 return true;
             }
-            if (!replacement.Acknowledged && replacement.Matches(text, _inputGeneration, offset)) {
+            if (!replacement.Acknowledged && Tracked.Contains(replacement)
+                && replacement.Matches(text, _inputGeneration, offset)) {
                 Acknowledge(replacement);
                 return true;
             }
@@ -1016,12 +1028,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _superseded.RemoveAll(pair => ReferenceEquals(pair.Old, old));
     }
 
-    async Task SendComposerAsync(string snapshot, bool includeTray, bool bypassRecall, bool ownsDraft = true, Action<QueuedChatMessage>? onQueued = null) {
-        _lastSendOutcome = null;
+    async Task<ChatSendOutcome?> SendComposerAsync(string snapshot, bool includeTray, bool bypassRecall, bool ownsDraft = true, Action<QueuedChatMessage>? onQueued = null) {
         var edits = _composerEdits;
-        // The edit count is what says this text was recalled and left alone. Typing the same
-        // words is a second send: one transcript echo retires one queued row. An explicit row
-        // Send bypasses that guard: the selected copy was already retired for this attempt.
+        // An unchanged recall is already queued; typing the same words is a separate send.
         if (!bypassRecall) {
             var already = edits == _recallEdits
                 ? _queuedMessages.FirstOrDefault(q =>
@@ -1029,12 +1038,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : null;
             if (already is not null && Tray.Snapshot().Count == 0) {
                 if (_composerEdits == edits && ComposerText == snapshot) ComposerText = "";
-                return;
+                return null;
             }
         }
         var draftRevision = ownsDraft ? _drafts?.Revision(_origin, _agentId) ?? 0 : 0;
         var files = includeTray ? Tray.Snapshot() : [];
-        if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return; }
+        if (files.Count > 0 && !Attachments.CanAttach) { Notice(Attachments.AttachHint); return null; }
         IReadOnlyList<string> ids = [];
         if (files.Count > 0) {
             // The bytes have to be on the server before the prompt names them: a prompt that
@@ -1042,12 +1051,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             UploadingFiles = files.Count;
             UploadOutcome upload;
             try { upload = await _uploader.UploadAsync(files, _lifetimeToken); }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException) { return null; }
             finally { UploadingFiles = 0; }
-            if (_lifetimeToken.IsCancellationRequested) return;
+            if (_lifetimeToken.IsCancellationRequested) return null;
             if (upload.Kind != UploadKind.Uploaded) {
                 Notice(upload.Kind == UploadKind.Unauthorized ? "sign in to attach files" : upload.Reason ?? "the upload failed");
-                return;
+                return null;
             }
             ids = upload.Ids;
             // Re-asked after the upload: the window is long enough for the session to end or the
@@ -1055,14 +1064,14 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             // the chips still staged and nothing said about them.
             if (!Attachments.CanAttach) {
                 Notice(Attachments.AttachHint ?? LocalFrameChatInput.AttachmentsRefused);
-                return;
+                return null;
             }
         }
         // The upload can finish after the menu is on screen. The text would be typed into
         // that menu, so the draft and the chips stay where they are.
-        if (HasTerminalMenu) return;
+        if (HasTerminalMenu) return null;
         var chipIds = files.Select(f => f.Id).ToList();
-        var queued = new QueuedChatMessage(snapshot, edits, _inputGeneration, CurrentOffset, chipIds) {
+        var queued = new QueuedChatMessage(snapshot, ownsDraft ? edits : -1, _inputGeneration, CurrentOffset, chipIds) {
             SendOrder = ++_nextSendOrder,
         };
         if (!queued.HasBaseline) Interlocked.Increment(ref _baselineVersion);
@@ -1071,6 +1080,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _unechoed.Add(queued);
         if (_unechoed.Count > ComposerHistory.Capacity) _unechoed.RemoveAt(0);
         onQueued?.Invoke(queued);
+        var delivered = _sessionId is { Length: > 0 } sid ? InputSending?.Invoke(sid) : null;
         ChatSendOutcome outcome;
         try { outcome = await _input.SendAsync(snapshot, ids, _lifetimeToken); }
         catch (OperationCanceledException) { outcome = ChatSendOutcome.Unconfirmed; }
@@ -1079,11 +1089,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             outcome = ChatSendOutcome.Unconfirmed;
         }
         finally { _sending = null; }
-        _lastSendOutcome = outcome;
         if (_lifetimeToken.IsCancellationRequested) {
             // The tab is gone, so nothing else will clear the stored copy of a delivered prompt.
-            if (outcome == ChatSendOutcome.Accepted) _drafts?.ClearDelivered(draftRevision);
-            return;
+            if (outcome == ChatSendOutcome.Accepted) {
+                _drafts?.ClearDelivered(draftRevision);
+                delivered?.Invoke();
+            }
+            return outcome;
         }
         if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
         var waits = !queued.Acknowledged && outcome switch {
@@ -1096,8 +1108,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _queuedMessages.Add(queued);
         }
         RefreshQueue();
-        if (outcome == ChatSendOutcome.Accepted) { ClearSentDraft(queued); Tray.RemoveAll(chipIds); }
+        if (outcome == ChatSendOutcome.Accepted) {
+            ClearSentDraft(queued);
+            Tray.RemoveAll(chipIds);
+            delivered?.Invoke();
+        }
         if (queued.Acknowledged) ConfirmDelivery(queued);
+        return outcome;
     }
 
     void ConfirmDelivery(QueuedChatMessage queued) {

@@ -1,4 +1,7 @@
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -11,45 +14,15 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
-    const string Unreadable = "<unreadable>";
+    const string Unreadable = RecordingServiceManager.Unreadable;
 
-    sealed class RecordingManager(Dictionary<string, string?> binaries) : IServiceManager {
-        public readonly List<string> Uninstalled = [];
-        int _statusReads;
-        public int StatusReads => Volatile.Read(ref _statusReads);
-        public string Describe() => "fake";
-        public string UnitDirectory => "";
-        public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
-        public bool ListingFails;
-        public IReadOnlyList<string> ListInstalled() => [.. binaries.Keys];
-        public IReadOnlyList<string>? TryListInstalled() => ListingFails ? null : ListInstalled();
-        public ServiceStatus Status(string serviceId) {
-            Interlocked.Increment(ref _statusReads);
-            return binaries[serviceId] == Unreadable
-                ? throw new IOException("unreadable wrapper")
-                : new(ServiceState.Installed, binaries[serviceId]);
-        }
-        public ServiceQuery Query(string serviceId) => new(LabelProbe.Loaded, true, ServiceState.Installed, binaries[serviceId], null);
-        public bool Install(ServiceSpec spec, bool startNow, out string? error) { error = null; return true; }
-        public void WriteAndBootstrap(ServiceSpec spec) { }
-
-        public bool Uninstall(string serviceId, out string? error) {
-            Uninstalled.Add(serviceId);
-            error = null;
-            return true;
-        }
-
-        public bool Start(string serviceId, out string? error) { error = null; return true; }
-        public bool Stop(string serviceId, out string? error) { error = null; return true; }
-    }
-
-    DaemonServiceCommands Commands(IServiceManager manager) =>
-        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, "unused", Home, TimeProvider.System);
+    DaemonServiceCommands Commands(IServiceManager manager, string id = "unused") =>
+        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), manager, id, Home, TimeProvider.System);
 
     [Test]
     public async Task Removes_only_units_whose_daemon_is_inside_the_folder() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() {
+        var manager = new RecordingServiceManager(new() {
             ["laptop"] = Path.Combine(app, "kcap-daemon.exe"),
             ["npm"]    = Path.GetFullPath("/npm/node_modules/@kurrent/kcap/bin/kcap-daemon.exe"),
             ["near"]   = Path.GetFullPath("/apps/KurrentCapacitor/current-old/kcap-daemon.exe"),
@@ -63,10 +36,112 @@ public class DaemonCommandsServiceUninstallUnderTests {
         await Assert.That(manager.Uninstalled).IsEquivalentTo(["laptop"]);
     }
 
+    /// <summary>The removed daemon never starts again, so it is asked to end its agents before the unit
+    /// goes; the bootout alone would keep them for a successor.</summary>
+    [Test]
+    public async Task A_running_daemon_is_asked_to_end_its_agents_before_its_unit_is_removed() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        // Set before the stand-in dies: a bootout that found it gone came after the request.
+        var asked    = 0;
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "laptop", LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => { Volatile.Write(ref asked, 1); child.Kill(); child.WaitForExit(); });
+        var askedFirst = new List<bool>();
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) {
+            OnBootout = _ => askedFirst.Add(Volatile.Read(ref asked) == 1),
+        };
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await Assert.That(askedFirst).IsEquivalentTo([true]);
+        await Assert.That(manager.Uninstalled).IsEquivalentTo(["laptop"]);
+    }
+
+    [Test]
+    public async Task Uninstall_asks_a_running_daemon_to_end_its_agents_first() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        // Set before the stand-in dies: a bootout that found it gone came after the request.
+        var asked    = 0;
+        var received = FakeControlSocket.AnswerOnce(Daemons.Store, "solo", LocalFrame.ShutdownAck("stopping"),
+            afterReply: () => { Volatile.Write(ref asked, 1); child.Kill(); child.WaitForExit(); });
+        var askedFirst = new List<bool>();
+        var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" }) {
+            OnBootout = _ => askedFirst.Add(Volatile.Read(ref asked) == 1),
+        };
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "solo").Uninstall();
+
+        await Assert.That(exit).IsEqualTo(0);
+        var request = await received.WaitAsync(TimeSpan.FromSeconds(30));
+        await Assert.That(ShutdownIpc.Parse(request!.Text!)).IsEqualTo(new ShutdownRequestDto("end", "final"));
+        await Assert.That(askedFirst).IsEquivalentTo([true]);
+        await Assert.That(manager.Uninstalled).IsEquivalentTo(["solo"]);
+    }
+
+    /// <summary>A daemon that cannot be reached is removed by the bootout as before.</summary>
+    [Test]
+    public async Task Uninstall_of_a_daemon_that_does_not_answer_still_removes_its_unit() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "solo").Uninstall();
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(manager.Uninstalled).IsEquivalentTo(["solo"]);
+    }
+
+    /// <summary>A daemon that could not be asked to end its agents leaves entries a later start would
+    /// resume; the operator meant to end them.</summary>
+    [Test]
+    public async Task Uninstall_of_a_daemon_that_does_not_answer_marks_its_ledger_interrupted() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("solo"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var ledger = ResumeLedgerStore.For(Daemons.Store, "solo");
+        ledger.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        ledger.Write(ResumeLedgerEntries.For("agent-2", ResumeState.Resuming));
+        var manager = new RecordingServiceManager(new() { ["solo"] = "/opt/kcap/kcap-daemon" });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager, "solo").Uninstall();
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ledger.ReadAll().All(e => e is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" })).IsTrue();
+    }
+
+    [Test]
+    public async Task UninstallUnder_of_a_daemon_that_does_not_answer_marks_its_ledger_interrupted() {
+        Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
+        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        using var child = DummyProcess.StartSleep(120);
+        File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
+        var ledger = ResumeLedgerStore.For(Daemons.Store, "laptop");
+        ledger.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
+        using var console = ConsoleOutput.StartFullCapture();
+
+        var exit = await Commands(manager).UninstallUnder(app);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(ledger.ReadAll().Single() is { State: ResumeState.Interrupted, LastError: "stopped_by_operator" }).IsTrue();
+    }
+
     [Test]
     public async Task A_unit_another_operation_holds_is_left_and_reported() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
         using var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
         using var console = ConsoleOutput.StartFullCapture();
 
@@ -81,7 +156,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     public async Task A_unit_repointed_while_the_lock_was_held_is_left_alone() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
         var binaries = new Dictionary<string, string?> { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") };
-        var manager = new RecordingManager(binaries);
+        var manager = new RecordingServiceManager(binaries);
         var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
         using var console = ConsoleOutput.StartFullCapture();
 
@@ -98,7 +173,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task A_unit_that_cannot_be_read_does_not_stop_the_others() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() {
+        var manager = new RecordingServiceManager(new() {
             ["broken"] = Unreadable,
             ["laptop"] = Path.Combine(app, "kcap-daemon.exe"),
         });
@@ -116,7 +191,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task A_listing_that_fails_is_reported_not_taken_as_no_units() {
         var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
-        var manager = new RecordingManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) { ListingFails = true };
+        var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) { ListingFails = true };
         using var console = ConsoleOutput.StartFullCapture();
 
         var exit = await Commands(manager).UninstallUnder(app);

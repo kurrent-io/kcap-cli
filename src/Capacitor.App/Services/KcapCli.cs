@@ -55,6 +55,9 @@ public interface IKcapCli {
     /// timeout, or a parse failure) — never a fabricated snapshot.
     Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct);
 
+    /// The same read for another daemon name's service.
+    Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct);
+
     Task<bool> SupportsServiceRetireAsync(CancellationToken ct);
 
     Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct);
@@ -84,13 +87,14 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
-    /// The forced refresh may wait 10 s for the service transaction lock before its own 55 s deadline starts.
-    static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(75);
+    /// The forced refresh may wait 10 s for the service transaction lock before its own 85 s deadline starts.
+    static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(105);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
     static readonly TimeSpan DiscoverTimeout = TimeSpan.FromSeconds(120);
     // A rename adds, on top of the install's own budgets: the old id's 10s lock wait, its 5s label
     // query, the 5s target probe, the old daemon's fence (two connects and exchanges of 3s each to
-    // acquire, then a 3s commit or abort) and the retire's own 20s forward budget — about 118s in all.
+    // acquire, then a 3s commit or abort), the old daemon's 10s end-agents wait and the retire's own 20s
+    // forward budget — about 128s in all.
     static readonly TimeSpan RenameTimeout = TimeSpan.FromSeconds(150);
     static readonly TimeSpan VersionTimeout = TimeSpan.FromSeconds(10);
     // Same tier as VersionTimeout — also a read-only query — so a hung `launchctl print` can
@@ -141,11 +145,13 @@ public sealed class KcapCli : IKcapCli {
         return result.ExitCode == 0 && !result.TimedOut ? CliResolver.ParseVersion(result.Stdout) : null;
     }
 
-    public async Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) {
+    public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) => ServiceStatusAsync(_daemonName, ct);
+
+    public async Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) {
         if (CliPath is not { } cliPath) return null;
 
         var result = await Run(cliPath,
-                ["daemon", "service", "status", "--name", _daemonName, "--json"],
+                ["daemon", "service", "status", "--name", daemonName, "--json"],
                 new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Timeout: StatusTimeout), ct)
             .ConfigureAwait(false);
 

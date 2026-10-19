@@ -53,7 +53,7 @@ public class SetupCommandTests {
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
             new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root) {
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 
@@ -657,8 +657,8 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
-    /// <summary>A service the browser's request put in place replaces the start-it-yourself advice, which
-    /// would otherwise start a second daemon beside it.</summary>
+    /// <summary>A service in place replaces the start-it-yourself advice, which would otherwise start a
+    /// second daemon beside it.</summary>
     [Test]
     [Arguments(FirstRunMachineActionOutcomes.Enabled)]
     [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
@@ -670,14 +670,41 @@ public class SetupCommandTests {
         await Assert.That(line).Contains("background service");
     }
 
-    /// <summary>No request, or one that did not end in a service, keeps the optional start hint.</summary>
+    /// <summary>A failed ensure is retried as a service; only a platform without one gets the plain start.</summary>
     [Test]
-    public async Task DaemonClosingLine_keeps_the_start_hint_without_a_service() {
-        await Assert.That(SetupCommand.DaemonClosingLine(null)).Contains("kcap daemon start -d");
+    public async Task DaemonClosingLine_offers_a_plain_start_only_without_a_service_manager() {
         await Assert.That(SetupCommand.DaemonClosingLine(
                 new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon service ensure");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(
+                    FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform)))
             .Contains("kcap daemon start -d");
     }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments(" ")]
+    [Arguments("--no-prompt")]
+    public async Task DaemonNameArgumentError_refuses_a_flag_with_no_usable_value(string? value) =>
+        await Assert.That(SetupCommand.DaemonNameArgumentError(
+            value is null ? ["setup", "--daemon-name"] : ["setup", "--daemon-name", value])).IsNotNull();
+
+    [Test]
+    public async Task DaemonNameArgumentError_accepts_a_name_or_no_flag() {
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--daemon-name", "laptop"])).IsNull();
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--no-prompt"])).IsNull();
+    }
+
+    /// <summary>A refusal no retry can change says why instead of sending the user to the same refusal.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionReasons.NotConfigured)]
+    [Arguments(FirstRunMachineActionReasons.NeedsAttention)]
+    public async Task DaemonClosingLine_suggests_no_retry_for_a_stable_refusal(string reason) =>
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Refused, reason)))
+            .DoesNotContain("retry");
 
     /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
     /// changes it, in the direction that would change it.</summary>
@@ -695,15 +722,6 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
         await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
         await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
-    }
-
-    /// <summary>The browser path cannot fall back to a prompt, so its fallbacks must be finite.</summary>
-    [Test]
-    public async Task BrowserDaemonNameFallbacks_start_with_the_prompt_s_suggestion_and_stop() {
-        var names = SetupCommand.BrowserDaemonNameFallbacks("tony", "mbp").ToList();
-
-        await Assert.That(names[0]).IsEqualTo("tony-mbp");
-        await Assert.That(names).IsEquivalentTo(["tony-mbp", "tony-mbp-2", "tony-mbp-3", "tony-mbp-4"]);
     }
 
     [Test]
@@ -877,6 +895,17 @@ public class SetupCommandTests {
         await Assert.That(withTour[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
         await Assert.That(withTour[1].Answer)
                     .Contains($"[cyan]{SetupCommand.GuidedTourPromptQuoted}[/]");
+    }
+
+    [Test]
+    public async Task NextSteps_for_the_local_installation_points_at_its_web_ui_instead_of_server_setup() {
+        var items = SetupCommand.NextStepItems(offerGuidedTour: true, localServerUrl: "http://localhost:9473");
+
+        await Assert.That(items.Count).IsEqualTo(2);
+        await Assert.That(items.Any(i => i.Question == SetupCommand.ServerSetupQuestion)).IsFalse();
+        await Assert.That(items[0].Question).IsEqualTo(SetupCommand.LocalServerQuestion);
+        await Assert.That(items[0].Answer).Contains("[cyan]http://localhost:9473[/]");
+        await Assert.That(items[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
     }
 
     [Test]
@@ -1438,7 +1467,7 @@ public class SetupCommandTests {
     // The environment they probe and the /auth/config cache they stub are both process-global, so no
     // cohort of key-holders can exclude the readers: bare.
 
-    static string[] SkipAllAgentInstallFlags => [
+    internal static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
         "--skip-cursor-hooks", "--skip-cursor-mcp",
         "--skip-copilot-hooks", "--skip-copilot-mcp", "--skip-copilot-instructions",

@@ -32,8 +32,12 @@ public sealed class RefreshCommand(IProcessRunner runner) {
         ["daemon", "service", "refresh"],
     ];
 
-    /// <summary>Longer than the daemon step's own 55s deadline, so its last reload can finish.</summary>
     static readonly TimeSpan StepTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>Longer than the daemon step's own 85s deadline, so its last reload can finish.</summary>
+    static readonly TimeSpan DaemonStepTimeout = TimeSpan.FromSeconds(90);
+
+    static TimeSpan TimeoutFor(string[] step) => step[0] == "daemon" ? DaemonStepTimeout : StepTimeout;
 
     public Task<int> HandleAsync(string[] args) =>
         RunAsync(Environment.ProcessPath, InstallProvenance.Kind(), () => SetupCommand.ResolvePluginPath(), Console.Out, Console.Error);
@@ -61,14 +65,14 @@ public sealed class RefreshCommand(IProcessRunner runner) {
             ProcessResult result;
             try {
                 result = await runner.RunAsync(binaryPath, [.. step],
-                    new RunOptions(Timeout: StepTimeout), CancellationToken.None);
+                    new RunOptions(Timeout: TimeoutFor(step)), CancellationToken.None);
             } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException) {
                 failed.Add($"kcap {string.Join(' ', step)}: {ex.Message}");
                 continue;
             }
 
             if (result.TimedOut)
-                failed.Add($"kcap {string.Join(' ', step)}: timed out after {StepTimeout.TotalSeconds:0}s");
+                failed.Add($"kcap {string.Join(' ', step)}: timed out after {TimeoutFor(step).TotalSeconds:0}s");
             else if (result.ExitCode != 0)
                 failed.Add($"kcap {string.Join(' ', step)}: exit {result.ExitCode}{LastLine(result.Stderr)}");
         }

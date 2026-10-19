@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.LocalEdition;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -34,10 +35,15 @@ public static class AtomicFile {
                 // UnixCreateMode is filtered by the umask; set the exact mode before writing.
                 if (target is { } exact && !OperatingSystem.IsWindows()) File.SetUnixFileMode(tmp, exact);
                 stream.Write(contents);
-                if (durable) stream.Flush(flushToDisk: true);
+                if (durable) {
+                    FaultPoints.Hit($"flush:{destination}");
+                    stream.Flush(flushToDisk: true);
+                }
             }
 
+            FaultPoints.Hit($"rename:{destination}");
             File.Move(tmp, destination, overwrite: true);
+            FaultPoints.Hit($"renamed:{destination}");
         } catch {
             if (created) {
                 try { File.Delete(tmp); } catch { /* preserve the original exception */ }

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Text;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -113,8 +112,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
     readonly TimeProvider            _time;
     readonly CancellationTokenSource _stderrDrainCts = new();
     readonly Task                    _stderrDrainTask;
-    readonly Lock                    _diagnosticsGate = new();
-    readonly StringBuilder           _diagnostics     = new();
+    readonly StderrHead              _diagnostics     = new(DiagnosticsCap);
     readonly SemaphoreSlim           _stdinGate       = new(1, 1);
 
     int _disposed;
@@ -159,7 +157,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
     /// nothing. Read on a failed launch or an unexpected exit, to turn silence into a reason an
     /// operator can act on. Mirrors <c>AgyTurnProcess.Diagnostics</c>'s shape and naming.</summary>
     public string? Diagnostics {
-        get { lock (_diagnosticsGate) return _diagnostics.Length == 0 ? null : _diagnostics.ToString(); }
+        get => _diagnostics.Text;
     }
 
     /// <summary>This child's stdout, LF-framed, one JSONL line at a time, ending at EOF.</summary>
@@ -221,7 +219,7 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
                 if (line is null) break;      // EOF — the child exited and closed the stream
                 if (line.Length == 0) continue;
 
-                Capture(line);
+                _diagnostics.Capture(line);
                 LogStderrShape(line.Length);
             }
         } catch (OperationCanceledException) {
@@ -230,14 +228,6 @@ internal sealed partial class PiRpcProcess : IPiRpcProcess {
             // Pipe torn down on teardown — expected.
         } catch (ObjectDisposedException) {
             // Stream disposed out from under the read — expected.
-        }
-    }
-
-    void Capture(string line) {
-        lock (_diagnosticsGate) {
-            if (_diagnostics.Length >= DiagnosticsCap) return;
-
-            _diagnostics.Append(line).Append('\n');
         }
     }
 

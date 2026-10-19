@@ -9,10 +9,13 @@ namespace Capacitor.App.ViewModels;
 /// Only the ids are held: the chips themselves live in the tray until a delivery clears them.
 public sealed class QueuedChatMessage(string text, int composerEdits, int generation, long? offset, IReadOnlyList<Guid> attachmentIds) : ReactiveObject {
     public const string AwaitingPickupNote = "The agent reads it when its current step ends";
-    /// Shown instead of <see cref="AwaitingPickupNote"/> when nothing is in a step to end.
+    public const string AttachmentsOnlyText = "Attachments only";
     public const string IdlePickupNote = "The agent is not in a step";
 
     public string Text { get; } = text;
+    /// The server's queue item carries no attachments, so a prompt that was only files arrives
+    /// with empty text.
+    public string DisplayText => string.IsNullOrWhiteSpace(Text) ? AttachmentsOnlyText : Text;
     public IReadOnlyList<Guid> AttachmentIds { get; } = attachmentIds;
     internal int ComposerEdits { get; } = composerEdits;
     internal bool Acknowledged { get; set; }
@@ -52,12 +55,10 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle ? IdlePickupNote : AwaitingPickupNote;
 
     internal void SetPickup(bool agentIdle, bool canSend) {
-        // A server-listed prompt is already a live dispatch: offering Send would submit another.
-        var send = canSend && IsAwaitingPickup && AttachmentIds.Count == 0 && DispatchId is null;
         var idleChanged = _agentIdle != agentIdle;
-        var sendChanged = _canSendNow != send;
         _agentIdle = agentIdle;
-        if (sendChanged) CanSendNow = send;
+        // A server-listed prompt is already a live dispatch: offering Send would submit another.
+        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0 && DispatchId is null;
         if (idleChanged) this.RaisePropertyChanged(nameof(PickupNote));
     }
 

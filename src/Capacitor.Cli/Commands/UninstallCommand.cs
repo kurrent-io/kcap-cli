@@ -13,7 +13,6 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
-using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -23,8 +22,8 @@ namespace Capacitor.Cli.Commands;
 /// Cursor / Gemini hook files, deletes the kcap-owned Copilot hooks file, the
 /// kcap Kiro agent (~/.kiro/agents/kcap.json) — restoring the default agent it
 /// replaced — and the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts),
-/// removes agent skills (and legacy Codex skills), deletes the kcap config
-/// directory and, last, the vendor account registry.
+/// removes agent skills (and legacy Codex skills), deletes the daemon state
+/// directory, the kcap config directory and, last, the vendor account registry.
 ///
 /// With <c>--project</c>, also strips kcap entries from the cwd's git-root
 /// <c>.claude/settings.local.json</c> and <c>.codex/hooks.json</c>. Project-scope
@@ -83,6 +82,15 @@ public sealed class UninstallCommand(
             await Console.Out.WriteLineAsync($"  • Delete the kcap config directory ({configDir})");
         }
 
+        // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
+        // A link there could lead anywhere, so only the real directory counts as kcap's. A linked
+        // ~/.config is allowed: dotfile managers link it, and kcap/ inside it is still kcap's.
+        var ownsDaemonDir = PathsEqual(store.Directory, DaemonStore.DefaultDirectory(home))
+                         && new DirectoryInfo(store.Directory).LinkTarget is null
+                         && new DirectoryInfo(Path.GetDirectoryName(store.Directory)!).LinkTarget is null;
+        if (ownsDaemonDir)
+            await Console.Out.WriteLineAsync($"  • Delete the daemon state directory ({store.Directory})");
+
         if (!skipPrompt) {
             await Console.Out.WriteAsync("Proceed? [y/N] ");
             var reply = await Console.In.ReadLineAsync();
@@ -101,36 +109,10 @@ public sealed class UninstallCommand(
         // — this flag captures the boolean for the final decision only.
         var hadFailures = false;
 
-        // Deregister any OS-managed daemon services FIRST. `daemon stop` defers to
-        // the supervisor for service-managed daemons (a raw kill would be
-        // auto-restarted), so without this the launchd/systemd/Scheduled-Task unit
-        // would survive uninstall and keep relaunching a daemon whose config we're
-        // about to delete. Uninstalling the unit also stops the running instance
-        // (launchctl bootout / systemctl disable --now), after which the plain
-        // `daemon stop --yes` below mops up any non-service daemons.
-        try {
-            var services = ServiceManagerFactory.ForCurrentOs(config, home, time);
-            foreach (var id in services.ListInstalled()) {
-                if (services.Uninstall(id, out var error)) {
-                    await Console.Out.WriteLineAsync($"  • Removed daemon service '{id}' ({services.Describe()})");
-                } else {
-                    await Console.Error.WriteLineAsync($"  • Could not remove daemon service '{id}': {error}");
-                    hadFailures = true;
-                }
-            }
-        } catch (PlatformNotSupportedException) {
-            // No service backend on this OS — nothing to deregister.
-        }
-
-        // Stop daemons first — they hold lock files inside the config dir we're
-        // about to delete. --yes silences the multi-daemon confirmation so this
-        // works non-interactively. A non-zero exit code means at least one
-        // daemon couldn't be stopped; we leave the config dir alone in that case.
-        if (await new DaemonCommands(store, config, profiles, home, harnesses, binaries, time)
-                .HandleAsync(["daemon", "stop", "--yes"]) != 0) hadFailures = true;
-
-        // Kill any orphaned watcher PIDs that the daemon stop didn't catch.
-        if (await new CleanupCommand(watchers).HandleCleanup() != 0) hadFailures = true;
+        // Daemons hold lock files inside the config dir we're about to delete; one still running leaves the
+        // config dir in place.
+        if (!await new OutgoingRecorders(store, config, profiles, home, harnesses, binaries, watchers, time).StopAsync())
+            hadFailures = true;
 
         var accountStore  = AccountStore.Beside(store);
         var env           = PluginEnvironment.FromProcess(await AppConfig.LoadProfileConfig(config), home, harnesses, binaries, accountStore);
@@ -223,6 +205,26 @@ public sealed class UninstallCommand(
             CodexHooksInstaller.DeleteMarker(codexProject);
         }
 
+        // Holds the daemons' locks and their granted consent. It goes before the config directory, which
+        // holds it by default, so a lock still held keeps both. Kept after a failure for the same reason
+        // as the registry: a re-run has to find and stop what is still running. A directory
+        // KCAP_DAEMONS_DIR moved, or a link, may be shared, so nothing in it is assumed to be kcap's.
+        if (!ownsDaemonDir) {
+            await Console.Out.WriteLineAsync($"Left the daemon state directory {store.Directory} in place: it is moved or linked elsewhere, so kcap cannot tell its files from others'.");
+        } else if (!hadFailures && Directory.Exists(store.Directory)) {
+            try {
+                if (store.DeleteAll()) {
+                    await Console.Out.WriteLineAsync($"Removed daemon state directory: {store.Directory}");
+                } else {
+                    await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: a daemon or daemon command is still using it.");
+                    hadFailures = true;
+                }
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                await Console.Error.WriteLineAsync($"Could not remove daemon state directory {store.Directory}: {ex.Message}");
+                hadFailures = true;
+            }
+        }
+
         if (!keepConfig) {
             if (hadFailures) {
                 await Console.Error.WriteLineAsync(
@@ -263,6 +265,10 @@ public sealed class UninstallCommand(
 
         return 0;
     }
+
+    static bool PathsEqual(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
     /// Deletes every <c>kcap-*</c> directory directly under
