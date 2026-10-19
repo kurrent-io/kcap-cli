@@ -121,6 +121,20 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public string? CurrentVisibilityNote { get; private set; }
 
+    bool Local => _onLocalPath?.Invoke() == true;
+
+    public string SavedNote => Local
+        ? "These connection choices are saved."
+        : "These connection choices are saved. Use kcap plugin remove in your terminal to disconnect a harness.";
+
+    public string CliMissingNote => Local
+        ? "The Capacitor command line isn't available on this machine, so there is nothing to turn on from here."
+        : "kcap isn't available on this machine, so there is nothing to turn on from here.";
+
+    public string ProviderKeyDetail => Local
+        ? " By default Capacitor leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use."
+        : " By default kcap leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use.";
+
     /// A local install keeps sessions on this machine, so there is no audience to choose.
     public bool VisibilityVisible => _onLocalPath?.Invoke() != true;
 

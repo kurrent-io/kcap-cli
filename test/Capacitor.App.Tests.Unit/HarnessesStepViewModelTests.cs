@@ -400,6 +400,21 @@ public class HarnessesStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Local_harnesses_notes_name_no_terminal_command() {
+        var (local, cloud) = await AvaloniaSession.DispatchAsync(async () => {
+            var l = new Harness(Config.Root, local: true);
+            var c = new Harness(Config.Root);
+            await l.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (new[] { l.Vm.SavedNote, l.Vm.CliMissingNote, l.Vm.ProviderKeyDetail }, c.Vm.SavedNote);
+        });
+
+        foreach (var text in local) await Assert.That(text).DoesNotContain("kcap ");
+        await Assert.That(cloud).Contains("kcap plugin remove");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Not_now_saves_privacy_without_installing_connections_and_records_the_offer() {
         var (calls, stamped) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root);
