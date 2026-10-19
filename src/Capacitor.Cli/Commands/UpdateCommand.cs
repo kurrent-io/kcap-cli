@@ -176,7 +176,7 @@ public sealed class UpdateCommand(
             ? "Run `kcap daemon restart` if you run the daemon."
             : "A running daemon restarts on the new version; its agents are stopped and resumed.");
 
-        return await RunLocalUpgrade(exe) is LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo ? 0 : 1;
+        return await RunLocalUpgrade(exe) is LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo or LocalUpgradeCommand.NotPublished ? 0 : 1;
     }
 
     /// <summary>Inherits the console, so its progress and any error reach the user as it happens.</summary>
@@ -190,7 +190,9 @@ public sealed class UpdateCommand(
 
         await process.WaitForExitAsync();
 
-        if (process.ExitCode is not (LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo))
+        if (process.ExitCode == LocalUpgradeCommand.NotPublished)
+            await Console.Error.WriteLineAsync("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+        else if (process.ExitCode is not (LocalUpgradeCommand.Upgraded or LocalUpgradeCommand.NothingToDo))
             await Console.Error.WriteLineAsync("The local server was not upgraded; run `kcap local upgrade` to retry.");
 
         return process.ExitCode;

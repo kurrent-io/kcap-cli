@@ -40,6 +40,7 @@ assert.strictEqual(localRegistryPath({}, path.resolve("/home/u")), path.join(pat
 assert.strictEqual(localRegistryPath({ KCAP_LOCAL_ROOT: path.resolve("/r") }, path.resolve("/home/u")), path.join(path.resolve("/r"), "install.json"));
 assert.strictEqual(localUpgradeSucceeded(0), true);
 assert.strictEqual(localUpgradeSucceeded(3), true);
+assert.strictEqual(localUpgradeSucceeded(4), true);   // bundle not published yet: the CLI update still succeeded
 assert.strictEqual(localUpgradeSucceeded(1), false);
 assert.strictEqual(localUpgradeSucceeded(2), false);
 assert.strictEqual(localUpgradeSucceeded(null), false);

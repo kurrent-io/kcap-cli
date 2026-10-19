@@ -24,7 +24,8 @@ For other installs (e.g. Homebrew), prints the command to run instead.
 When this machine has a local installation (kcap setup --local), npm and
 script installs then run the new binary's kcap local upgrade, which moves
 the local stack to the new version; a failed upgrade makes kcap update
-exit 1. Other installs run kcap local upgrade themselves after updating.
+exit 1. A release whose server bundle is not published yet only says so:
+the stack stays on its version until kcap local upgrade is run again. Other installs run kcap local upgrade themselves after updating.
 
 On macOS and Linux a running daemon restarts on the new version by itself;
 its agents are stopped and resumed.

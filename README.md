@@ -408,7 +408,7 @@ kcap local uninstall       # remove it, keeping its data; --purge deletes it (se
 
 The stack is always at least as new as every `kcap` that uses it, and it only moves forward. `kcap local upgrade` is the only command that changes its version: it moves the stack to this `kcap`'s version when that is newer, and otherwise changes nothing, so an older `kcap` on the same machine (say the desktop app's bundled one) keeps working against a newer stack and never moves it back.
 
-- **npm:** `kcap update` replaces the CLI, then runs the new binary's `kcap local upgrade`.
+- **npm:** `kcap update` replaces the CLI, then runs the new binary's `kcap local upgrade`. A CLI release can reach npm before its server bundle is published; the update then still succeeds, says so, and the stack stays on its version until `kcap local upgrade` is run again.
 - **Script installs:** `kcap update` does the same once the new release is in place.
 - **Homebrew and other installs:** update the CLI the way you installed it, then run `kcap local upgrade`. `kcap local status` and the notice after other commands say when the stack is behind.
 
@@ -436,6 +436,7 @@ A run that changes nothing ends with `{"v":1,"event":"nothing_to_do","version":"
 | 1 | Failed before the switch: the old version is selected, and running again if it was |
 | 2 | Failed after the switch: the new version is selected and stopped, or its switch is finished by the next command |
 | 3 | Nothing to do: already at this version, newer than it, or not installed |
+| 4 | No bundle is published for this version yet (`bundle_not_published`); nothing changed |
 
 ### Approval policy
 

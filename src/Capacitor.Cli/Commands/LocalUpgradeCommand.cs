@@ -20,6 +20,10 @@ sealed class LocalUpgradeCommand(ILocalStackFactory stacks) {
     /// <summary>Already at this version, newer than it, or not installed.</summary>
     public const int NothingToDo = 3;
 
+    /// <summary>No bundle is published for this version yet, so nothing changed. A CLI release can reach its channel
+    /// before its bundle does; <c>kcap update</c> treats this as a note, not a failure.</summary>
+    public const int NotPublished = 4;
+
     static readonly string[] Flags = ["--json", "--if-installed", "--no-update-check"];
 
     /// <summary>Overrides this kcap's own version, as <see cref="LocalBundleClient.VersionEnvVar"/> does.</summary>
@@ -47,7 +51,7 @@ sealed class LocalUpgradeCommand(ILocalStackFactory stacks) {
                 Console.Error.WriteLine($"  Error: {message}");
             }
 
-            return switched ? FailedAfterSwitch : Failed;
+            return switched ? FailedAfterSwitch : code == LocalInstallFailureCode.BundleNotPublished ? NotPublished : Failed;
         }
 
         if (args.Skip(2).FirstOrDefault(a => !Flags.Contains(a)) is { } unknown)

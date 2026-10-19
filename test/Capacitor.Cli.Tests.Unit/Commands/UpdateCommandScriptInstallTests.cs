@@ -62,6 +62,7 @@ public class UpdateCommandScriptInstallTests : IDisposable {
     /// <summary>The CLI is updated either way; the exit says the stack did not follow it.</summary>
     [Test]
     [Arguments(LocalUpgradeCommand.Upgraded, 0)]
+    [Arguments(LocalUpgradeCommand.NotPublished, 0)]
     [Arguments(LocalUpgradeCommand.Failed, 1)]
     [Arguments(LocalUpgradeCommand.FailedAfterSwitch, 1)]
     public async Task A_failed_local_upgrade_fails_the_update(int upgradeExit, int exit) {

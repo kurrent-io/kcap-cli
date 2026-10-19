@@ -31,8 +31,8 @@ Subcommands:
 status exits 0 only when the server is running and ready. start, stop, restart, upgrade and uninstall wait for
 any other kcap changing the installation, and first finish or undo a setup, upgrade or purge that was interrupted.
 
-upgrade exits 0 when it upgraded, 1 when it failed before the switch, 2 when it failed after the switch, and 3
-when there was nothing to do.
+upgrade exits 0 when it upgraded, 1 when it failed before the switch, 2 when it failed after the switch, 3
+when there was nothing to do, and 4 when no bundle is published for this version yet.
 
 The installation lives in ~/.config/kcap/local, or in KCAP_LOCAL_ROOT when it is set; its logs are
 in the logs directory under it.

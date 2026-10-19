@@ -58,9 +58,10 @@ function localRegistryPath(env, home) {
   return path.join(root, "install.json");
 }
 
-// Exit codes of `kcap local upgrade`: 0 upgraded, 3 nothing to do; 1 and 2 are failures it has reported.
+// Exit codes of `kcap local upgrade`: 0 upgraded, 3 nothing to do, 4 no bundle published for this version
+// yet (a CLI release can reach npm first); 1 and 2 are failures it has reported.
 function localUpgradeSucceeded(status) {
-  return status === 0 || status === 3;
+  return status === 0 || status === 3 || status === 4;
 }
 
 // ── Windows binary-lock handling ────────────────────────────────────────────
@@ -407,7 +408,9 @@ function runUpdate(binaryPath, updArgs) {
   let exitCode = 0;
   if (process.platform !== "win32" && fs.existsSync(localRegistryPath(process.env, os.homedir()))) {
     const upgrade = spawnSync(binaryPath, localUpgradeArgs(), { stdio: "inherit" });
-    if (!localUpgradeSucceeded(upgrade.status)) {
+    if (upgrade.status === 4) {
+      console.error("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+    } else if (!localUpgradeSucceeded(upgrade.status)) {
       console.error("The local server was not upgraded; run `kcap local upgrade` to retry.");
       exitCode = 1;
     }

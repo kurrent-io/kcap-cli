@@ -12,22 +12,33 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class LocalUpgradeCommandTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
-    sealed class StackFactory(Func<LocalStack> create) : ILocalStackFactory {
+    sealed class StackFactory(Func<LocalStack> create, Func<LocalBundleStager>? stager = null) : ILocalStackFactory {
         public LocalStack Create() => create();
 
-        public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");
+        public LocalBundleStager Stager() => stager?.Invoke() ?? throw new InvalidOperationException("The command reached the bundles.");
     }
 
-    async Task<(int Exit, string Out)> RunAsync(string version, params string[] args) {
+    UserHome Home => field ??= NewHome();
+
+    Core.LocalEdition.LocalRoot Root => field ??= Core.LocalEdition.LocalRoot.Resolve(Tmp.PathTo("r"), Home);
+
+    FakeLocalServerService Service => field ??= new([], Home);
+
+    UserHome NewHome() {
         Tmp.CreateDir("home");
-        var home  = new UserHome(Tmp.GetResolvedPath("home"));
-        var root  = Core.LocalEdition.LocalRoot.Resolve(Tmp.PathTo("r"), home);
-        var stack = new LocalStack(root, home, new FakeLocalServerService([], home), new HttpClient(), TimeProvider.System,
-            new FakeOutgoingRecorders([]), new ConfigRoot(Tmp.PathTo("cfg")));
+        return new(Tmp.GetResolvedPath("home"));
+    }
+
+    async Task<(int Exit, string Out)> RunAsync(string version, params string[] args) => await RunAsync(version, null, args);
+
+    async Task<(int Exit, string Out)> RunAsync(string version, Func<LocalBundleStager>? stager, params string[] args) {
+        var stack = new LocalStack(Root, Home, Service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders([]), new ConfigRoot(Tmp.PathTo("cfg"))) {
+            FindHolder = _ => null,
+        };
 
         using var capture = ConsoleOutput.StartFullCapture();
 
-        var exit = await new LocalUpgradeCommand(new StackFactory(() => stack)) { Version = version }.HandleAsync(["local", "upgrade", .. args]);
+        var exit = await new LocalUpgradeCommand(new StackFactory(() => stack, stager)) { Version = version }.HandleAsync(["local", "upgrade", .. args]);
 
         return (exit, capture.GetCapturedOutput());
     }
@@ -54,6 +65,26 @@ public class LocalUpgradeCommandTests {
 
         await Assert.That(exit).IsEqualTo(LocalUpgradeCommand.Failed);
         await Assert.That(output).Contains("\"code\":\"invalid_arguments\"");
+    }
+
+    /// <summary>A CLI release can reach its channel before its bundle; that is not an upgrade failure.</summary>
+    [Test]
+    public async Task An_unpublished_bundle_exits_4_and_changes_nothing() {
+        Root.EnsureCreated();
+        Core.LocalEdition.LocalStateFiles.PublishRegistry(Root,
+            Core.LocalEdition.InstallRegistry.Empty.WithActive(new("0123456789abcdef0123456789abcdef", 47391, "http://localhost:47391", "1.2.3")));
+        Tmp.CreateFile(["r", "bin", "1.2.3", "kcap-server"]);
+        LocalBin.Switch(Root, "1.2.3");
+        Service.Install(LocalServerUnit.ForInstallation(Root, 47391));
+
+        using var bundle = new FakeBundle(Tmp.PathTo("bundle.tar.gz"), "1.3.0") { ManifestMissing = true };
+        var platform = new LocalPlatform(true, false, false, System.Runtime.InteropServices.Architecture.Arm64);
+
+        var (exit, output) = await RunAsync("1.3.0", () => new(Root, bundle.Client(), bundle.Key, platform), "--json");
+
+        await Assert.That(exit).IsEqualTo(LocalUpgradeCommand.NotPublished);
+        await Assert.That(output).Contains("\"code\":\"bundle_not_published\"");
+        await Assert.That(Service.Running).IsTrue();
     }
 
     [Test]
