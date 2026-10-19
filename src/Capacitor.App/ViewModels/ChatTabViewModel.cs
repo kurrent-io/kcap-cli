@@ -1114,8 +1114,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
         }
         // The upload can finish after the menu is on screen. The text would be typed into
-        // that menu, so the draft and the chips stay where they are.
-        if (HasTerminalMenu) return null;
+        // that menu, so the draft and the chips stay where they are. Or after the pane moved to a
+        // feed not yet seeded; the draft waits for Send to open again.
+        if (HasTerminalMenu || !CanSendBeforeSeed) return null;
         var chipIds = files.Select(f => f.Id).ToList();
         var queued = new QueuedChatMessage(snapshot, ownsDraft ? edits : -1, _inputGeneration, CurrentOffset, chipIds) {
             SendOrder = ++_nextSendOrder,

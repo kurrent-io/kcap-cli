@@ -1500,10 +1500,11 @@ public class ChatTabViewModelTests {
             var answered = new List<string>();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
-                new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true }, new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
                 sessionId: new BehaviorSubject<string?>("s1")) {
                 InputSending = sid => { sending.Add(sid); return () => answered.Add(sid); },
             };
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "refused";
             var send = chat.SendCommand.Execute().ToTask();
@@ -3379,8 +3380,9 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -3406,11 +3408,12 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
-            var feed = new ScriptedFeed();
+            var feed = new ScriptedFeed { ResetNext = true };
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
                 new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
