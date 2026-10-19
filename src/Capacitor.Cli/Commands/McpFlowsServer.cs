@@ -158,6 +158,20 @@ class McpFlowsServer(
         return 0;
     }
 
+    /// <summary>The checkout a call names in <c>repo_path</c>: its repository root and remote identity. The
+    /// path is the caller's to choose; the daemon still decides whether it hosts it.</summary>
+    async Task<(string Cwd, string? Root, RepositoryPayload? Info)> ResolveNamedCheckoutAsync(string path) {
+        if (!Path.IsPathFullyQualified(path))
+            throw new ArgumentException("repo_path must be an absolute path to a checkout on this machine.");
+        // FindRoot walks up from any path, so a mistyped one would quietly review its nearest checkout.
+        if (!Directory.Exists(path))
+            throw new ArgumentException("repo_path does not exist on this machine.");
+        if (GitRepository.FindRoot(path) is not { } root)
+            throw new ArgumentException("repo_path is not inside a git checkout on this machine.");
+
+        return (root, root, await RepositoryDetection.DetectRepositoryAsync(router, config, root, time, detectPullRequest: false));
+    }
+
     // Internal (not private) so unit tests can drive the tool-call dispatch directly against a
     // WireMock stub, without spawning the real stdio JSON-RPC process (that full-process path is
     // Capacitor.Cli.Tests.Integration's job).
@@ -200,6 +214,14 @@ class McpFlowsServer(
         try {
             var apiRoot = baseUrl.TrimEnd('/');
 
+            // The checkout a start or vendor lookup is for: the session's own, or one the call names.
+            // A named checkout replaces the cwd as well, since a same-machine borrow probes the cwd;
+            // the session id, the machine and the run ledger stay the session's.
+            var (hostCwd, hostRoot, hostInfo) = toolName is "start_review_flow" or "start_flow" or "list_reviewer_vendors"
+                && McpToolArguments.OptionalString(arguments, "repo_path") is { } named
+                    ? await ResolveNamedCheckoutAsync(named)
+                    : (cwd, repoRoot, repoInfo);
+
             // The start/submit tools (and their generic aliases) may need async poll — handle separately.
             if (toolName is "start_review_flow" or "start_flow" or "submit_review_round" or "send_to_participant") {
                 // Dynamic flows: whether THIS call carried an inline definition_yaml. Uncoded
@@ -231,11 +253,11 @@ class McpFlowsServer(
 
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     "start_flow"          => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, cwd, repoRoot, repoInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
                     // Round submission also retries the coded participant_unreachable 409 (see
                     // ParticipantUnreachableCode) — never a start, which can't return it.
                     "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode),
@@ -331,7 +353,7 @@ class McpFlowsServer(
                     var retryResult = await SendWithSettlementRetryAsync(
                         client, apiRoot,
                         (c, ct) => StartFlowAsync(
-                            c, apiRoot, arguments, cwd, repoRoot, repoInfo,
+                            c, apiRoot, arguments, hostCwd, hostRoot, hostInfo,
                             kindArgName: toolName == "start_review_flow" ? "kind" : "definition_id",
                             requestingSessionId: requestingSessionId, ct: ct),
                         clock, backoff, budgetStartedAt: settlementStartedAt);
@@ -409,10 +431,10 @@ class McpFlowsServer(
             // ReviewerVendorLookup). Its own branch — it hits /api/daemons, not a flow URL, and never
             // mutates anything.
             if (toolName is "list_reviewer_vendors") {
-                // Surface a NON-sensitive repo id (owner/repo), never the local repoRoot path, which
-                // must not leak to the model — repoRoot is used only for the on-disk hosting match.
-                var repoIdentity = repoInfo is { Owner.Length: > 0, RepoName.Length: > 0 }
-                    ? $"{repoInfo.Owner}/{repoInfo.RepoName}"
+                // Surface a NON-sensitive repo id (owner/repo), never the local checkout path, which
+                // must not leak to the model — that path is used only for the on-disk hosting match.
+                var repoIdentity = hostInfo is { Owner.Length: > 0, RepoName.Length: > 0 }
+                    ? $"{hostInfo.Owner}/{hostInfo.RepoName}"
                     : null;
                 // Read-only: never MachineId.Get() here — that would persist machine.json on first
                 // use, breaking this tool's read-only/side-effect-free contract. A null id (no
@@ -422,9 +444,9 @@ class McpFlowsServer(
                 // repo_unresolved is a local precondition AND the highest-precedence reason — settle it
                 // before any network call, so an unresolved repo can never surface as an auth/lookup
                 // error from GET /api/daemons instead of the contractual repo_unresolved result.
-                if (string.IsNullOrEmpty(repoRoot))
+                if (string.IsNullOrEmpty(hostRoot))
                     return BuildToolResult(id, JsonSerializer.Serialize(
-                        ReviewerVendorLookup.Aggregate(null, repoRoot, machineId, driverVendor, repoIdentity: repoIdentity),
+                        ReviewerVendorLookup.Aggregate(null, hostRoot, machineId, driverVendor, repoIdentity: repoIdentity),
                         McpJsonContext.Default.ReviewerVendorsResult));
 
                 using var daemonsResp = await client.GetAsync(apiRoot + "/api/daemons");
@@ -434,12 +456,12 @@ class McpFlowsServer(
 
                 ReviewerVendorsResult result;
                 if (!daemonsResp.IsSuccessStatusCode) {
-                    result = ReviewerVendorLookup.Aggregate(null, repoRoot, machineId, driverVendor, repoIdentity: repoIdentity);
+                    result = ReviewerVendorLookup.Aggregate(null, hostRoot, machineId, driverVendor, repoIdentity: repoIdentity);
                 } else {
                     var daemonsBody = await daemonsResp.Content.ReadAsStringAsync();
                     var (records, skipped, skew) = ReviewerVendorLookup.ParseDaemons(daemonsBody);
                     result = ReviewerVendorLookup.Aggregate(
-                        records, repoRoot, machineId, driverVendor,
+                        records, hostRoot, machineId, driverVendor,
                         schemaSkew: skew, skippedRecords: skipped, repoIdentity: repoIdentity);
                 }
 
@@ -2287,7 +2309,7 @@ class McpFlowsServer(
 
         switch (mode) {
             case "borrowed":
-                sb.AppendLine("workspace: borrowed (the reviewer saw this session's project directory in place, uncommitted changes included)");
+                sb.AppendLine("workspace: borrowed (the reviewer saw this session's project directory, or repo_path when given, in place, uncommitted changes included)");
                 break;
             case "fallback": {
                 var reason = TryGetString(node, "fallback_reason");
@@ -2502,9 +2524,10 @@ class McpFlowsServer(
                     ["target_ref"]   = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"] = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["session_title"] = new("string", SessionTitleDescription("reviewer's", "'Review PR #1302: deliver flow results through a server restart'")),
-                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of THIS SESSION's project directory, not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your checkout was NOT borrowed, so inline anything uncommitted that matters."),
+                    ["context"]      = new("string", "Background context for the reviewer: what to focus on, constraints, definition of done. State where the changes live — the reviewer sees a mirror of THIS SESSION's project directory (or of repo_path when given), not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs. Whether it sees your UNCOMMITTED work is conditional: only when the run actually borrows your checkout. Responses report this as workspace: borrowed | fallback (<reason>) | unknown — for the reserved review aliases; other flow kinds report unknown. On fallback your checkout was NOT borrowed, so inline anything uncommitted that matters."),
                     ["instructions"] = new("string", "Optional additional instructions for the reviewer agent."),
-                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it reviews a worktree mirrored from THIS SESSION's project directory — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
+                    ["mode"]         = new("string", "Optional. Pass 'context-only' to have the reviewer treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it reviews a worktree mirrored from THIS SESSION's project directory (or repo_path when given) — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
+                    ["repo_path"]    = new("string", "Optional absolute path to a checkout or linked worktree on this machine to review instead of this session's project directory — for a change in another repository or worktree. The session stays the requester; a daemon must host that repository, and on this machine the reviewer borrows that checkout."),
                     ["vendor"]       = new("string", "Optional reviewer vendor for the reserved alias, independent of the driver harness. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. The selected vendor must be installed and certified unattended on an eligible daemon; there is no silent fallback. Pass the lowercase canonical vendor token (e.g. 'claude', 'codex')."),
                     ["model"]        = new("string", "Optional reviewer model override for this review. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
@@ -2576,9 +2599,10 @@ class McpFlowsServer(
                     ["target_ref"]     = new("string", "A reference to the target (PR URL, branch name, file path, etc.)."),
                     ["target_title"]   = new("string", "Human-readable title for the target (PR title, spec name, etc.)."),
                     ["session_title"]  = new("string", SessionTitleDescription("participant agent's", "'Test the hook spool drain against a 401'")),
-                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of THIS SESSION's project directory, not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs."),
+                    ["context"]        = new("string", "Background context for the agent: what to focus on, constraints, definition of done. State where the changes live — the participant sees a mirror of THIS SESSION's project directory (or of repo_path when given), not of the directory you are working in; if your changeset is elsewhere or incomplete there, say so, give an explicit commit range, and inline the relevant diffs."),
                     ["instructions"]   = new("string", "Optional additional instructions for the agent."),
-                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it works in a worktree mirrored from THIS SESSION's project directory — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
+                    ["mode"]           = new("string", "Optional. Pass 'context-only' to have the agent treat the submitted context/diff as authoritative rather than reading the repository. By default, on the same machine, it works in a worktree mirrored from THIS SESSION's project directory (or repo_path when given) — not from the directory you are working in — with uncommitted changes only when your checkout is borrowed."),
+                    ["repo_path"]      = new("string", "Optional absolute path to a checkout or linked worktree on this machine to review instead of this session's project directory — for a change in another repository or worktree. The session stays the requester; a daemon must host that repository, and on this machine the reviewer borrows that checkout."),
                     ["vendor"]         = new("string", "Optional reviewer vendor. Reserved spec-review/code-review aliases use it independently of the driver. Omit to use the flow definition's authored vendor; if the definition names none, your saved flows.reviewer_vendor preference is applied, else the server asks for one. Custom single-participant catalog definitions accept an explicit override. Rejected for multi-participant and definition_yaml flows. The selected vendor must be certified unattended on an eligible daemon; no silent fallback. Pass a lowercase canonical token."),
                     ["model"]          = new("string", "Optional reviewer model override for a single-participant catalog review definition. REQUIRES 'vendor' — the model is interpreted against that vendor (there is no vendor->model table here), so passing model without vendor is rejected locally. Rejected for definition_yaml (dynamic) and multi-participant flows. Omit to use the vendor's default reviewer model. The chosen model must be resolvable and certified on the selected daemon; there is no silent fallback. Pass the vendor's own model id or alias verbatim (case-sensitive) — do not translate or guess it. Requires a server that supports the v3 flow-start protocol.")
                 },
@@ -2636,13 +2660,15 @@ class McpFlowsServer(
         ),
         new(
             "list_reviewer_vendors",
-            "List the reviewer vendors that can ACTUALLY run an unattended review flow for THIS repo right now — installed and certified on a connected daemon that hosts this repository. " +
+            "List the reviewer vendors that can ACTUALLY run an unattended review flow for THIS repo right now (or for repo_path when given) — installed and certified on a connected daemon that hosts this repository. " +
             "Read-only and side-effect-free: safe to call before offering a review, so you recommend a reviewer that will not be rejected. " +
             "Returns reviewers[] (each with the canonical lowercase vendor token; empty when none, and diagnostics.reason then names why: repo_unresolved | schema_skew | lookup_failed | no_daemons_connected | no_repo_hosting_daemon | no_unattended_reviewer), " +
             "driver_vendor (the harness running THIS session, or absent when it cannot be determined — treat absent as unknown, and do not claim a different model), " +
             "and diagnostics counts. This does NOT start a review — it only reports availability; use start_review_flow to run one. " +
             "Availability is a snapshot: a vendor listed here can still be rejected by start_review_flow if the daemon dropped in between.",
-            new("object", new(), []),
+            new("object", new() {
+                ["repo_path"] = new("string", "Optional absolute path to a checkout or linked worktree on this machine to answer for, instead of this session's project directory — pass the same repo_path you will give start_review_flow."),
+            }, []),
             McpToolAnnotations.Read
         ),
         new(

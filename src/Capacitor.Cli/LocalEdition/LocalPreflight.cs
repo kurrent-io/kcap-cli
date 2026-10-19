@@ -10,21 +10,31 @@ namespace Capacitor.Cli.LocalEdition;
 /// What must hold before a local install starts. Nothing here locks, fetches or writes; a refusal throws
 /// <see cref="LocalInstallFailure"/> naming what the user can change.
 /// </summary>
-sealed class LocalPreflight(LocalRoot root, ConfigRoot config, LocalPlatform platform, ILocalServerService service, int? socketLimit = null) {
+sealed class LocalPreflight(
+    LocalRoot root, ConfigRoot config, LocalPlatform platform, ILocalServerService service, int? socketLimit = null, ILocalClientCopies? copies = null) {
     static readonly string[] Sockets = ["run/.s.PGSQL.5432", "run/kurrentdb.sock"];
 
     /// <summary>Platform, socket paths, ancestors, journal and registry, then (unless a journal calls for
-    /// recovery first) profiles, the empty slot and the config; the version last.</summary>
+    /// recovery first) profiles, the empty slot and the config, then the version; the other kcap copies last, since
+    /// asking them spawns each one. An old copy never blocks a recovery: <see cref="Recheck"/> refuses it after.</summary>
     public LocalPlan Check(string version) {
         CheckPlatform();
         CheckSockets();
         CheckAncestors();
 
-        return Decide(version, afterRecovery: false);
+        var plan = Decide(version, afterRecovery: false);
+        if (plan.Hint != PlanHint.Recover) CheckClients();
+
+        return plan;
     }
 
     /// <summary>Under the lease, after recovery: a journal still present is a bug in the caller.</summary>
-    public LocalPlan Recheck(string version) => Decide(version, afterRecovery: true);
+    public LocalPlan Recheck(string version) {
+        var plan = Decide(version, afterRecovery: true);
+        CheckClients();
+
+        return plan;
+    }
 
     public static int SocketLimit(LocalPlatform p) => p.IsMacOS ? 103 : 107;
 
@@ -65,6 +75,17 @@ sealed class LocalPreflight(LocalRoot root, ConfigRoot config, LocalPlatform pla
         if (platform.IsLinux && platform.IsMusl) throw Refuse(LocalInstallFailureCode.MuslUnsupported, "The musl builds of kcap do not support a local installation.");
 
         throw Refuse(LocalInstallFailureCode.UnsupportedPlatform, "The local edition runs on macOS for now.");
+    }
+
+    void CheckClients() {
+        if (copies?.Find().FirstOrDefault(c => !LocalClientFloor.Admits(c.Version)) is not { } old) return;
+
+        var which = old.Kind == ClientCopyKind.DesktopApp ? $"The desktop app's kcap ({old.Path})" : $"The kcap on PATH ({old.Path})";
+        var found = old.Version is { } v ? $"is {v}" : "did not report its version";
+        var fix   = old.Kind == ClientCopyKind.DesktopApp ? "Update the desktop app" : "Update or remove it";
+
+        throw Refuse(LocalInstallFailureCode.ClientBelowFloor,
+            $"{which} {found}, and a local installation needs a kcap newer than {LocalClientFloor.NewestRefused}. {fix} before setting up a local installation.");
     }
 
     void CheckSockets() {

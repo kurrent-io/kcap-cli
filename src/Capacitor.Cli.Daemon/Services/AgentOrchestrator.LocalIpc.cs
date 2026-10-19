@@ -70,7 +70,7 @@ internal partial class AgentOrchestrator {
             .OrderBy(p => p.CreatedAt)
             .ThenBy(p => p.Id, StringComparer.Ordinal)
             .Select(p => new PendingLaunchDto(
-                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage))];
+                p.Id, p.Vendor ?? "", p.RepoPath, p.Title, p.CreatedAt, p.ActivityClock.LaunchStage, KindText(p.Kind)))];
 
     /// <summary>Whether any agent is running or starting, as one observation: an admitted launch still before its
     /// runtime starts (consent, worktree, attachments), a pending one, or a published one. A launch is admitted before
@@ -182,6 +182,10 @@ internal partial class AgentOrchestrator {
             return;
         }
 
+        // Read before the live agent: a launch publishes its agent before it leaves this set, so one that
+        // settles between the two reads is still found live.
+        var starting = CancellableLaunchesFor(agentId);
+
         if (_agents.TryGetValue(agentId, out var agent)) {
             if (!force && agent.Kind != LaunchKind.Default) {
                 // A flow participant going away mid-round strands the flow; a plain hosted
@@ -196,7 +200,24 @@ internal partial class AgentOrchestrator {
                 return;
             }
 
-            var ok = await StopAgentCoreAsync(agent);
+            if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
+
+            // A launch under the same id would otherwise start under the id just stopped; the one that
+            // published this agent may still be finishing, so the agent is stopped once they settle. One
+            // that outlasts the wait stops the agent under this id itself when it settles.
+            var ok = await SettleCancelledLaunchesAsync(starting)
+                && (_agents.GetValueOrDefault(agentId) is not { } current || await StopAgentCoreAsync(current));
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
+        // A launch queued or starting has no agent yet: cancel it, and answer once it has settled. Before
+        // the resume discard below, which would otherwise remove a starting launch's worktree under it.
+        if (await RefuseProtectedStartingAsync(force, agentId, starting, stream, ct)) return;
+
+        if (starting.Length > 0) {
+            var ok = await CancelStartingLaunchesAsync(agentId, starting);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
             return;
@@ -261,6 +282,45 @@ internal partial class AgentOrchestrator {
     }
 
     static string StatusText(bool confirmedStopped) => confirmedStopped ? "stopped" : "failed";
+
+    /// <summary>How long a local stop waits for a cancelled launch to settle: a handshake stage cancels at
+    /// once, but worktree creation takes no token and finishes first.</summary>
+    static readonly TimeSpan LaunchCancelSettleWait = TimeSpan.FromSeconds(60);
+
+    /// <summary>Refuses a stop without force that would cancel a protected launch, as its agent would be.</summary>
+    static async Task<bool> RefuseProtectedStartingAsync(
+            bool force, string agentId, CancellableLaunch[] starting, Stream stream, CancellationToken ct) {
+        if (force || starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is not { } protectedLaunch) return false;
+
+        await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+            $"{agentId} is a starting {KindText(protectedLaunch.Kind)} launch. Pass --force to cancel it anyway."), ct);
+
+        return true;
+    }
+
+    /// <summary>Cancels the launches for this id and stops any agent one published anyway, past its last
+    /// cancellation point.</summary>
+    async Task<bool> CancelStartingLaunchesAsync(string agentId, CancellableLaunch[] launches) =>
+        await SettleCancelledLaunchesAsync(launches)
+        && (_agents.GetValueOrDefault(agentId) is not { } published || await StopAgentCoreAsync(published));
+
+    /// <summary>Cancels launches: one still queued is refused when the lane reaches it, and one already
+    /// started is waited for. False when one outlasts the wait; it then stops whatever it publishes itself.</summary>
+    async Task<bool> SettleCancelledLaunchesAsync(CancellableLaunch[] launches) {
+        foreach (var launch in launches) launch.Cancel();
+        var started = launches.Where(l => l.HasStarted).ToArray();
+        if (started.Length == 0) return true;
+
+        try {
+            await Task.WhenAll(started.Select(l => l.Settled)).WaitAsync(LaunchCancelSettleWait, _time);
+        } catch (TimeoutException) {
+            var outlasted = false;
+            foreach (var launch in started) outlasted |= launch.Abandon();
+            if (outlasted) return false;
+        }
+
+        return true;
+    }
 
     /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can
     /// word — never an Error frame, never an escaped exception — and it is written only once the
@@ -412,7 +472,9 @@ internal partial class AgentOrchestrator {
                 Work = work
             };
 
-            launcher.Prepare(ctx);
+            var before = work == WorkLocation.OwnedWorktree ? WorktreeManager.StampDaemonPaths(worktree.Path) : null;
+            try { launcher.Prepare(ctx); }
+            finally { if (before is not null) WorktreeManager.RecordDaemonBaseline(worktree.Path, before); }
             var built = launcher.BuildPassthrough(ctx, args);
 
             // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so
@@ -461,7 +523,7 @@ internal partial class AgentOrchestrator {
             // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
             // spawn fails after the worktree was created (mirrors the server launch path).
             if (ownedWorktree is { } leaked) {
-                try { await WorktreeManager.RemoveAsync(leaked, _time); } catch { /* best-effort */ }
+                try { await RemoveOwnedWorktreeAsync(leaked, agentId); } catch { /* best-effort */ }
             }
 
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);

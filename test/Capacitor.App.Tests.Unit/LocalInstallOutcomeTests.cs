@@ -39,6 +39,7 @@ public class LocalInstallOutcomeTests {
     [Test]
     [Arguments("lifecycle_busy", LocalInstallAffordance.Busy)]
     [Arguments("other_server", LocalInstallAffordance.Permanent)]
+    [Arguments("client_below_floor", LocalInstallAffordance.Permanent)]
     [Arguments("cancelled", LocalInstallAffordance.Retry)]
     [Arguments("verification_failed", LocalInstallAffordance.Retry)]
     [Arguments(null, LocalInstallAffordance.Retry)]

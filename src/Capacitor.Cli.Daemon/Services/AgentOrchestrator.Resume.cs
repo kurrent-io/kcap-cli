@@ -666,7 +666,7 @@ internal partial class AgentOrchestrator {
     async Task RemoveDiscardedResourcesAsync(ResumeLedgerEntry entry) {
         if (entry.Launch.Work == WorkLocation.OwnedWorktree) {
             try {
-                await WorktreeManager.RemoveAsync(ResumedWorktree(entry), _time);
+                await RemoveOwnedWorktreeAsync(ResumedWorktree(entry), entry.AgentId);
             } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "removing a discarded resume's worktree", entry.AgentId);
             }
@@ -867,7 +867,7 @@ internal partial class AgentOrchestrator {
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
-        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume);
+        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
@@ -1032,7 +1032,7 @@ internal partial class AgentOrchestrator {
         };
         var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
-        var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch);
+        var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch, cancel: CancellationToken.None); // the resume's own token ends its start
 
         return launch.Agent is not null && outcome.Kind == CommandOutcomeKind.LaunchExecuted ? launch : null;
     }
@@ -1117,7 +1117,8 @@ internal partial class AgentOrchestrator {
             path,
             launch.WorktreeBranch ?? $"capacitor/{Path.GetFileName(path)}",
             launch.WorktreeSourceRepo ?? launch.RepoPath,
-            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git"))) {
+            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git")),
+            FetchedRef: WorktreeManager.FetchedRefFor(Path.GetFileName(path))) {
             GitRelativeCwd = launch.GitRelativeCwd
         };
     }

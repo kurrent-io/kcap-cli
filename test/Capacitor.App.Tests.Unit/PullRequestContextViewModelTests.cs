@@ -244,6 +244,21 @@ public class PullRequestContextViewModelTests {
         } finally { release.Set(); h.Source.ListGate?.TrySetResult(); await h.Dispose(); }
     });
 
+    /// A body's GitHub references link only into a github.com repository; elsewhere they stay text.
+    [Test]
+    [Arguments("github", "github.com", "https://github.com/example/repo")]
+    [Arguments("github", "ghe.example", null)]
+    [Arguments("gitlab", "gitlab.com", null)]
+    public Task References_read_against_the_selected_github_repository(string provider, string host, string? expected) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [FakePullRequestSource.Link(1) with { Provider = provider, Host = host }];
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected is not null, what: "a selected PR");
+        await Assert.That(h.Vm.ReferenceBase).IsEqualTo(expected);
+        await h.Dispose();
+    });
+
     [Test]
     public Task Repeated_refreshes_in_the_throttle_window_do_not_rebind_unchanged_properties() => RunOnUiAsync(async () => {
         var h = new Harness();

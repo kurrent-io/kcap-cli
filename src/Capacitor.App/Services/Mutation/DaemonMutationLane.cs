@@ -29,6 +29,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     readonly ILoginShellProbe _shellProbe;
     readonly OutcomeChannel _channel;
     readonly Func<string?> _cliOverride;
+    readonly Func<string?> _bundledCli;
     readonly Func<MutationRequest, string?, IKcapCli> _executorFactory;
     readonly Func<MutationRequest, IDaemonObservation> _oneShotFactory;
     readonly TimeProvider _time;
@@ -50,11 +51,12 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     public DaemonMutationLane(
             DaemonStore store, ILoginShellProbe shellProbe, OutcomeChannel channel,
             Func<string?> cliOverride, Func<MutationRequest, string?, IKcapCli> executorFactory,
-            Func<MutationRequest, IDaemonObservation> oneShotFactory, TimeProvider time) {
+            Func<MutationRequest, IDaemonObservation> oneShotFactory, TimeProvider time, Func<string?>? bundledCli = null) {
         _store           = store;
         _shellProbe      = shellProbe;
         _channel         = channel;
         _cliOverride     = cliOverride;
+        _bundledCli      = bundledCli ?? (() => null);
         _executorFactory = executorFactory;
         _oneShotFactory  = oneShotFactory;
         _time            = time;
@@ -277,7 +279,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     async Task<string?> ResolvePathAsync(CancellationToken ct) {
         var path = _cliOverride() ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: false).ConfigureAwait(false);
         // Retry a cached miss so installing the CLI does not require an app restart.
-        return path ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+        path ??= await _shellProbe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
+        // A kcap on the terminal PATH wins; without one (a fresh Mac) the app's own CLI still runs the daemon.
+        return path ?? _bundledCli();
     }
 
     static Task<ProcessResult> Dispatch(IKcapCli executor, MutationRequest request, string? attemptId, CancellationToken ct) =>

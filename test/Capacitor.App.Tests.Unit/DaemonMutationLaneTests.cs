@@ -78,7 +78,7 @@ public class DaemonMutationLaneTests {
             RecordingExecutorFactory factory, OutcomeChannel? channel = null,
             Func<string?>? cliOverride = null, ILoginShellProbe? shellProbe = null,
             Func<MutationRequest, IDaemonObservation>? oneShotFactory = null,
-            TimeProvider? time = null, MutationClassifier? classify = null) {
+            TimeProvider? time = null, MutationClassifier? classify = null, Func<string?>? bundledCli = null) {
         var lane = new DaemonMutationLane(
             Daemons.Store,
             shellProbe ?? new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>(null) },
@@ -86,7 +86,8 @@ public class DaemonMutationLaneTests {
             cliOverride ?? (() => "/opt/kcap/bin/kcap"),
             factory.Invoke,
             oneShotFactory ?? (_ => new ScriptedObservation()),
-            time ?? TimeProvider.System);
+            time ?? TimeProvider.System,
+            bundledCli);
         if (classify is not null) lane.Classify = classify;
         return lane;
     }
@@ -368,6 +369,36 @@ public class DaemonMutationLaneTests {
         await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention));
         await Assert.That(factory.Calls.Count).IsEqualTo(0);
         await Assert.That(probe.KcapPathForceRefreshCalls).IsEquivalentTo([false, true]);
+
+        await lane.DisposeAsync();
+    }
+
+    /// A fresh Mac has no kcap on the terminal PATH; the app's own CLI must still run the daemon.
+    [Test]
+    public async Task No_kcap_on_the_terminal_path_falls_back_to_the_bundled_cli() {
+        var factory = new RecordingExecutorFactory();
+        var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>(null) };
+        var lane = MakeLane(factory, cliOverride: () => null, shellProbe: probe, classify: CannedSucceeded,
+            bundledCli: () => "/Applications/Capacitor.app/Contents/MacOS/kcap");
+
+        var outcome = await lane.RunAsync(Req(), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
+        await Assert.That(factory.Calls[0].PinnedPath).IsEqualTo("/Applications/Capacitor.app/Contents/MacOS/kcap");
+
+        await lane.DisposeAsync();
+    }
+
+    [Test]
+    public async Task A_kcap_on_the_terminal_path_wins_over_the_bundled_cli() {
+        var factory = new RecordingExecutorFactory();
+        var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>("/opt/homebrew/bin/kcap") };
+        var lane = MakeLane(factory, cliOverride: () => null, shellProbe: probe, classify: CannedSucceeded,
+            bundledCli: () => "/Applications/Capacitor.app/Contents/MacOS/kcap");
+
+        await lane.RunAsync(Req(), CancellationToken.None);
+
+        await Assert.That(factory.Calls[0].PinnedPath).IsEqualTo("/opt/homebrew/bin/kcap");
 
         await lane.DisposeAsync();
     }

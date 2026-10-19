@@ -81,6 +81,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             ResumeSessionId = ctx.ResumeSessionId
         };
 
+        var owned = launcherCtx.Work == Core.LocalIpc.WorkLocation.OwnedWorktree;
+        var before = owned ? WorktreeManager.StampDaemonPaths(launcherCtx.Worktree.Path) : null;
         try {
             launcher.Prepare(launcherCtx);
         } catch (UnattendedReviewPolicyException) {
@@ -90,6 +92,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             throw;
         } catch (Exception ex) {
             LogPrepareSoftFailure(ex, ctx.AgentId);
+        } finally {
+            if (owned) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path, before);
         }
 
         var launchArgs = launcher.BuildArgs(launcherCtx);
