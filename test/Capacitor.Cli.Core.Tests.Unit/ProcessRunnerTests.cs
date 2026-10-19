@@ -261,6 +261,7 @@ public class ProcessRunnerTests {
             }, CancellationToken.None);
 
         await Assert.That(result.ExitCode).IsNotEqualTo(0);
+        await Assert.That(result.TimedOut).IsFalse();
     }
 
     /// A GUI parent on Windows gives every console child its own window unless told not to, so each

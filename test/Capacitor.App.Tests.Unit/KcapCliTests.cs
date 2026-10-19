@@ -19,9 +19,11 @@ public class KcapCliTests {
         }
 
         public IReadOnlyList<StreamedLine> ScriptedStreamLines = [];
+        public CancellationToken SeenStreamingToken;
 
         public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
                 Action<StreamedLine> onLine, CancellationToken ct) {
+            SeenStreamingToken = ct;
             SeenFileName = fileName;
             SeenArgs     = args;
             SeenOptions  = options;
@@ -644,6 +646,21 @@ public class KcapCliTests {
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
         await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
         await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        // Rollback stops the service on a 105 s budget and the commit can wait ten minutes.
+        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(11));
+    }
+
+    /// The caller's token bounds only the work before the spawn: a running setup stops through its
+    /// interrupt, which lets the CLI roll back, never through a tree kill.
+    [Test]
+    public async Task SetupLocalAsync_never_hands_the_callers_token_to_the_runner() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var caller = new CancellationTokenSource();
+
+        await cli.SetupLocalAsync(_ => { }, CancellationToken.None, caller.Token);
+
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
     }
 
     [Test]

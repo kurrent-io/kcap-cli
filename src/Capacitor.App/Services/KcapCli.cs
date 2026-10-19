@@ -81,7 +81,8 @@ public interface IKcapCli {
     Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct);
 
     /// `setup --local --json --single-user --yes`, streamed live via onLine. No internal timeout:
-    /// <paramref name="interrupt"/> asks the CLI to stop and clean up, <paramref name="ct"/> kills it.
+    /// <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops only
+    /// through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
     Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
 
     /// `local start`, bounded above the CLI's own readiness budget.
@@ -111,6 +112,9 @@ public sealed class KcapCli : IKcapCli {
     static readonly TimeSpan DetachedStartTimeout = TimeSpan.FromSeconds(75);
     // Sits above the CLI's ten-minute readiness budget so the CLI reports its own failure first.
     static readonly TimeSpan LocalStartTimeout = TimeSpan.FromMinutes(11);
+    // An interrupted setup rolls back on its own budgets (a 105 s service stop, up to ten minutes in commit);
+    // killing it sooner leaves a partial install behind.
+    static readonly TimeSpan SetupInterruptGrace = TimeSpan.FromMinutes(11);
 
     // Overlay variable names every app-initiated spawn carries — the lane and KcapCliTests reference these.
     public const string SpawnNoTelemetryVar   = "KCAP_APP_SPAWN_NO_TELEMETRY";
@@ -278,7 +282,8 @@ public sealed class KcapCli : IKcapCli {
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
         return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes"],
-            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt), onLine, ct).ConfigureAwait(false);
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: SetupInterruptGrace),
+            onLine, CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> LocalStartAsync(CancellationToken ct) {

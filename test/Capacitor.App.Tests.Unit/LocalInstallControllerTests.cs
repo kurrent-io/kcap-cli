@@ -1,3 +1,4 @@
+using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalEdition;
@@ -13,17 +14,24 @@ public class LocalInstallControllerTests {
 
     TelemetryProbe Probe() => TelemetryProbe.Live("setup", Config.Root);
 
+    /// Every interrupt request lands on the one token the child was started with, and the settle
+    /// waits for the child's own exit rather than completing on the request.
     [Test]
     public async Task Cancel_then_settle_sends_one_interrupt() {
         var signals = 0;
+        var tokens = new List<CancellationToken>();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cli = new FakeKcapCli {
             SetupLocalBehavior = async (onLine, interrupt, _) => {
-                var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                await using var reg = interrupt.Register(() => {
-                    signals++;
-                    exited.TrySetResult();
-                });
-                await exited.Task;
+                tokens.Add(interrupt);
+                var interrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                await using (interrupt.Register(() => {
+                    Interlocked.Increment(ref signals);
+                    interrupted.TrySetResult();
+                })) {
+                    await interrupted.Task;
+                }
+                await release.Task;
                 onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("cancelled")));
                 return new StreamingResult(130, false, []);
             },
@@ -33,11 +41,69 @@ public class LocalInstallControllerTests {
         await controller.StartAsync(CancellationToken.None);
         controller.Interrupt();
         controller.Interrupt();
-        await controller.SettleAsync();
+        var settle = controller.SettleAsync();
+        controller.Interrupt();
+        await Task.Delay(50);
+
+        await Assert.That(settle.IsCompleted).IsFalse();
+        await Assert.That(controller.Running).IsTrue();
+
+        release.SetResult();
+        await settle.WaitAsync(TimeSpan.FromSeconds(5));
 
         await Assert.That(signals).IsEqualTo(1);
+        await Assert.That(tokens.Count).IsEqualTo(1);
         await Assert.That(controller.Running).IsFalse();
         await Assert.That(controller.Outcome).IsTypeOf<LocalInstallOutcome.Failed>();
+        await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Code).IsEqualTo("cancelled");
+    }
+
+    /// A runner that rolls back on SIGINT and tree-kills on its cancellation token, as ProcessRunner does.
+    sealed class RollbackRunner : IProcessRunner {
+        public int Interrupts;
+        public int Kills;
+        public readonly TaskCompletionSource Spawned = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) =>
+            Task.FromResult(new ProcessResult(0, "", "", false));
+
+        public async Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
+                Action<StreamedLine> onLine, CancellationToken ct) {
+            var stopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var onInterrupt = options.Interrupt.Register(() => {
+                Interlocked.Increment(ref Interrupts);
+                stopped.TrySetResult(false);
+            });
+            await using var onKill = ct.Register(() => {
+                Interlocked.Increment(ref Kills);
+                stopped.TrySetResult(true);
+            });
+            Spawned.TrySetResult();
+
+            if (await stopped.Task) return new StreamingResult(137, false, []);
+
+            await Task.Delay(20, CancellationToken.None);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("cancelled")));
+            return new StreamingResult(130, false, []);
+        }
+    }
+
+    [Test]
+    public async Task A_quit_interrupts_the_running_setup_once_and_never_kills_it() {
+        var runner = new RollbackRunner();
+        var cli = new KcapCli(runner, "kcap", "daemon-a", "work", terminalPathAsync: null, "https://cap.example.com:443");
+        var controller = new LocalInstallController(
+            () => cli, LocalSetupScript.NoSetup(Config), () => false, action => action(), Probe().Funnel);
+        using var shutdown = new CancellationTokenSource();
+
+        await controller.StartAsync(shutdown.Token);
+        await runner.Spawned.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // The app cancels its shutdown token before it settles the install.
+        await shutdown.CancelAsync();
+        await controller.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(runner.Interrupts).IsEqualTo(1);
+        await Assert.That(runner.Kills).IsEqualTo(0);
         await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Code).IsEqualTo("cancelled");
     }
 
