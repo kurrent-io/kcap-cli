@@ -39,6 +39,8 @@ public static class ReloadCopy {
         if (state.Kind is ReloadOutcomeKind.Skew or ReloadOutcomeKind.Repair) {
             if (state.Token == "background_band")
                 return $"The daemon still runs at background priority after the reload. Run {force} from a terminal and check `kcap daemon status`.";
+            if (state.Token == "predecessor_still_running")
+                return $"The old daemon was still answering after the reload, so no new daemon has taken over. {check}.";
             if (state.Token == "spawn_type_unknown")
                 return $"The reload finished but the daemon's priority could not be confirmed. {check}.";
             if (EvidenceLegs.Contains(state.Token))

@@ -7,9 +7,10 @@ using Capacitor.Cli.Core.Setup;
 namespace Capacitor.App.Services.Mutation;
 
 /// The per-verb classification seam the lane's control flow delegates into — kept separate so control flow never has to change when classification rules change.
+/// <paramref name="predecessor"/> is the daemon observed just before a reload, null for any other verb.
 internal delegate Task<MutationOutcome> MutationClassifier(
     MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation,
-    string? attemptId, CancellationToken ct);
+    string? attemptId, ObservedEvidence? predecessor, CancellationToken ct);
 
 /// The app-lifetime singleton every daemon mutation runs through: one owned action at a time,
 /// identical concurrent requests coalesce, a different request queues FIFO for its own fresh probe.
@@ -19,6 +20,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     // The one EvidenceFailureLeg sentinel that means "not yet confirmable" rather than "a definite problem".
     const string UnreachableLeg = "unreachable";
+    const string PredecessorLeg = "predecessor_still_running";
 
     internal static readonly TimeSpan DetachedConfirmWindow = TimeSpan.FromSeconds(10);
     internal static readonly TimeSpan DetachedPollInterval  = TimeSpan.FromSeconds(1);
@@ -262,13 +264,14 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         }
 
         var attemptId = request.Verb == MutationVerb.DetachedStart ? Guid.NewGuid().ToString("N") : null;
+        var predecessor = request.Verb == MutationVerb.Reload ? await observation.ObserveAsync(request, ct).ConfigureAwait(false) : null;
 
         // The runner starts the child before consulting ct, and an already-exited child's own wait
         // can return normally under a cancelled token — this is the last gate before a real spawn.
         ct.ThrowIfCancellationRequested();
         var result = await Dispatch(executor, request, attemptId, ct).ConfigureAwait(false);
 
-        return await Classify(request, result, executor, observation, attemptId, ct).ConfigureAwait(false);
+        return await Classify(request, result, executor, observation, attemptId, predecessor, ct).ConfigureAwait(false);
     }
 
     async Task<string?> ResolvePathAsync(CancellationToken ct) {
@@ -292,10 +295,10 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     Task<MutationOutcome> ClassifyOutcomeAsync(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation,
-            string? attemptId, CancellationToken ct) =>
+            string? attemptId, ObservedEvidence? predecessor, CancellationToken ct) =>
         request.Verb switch {
             MutationVerb.DetachedStart => ClassifyDetachedStartAsync(request, result, observation, attemptId, ct),
-            MutationVerb.Reload        => ClassifyReloadAsync(request, result, executor, observation, ct),
+            MutationVerb.Reload        => ClassifyReloadAsync(request, result, executor, observation, predecessor, ct),
             _                          => ClassifyServiceVerbAsync(request, result, executor, observation, ct),
         };
 
@@ -396,15 +399,21 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return null;
     }
 
+    // A reload stops the daemon and waits for it to exit before the service brings up a successor, so
+    // only a different instance proves it: the one observed beforehand still answering is the old
+    // daemon, whatever the CLI's exit code says.
     async Task<MutationOutcome> ClassifyReloadAsync(
-            MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {
+            MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation,
+            ObservedEvidence? predecessor, CancellationToken ct) {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
         if (result.ExitCode != 0) {
             LogReloadFailure(request, result);
             return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "refresh_outcome="), RecoverySurface.Attention);
         }
 
-        var waited = await AwaitFullEvidenceAsync(request, observation, null, ct).ConfigureAwait(false);
+        var restarted = ReasonLine.TrySingle(result.Stderr, "refresh_outcome=") == "reloaded";
+        var stale = restarted && predecessor is { Reachable: true, InstanceId: { } old } ? old : null;
+        var waited = await AwaitFullEvidenceAsync(request, observation, null, ct, stale).ConfigureAwait(false);
         if (waited is not null) return waited;
 
         return await ClassifyServiceSuccessAsync(request, executor, observation, ct, requirePositiveSpawnType: true).ConfigureAwait(false);
@@ -449,14 +458,17 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     // The one-shot observation never retries, and a daemon that just booted or reloaded needs time to bind
     // its socket. Returns null once evidence is fully positive, else the terminal outcome.
+    // `staleInstance` is an instance that must not be the one answering.
     async Task<MutationOutcome?> AwaitFullEvidenceAsync(
-            MutationRequest request, IDaemonObservation observation, Func<MutationOutcome?>? preCheck, CancellationToken ct) {
+            MutationRequest request, IDaemonObservation observation, Func<MutationOutcome?>? preCheck, CancellationToken ct,
+            string? staleInstance = null) {
         var deadline = _time.GetUtcNow() + DetachedConfirmWindow;
         while (true) {
             if (preCheck?.Invoke() is { } early) return early;
 
             var evidence = await observation.ObserveAsync(request, ct).ConfigureAwait(false);
-            var leg = EvidenceFailureLeg(evidence, request);
+            var leg = EvidenceFailureLeg(evidence, request)
+                   ?? (staleInstance is not null && evidence!.InstanceId == staleInstance ? PredecessorLeg : null);
             if (leg is null) return null;
 
             var remaining = deadline - _time.GetUtcNow();
