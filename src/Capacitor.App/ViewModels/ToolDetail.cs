@@ -59,6 +59,26 @@ public static class ToolDetail {
     }
 
     /// For a tool nothing describes: the first string argument, in declaration order.
+    public static string? ImageFile(string? inputJson) {
+        foreach (var key in PathKeys) {
+            var path = RawForKey(inputJson, key);
+            if (path.Length == 0) continue;
+            if (IsImageExtension(path)) return path;
+        }
+        return null;
+    }
+
+    static bool IsImageExtension(string path) {
+        var ext = System.IO.Path.GetExtension(path);
+        return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".gif", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".webp", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".bmp", StringComparison.OrdinalIgnoreCase)
+            || ext.Equals(".svg", StringComparison.OrdinalIgnoreCase);
+    }
+
     public static string FirstString(string? inputJson) {
         if (string.IsNullOrEmpty(inputJson)) return "";
         try {
