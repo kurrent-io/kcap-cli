@@ -248,6 +248,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly BehaviorSubject<bool> _awaitingServerAfterSignIn = new(false);
     /// True once a Connecting/Finishing notice has lasted CatchUpLimit — Sign in is then the remaining affordance.
     readonly BehaviorSubject<bool> _catchUpTimedOut = new(false);
+    // A local server takes no sign-in: its recovery is the Start banner.
+    readonly BehaviorSubject<bool> _localServer = new(false);
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -657,7 +659,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
-            .CombineLatest(_catchUpTimedOut, (t, timedOut) => !t.Awaiting && (t.Expired || timedOut || (
+            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || timedOut || (
                 t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
@@ -721,6 +723,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
             .DisposeWith(_disposables);
+    }
+
+    /// The "local server is not running" banner, beside the daemon's own recovery.
+    public LocalServerRecoveryViewModel? LocalServer { get; private set; }
+
+    public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
+        LocalServer = recovery;
+        this.RaisePropertyChanged(nameof(LocalServer));
+        _localServer.OnNext(recovery.IsLocalServer);
     }
 
     /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.

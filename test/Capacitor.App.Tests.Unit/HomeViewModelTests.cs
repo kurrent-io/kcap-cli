@@ -922,6 +922,32 @@ public class HomeViewModelTests {
         });
     }
 
+    /// The same signed-out lane that offers Sign in above offers nothing once the server is the
+    /// local installation: there is no credential to repair, and the Start banner owns recovery.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_server_never_shows_the_launcher_sign_in() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.LocalServer).IsSameReferenceAs(local);
+        });
+    }
+
     /// First paint after wizard auth never calls NotifySignInCompleted — Home is constructed
     /// afterwards. A live app lane plus a daemon still saying "disconnected" is catch-up, not
     /// "sign in again".

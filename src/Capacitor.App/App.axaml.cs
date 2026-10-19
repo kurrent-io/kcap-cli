@@ -173,6 +173,8 @@ public partial class App : Application {
     // back off the built window's DataContext so they can be disposed.
     HomeViewModel? _home;
     SessionRailViewModel? _rail;
+    // Shared by every window Home over this graph, so owned here rather than by any one of them.
+    LocalServerRecoveryViewModel? _localServer;
     // The server-side clients that outlive a window rebuild (MainWindowCoordinator can build a
     // second window over the same launch client) and own live transports. Torn down through one
     // holder on both teardown paths, after _home — never before, or a launch still in flight would
@@ -336,7 +338,7 @@ public partial class App : Application {
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _localServer, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -363,6 +365,7 @@ public partial class App : Application {
             _pause = null;
             _activity = null;
             _home = null;
+            _localServer = null;
             _rail = null;
             _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
             if (_historyImport is { } history) await history.CancelActiveRunAsync();
@@ -506,7 +509,7 @@ public partial class App : Application {
 
         // The controller's attach subscription must be live BEFORE service.Start() begins pumping,
         // or the startup phase could miss the first terminal outcome it hinges on.
-        var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe) = BuildLifecycleController(
+        var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe, lifecycleCli) = BuildLifecycleController(
             service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext, lifecycleAttention.OnNext,
             lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
         lifecycle.Start();
@@ -660,7 +663,8 @@ public partial class App : Application {
         // placeholder only — TerminalControl resizes its model to the real pane the moment it is
         // attached to the visual tree (WorkspaceView's own header comment).
         var attachFactory = CoreTerminalAttachClient.Factory(() => _daemonStore.SocketPath(service.DaemonName));
-        Action requestSignIn = () => {
+        var isLocalServer = IsLocalServer(profiles?.Resolution.ServerUrl, _localRoot);
+        var requestSignIn = SignInRequestFor(isLocalServer, () => {
             // Reachable in the carve-out arm (gate Incomplete after an abandoned wizard), where the
             // rail can show disconnected with no server to re-auth against.
             if (profiles?.Resolution.ServerUrl is not { } serverUrl || !OnboardingGate.ValidServerUrl(serverUrl)) {
@@ -668,7 +672,10 @@ public partial class App : Application {
                 return;
             }
             OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true);
-        };
+        });
+        var localServer = new LocalServerRecoveryViewModel(
+            serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token);
+        _localServer = localServer;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
@@ -731,7 +738,8 @@ public partial class App : Application {
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
-                isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync)),
+                isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
+                localServer: localServer)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -1350,7 +1358,8 @@ public partial class App : Application {
             Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null, MainWindow? adopt = null,
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
-            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
+            LocalServerRecoveryViewModel? localServer = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1382,6 +1391,7 @@ public partial class App : Application {
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
             launchFailed: agentId => vm?.CloseFailedLaunch(agentId));
+        if (localServer is not null) home.AttachLocalServerRecovery(localServer);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
         // `vm`, not a local, so no two-step forward-declaration is needed.
         // Both rail actions route through the one call, each naming the lane of the row that was
@@ -1430,7 +1440,7 @@ public partial class App : Application {
 
     // Wires the CLI facade and PATH probe (a broken override is "no CLI"); also builds the shim/consent-flip coordinators, sharing rather than re-resolving them.
     (DaemonLifecycleController Lifecycle, ShimOfferCoordinator ShimOffer, ConsentFlipCoordinator ConsentFlip,
-            ILifecycleSurface Surface, ILoginShellProbe Probe) BuildLifecycleController(
+            ILifecycleSurface Surface, ILoginShellProbe Probe, IKcapCli Cli) BuildLifecycleController(
             DaemonClientService service, ILocalControlOps ops, bool autoActionsPermanentlyClosed,
             Action<string> setLifecycleStatus, Action<string> setLifecycleAttention,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
@@ -1464,8 +1474,16 @@ public partial class App : Application {
             service, ops, new ConsentFlipClaims(_config),
             () => ResolveConsentFlipIdentity(_config, _localRoot), surface, _appState, _shutdown.Token);
 
-        return (lifecycle, shimOffer, consentFlip, surface, probe);
+        return (lifecycle, shimOffer, consentFlip, surface, probe, cli);
     }
+
+    internal static bool IsLocalServer(string? serverUrl, LocalRoot local) =>
+        LocalEndpoints.Read(local).Classify(serverUrl) is LocalEndpointClass.Local;
+
+    /// A local server takes no credential, so a sign-in dialog there could only fail; null hides
+    /// every sign-in affordance and the Start banner speaks instead.
+    internal static Action? SignInRequestFor(bool isLocalServer, Action openSignIn) =>
+        isLocalServer ? null : openSignIn;
 
     // Pure read only — TryConsume already holds this same config lock when this delegate runs, so
     // unreadable config fails closed to an identity that matches nothing (the claim stays pending)
@@ -2004,7 +2022,7 @@ public partial class App : Application {
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _localServer, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });
         } else {
