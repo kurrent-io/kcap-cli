@@ -27,25 +27,48 @@ public sealed class LocalDestinationHandler(LocalRoot? root, string? serverUrl, 
 
         var response = await base.SendAsync(request, ct);
 
+        // Each hop is a request of its own, so the caller's request keeps its URI: a handler above that resends it,
+        // as the 401 recovery does with a fresh bearer, resends it to the origin the caller chose, not to the last hop.
+        var hop = request;
+
         for (var hops = 0; followRedirects && hops < MaxRedirects; hops++) {
-            if (Next(request, response) is not { } target) break;
+            if (Next(hop, response) is not { } target) break;
 
-            Check(target);
-
-            if (ForcesGet(response.StatusCode, request.Method)) {
-                request.Method  = HttpMethod.Get;
-                request.Content = null;
+            try {
+                Check(target);
+            } catch {
+                response.Dispose();
+                throw;
             }
 
-            if (!SameOrigin(request.RequestUri!, target)) request.Headers.Authorization = null;
+            var next = NextHop(hop, target, ForcesGet(response.StatusCode, hop.Method));
 
-            request.RequestUri = target;
             response.Dispose();
+            hop = next;
 
-            response = await base.SendAsync(request, ct);
+            response = await base.SendAsync(hop, ct);
         }
 
         return response;
+    }
+
+    /// <summary>The request for the next hop. Content is shared, not copied, so a hop is never disposed: that would
+    /// dispose the caller's content.</summary>
+    static HttpRequestMessage NextHop(HttpRequestMessage from, Uri target, bool forceGet) {
+        var next = new HttpRequestMessage(forceGet ? HttpMethod.Get : from.Method, target) {
+            Version       = from.Version,
+            VersionPolicy = from.VersionPolicy,
+            Content       = forceGet ? null : from.Content,
+        };
+
+        foreach (var (name, values) in from.Headers) next.Headers.TryAddWithoutValidation(name, values);
+
+        foreach (var (key, value) in from.Options) ((IDictionary<string, object?>)next.Options)[key] = value;
+
+        if (forceGet) next.Headers.TransferEncodingChunked = null;
+        if (!SameOrigin(from.RequestUri!, target)) next.Headers.Authorization = null;
+
+        return next;
     }
 
     void Check(Uri? uri) {
