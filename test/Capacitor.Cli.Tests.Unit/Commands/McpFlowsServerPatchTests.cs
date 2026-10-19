@@ -85,8 +85,8 @@ public class McpFlowsServerPatchTests {
         await Assert.That(body["requesting_repo_root"]!.GetValue<string>()).IsEqualTo("/tmp/session");
     }
 
-    /// <summary>An older route would drop the patch and start a run without it, so a server without v5 is
-    /// reported rather than fallen back from.</summary>
+    /// <summary>No other start route carries the patch, so a server without v5 is reported and nothing else is
+    /// posted.</summary>
     [Test]
     public async Task A_server_without_v5_is_reported_and_no_other_route_is_tried() {
         using var server = Answering(404, "");

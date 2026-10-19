@@ -311,8 +311,7 @@ partial class McpFlowsServer(
                 // started) plus an explicit-vendor echo check once the route matched.
                 var requestedVendor = NormalizeVendor(arguments?["vendor"]?.GetValue<string>());
 
-                // A patch start goes only to v5; an older server answers that route with a 404 and started
-                // nothing, so the caller is told to update rather than seeing a run without its patch.
+                // A patch start goes only to v5, and a server without that route answers 404 having started nothing.
                 if (startPatch is not null
                     && postResponse.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
                     return BuildToolResult(id, PatchProtocolRequiredMessage, isError: true);
@@ -1354,8 +1353,8 @@ partial class McpFlowsServer(
             BaseCommit:           patch?.BaseCommit
         );
 
-        // A patch goes only to the route that takes it. An older route would drop the two fields and start a
-        // run without the patch, so a server without v5 is reported, never fallen back from.
+        // A patch goes only to v5: no other start route carries the patch fields, so a server without v5 is
+        // reported rather than given a run without its patch.
         if (patch is not null)
             return await client.PostAsync(
                 $"{apiRoot}/api/flows/review/start/v5",
