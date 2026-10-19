@@ -40,9 +40,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public bool IsStarting => _isStarting.Value;
 
     readonly ObservableAsPropertyHelper<bool> _hasAgent;
-    /// The header's actions address an agent the daemon reports: before that Stop has nothing to
-    /// reach and the web page does not exist.
+    /// The header's actions address an agent the daemon reports: before that the web page does not exist.
     public bool HasAgent => _hasAgent.Value;
+
+    readonly ObservableAsPropertyHelper<bool> _showsStop;
+    /// Stop reaches a starting launch too: the daemon cancels it before its agent registers.
+    public bool ShowsStop => _showsStop.Value;
 
     readonly ObservableAsPropertyHelper<string> _startingText;
     public string StartingText => _startingText.Value;
@@ -144,6 +147,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     // (AgentActionService.IsProtectedKind), so Stop must see whatever the LATEST resolved dto
     // says, not a value captured once at construction.
     AgentStatusDto? _latestDto;
+    AgentRow? _startingRow;
 
     public WorkspaceViewModel(
             string agentId, IDaemonClientService daemon, AgentActionService actions,
@@ -237,6 +241,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         _isStarting = header.Select(h => h.Row is not null)
             .ToProperty(this, x => x.IsStarting, initialValue: false)
             .DisposeWith(_disposables);
+        _showsStop = header.Select(h => h.Dto is not null || h.Row is not null)
+            .ToProperty(this, x => x.ShowsStop, initialValue: false)
+            .DisposeWith(_disposables);
+        header.Subscribe(h => _startingRow = h.Row).DisposeWith(_disposables);
         _startingText = header.Select(h => h.Row is { } row ? LaunchStages.StartingText(row.Vendor, row.LaunchStage) : "")
             .ToProperty(this, x => x.StartingText, initialValue: "")
             .DisposeWith(_disposables);
@@ -293,8 +301,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             // anything other than exactly "agent" as protected) -- the edge case of a Stop click
             // before the first dto ever arrives must never default to the ONE kind that skips
             // the confirm-then-force seam.
-            var kind = dto?.Kind ?? UnresolvedKind;
-            var label = dto is null ? agentId : $"{dto.Kind} · {dto.Vendor} · {RepoLabel.Leaf(dto.RepoPath)}";
+            var row   = _startingRow;
+            var kind  = dto?.Kind ?? row?.Kind ?? UnresolvedKind;
+            var label = dto is not null ? $"{dto.Kind} · {dto.Vendor} · {RepoLabel.Leaf(dto.RepoPath)}"
+                      : row is not null ? $"{row.Kind} · {row.Vendor} · {RepoLabel.Leaf(row.RepoPath)}"
+                      : agentId;
             actions.RequestStop(agentId, label, kind);
         }, canStop);
         _disposables.Add(StopCommand);

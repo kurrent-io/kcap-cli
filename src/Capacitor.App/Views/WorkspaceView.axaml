@@ -51,7 +51,7 @@
                         <views:AppIcon Kind="ExternalLink" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
                     </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
-                            IsVisible="{Binding HasAgent}" Padding="10,5" FontSize="13.5" />
+                            IsVisible="{Binding ShowsStop}" Padding="10,5" FontSize="13.5" />
                 </StackPanel>
             </Grid>
         </Border>

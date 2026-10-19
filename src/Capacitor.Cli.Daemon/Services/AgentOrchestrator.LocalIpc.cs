@@ -202,6 +202,22 @@ internal partial class AgentOrchestrator {
             return;
         }
 
+        // A launch still starting has no agent yet: cancel it, and answer once it has settled. Before
+        // the resume discard below, which would otherwise remove a starting launch's worktree under it.
+        if (!force && _cancellableLaunches.TryGetValue(agentId, out var protectedLaunch) && protectedLaunch.Kind != LaunchKind.Default) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+                $"{agentId} is a starting {protectedLaunch.Kind} launch. Pass --force to cancel it anyway."), ct);
+
+            return;
+        }
+
+        if (await CancelStartingLaunchAsync(agentId) is { } cancelled) {
+            var ok = cancelled.Published is not { } published || await StopAgentCoreAsync(published);
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
         // Not live here — it may be a survivor of a previous daemon incarnation, which the PID
         // record can still reap. This is why the client sends full ids verbatim. The record
         // carries the same Kind/FlowRunId/FlowRole the live agent would have, so protection still
@@ -261,6 +277,32 @@ internal partial class AgentOrchestrator {
     }
 
     static string StatusText(bool confirmedStopped) => confirmedStopped ? "stopped" : "failed";
+
+    /// <summary>How long a local stop waits for a cancelled launch to settle: a handshake stage cancels at
+    /// once, but worktree creation takes no token and finishes first.</summary>
+    static readonly TimeSpan LaunchCancelSettleWait = TimeSpan.FromSeconds(60);
+
+    internal sealed record CancelledLaunch(AgentInstance? Published);
+
+    /// <summary>Cancels a launch for this id that has not registered its agent, or null when there is none.
+    /// A launch still queued on the command lane is refused when it starts; a running one is cancelled
+    /// and waited for, and the agent it published anyway, having passed its last cancellation point, is
+    /// returned to be stopped.</summary>
+    async Task<CancelledLaunch?> CancelStartingLaunchAsync(string agentId) {
+        if (!_cancellableLaunches.TryGetValue(agentId, out var running)) {
+            if (_processor?.HasActiveLaunch(agentId) != true) return null;
+
+            _launchesCancelledBeforeStart[agentId] = 0;
+            // It may have started between the two reads; then it is cancelled below like any other.
+            if (!_cancellableLaunches.TryGetValue(agentId, out running)) return new CancelledLaunch(null);
+            _launchesCancelledBeforeStart.TryRemove(agentId, out _);
+        }
+
+        running.Cancel();
+        try { await running.Settled.WaitAsync(LaunchCancelSettleWait, _time); } catch (TimeoutException) { /* answer with what is there */ }
+
+        return new CancelledLaunch(_agents.GetValueOrDefault(agentId));
+    }
 
     /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can
     /// word — never an Error frame, never an escaped exception — and it is written only once the

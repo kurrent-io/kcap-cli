@@ -214,6 +214,36 @@ public class WorkspaceViewModelTests {
         new(ops, notifier, opener, new ReplaySubject<DaemonStatusDto>(1), CancellationToken.None,
             confirmForceStop ?? NeverConfirm.Confirm);
 
+    /// A starting launch can be cancelled from its workspace: Stop shows before the daemon reports the
+    /// agent, and reads the pending row's kind, so a launch from the app stops without a force prompt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Stop_reaches_a_launch_that_is_still_starting() {
+        await RunOnUiAsync(async () => {
+            var ops       = new ScriptedLocalControlOps();
+            var confirmer = new RecordingConfirmer();
+            var actions   = NewActions(ops, new RecordingNotifier(), new RecordingOpener(), confirmForceStop: confirmer.Confirm);
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(AgentRow.FromPending(
+                new PendingLaunchDto("a1", "claude", "/repo/myproj", "Fix the flaky test", DateTime.UtcNow, "spawned"),
+                new RepoIdentity("path:/repo/myproj", "myproj")));
+            var vm = new WorkspaceViewModel("a1", new FakeDaemonClientService(), actions, new FakeTerminalAttachClientFactory().Factory,
+                () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(),
+                new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), directory: directory);
+
+            await Assert.That(vm.HasAgent).IsFalse();
+            await Assert.That(vm.ShowsStop).IsTrue();
+
+            ops.QueueStop(new StopAgentResult(true, "stopped", null));
+            await vm.StopCommand.Execute();
+
+            await WaitUntilAsync(() => ops.StopCalls >= 1, what: "stop issued for the starting launch");
+            await Assert.That(confirmer.Prompted).IsEmpty();
+            await Assert.That(ops.StopPayloads).IsEquivalentTo([("a1", false)], CollectionOrdering.Matching);
+            await vm.TeardownAsync();
+        });
+    }
+
     /// Between the launch being accepted and the daemon publishing the agent, the header reads the
     /// directory's pending row, so the workspace never opens as a blank shell.
     [Test]

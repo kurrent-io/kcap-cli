@@ -455,6 +455,9 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
 
     /// <summary>Test seams for the §3.3 tracking state. Reading them takes <c>_lock</c>, so they observe
     /// exactly what admission and coalescing observe.</summary>
+    /// <summary>Whether a launch for this id is committed and not yet settled, queued or running.</summary>
+    internal bool HasActiveLaunch(string agentId) { lock (_lock) return _activeLaunches.ContainsKey(agentId); }
+
     internal bool IsActiveLaunchTargetForTest(string agentId) { lock (_lock) return _activeLaunches.ContainsKey(agentId); }
     internal int  ActiveLaunchInstancesForTest(string agentId) { lock (_lock) return _activeLaunches.GetValueOrDefault(agentId); }
     internal int  ActiveLaunchIdCountForTest  { get { lock (_lock) return _activeLaunches.Count; } }
