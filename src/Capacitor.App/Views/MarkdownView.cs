@@ -40,6 +40,8 @@ public sealed class MarkdownView : ContentControl {
     // The extension builds its TextMate highlighters on first use and keeps them, so one
     // instance serves the app; a per-view instance rebuilds them on every render.
     static readonly TextMateExtension Highlighting = new();
+    static readonly Cursor IBeamCursor = new(StandardCursorType.Ibeam);
+    static readonly Cursor HandCursor = new(StandardCursorType.Hand);
 
     readonly MarkdownViewer _viewer = new();
     readonly DetailsState _details = new();
@@ -72,6 +74,8 @@ public sealed class MarkdownView : ContentControl {
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
+        // Bubble on the host runs after the viewer's own move, which has already chosen Hand or
+        // the arrow. Selectable prose keeps the I-beam; a link keeps the hand.
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
@@ -84,10 +88,11 @@ public sealed class MarkdownView : ContentControl {
     }
 
     void OnPointerMoved(object? sender, PointerEventArgs e) {
-        var tip = FindHyperlinkAt(_viewer, e.GetPosition(_viewer))?.NavigateUri?.ToString()
-            ?? ImageUnder(e.Source as Visual)?.Target;
+        var link = FindHyperlinkAt(_viewer, e.GetPosition(_viewer));
+        var tip = link?.NavigateUri?.ToString() ?? ImageUnder(e.Source as Visual)?.Target;
         if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
             ToolTip.SetTip(_viewer, tip);
+        _viewer.Cursor = link is null ? IBeamCursor : HandCursor;
     }
 
     static MarkdownImage? ImageUnder(Visual? visual) {
