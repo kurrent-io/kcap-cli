@@ -48,6 +48,24 @@ public class SettingsViewModelTests {
     }
 
     [Test]
+    public Task Auto_resume_reads_unset_as_on_and_saves_to_the_attached_profile_only() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = Make(store, Connected());
+        await Assert.That(vm.AutoResume).IsTrue();
+
+        vm.AutoResume = false;
+        await WaitUntilAsync(() => vm.AutoResumeMessage is not null);
+
+        await Assert.That(store.Load().AutoResume).IsFalse();
+        await Assert.That(vm.AutoResumeMessage).IsEqualTo("Saved. The daemon reads this when it starts.");
+        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(Config.Root), out var saved);
+        await Assert.That(saved!.Profiles["another"].Daemon!.AutoResume).IsNull();
+
+        using var reopened = Make(store, Connected());
+        await Assert.That(reopened.AutoResume).IsFalse();
+    });
+
+    [Test]
     public Task Rename_waits_for_startup_even_when_unreachable() => AvaloniaSession.RunOnUiAsync(async () => {
         var startup = new TaskCompletionSource();
         var service = Connected();
