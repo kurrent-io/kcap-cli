@@ -309,7 +309,7 @@ public partial class App : Application {
                     alreadyAuthenticated: current is GateResult.Complete),
                 () => ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token),
                 (current, currentProfiles, laneQuiesced) => BuildDaemonGraph(desktop, lane, channel, current, currentProfiles, laneQuiesced),
-                () => LocalSetupState.Pending(_localRoot), _shutdown.Token);
+                () => LocalSetupState.Pending(_localRoot), _shutdown.Token, () => LocalSetupCannotRetry(_localInstall));
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
             // A quit landing mid-startup (gate evaluation, the wizard's PATH probe, the post-wizard
             // re-resolve) is not a startup failure: the shutdown path already owns teardown, and an
@@ -457,13 +457,15 @@ public partial class App : Application {
     // An incomplete gate builds no daemon graph while the wizard owns the app, and the graph is then
     // built against a fresh resolution, because the wizard is what may have changed the answer. A
     // close that leaves local setup pending reopens the wizard instead: that graph would come up
-    // over a half-installed edition. A quit builds nothing. Only the wizard's handoff can report a
+    // over a half-installed edition. Only an install that can still be retried reopens it; one that
+    // cannot hands over to the graph, which an incomplete gate brings up degraded. A quit builds nothing. Only the wizard's handoff can report a
     // lane still live, and a graph built over one must not also drive automatic actions.
     internal static async Task RunWizardThenBuildGraphAsync(
             GateResult gate, ProfileContext? profiles, bool showWizard,
             Func<GateResult, ProfileContext?, Task<bool>> runWizard,
             Func<Task<(GateResult Gate, ProfileContext? Profiles)>> reevaluate,
-            Action<GateResult, ProfileContext?, bool> buildGraph, Func<bool> localSetupPending, CancellationToken shutdown) {
+            Action<GateResult, ProfileContext?, bool> buildGraph, Func<bool> localSetupPending, CancellationToken shutdown,
+            Func<bool>? setupCannotRetry = null) {
         var laneQuiesced = true;
         if (showWizard) {
             do {
@@ -471,13 +473,17 @@ public partial class App : Application {
                 if (shutdown.IsCancellationRequested) return;
                 (gate, profiles) = await reevaluate().ConfigureAwait(true);
             } while ((gate is GateResult.Incomplete { Reason: GateReason.LocalSetupPending } || localSetupPending())
-                  && !shutdown.IsCancellationRequested);
+                  && setupCannotRetry?.Invoke() != true && !shutdown.IsCancellationRequested);
 
             if (shutdown.IsCancellationRequested) return;
         }
 
         buildGraph(gate, profiles, laneQuiesced);
     }
+
+    /// The install's last outcome offers neither Try again nor Back: a reopened wizard could only be quit.
+    internal static bool LocalSetupCannotRetry(LocalInstallController? install) =>
+        install?.Outcome is LocalInstallOutcome.Failed { Affordance: LocalInstallAffordance.Permanent or LocalInstallAffordance.Busy };
 
     internal static bool ShouldShowWizard(GateResult gate, string[]? args) =>
         gate is GateResult.Incomplete || args?.Contains("--setup", StringComparer.Ordinal) == true;

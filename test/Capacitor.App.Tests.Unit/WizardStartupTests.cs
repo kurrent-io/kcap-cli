@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Capacitor.Cli.Core.Telemetry;
 using System.Net;
 using System.Text;
@@ -661,13 +662,13 @@ public class WizardStartupTests {
     // show, let the test drive, wait for the close, hand off.
     static Func<GateResult, ProfileContext?, Task<bool>> WizardRuns(
             WizardFixtures.GraphHarness harness, List<(WizardGraph Graph, WizardStepId StartedAt)> shown,
-            Func<WizardGraph, Task> drive, CancellationToken shutdown) {
-        LocalInstallController? install = null;
+            Func<WizardGraph, Task> drive, CancellationToken shutdown, StrongBox<LocalInstallController?>? install = null) {
+        install ??= new StrongBox<LocalInstallController?>();
 
         return async (_, _) => {
             var options = harness.Options();
-            install ??= WizardComposition.NewInstallController(options);
-            var graph = WizardComposition.BuildGraph(options with { Install = install });
+            install.Value ??= WizardComposition.NewInstallController(options);
+            var graph = WizardComposition.BuildGraph(options with { Install = install.Value });
             await graph.ViewModel.PendingEnterForTesting;
             shown.Add((graph, graph.ViewModel.Current.Id));
             await drive(graph);
@@ -723,6 +724,46 @@ public class WizardStartupTests {
         // The reopened wizard shows the settled failure; it does not start a second child unasked.
         await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(1);
         await Assert.That(reopenedMessage).IsEqualTo(message);
+    }
+
+    /// A journal the CLI cannot read settles Permanent: no Try again and no Back, so reopening the
+    /// wizard on every close would leave only Quit.
+    [Test]
+    public async Task A_close_after_a_permanent_setup_failure_builds_one_degraded_graph() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = new LocalRoot(Config.PathTo("local"));
+        root.EnsureCreated();
+        Config.CreateFile("local/journal.json", "{not json");
+        harness.LocalRoot = root;
+        harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
+        using var shutdown = new CancellationTokenSource();
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var install = new StrongBox<LocalInstallController?>();
+        var built = new List<(GateResult Gate, bool LaneQuiesced)>();
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, async graph => {
+                if (shown.Count > 1) {
+                    shutdown.Cancel(); // a reopen is the failure; end the loop it would otherwise repeat
+                    return;
+                }
+                await WizardFixtures.WaitUntilAsync(() => graph.Install.Outcome is not null, what: "the install to settle");
+                graph.ViewModel.RequestClose();
+            }, shutdown.Token, install);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (gate, _, quiesced) => built.Add((gate, quiesced)),
+                    () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token,
+                    () => AppUnderTest.LocalSetupCannotRetry(install.Value))
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            return true;
+        });
+
+        await Assert.That(shown.Count).IsEqualTo(1);
+        await Assert.That(built.Count).IsEqualTo(1);
+        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(built[0].Gate, built[0].LaneQuiesced)).IsTrue();
     }
 
     /// A gate that could not be read says nothing about the journal: pending setup still reopens the wizard.
