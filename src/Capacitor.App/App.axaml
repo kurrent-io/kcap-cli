@@ -523,6 +523,33 @@
         </Style>
         <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
              the danger colour. Rest and hover both pin KcapDangerBrush. -->
+        <!-- A destructive primary: filled like kcapPrimary so it reads as the action, never bound to
+             Enter, so the default key cannot remove or stop anything. -->
+        <Style Selector="Button.kcapDangerFill">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapDangerFill:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
         <Style Selector="Button.kcapDanger">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />

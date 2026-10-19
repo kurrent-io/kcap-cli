@@ -1271,12 +1271,18 @@ public partial class App : Application {
     // launch (OutputType=WinExe has no console), so this window is the only channel that
     // actually reaches the user. SelectableTextBlock (not TextBlock) keeps the stack trace
     // copyable for a bug report.
+    /// The app theme's brush, or null before the theme has loaded, which leaves the default.
+    static IBrush? KcapBrush(string key) =>
+        Current?.TryGetResource(key, null, out var brush) == true ? brush as IBrush : null;
+
     internal static Window BuildStartupErrorWindow(Exception ex) =>
         new() {
             Title = "Kurrent Capacitor — startup failed",
             Icon = ProductIcon.WindowIcon,
             Width = 640,
             Height = 400,
+            Background = KcapBrush("KcapCanvasBrush"),
+            Foreground = KcapBrush("KcapTextBrush"),
             Content = new ScrollViewer {
                 Content = new SelectableTextBlock {
                     Text = $"The app failed to start. Details:\n{ex}",
@@ -1836,24 +1842,18 @@ public partial class App : Application {
         return tcs.Task;
     }
 
-    // Plain code-built Window (same style as BuildStartupErrorWindow above) rather than a XAML
-    // view — this dialog has no ViewModel, no data binding, and exists only to resolve `tcs`.
-    // "Stop anyway" is IsDefault (Enter-triggered, styled as the destructive default);
-    // "Cancel" is IsCancel (Esc-triggered). Closing via the titlebar/Esc without clicking either
-    // button also resolves false — TrySetResult is idempotent, so whichever path runs first wins
-    // and the other is a no-op.
+    // "Stop anyway" is destructive, so Enter does not press it; Esc cancels. Closing via the
+    // titlebar without clicking either button also resolves false — TrySetResult is idempotent,
+    // so whichever path runs first wins and the other is a no-op.
     internal static Window BuildConfirmForceStopWindow(string label, TaskCompletionSource<bool> tcs) {
-        var cancelButton = new Button { Content = "Cancel", IsCancel = true };
-        var stopButton = new Button {
-            Content = "Stop anyway",
-            IsDefault = true,
-            Background = new SolidColorBrush(Color.Parse("#D32F2F")),
-            Foreground = Brushes.White,
-        };
+        var cancelButton = new Button { Content = "Cancel", IsCancel = true, Classes = { "kcapChip" } };
+        var stopButton = new Button { Content = "Stop anyway", Classes = { "kcapDangerFill" } };
 
         var window = new Window {
             Title = "Stop review participant?",
             Icon = ProductIcon.WindowIcon,
+            Background = KcapBrush("KcapCanvasBrush"),
+            Foreground = KcapBrush("KcapTextBrush"),
             Width = 420,
             SizeToContent = SizeToContent.Height,
             CanResize = false,
