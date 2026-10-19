@@ -6,7 +6,9 @@ write_stub_kcap() {
   cat > "$1" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-[ -z "${KCAP_PLUGIN_DIR+set}" ] || { echo "stub kcap: KCAP_PLUGIN_DIR leaked in" >&2; exit 2; }
+for var in KCAP_PLUGIN_DIR CODEX_HOME CLAUDE_CONFIG_DIR; do
+  [ -z "${!var+set}" ] || { echo "stub kcap: $var leaked in" >&2; exit 2; }
+done
 cwd="$PWD"
 if command -v cygpath >/dev/null 2>&1; then cwd="$(cygpath -m "$PWD")"; fi
 case "$HOME" in "$cwd"/*) ;; *) echo "stub kcap: HOME is not isolated: $HOME" >&2; exit 2 ;; esac
