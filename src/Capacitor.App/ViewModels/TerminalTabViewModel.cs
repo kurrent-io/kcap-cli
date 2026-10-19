@@ -421,7 +421,10 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             // teardown removes them.
             if (state != ResolveDtoWon) return;
             if (SessionStatusDots.IsTerminal(dto.Status)) HandleAgentEnded();
-            else ReconcileResumeStatus(previous, dto);
+            else {
+                NoteResumeTransition(previous, dto);
+                ReconcileResumeStatus();
+            }
             return;
         }
     }
@@ -639,6 +642,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         await Dispatcher.UIThread.InvokeAsync(() => {
             if (Retired(generation)) return;
             ResumeDeadline = null;
+            _recoveryPending = false;
             Deliver(generation, surface, text);
             Publish(TerminalSessionState.Attached(reason), openingToken);
         }, DispatcherPriority.Default, ct);
@@ -713,30 +717,42 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
     }
 
-    // The row the Agents cache last showed; UI thread only.
+    // The row the Agents cache last showed, and whether a status change since the last attach or
+    // resume wait says the agent may come back; UI thread only.
     AgentStatusDto? _lastDto;
+    bool _recoveryPending;
 
     /// A tab that settled on an end can still see its agent come back: a resumed runtime that fails its
     /// readiness window exits and is then interrupted, and an interrupted one retried with
-    /// `kcap agent resume` returns under the same id. A tab with an attempt in flight is left to it.
-    /// Runs when a row arrives and again when an attempt settles, since the two arrive in either order;
-    /// a null <paramref name="previous"/> reads only the row's own state.
-    void ReconcileResumeStatus(string? previous, AgentStatusDto dto) {
+    /// `kcap agent resume` returns under the same id. The evidence is a status change in the cache,
+    /// recorded whatever the tab is doing and consumed once by the wait it starts, so a row and an
+    /// attach outcome can arrive in either order and replaying an unchanged row renews nothing.
+    void NoteResumeTransition(string? previous, AgentStatusDto dto) {
+        if (previous == dto.Status) return;
+        if (dto.Status is "Resuming" or "Interrupted"
+            || previous is "Resuming" or "Interrupted" || SessionStatusDots.IsTerminal(previous))
+            _recoveryPending = true;
+    }
+
+    /// Runs when a row arrives and again when an attempt settles. A tab with an attempt in flight, or
+    /// already waiting on a resume, is left to it.
+    void ReconcileResumeStatus() {
+        if (_lastDto is not { } dto || Volatile.Read(ref _resolveState) != ResolveDtoWon) return;
         if (State.Phase is not (TerminalSessionPhase.Exited or TerminalSessionPhase.Failed
                 or TerminalSessionPhase.SessionEnded or TerminalSessionPhase.Interrupted)) return;
 
         if (dto.Status == "Interrupted") {
+            _recoveryPending = false;
             if (State.Phase != TerminalSessionPhase.Interrupted || State.Detail != dto.Interruption)
                 Publish(TerminalSessionState.Interrupted(dto.Interruption), null);
             return;
         }
 
-        var cameBack = dto.Status == "Resuming" && previous != "Resuming"
-                    || previous is "Interrupted" or "Resuming" || SessionStatusDots.IsTerminal(previous);
-        if (cameBack) AwaitRetriedResume();
+        if (_recoveryPending) AwaitRetriedResume();
     }
 
     void AwaitRetriedResume() {
+        _recoveryPending = false;
         ResumeDeadline = _time.GetUtcNow() + _reconnectWindow;
         Publish(TerminalSessionState.Resuming, null);
         _ = WaitForResumeAsync(Volatile.Read(ref _attemptGeneration));
@@ -764,6 +780,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             await Dispatcher.UIThread.InvokeAsync(() => {
                 if (Retired(generation) || State.Phase != TerminalSessionPhase.Resuming) return;
                 ResumeDeadline = null;
+                _recoveryPending = false;
                 Publish(end, null);
             });
             return;
@@ -787,7 +804,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             var remainder = decoder.Flush();
             if (remainder.Length > 0) surface.Feed(remainder);
             Publish(state, openingToken);
-            if (_lastDto is { } latest && Volatile.Read(ref _resolveState) == ResolveDtoWon) ReconcileResumeStatus(null, latest);
+            // A resume wait the outcome itself started consumes whatever recovery the cache had noted.
+            if (state.Phase == TerminalSessionPhase.Resuming) _recoveryPending = false;
+            else ReconcileResumeStatus();
         }, DispatcherPriority.Default, CancellationToken.None).GetTask();
 
     async Task RunDetachAsync() {

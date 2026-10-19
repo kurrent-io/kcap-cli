@@ -191,6 +191,51 @@ public class TerminalTabResumeTests {
         });
     }
 
+    /// A manual retry can publish the replacement while the old stream is still draining, so the
+    /// transitions the cache showed meanwhile still start the wait once the old attempt ends.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retry_that_completes_while_the_old_attempt_drains_is_followed() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.AttachAsync();
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            await rig.DropAsync(client, new AttachOutcome.Exited(1));
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+
+            await rig.TickAsync();
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// A cache stuck on Resuming after the window ran out is the same row replayed, not a new retry.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_expired_window_is_not_renewed_by_an_unchanged_resuming_row() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.AttachAsync();
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+
+            // The ledger says Running, but every attach fails until the window runs out.
+            for (var waited = TimeSpan.Zero; waited <= Window + Window && rig.Vm.State.Phase != TerminalSessionPhase.Failed;
+                 waited += TerminalTabViewModel.ResumeRetryGap) {
+                await rig.TickAsync();
+                if (rig.Factory.Created[^1].Result.Task.IsCompleted is false)
+                    await rig.DropAsync(rig.Factory.Created[^1], new AttachOutcome.Failed("connect refused"));
+            }
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming", Title = "same status" });
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+        });
+    }
+
     /// An agent that simply finished keeps its exit, whatever stale status the cache still shows.
     [Test]
     [NotInParallel("AvaloniaSession")]
