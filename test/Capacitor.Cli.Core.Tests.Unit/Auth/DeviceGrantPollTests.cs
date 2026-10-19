@@ -5,9 +5,6 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Auth;
 
-/// <summary>
-/// The defects in the RFC 8628 poll loop, all of which shipped in the GitHub flow first.
-/// </summary>
 public class DeviceGrantPollTests {
     sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
@@ -78,39 +75,130 @@ public class DeviceGrantPollTests {
         await Assert.That(polls).IsEqualTo(2);
     }
 
-    /// <summary>A handler that hangs until its attempt is cancelled, then answers on the next try.</summary>
     sealed class HangsOnceHandler : HttpMessageHandler {
         public int Calls { get; private set; }
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
-            if (++Calls == 1) await Task.Delay(Timeout.Infinite, ct);   // observes the per-attempt bound
+            if (++Calls == 1) {
+                Started.SetResult();
+                await Task.Delay(Timeout.Infinite, ct);
+            }
 
             return Json("""{"access_token":"acc"}""");
         }
     }
 
-    /// <summary>
-    /// One hung POST used to reach HttpClient's 100-second default and escape as a
-    /// TaskCanceledException at the top level, killing a sign-in the user was still completing.
-    /// </summary>
-    [Test]
-    public async Task A_hung_poll_is_retried_rather_than_ending_the_sign_in() {
-        var       handler  = new HangsOnceHandler();
-        var github = new GitHubOAuthClient(new PlainHttpClientFactory(handler));
-        var       progress = new RecordingAuthProgress();
-        var       device   = new DeviceCodeResponse { DeviceCode = "dc", ExpiresIn = 900, Interval = 0 };
+    sealed class HangingBodyContent : HttpContent {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var token = await OAuthLoginFlow.PollDeviceGrantAsync(
-            github.PollForTokenAsync, new() { ["client_id"] = "c" },
+        protected override async Task<Stream> CreateContentReadStreamAsync(CancellationToken ct) {
+            Started.SetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+
+            throw new InvalidOperationException("The body must wait for cancellation.");
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            throw new NotSupportedException();
+
+        protected override bool TryComputeLength(out long length) {
+            length = 0;
+
+            return false;
+        }
+    }
+
+    static Task<string?> Poll(
+            Func<Dictionary<string, string>, CancellationToken, Task<HttpResponseMessage>> post,
+            RecordingAuthProgress progress, TimeProvider time, CancellationToken ct = default) =>
+        OAuthLoginFlow.PollDeviceGrantAsync(
+            post, new() { ["client_id"] = "c" },
             CapacitorJsonContext.Default.GitHubTokenResponse,
             r => (r.AccessToken, r.Error),
-            device, interval: 0, CancellationToken.None, progress, TimeProvider.System,
-            attemptTimeout: TimeSpan.FromMilliseconds(200));
+            new DeviceCodeResponse { DeviceCode = "dc", ExpiresIn = 900, Interval = 0 },
+            interval: 0, ct, progress, time);
+
+    [Test]
+    public async Task A_hung_poll_is_retried_rather_than_ending_the_sign_in() {
+        using var handler = new HangsOnceHandler();
+        var github        = new GitHubOAuthClient(new PlainHttpClientFactory(handler));
+        var progress      = new RecordingAuthProgress();
+        var time          = new FakeTimeProvider();
+
+        var polling = Poll(github.PollForTokenAsync, progress, time);
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        time.Advance(TimeSpan.FromSeconds(20));
+        var token = await polling.WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(token).IsEqualTo("acc");
         await Assert.That(handler.Calls).IsEqualTo(2);
-        // Reported as a tick, not a failure: nothing is wrong, the request just did not answer.
+        await Assert.That(progress.PollTicks).IsEqualTo(1);
         await Assert.That(progress.Errors).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_timed_out_success_response_body_is_retried() {
+        using var body = new HangingBodyContent();
+        var time       = new FakeTimeProvider();
+        var progress   = new RecordingAuthProgress();
+        var calls      = 0;
+
+        var polling = Poll((_, _) => Task.FromResult(++calls == 1
+            ? new HttpResponseMessage(HttpStatusCode.OK) { Content = body }
+            : Json("""{"access_token":"acc"}""")), progress, time);
+
+        await body.Started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        time.Advance(TimeSpan.FromSeconds(20));
+        var token = await polling.WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(token).IsEqualTo("acc");
+        await Assert.That(calls).IsEqualTo(2);
+        await Assert.That(progress.PollTicks).IsEqualTo(1);
+        await Assert.That(progress.Errors).IsEmpty();
+    }
+
+    [Test]
+    public async Task Cancelling_while_reading_a_response_stops_sign_in() {
+        using var body = new HangingBodyContent();
+        using var ct   = new CancellationTokenSource();
+        var progress   = new RecordingAuthProgress();
+        var calls      = 0;
+
+        var polling = Poll((_, _) => {
+            calls++;
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = body });
+        }, progress, new FakeTimeProvider(), ct.Token);
+
+        await body.Started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await ct.CancelAsync();
+
+        await Assert.That(async () => await polling.WaitAsync(TimeSpan.FromSeconds(30)))
+            .Throws<OperationCanceledException>();
+        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(progress.PollTicks).IsEqualTo(0);
+        await Assert.That(progress.Errors).IsEmpty();
+    }
+
+    [Test]
+    [Arguments("not json")]
+    [Arguments("null")]
+    public async Task An_unreadable_success_response_ends_sign_in(string body) {
+        var progress = new RecordingAuthProgress();
+        var calls    = 0;
+
+        var token = await Poll((_, _) => {
+            calls++;
+
+            return Task.FromResult(Json(body));
+        }, progress, new FakeTimeProvider()).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(token).IsNull();
+        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(progress.PollTicks).IsEqualTo(0);
+        await Assert.That(progress.Errors.Count).IsEqualTo(1);
+        await Assert.That(progress.Errors[0]).Contains("unreadable response");
     }
 
     /// <summary>
