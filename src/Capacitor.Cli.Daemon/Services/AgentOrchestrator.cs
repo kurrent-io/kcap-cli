@@ -2012,12 +2012,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>LaunchFailed reason for a launch the owner stopped before its agent registered.</summary>
     internal const string LaunchCancelledReason = "launch_cancelled";
 
-    /// <summary>A server launch from admission until it settles, so a local stop can cancel it before its
-    /// agent exists.</summary>
+    /// <summary>A server launch from submission until it settles, so a local stop can cancel it while it
+    /// is queued or starting, before its agent exists.</summary>
     internal sealed class CancellableLaunch : IDisposable {
         readonly CancellationTokenSource _cts = new();
         readonly TaskCompletionSource    _settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
         Action? _remove;
+        int     _started;
+        int     _handoff;
 
         internal CancellableLaunch(LaunchKind kind, Action remove) {
             Kind    = kind;
@@ -2033,26 +2035,52 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { _cts.Cancel(); } catch (ObjectDisposedException) { /* already settled */ }
         }
 
+        /// <summary>The lane reaches the launch. False when it was cancelled first. Ordered against
+        /// <see cref="HasStarted"/> read after <see cref="Cancel"/>, so a launch the stopper sees unstarted
+        /// always sees the cancel.</summary>
+        public bool TryStart() {
+            Interlocked.Exchange(ref _started, 1);
+            return !IsCancelled;
+        }
+
+        public bool HasStarted => Interlocked.CompareExchange(ref _started, 0, 0) == 1;
+
+        /// <summary>The stopper stops waiting. True when the launch had not settled: it then stops any agent
+        /// it publishes itself.</summary>
+        public bool Abandon() => Interlocked.Exchange(ref _handoff, 1) == 0;
+
+        /// <summary>The launch settles. True when its stopper had already stopped waiting.</summary>
+        public bool SettleAbandoned() => Interlocked.Exchange(ref _handoff, 1) == 1;
+
         public void Dispose() {
             Interlocked.Exchange(ref _remove, null)?.Invoke();
+            Interlocked.Exchange(ref _handoff, 1);
             _settled.TrySetResult();
             _cts.Dispose();
         }
     }
 
-    readonly ConcurrentDictionary<string, CancellableLaunch> _cancellableLaunches = new(StringComparer.Ordinal);
-
-    /// <summary>Launches a local stop reached while they were still queued on the command lane: each is
-    /// refused when it starts.</summary>
-    readonly ConcurrentDictionary<string, byte> _launchesCancelledBeforeStart = new(StringComparer.Ordinal);
+    readonly Dictionary<string, List<CancellableLaunch>> _cancellableLaunches = new(StringComparer.Ordinal);
 
     CancellableLaunch TrackCancellableLaunch(string agentId, LaunchKind kind) {
         CancellableLaunch? launch = null;
-        launch = new CancellableLaunch(kind, () => _cancellableLaunches.TryRemove(new KeyValuePair<string, CancellableLaunch>(agentId, launch!)));
-        _cancellableLaunches[agentId] = launch;
-        if (_launchesCancelledBeforeStart.TryRemove(agentId, out _)) launch.Cancel();
+        launch = new CancellableLaunch(kind, () => {
+            lock (_cancellableLaunches) {
+                if (!_cancellableLaunches.TryGetValue(agentId, out var list)) return;
+                list.Remove(launch!);
+                if (list.Count == 0) _cancellableLaunches.Remove(agentId);
+            }
+        });
+        lock (_cancellableLaunches) {
+            if (!_cancellableLaunches.TryGetValue(agentId, out var list)) _cancellableLaunches[agentId] = list = [];
+            list.Add(launch);
+        }
 
         return launch;
+    }
+
+    CancellableLaunch[] CancellableLaunchesFor(string agentId) {
+        lock (_cancellableLaunches) return _cancellableLaunches.TryGetValue(agentId, out var list) ? [.. list] : [];
     }
 
     /// <summary>Registers an in-flight launch so <see cref="BuildLiveAgents"/> can describe it during
@@ -2154,9 +2182,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// them — relocated off the pump, never refused for its format.</para></summary>
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
         var anySeq = cmd.Epoch is not null || cmd.Seq is not null || cmd.CommandId is not null;
+        var launch = TrackCancellableLaunch(cmd.AgentId, cmd.Kind);
 
         if (!anySeq) {
-            await DispatchUnsequencedLaunchAsync(cmd);
+            await DispatchUnsequencedLaunchAsync(cmd, launch);
             return;
         }
 
@@ -2168,11 +2197,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (Processor is { } proc && cmd.Epoch is { } epoch && cmd.Seq is { } seq && cmd.CommandId is { } cmdId) {
             var execution = proc.SubmitAsync(
                 new SequencedItem(SequencedKind.Launch, epoch, seq, cmdId, cmd.AgentId),
-                () => HandleLaunchAgentCore(cmd));
-            _ = ObserveDetachedExecution(execution, cmd.AgentId);
+                () => HandleLaunchAgentCore(cmd, launch));
+            _ = ObserveDetachedExecution(execution, cmd.AgentId, launch);
             return;
         }
 
+        launch.Dispose();
         await _server.LaunchFailedAsync(cmd.AgentId, "Malformed sequenced launch: partial Epoch/Seq/CommandId");
     }
 
@@ -2180,7 +2210,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// hosted-agent and PR-review launch has, since the sequenced tuple rides only the review-flow
     /// settlement lane (§1.9). It is committed onto the same serial lane as sequenced traffic so arrival
     /// order holds across formats, and the pump is free the instant the commit returns.</summary>
-    async Task DispatchUnsequencedLaunchAsync(LaunchAgentCommand cmd) {
+    async Task DispatchUnsequencedLaunchAsync(LaunchAgentCommand cmd, CancellableLaunch launch) {
         var proc = SnapshotProcessorReservingInlineSlot();
 
         if (proc is null) {
@@ -2192,7 +2222,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // HandleLaunchAgentCore, which ServerConnection.SafeInvoke logs and swallows — so no
             // LaunchFailed reaches the server for a launch torn down mid-prompt by shutdown. That is
             // shutdown-only and the server's own reconciliation lanes are the backstop; do NOT re-add one.
-            try { await HandleLaunchAgentCore(cmd); }
+            try { await HandleLaunchAgentCore(cmd, launch); }
             finally { ReleaseInlineSlot(); }
             return;
         }
@@ -2201,9 +2231,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Coalesced/DroppedUnknownTarget are stop-only outcomes: launches never coalesce and are never
         // admission-checked (a launch CREATES its target).
         var outcome = proc.SubmitUnsequenced(new UnsequencedItem(
-            UnsequencedKind.Launch, cmd.AgentId, UnsequencedLaunchPayloadKey, () => HandleLaunchAgentCore(cmd)));
+            UnsequencedKind.Launch, cmd.AgentId, UnsequencedLaunchPayloadKey, () => HandleLaunchAgentCore(cmd, launch)));
 
         if (outcome is not SubmitOutcome.Refused) return;
+
+        launch.Dispose();
 
         // Refused == the lane stopped accepting, i.e. daemon shutdown. The CALLER owns the consequence, and
         // its own send failure is swallowed: the daemon is exiting, nothing here can act on it, and this
@@ -2221,9 +2253,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="CommandRejected"/>. In normal operation this task completes successfully — RunLaneAsync's
     /// own finally always resolves it — so reaching the catch below is itself a defensive, not expected,
     /// path.</summary>
-    async Task ObserveDetachedExecution(Task execution, string agentId) {
+    async Task ObserveDetachedExecution(Task execution, string agentId, CancellableLaunch? launch = null) {
         try { await execution; }
         catch (Exception ex) { LogDetachedCommandFault(ex, agentId); }
+        finally { launch?.Dispose(); }
     }
 
     /// <summary>The daemon's rename fence; every new agent admits through it.</summary>
@@ -2231,7 +2264,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Admits a server launch through the rename fence; a fenced daemon fails it as a semantic
     /// rejection, so the server does not read it as a transient full daemon.</summary>
-    async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd) {
+    async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd, CancellableLaunch launch) {
+        using var settle    = launch;
         using var admission = _admission.TryAdmit();
         if (admission is null) {
             _logger.LogWarning("Launch {AgentId} refused: the daemon is being renamed", cmd.AgentId);
@@ -2240,12 +2274,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
-        using var hold   = BeginLaunchHold();
-        using var cancel = TrackCancellableLaunch(cmd.AgentId, cmd.Kind);
+        using var hold = BeginLaunchHold();
 
         try {
-            if (!cancel.IsCancelled) return await HandleAdmittedLaunchAsync(cmd, hold, cancel.Token);
-        } catch (OperationCanceledException) when (cancel.IsCancelled && !_shutdownCts.IsCancellationRequested) {
+            if (launch.TryStart()) {
+                var outcome = await HandleAdmittedLaunchAsync(cmd, hold, launch.Token);
+                // Cancelled past its last cancellation point, with no stopper left waiting to stop what it published.
+                if (launch.SettleAbandoned() && _agents.GetValueOrDefault(cmd.AgentId) is { } published)
+                    _ = StopAgentCoreAsync(published);
+
+                return outcome;
+            }
+        } catch (OperationCanceledException) when (launch.IsCancelled && !_shutdownCts.IsCancellationRequested) {
             // Cancelled before the launch body reached its own cleanup (the consent prompt).
         }
 
@@ -6416,8 +6456,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test-only: look up a tracked agent by id (null if absent), so a launch test can
     /// assert the resolved <see cref="AgentInstance.Work"/> / <see cref="AgentInstance.Worktree"/>.</summary>
     internal AgentInstance? GetAgentForTest(string agentId) => _agents.GetValueOrDefault(agentId);
-
-    internal IDisposable TrackCancellableLaunchForTest(string agentId, LaunchKind kind) => TrackCancellableLaunch(agentId, kind);
 
     /// <summary>Test-only entry point to the private cleanup path.</summary>
     internal Task CleanupAgentForTest(string agentId) => CleanupAgentAsync(agentId);

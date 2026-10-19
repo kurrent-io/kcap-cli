@@ -453,10 +453,7 @@ internal sealed class SequencedCommandProcessor : IAsyncDisposable {
         alarmHighWater = _queuedStopsHighWater;
     }
 
-    /// <summary>Whether a launch for this id is committed and not yet settled, queued or running.</summary>
-    internal bool HasActiveLaunch(string agentId) { lock (_lock) return _activeLaunches.ContainsKey(agentId); }
-
-    /// <summary>Test seams for the tracking state. Reading them takes <c>_lock</c>, so they observe
+    /// <summary>Test seams for the §3.3 tracking state. Reading them takes <c>_lock</c>, so they observe
     /// exactly what admission and coalescing observe.</summary>
     internal bool IsActiveLaunchTargetForTest(string agentId) { lock (_lock) return _activeLaunches.ContainsKey(agentId); }
     internal int  ActiveLaunchInstancesForTest(string agentId) { lock (_lock) return _activeLaunches.GetValueOrDefault(agentId); }

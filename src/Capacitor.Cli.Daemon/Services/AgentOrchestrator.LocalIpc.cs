@@ -202,17 +202,18 @@ internal partial class AgentOrchestrator {
             return;
         }
 
-        // A launch still starting has no agent yet: cancel it, and answer once it has settled. Before
+        // A launch queued or starting has no agent yet: cancel it, and answer once it has settled. Before
         // the resume discard below, which would otherwise remove a starting launch's worktree under it.
-        if (!force && _cancellableLaunches.TryGetValue(agentId, out var protectedLaunch) && protectedLaunch.Kind != LaunchKind.Default) {
+        var starting = CancellableLaunchesFor(agentId);
+        if (!force && starting.FirstOrDefault(l => l.Kind != LaunchKind.Default) is { } protectedLaunch) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error(
                 $"{agentId} is a starting {protectedLaunch.Kind} launch. Pass --force to cancel it anyway."), ct);
 
             return;
         }
 
-        if (await CancelStartingLaunchAsync(agentId) is { } cancelled) {
-            var ok = cancelled.Published is not { } published || await StopAgentCoreAsync(published);
+        if (starting.Length > 0) {
+            var ok = await CancelStartingLaunchesAsync(agentId, starting);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
 
             return;
@@ -282,26 +283,23 @@ internal partial class AgentOrchestrator {
     /// once, but worktree creation takes no token and finishes first.</summary>
     static readonly TimeSpan LaunchCancelSettleWait = TimeSpan.FromSeconds(60);
 
-    internal sealed record CancelledLaunch(AgentInstance? Published);
+    /// <summary>Cancels the launches for this id; one still queued is refused when the lane reaches it, and
+    /// one already started is waited for. True once none is left running and any agent one published anyway,
+    /// past its last cancellation point, is stopped; false when one outlasts the wait, which then stops
+    /// whatever it publishes itself.</summary>
+    async Task<bool> CancelStartingLaunchesAsync(string agentId, CancellableLaunch[] launches) {
+        foreach (var launch in launches) launch.Cancel();
+        var started = launches.Where(l => l.HasStarted).ToArray();
 
-    /// <summary>Cancels a launch for this id that has not registered its agent, or null when there is none.
-    /// A launch still queued on the command lane is refused when it starts; a running one is cancelled
-    /// and waited for, and the agent it published anyway, having passed its last cancellation point, is
-    /// returned to be stopped.</summary>
-    async Task<CancelledLaunch?> CancelStartingLaunchAsync(string agentId) {
-        if (!_cancellableLaunches.TryGetValue(agentId, out var running)) {
-            if (_processor?.HasActiveLaunch(agentId) != true) return null;
-
-            _launchesCancelledBeforeStart[agentId] = 0;
-            // It may have started between the two reads; then it is cancelled below like any other.
-            if (!_cancellableLaunches.TryGetValue(agentId, out running)) return new CancelledLaunch(null);
-            _launchesCancelledBeforeStart.TryRemove(agentId, out _);
+        try {
+            await Task.WhenAll(started.Select(l => l.Settled)).WaitAsync(LaunchCancelSettleWait, _time);
+        } catch (TimeoutException) {
+            var outlasted = false;
+            foreach (var launch in started) outlasted |= launch.Abandon();
+            if (outlasted) return false;
         }
 
-        running.Cancel();
-        try { await running.Settled.WaitAsync(LaunchCancelSettleWait, _time); } catch (TimeoutException) { /* answer with what is there */ }
-
-        return new CancelledLaunch(_agents.GetValueOrDefault(agentId));
+        return _agents.GetValueOrDefault(agentId) is not { } published || await StopAgentCoreAsync(published);
     }
 
     /// <summary>Composer input from the owner's socket. Every outcome is one ack the composer can

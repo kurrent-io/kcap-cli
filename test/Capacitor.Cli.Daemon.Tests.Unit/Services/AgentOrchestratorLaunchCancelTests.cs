@@ -67,17 +67,29 @@ public class AgentOrchestratorLaunchCancelTests {
         await Assert.That(factory.StartCalls).IsEqualTo(1);
     }
 
-    /// <summary>A protected launch needs force, exactly as its agent will once it registers.</summary>
+    /// <summary>A protected launch needs force, exactly as its agent will once it registers, including
+    /// while it is still queued behind another.</summary>
     [Test]
-    public async Task A_protected_launch_is_not_cancelled_without_force() {
-        var server = new CaptureServerConnection();
+    public async Task A_queued_protected_launch_is_not_cancelled_without_force() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var server  = new CaptureServerConnection();
+        var gate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = new SpyHostedAgentRuntimeFactory("cursor") { StartGate = gate, OnStart = () => started.TrySetResult() };
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
-            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
-        using var launch = orch.TrackCancellableLaunchForTest("review-1", LaunchKind.ReviewFlow);
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repoPath, extraRuntimeFactories: [factory]);
+
+        var first = orch.HandleLaunchAgentForTest(Launch("ahead-1", repoPath));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var queued = orch.HandleLaunchAgentForTest(Launch("review-1", repoPath) with { Kind = LaunchKind.ReviewFlow });
 
         var reply = await StopAsync(orch, "review-1");
+        gate.SetResult();
+        await Task.WhenAll(first, queued).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(reply.Type).IsEqualTo(FrameType.Error);
         await Assert.That(reply.Text).Contains("--force");
+        await Assert.That(server.LaunchFailedCalls).DoesNotContain(("review-1", AgentOrchestrator.LaunchCancelledReason));
     }
 }
