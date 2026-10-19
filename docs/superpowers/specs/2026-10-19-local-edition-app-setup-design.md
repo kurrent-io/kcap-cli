@@ -22,6 +22,7 @@ the app's main window connected to the local server.
 - The daemon service is installed and started without asking.
 - The import is offered; the user can import or skip.
 - A closing frame says the user is set up, with **Continue** (into the app) and **Open web dashboard**.
+- When the local server is down, the main window offers **Start**.
 
 ## Non-goals
 
@@ -34,44 +35,71 @@ the app's main window connected to the local server.
   wiring the app to it is a follow-up change.
 - The Ollama embeddings step (AI-3908, in progress in parallel). It adds lines to the same `--json`
   stream; this work must not break on event names it does not know (see Progress).
-- Windows and Linux. The CLI refuses unsupported platforms with a stable code; the app shows it.
+- Converting between local and cloud in either direction (the Conversion milestone).
+- Windows and Linux (their own milestones, AI-3903 and AI-3898).
 
 ## Anti-goals
 
-- The app must not report a failed or half-finished install as success. A step shows done only after
-  the CLI's `committed` (or `reused`) line and a zero exit.
-- The app must not kill the CLI mid-install in a way that skips its rollback.
+- The app must never report a failed or half-finished install as success, and never offer a route to
+  cloud once a local profile has been published, whatever the exit code said.
+- The app must not kill the CLI mid-install in a way that skips its rollback, and must not signal it
+  twice (a second interrupt makes the CLI exit at once, skipping cleanup).
 - No terminal instruction anywhere on the local path ("run kcap …" text in Done is cloud wording).
+
+## Which edition a wizard run is on
+
+The edition is not only the button pressed in this run. A run is **on the local path** when either the
+user chose Local in this run, or the resolved profile's server classifies as
+`LocalEndpointClass.Local` (the registered active installation, not merely a loopback or no-auth
+server). Everything below that says "local path" uses this one predicate, so a forced `--setup` on a
+committed local machine gets local presentation and no route to cloud, and a cloud machine's forced
+setup behaves as today.
+
+## Onboarding gate and an unfinished install
+
+`kcap setup --local` publishes the registry and the `AuthProvider.None` profile before it lifts the
+server's fence and clears its lifecycle journal. A crash or failed confirmation in between leaves a
+profile the gate reads as Complete today, although setup never finished.
+
+The gate gains one rule: a resolved profile that classifies as `Local` while the local root's lifecycle
+journal (`LocalStateFiles.ReadJournal`) holds a `setup` entry is **Incomplete**, with a reason that
+says a local install is unfinished. The wizard then opens on the local path at Install, which re-runs
+`kcap setup --local --json`; the CLI's recovery rolls the entry forward or back (`recovering` /
+`recovered` lines). Daemon enablement and the main-window graph never start while that entry stands.
+A journal entry for another operation (an upgrade, an uninstall) leaves the gate as it is; the
+install reports `lifecycle_busy` if one is still running.
 
 ## The flow
 
 ### Edition
 
 Choosing **For you, locally** advances to Install instead of showing the notice. The card's detail
-line says the local edition is for a Mac one person uses, because choosing it answers the CLI's
-`--single-user` question (see Install). *My call.*
+line says the local edition is for a Mac one person uses, and roughly how large the download is,
+because choosing it answers the CLI's `--single-user` and `--yes` questions (see Install). *My call.*
 
 The Local card stays unavailable, with an explanation in place of today's notice, in two cases. *Both
 my calls, from the project's milestones:*
 
-- **Not macOS.** Linux and Windows get the app's local path in their own milestones (AI-3898, AI-3903),
-  so on those platforms the card keeps a "not available on this platform yet" line rather than running
-  an untested flow. The CLI would accept glibc Linux, so this gate is the app's.
-- **The machine already has a cloud profile.** The wizard can reopen for one (an expired token, or
-  `--setup`), and the CLI would refuse with `other_server`: converting a cloud machine is the Conversion
-  milestone. The card says this Mac is set up for a cloud workspace and that moving it to local comes
-  later, instead of letting the user run into a permanent failure.
+- **Not macOS.** On other platforms the card keeps a "not available on this platform yet" line rather
+  than running an untested flow. The CLI would accept glibc Linux, so this gate is the app's.
+- **The machine already has a cloud profile** (the resolved profile names an `Ordinary` server). The
+  wizard can reopen for one (an expired token, or `--setup`), and the CLI would refuse with
+  `other_server`. The card says this Mac is set up for a cloud workspace and that moving it to local
+  comes later.
 
 ### Install (new step)
 
-A new `WizardStepId.Install`, placed after Edition. It is shown only for the Local choice, and Sign-in
-only for the other two.
+A new `WizardStepId.Install`, after Edition. It is shown only on the local path and Sign-in only off it.
 
-On entry it starts `kcap setup --local --json --single-user --yes` through the app's CLI facade.
-`--single-user` acknowledges that shared machines are unsafe for now (the Local card says so);
-`--yes` confirms the download, whose approximate size the Local card states as static copy (the
-CLI reports the real size only after consent). Both are answered by the user's choice of
-the Local card, not by a further prompt. *My call; the CLI needs both or fails with `answer_required`.*
+**Before starting** it checks that the profile the app resolves is the one the installer will write:
+the installer writes the config's literal active profile, while the app honours `KCAP_PROFILE`. If
+`KCAP_PROFILE` names a different profile, the step stops with a message naming both and does not run
+the install. *My call: refusing is smaller and safer than teaching the installer a second resolution
+rule.*
+
+It then starts `kcap setup --local --json --single-user --yes` through the app's CLI facade. Entry
+returns as soon as the child is started; the run is owned by an install controller that outlives the
+step's page (see Closing the wizard).
 
 The page shows four rows, each with a state, and a progress bar for the download:
 
@@ -84,54 +112,75 @@ The page shows four rows, each with a state, and a progress bar for the download
 
 - `preflight_passed` names the plan and version; a `recovering`/`recovered` pair shows a line such as
   "Finishing an earlier setup" above the rows.
-- `reused {server_url, installed_version}` means a committed installation already exists: all rows show
-  done and the step reads "Already installed".
-- `rolling_back` / `rolled_back` show as "Undoing the partial install" before the failure state.
-- A line whose `event` the app does not know is ignored, not treated as an error, so new CLI steps
-  (Ollama) do not break the page. The line carries `v`; a `v` above the one the app knows is still
-  read for `event`, `committed` and `failed`.
+- `reused {server_url, installed_version}` shows all rows done and "Already installed". A reuse may
+  still be followed by `committed`; the outcome is counted once.
+- `rolling_back` / `rolled_back` show as "Undoing the partial install".
+- A line whose `event` the app does not know is ignored, so new CLI steps (Ollama) do not break the
+  page. A line whose `v` is above the one the app knows is still read for `event`, `committed`,
+  `reused` and `failed`.
 
-On `committed` (or `reused`) with exit 0 the step is satisfied, records the `server_url`, and moves on
-to Agents by itself. *My call: one primary action per screen, and there is nothing to decide here.*
+**The settled result.** Progress lines only drive the rows. The step's outcome is decided once, after
+the child has exited, from three facts: whether a `committed` or `reused` line was seen, the `failed`
+code if any, and whether the resolved profile now classifies as `Local`.
 
-**After the commit there is no way back to Edition.** The profile now names the local server and the
-stack runs; switching to cloud would be a conversion, which v1 does not do. Back from Agents stops at
-Agents (Install and Edition are locked), and a re-entered Install shows the static "Installed" state
-without re-running the CLI. *My call.* A machine that quits right after the commit reopens into the
-main window, as a cloud machine does after Sign-in, because the gate reads Complete.
+| Settled as | When | The page |
+|---|---|---|
+| **Installed** | `committed` or `reused` was seen, whatever the exit code (a cancel that arrives after the commit boundary exits 130 after `committed`) | Moves to Agents by itself |
+| **Unfinished** | no success line, but the profile now classifies as `Local` (e.g. `commit_failed`, or a failure after the profile was published) | Says the install did not finish and offers **Try again**, which re-runs the command so the CLI's journal recovery completes it. No Back. |
+| **Failed** | no success line and no local profile | Grouped by code, below |
 
-**Cancel.** While the install runs, the page offers a Cancel link and no Back. Cancel interrupts the
-CLI gracefully (SIGINT on macOS), so its own lifetime handling rolls back and writes a last
-`failed {code: cancelled}` line before exiting 130. Only if the child has not exited after a grace
-period does the app kill the process tree. The process runner's streaming call today always kills the
-tree on cancellation; it needs a graceful mode. *Grace period is the builder's call.*
-
-**Quit mid-install.** The app signals the child as for Cancel and does not kill its tree; failing
-that, the CLI's parent-liveness watchdog sees the app gone and rolls back. On the next
-launch the onboarding gate still reads Incomplete (no committed profile), so the wizard opens again; the
-CLI's journal recovery finishes or undoes the earlier attempt on the next run (`recovering` lines).
-
-**Failures.** The `failed {code, message}` line decides what the page offers:
+Failed, by code:
 
 | Group | Codes | The page |
 |---|---|---|
-| Transient | `download_failed`, `start_failed`, `verification_failed`, `recovery_failed`, `cancelled` | Says what went wrong in plain words, offers **Try again** (re-runs the same command) and Back |
-| Another setup running | `lifecycle_busy` | Says another kcap setup or upgrade is running on this Mac, offers Back only |
-| Permanent | every other code (`unsupported_platform`, `musl_unsupported`, `socket_path_too_long`, `unsafe_root`, `registry_unreadable`, `config_unreadable`, `other_server`, `leftover_state`, `bundle_not_published`, `not_our_server`, `commit_failed`, `answer_required`, `invalid_arguments`) | Shows the CLI's message, offers Back only |
+| Transient | `download_failed`, `start_failed`, `verification_failed`, `recovery_failed`, `cancelled`, and a non-zero exit with no `failed` line | Says what went wrong in plain words, offers **Try again** and Back |
+| Another setup running | `lifecycle_busy` | Says another kcap setup, upgrade or uninstall is running on this Mac, offers Back only |
+| Permanent | every other code (`unsupported_platform`, `musl_unsupported`, `socket_path_too_long`, `unsafe_root`, `registry_unreadable`, `config_unreadable`, `other_server`, `leftover_state`, `bundle_not_published`, `not_our_server`, `answer_required`, `invalid_arguments`) | Shows the CLI's message, offers Back only |
 
-A non-zero exit with no `failed` line is treated as transient with a generic message. *My call:*
-`verification_failed` sits with the transient group because a retry re-downloads; a second failure in a
-row reads the same and stays retryable.
+*My call:* `verification_failed` is transient because a retry re-downloads.
 
-`lifecycle_busy` can occur although the app never runs two setups: a terminal `kcap setup --local` or
-`kcap local uninstall`, a `kcap local upgrade` (AI-3494), or a previous app instance's child that has
-not exited yet.
+`lifecycle_busy` can occur although the app never runs two setups at once: a terminal
+`kcap setup --local` or `kcap local uninstall`, a `kcap local upgrade`, or a previous app instance's
+child that has not exited yet.
+
+**Advancing.** The shell drops an `AdvanceRequested` raised while a navigation is in flight. The
+shell changes so that an advance requested during navigation is queued and applied once when that
+navigation finishes; an install that settles immediately (a reuse, a fake in tests) and one that
+settles minutes later both advance exactly once without a click.
+
+**After Installed there is no way back to Edition or Install.** Back from Agents stops at Agents, and
+Back skips pass-through steps in general. *My call.*
+
+**Cancel.** While the install runs, the page offers a Cancel link and no Back. Cancel interrupts the
+CLI once (SIGINT on macOS), then waits for it to exit; its own lifetime handling rolls back before the
+commit boundary and writes `failed {code: cancelled}`. Past the boundary the CLI finishes the commit,
+and the settled result is Installed. Only if the child has not exited after a grace period does the
+app kill the process tree. The process runner's streaming call today always kills the tree on
+cancellation; it gains a graceful mode. *Grace period is the builder's call.*
+
+### Closing the wizard during an install
+
+Closing the wizard is not quitting the app: the titlebar close, **Finish later** and app Quit all hand
+over to the main graph. Every one of them goes through the install controller first:
+
+- If no install is running, nothing changes.
+- If one is running, the close is held: the controller sends its one interrupt (a second request,
+  such as Cancel then Quit, reuses the interrupt already sent), waits for the child to exit and settles
+  the result. Only then does the close proceed, the gate is re-evaluated and the graph built. A close
+  during an install that settles Installed or Unfinished therefore lands on the gate's verdict for the
+  committed or journalled state.
+- Finish later is disabled while the install runs, so the only close paths are the titlebar and Quit.
+  *My call.*
+
+If the app dies outright, the CLI's parent-liveness watchdog rolls back, and the next launch's gate
+sees either no local profile or the outstanding journal entry.
 
 ### Agents
 
-Today's Harnesses step, unchanged in what it offers: it lists the agents found on the Mac and the user
-picks. On the local path the default-visibility control is hidden, because there is no team to share
-with. *My call.* It already writes to the resolved profile, which the install committed.
+Today's Harnesses step: it lists the agents found on the Mac and the user picks. On the local path the
+default-visibility control is hidden and the step's visibility is preset to `private` (only this user;
+there is no team), so continuing, skipping and "no agents detected" all pass validation and persist
+`private` to the profile. *My call.*
 
 ### History
 
@@ -140,9 +189,10 @@ committed profile, which needs no bearer.
 
 ### Daemon service
 
-Not a step, as today. `DaemonEnabler` runs as soon as the install commits, the same way it runs today
-when Sign-in is satisfied, and asks nothing in the normal case. Its existing behaviour for a name in
-use or an old service stays.
+Not a step, as today. `DaemonEnabler` runs once the install has settled Installed (never on an early
+progress line), the same way it runs today when Sign-in is satisfied, and asks nothing in the normal
+case. On a forced setup of a committed local machine it runs on entry, as it does for a satisfied
+Sign-in. Its existing behaviour for a name in use or an old service stays.
 
 ### Closing frame
 
@@ -155,40 +205,72 @@ recorded, whether the import ran, the daemon's state. Two actions:
 
 No "run kcap …" text on this path.
 
+## Main window: the local server is not running
+
+Decided with the user: when the local server is down, the main window says so and offers **Start**.
+
+- **Applies only** when the resolved server classifies as `LocalEndpointClass.Local`. An unreachable
+  cloud server never offers it, and the sign-in dialog is never offered for a `Local` server.
+- **Evidence** is the server lane's own: the server connection failing to connect or its health
+  request failing. The daemon socket's attach state is a separate signal, so a stopped server with a
+  healthy daemon still shows Start.
+- **Start** runs the bundled CLI's `kcap local start`, one at a time (a second press while one runs
+  does nothing), with a timeout above the CLI's ten-minute readiness budget rather than the facade's
+  usual sixty seconds. `kcap local start` writes human text and takes no `--json`; success is exit 0.
+- On exit 0 the window reconnects the server connection explicitly instead of waiting for its retry.
+  On failure, including `lifecycle_busy` contention, it shows the CLI's output and offers Start again.
+
 ## What has to change, and what already works
 
 Already works for a committed local installation (checked in the code):
 
-- `kcap setup --local --json` installs, starts and commits, and points the active profile at the local
-  server with `AuthProvider.None` (`LocalSetupCommit.PublishProfileAsync`).
-- `OnboardingGate` treats that profile as complete, so the wizard does not reopen afterwards.
+- `kcap setup --local --json` installs, starts and commits, and points the config's active profile at
+  the local server with `AuthProvider.None` (`LocalSetupCommit.PublishProfileAsync`).
 - Profile resolution sends no bearer to a local endpoint, and the app's server reads accept
   `NoAuthRequired`, so Harnesses, History, the daemon's held-name lookup and the main window work.
 
 Has to change:
 
+- **Gate.** The unfinished-install rule above.
 - **Composition.** `Applicable` is read before the user chooses, so the per-edition steps use
-  `PassThrough`: Install passes through unless the choice is Local; Sign-in passes through when it is.
-  Back must skip pass-through steps too, or Back from Agents lands on a skipped Sign-in.
+  `PassThrough` keyed on the local-path predicate. Back skips pass-through steps. A forced setup on a
+  committed local machine starts at Agents on the local path, with Edition and Install locked.
+- **Shell.** Queued advance during navigation; close paths routed through the install controller.
 - **The "connected" gate.** The daemon identity, the `EnsureAsync` trigger and Done's dashboard URL are
-  keyed on `signIn.Satisfied`. They key on "Sign-in satisfied or the install committed" instead.
+  keyed on `signIn.Satisfied`. They key on "Sign-in satisfied, or the install settled Installed, or
+  the run is on the local path with a committed profile".
 - **CLI facade.** A streaming call for `setup --local --json` that parses each stdout line as JSON and
-  hands typed events to the step, with the graceful cancel described above. Stderr is kept for
-  diagnostics, not shown.
+  hands typed events to the controller, with graceful single-interrupt cancel. A call for
+  `local start` with its own long timeout. Stderr is kept for diagnostics.
+- **Agents.** Preset `private` and hidden visibility on the local path.
 - **Done.** Local wording and the dashboard action.
-- **Main window.** For a local server its sign-in request path offers no sign-in dialog. When the local
-  server is not reachable (after a reboot before the service is back, or `kcap local stop`), the window
-  says the local server isn't running and offers **Start**, which runs the bundled CLI's
-  `kcap local start` and reconnects when it reports ready. A failed start shows the CLI's message.
-  *Decided with the user.*
+- **Main window.** The local Start state.
 
 ## Telemetry
 
 New setup-funnel events, emitted by the app (its CLI children run with telemetry off):
-`cli_setup_local_install_started`, `cli_setup_local_install_committed` (plan: fresh, reused),
-`cli_setup_local_install_failed` (code), `cli_setup_local_install_retried`. The existing edition events
-stay. *My call on the names; they follow the existing `cli_setup_*` pattern and never change once
-shipped.*
+`cli_setup_local_install_started`, `cli_setup_local_install_committed` (plan: fresh, reused, recovered),
+`cli_setup_local_install_failed` (code, or `unfinished`), `cli_setup_local_install_retried`. The
+existing edition events stay. *My call on the names; they follow the existing `cli_setup_*` pattern
+and never change once shipped.*
+
+## Acceptance
+
+Beyond the happy path, tests cover:
+
+- A failure injected after the profile is published and before the journal clears: relaunch reopens
+  the wizard at Install on the local path, Try again finishes it, and nothing reads as set up before.
+- Cancel before the commit boundary (rolls back, Try again and Back offered), during a fresh commit and
+  during recovery (settles Installed), and `reused` followed by `committed` counted once.
+- Titlebar close and Quit during the install and during rollback; Cancel then Quit sends one interrupt.
+- An install that settles immediately and one that settles late each advance to Agents exactly once.
+- `KCAP_PROFILE` naming a profile other than the active one: the install refuses before starting.
+- Agents on the local path: continue with agents, skip, and none detected, with visibility hidden.
+- Forced `--setup` on a committed local machine: starts at Agents, local presentation, no route to
+  cloud. A cloud machine's forced setup is unchanged.
+- Main window: a stopped server with a connected daemon offers Start; a start taking over sixty
+  seconds succeeds and reconnects; a failed and a contended start show the CLI's message; an
+  unreachable cloud server never offers Start.
 
 ## Server follow-up (kcap-server, separate issue)
 
@@ -200,8 +282,9 @@ change.
 
 ## Left to the builder
 
-- Layout and copy of the Install page and the failure states, within the Kcap theme rules in
-  `CLAUDE.md` (status colours for status only, Lucide icons).
+- Layout and copy of the Install page, its failure states and the main window's Start state, within
+  the Kcap theme rules in `CLAUDE.md` (status colours for status only, Lucide icons).
 - The graceful-cancel grace period and how the runner signals the child.
 - How download progress is smoothed and labelled.
-- Whether the closing frame is a variant of `DoneStepViewModel` or a sibling step type.
+- Whether the closing frame is a variant of `DoneStepViewModel` or a sibling step type, and where the
+  install controller lives.
