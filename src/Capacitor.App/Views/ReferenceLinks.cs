@@ -20,7 +20,7 @@ public sealed partial class ReferenceLinks(MarkdownView view) : IMarkViewExtensi
     // A SHA needs a letter and a digit, so a bare number or word never reads as one.
     [GeneratedRegex("""
         (?<![\w@/.-])@(?<login>[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})(?![\w-])
-        |(?<![\w/.-])(?<owner>[A-Za-z0-9][A-Za-z0-9-]{0,38})/(?<repo>(?!\.{1,2}\#)[A-Za-z0-9._-]{1,100})\#(?<other>[1-9][0-9]*)\b
+        |(?<![\w/.-])(?<owner>[A-Za-z0-9][A-Za-z0-9-]{0,38})/(?<repo>(?!\.+\#)[A-Za-z0-9._-]{1,100})\#(?<other>[1-9][0-9]*)\b
         |(?<![\w&/\#.])\#(?<number>[1-9][0-9]*)\b
         |(?<![\w/@.-])(?=[0-9a-fA-F]*[a-fA-F])(?=[0-9a-fA-F]*[0-9])(?<sha>[0-9a-fA-F]{7,40})(?![\w-])
         """, RegexOptions.IgnorePatternWhitespace)]
