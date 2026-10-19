@@ -90,6 +90,31 @@ public class McpStdioLoopTests {
         await Assert.That(string.Join(",", output.Ids)).IsEqualTo("3,1,2");
     }
 
+    /// Yields its lines, then fails the next read as a broken stdin would.
+    sealed class FailingReader(params string[] lines) : TextReader {
+        int _next;
+
+        public override Task<string?> ReadLineAsync() =>
+            _next < lines.Length ? Task.FromResult<string?>(lines[_next++]) : Task.FromException<string?>(new IOException("stdin broke"));
+    }
+
+    [Test]
+    public async Task A_failing_read_still_waits_for_the_call_in_flight_before_failing() {
+        var release = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var output = new Responses();
+
+        var loop = McpStdioLoop.RunAsync(new FailingReader(Call(1, "slow")), output, (_, _) => release.Task,
+            (id, method, _) => Answer(id, method), "test");
+        await Task.Delay(50);
+
+        await Assert.That(loop.IsCompleted).IsFalse();
+
+        release.SetResult(Answer(1, "tools/call"));
+
+        await Assert.That(async () => await loop).Throws<IOException>();
+        await Assert.That(string.Join(",", output.Ids)).IsEqualTo("1");
+    }
+
     [Test]
     public async Task A_call_that_throws_is_answered_with_an_internal_error_and_the_loop_serves_on() {
         using var output = new Responses();

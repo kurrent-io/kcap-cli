@@ -53,34 +53,43 @@ static class McpStdioLoop {
             await CallAsync(id, request);
         }
 
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
+        // However the loop ends, a call already running still answers, and nothing it uses is disposed under it.
+        try {
+            while (await reader.ReadLineAsync() is { } line) {
+                if (string.IsNullOrWhiteSpace(line)) continue;
 
-            JsonObject? request;
+                JsonObject? request;
+                try {
+                    request = JsonNode.Parse(line) as JsonObject;
+                } catch {
+                    continue;
+                }
+
+                // Notifications have no id and get no response.
+                if (request?["id"] is not { } id) continue;
+
+                var method = request["method"] is JsonValue value && value.TryGetValue(out string? m) ? m : null;
+                if (method == "tools/call") {
+                    inFlight.RemoveAll(t => t.IsCompletedSuccessfully);
+                    var prior = previous;
+                    var call = serialCalls
+                        ? Task.Run(() => CallAfterAsync(prior, id, request))
+                        : Task.Run(() => CallAsync(id, request));
+                    previous = call;
+                    inFlight.Add(call);
+                } else {
+                    await WriteAsync(answer(id, method, request));
+                }
+            }
+        } catch {
             try {
-                request = JsonNode.Parse(line) as JsonObject;
+                await Task.WhenAll(inFlight);
             } catch {
-                continue;
+                // The loop's own failure is the one to report.
             }
-
-            // Notifications have no id and get no response.
-            if (request?["id"] is not { } id) continue;
-
-            var method = request["method"] is JsonValue value && value.TryGetValue(out string? m) ? m : null;
-            if (method == "tools/call") {
-                inFlight.RemoveAll(t => t.IsCompleted);
-                var prior = previous;
-                var call = serialCalls
-                    ? Task.Run(() => CallAfterAsync(prior, id, request))
-                    : Task.Run(() => CallAsync(id, request));
-                previous = call;
-                inFlight.Add(call);
-            } else {
-                await WriteAsync(answer(id, method, request));
-            }
+            throw;
         }
 
-        // A call already running still answers, and nothing it uses is disposed under it.
         await Task.WhenAll(inFlight);
     }
 
