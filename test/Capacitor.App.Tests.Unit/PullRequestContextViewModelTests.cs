@@ -895,6 +895,8 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task A_default_that_merges_while_shown_hands_over_on_its_next_overview() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
+        // Settling the read arms its renewal timer after the overview becomes visible.
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial overview settled");
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
         h.Source.Lifecycles[2] = "merged";
         h.Time.Advance(TimeSpan.FromSeconds(26)); Dispatcher.UIThread.RunJobs();
