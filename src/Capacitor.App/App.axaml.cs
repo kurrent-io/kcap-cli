@@ -1533,8 +1533,6 @@ public partial class App : Application {
         }
     }
 
-    // The daemon the app installs is the one it ships and updates. A kcap elsewhere on PATH is the
-    // operator's own; only an explicit KCAP_APP_CLI_PATH pins another.
     static string? ResolvePinnedCli() => ResolveCliOverride() ?? ResolveBundledCli(Program.Host.CliDirectory, File.Exists);
 
     internal static string? ResolveBundledCli(string cliDirectory, Func<string, bool> fileExists) {

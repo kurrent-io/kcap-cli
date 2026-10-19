@@ -272,7 +272,6 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     }
 
     async Task<string?> ResolvePathAsync(CancellationToken ct) {
-        // PATH answers only when nothing is pinned: a dev run with no CLI beside the app.
         var path = _pinnedCli() ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: false).ConfigureAwait(false);
         // Retry a cached miss so installing the CLI does not require an app restart.
         return path ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);

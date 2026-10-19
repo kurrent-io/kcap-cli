@@ -148,9 +148,7 @@ public static partial class DaemonRunner {
             StdErrCapture.Apply(capturePath);
         }
 
-        // No host defaults: the daemon reads no appsettings, env or command-line configuration, and
-        // the default appsettings watch walks every directory under the content root, which is the
-        // home directory under a service manager.
+        // The default host's appsettings watch walks every directory under the content root, the home directory under a service manager.
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
         builder.Services.AddLogging();
 
