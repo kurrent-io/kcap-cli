@@ -982,6 +982,62 @@ public class HomeViewModelTests {
         });
     }
 
+    /// A local server that is up says nothing about a remote machine, so that machine's lost
+    /// connection still has its notice.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_local_server_keeps_a_remote_machines_lost_notice() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = false, RepoPaths = ["/w/repo"] },
+            ]);
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
+                appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            Connect(daemon, "connected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            await Assert.That(local.Visible).IsFalse();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
+        });
+    }
+
+    /// A local server takes no sign-in: its refusal must not ask for one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_local_server_names_a_restart_not_a_sign_in() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            Connect(daemon, "connected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+
+            await Assert.That(vm.ConnectionNotice ?? "").DoesNotContain("Sign in");
+            await Assert.That(vm.BannerMessage ?? "").DoesNotContain("Sign in");
+            await Assert.That(vm.ConnectionNotice).IsNotNull();
+        });
+    }
+
     /// Suppressing the server notices must not hide the daemon's own: a local server with the
     /// daemon down still says so.
     [Test]

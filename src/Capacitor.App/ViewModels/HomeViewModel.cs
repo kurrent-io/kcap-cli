@@ -79,6 +79,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart Capacitor.";
 
     const string IncompatibleReason = "daemon_incompatible";
 
@@ -250,6 +251,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly BehaviorSubject<bool> _catchUpTimedOut = new(false);
     // A local server takes no sign-in: its recovery is the Start banner.
     readonly BehaviorSubject<bool> _localServer = new(false);
+    readonly BehaviorSubject<bool> _localServerDown = new(false);
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -638,7 +640,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(_localServer, NoticeForLocalServer);
+            .CombineLatest(_localServer, _localServerDown, NoticeForLocalServer);
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -733,6 +735,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         LocalServer = recovery;
         this.RaisePropertyChanged(nameof(LocalServer));
         _localServer.OnNext(recovery.IsLocalServer);
+        recovery.WhenAnyValue(x => x.Visible).Subscribe(_localServerDown).DisposeWith(_disposables);
     }
 
     /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
@@ -844,11 +847,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
         timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
 
-    /// A local server's outage belongs to its Start banner: the generic connecting and lost-session
-    /// lines would contradict it, and the lost one tells the user to sign in, which a local server
-    /// never takes. The daemon's own notices still stand.
-    internal static string? NoticeForLocalServer(string? notice, bool localServer) =>
-        localServer && notice is ConnectingNotice or ServerLostNotice ? null : notice;
+    /// While a local server is down its Start banner is the whole story, so the generic connecting
+    /// and lost-session lines would contradict it; the daemon's own notices and a remote machine's
+    /// still stand. A local server takes no sign-in, so a refusal from it names a restart instead.
+    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown) => notice switch {
+        SignInExpiredNotice when localServer                                    => LocalServerRefusedNotice,
+        ConnectingNotice or ServerLostNotice when localServer && localServerDown => null,
+        _                                                                       => notice,
+    };
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>
