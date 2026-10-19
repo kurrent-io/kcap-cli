@@ -333,6 +333,19 @@ public class OnboardingGateTests {
         await AssertIncomplete(result, GateReason.LocalSetupPending);
     }
 
+    /// Settings grades each profile through the per-profile seam; a setup journal is the startup's
+    /// concern, so a cloud profile there keeps its own verdict.
+    [Test]
+    public async Task A_setup_journal_does_not_grade_a_resolved_cloud_profile() {
+        var profile = new Profile { ServerUrl = ServerUrl };
+        await AuthFixtures.NewTokenStore(Config.Root).SaveAsync(ProfileName,
+            MakeToken(AuthProvider.GitHubApp, expired: false, serverUrl: ServerUrl));
+
+        var result = await GateWithSetupJournal().EvaluateResolvedAsync(ProfileName, profile, CancellationToken.None);
+
+        await Assert.That(result).IsTypeOf<GateResult.Complete>();
+    }
+
     static async Task AssertIncomplete(GateResult result, GateReason expected) {
         await Assert.That(result).IsTypeOf<GateResult.Incomplete>();
         await Assert.That(((GateResult.Incomplete)result).Reason).IsEqualTo(expected);

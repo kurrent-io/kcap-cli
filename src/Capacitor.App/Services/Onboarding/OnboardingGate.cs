@@ -42,7 +42,11 @@ public sealed class OnboardingGate(
         var profiles = await AppConfig.ResolveActiveProfile([], config, env, LocalEndpoints.Read(local));
         GateResult result;
         try {
-            result = await EvaluateResolvedAsync(profiles.Resolution.ProfileName, profiles.Resolution.Profile, ct);
+            // A setup entry outranks every profile verdict: a half-installed local edition is not set up
+            // even when its profile already carries a complete-looking stamp.
+            result = LocalSetupState.Pending(local)
+                ? new GateResult.Incomplete(GateReason.LocalSetupPending)
+                : await EvaluateResolvedAsync(profiles.Resolution.ProfileName, profiles.Resolution.Profile, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception ex) {
@@ -58,13 +62,8 @@ public sealed class OnboardingGate(
     /// Evaluates a resolution the caller already holds instead of resolving a second time — two
     /// independent resolves racing a concurrent active-profile change could otherwise evaluate the
     /// gate against a different profile than the one the daemon graph builds for.
+    /// Grades the one profile only; a pending local setup is <see cref="EvaluateAsync"/>'s verdict.
     public async Task<GateResult> EvaluateResolvedAsync(string? profileName, Profile? profile, CancellationToken ct) {
-        // A setup entry outranks every profile verdict: a half-installed local edition is not set up
-        // even when its profile already carries a complete-looking stamp.
-        if (LocalSetupState.Pending(local)) {
-            return new GateResult.Incomplete(GateReason.LocalSetupPending);
-        }
-
         if (profile is null || string.IsNullOrEmpty(profileName)) {
             return new GateResult.Incomplete(GateReason.NoProfile);
         }
