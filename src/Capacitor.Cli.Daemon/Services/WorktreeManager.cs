@@ -670,15 +670,32 @@ public partial class WorktreeManager(
 
     const string DaemonBaselineFile = "kcap-daemon-files";
 
+    /// <summary>Marks a path the agent changed after the daemon last recorded it: from then on no stamp
+    /// matches, so any change there is work.</summary>
+    const string AgentOwned = "agent";
+
+    /// <summary>The current stamps of the daemon-written paths, taken before a launch prepares the
+    /// worktree so <see cref="RecordDaemonBaseline"/> can tell what changed since the last record.</summary>
+    public static IReadOnlyDictionary<string, string> StampDaemonPaths(string worktreePath) =>
+        DaemonWrittenPaths().ToDictionary(path => path, path => SafeStamp(Path.Combine(worktreePath, path)) ?? AgentOwned, StringComparer.Ordinal);
+
     /// <summary>Records what the daemon left at each path it writes, in the worktree's own git dir, so
     /// a later removal can tell the daemon's edit from the agent's: only an entry still as recorded is
-    /// the daemon's. Called after creation and after a launch prepares the worktree. Best-effort: with
-    /// no record, every such change counts as work.</summary>
-    public static void RecordDaemonBaseline(string worktreePath) {
+    /// the daemon's. Called after creation and after a launch prepares the worktree, with the stamps
+    /// taken just before it: a path that changed since the previous record was the agent's doing and
+    /// stays the agent's. Best-effort: with no record, every such change counts as work.</summary>
+    public static void RecordDaemonBaseline(string worktreePath, IReadOnlyDictionary<string, string>? before = null) {
         try {
             if (GitDirOf(worktreePath) is not { } gitDir) return;
 
-            var lines = DaemonWrittenPaths().Select(path => $"{path}\t{ContentStamp(Path.Combine(worktreePath, path))}");
+            var prior = before is null ? null : ReadDaemonBaseline(worktreePath);
+            var lines = DaemonWrittenPaths().Select(path => {
+                // With no record to compare against, whatever was there before the launch is the agent's.
+                var agents = before is not null && (prior?.GetValueOrDefault(path) is { } recorded
+                    ? recorded == AgentOwned || before.GetValueOrDefault(path) != recorded
+                    : before.GetValueOrDefault(path) != "-");
+                return $"{path}\t{(agents ? AgentOwned : SafeStamp(Path.Combine(worktreePath, path)) ?? AgentOwned)}";
+            });
             File.WriteAllLines(Path.Combine(gitDir, DaemonBaselineFile), lines);
         } catch (IOException) {
         } catch (UnauthorizedAccessException) {
@@ -714,11 +731,10 @@ public partial class WorktreeManager(
         return Path.IsPathRooted(dir) ? dir : Path.GetFullPath(Path.Combine(worktreePath, dir));
     }
 
-    /// <summary>"-" for a missing path, else the SHA-256 of an ordinary file; a link is stamped as such
-    /// so it never matches a file.</summary>
+    /// <summary>"-" for a missing path, a link's target for a link, else the SHA-256 of the file.</summary>
     static string ContentStamp(string path) {
         var info = new FileInfo(path);
-        if (info.LinkTarget is not null) return "link";
+        if (info.LinkTarget is { } target) return $"link:{target}";
         if (!info.Exists) return "-";
 
         using var stream = info.OpenRead();

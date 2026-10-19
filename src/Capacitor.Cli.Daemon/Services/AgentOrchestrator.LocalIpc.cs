@@ -412,8 +412,9 @@ internal partial class AgentOrchestrator {
                 Work = work
             };
 
-            launcher.Prepare(ctx);
-            if (work == WorkLocation.OwnedWorktree) WorktreeManager.RecordDaemonBaseline(worktree.Path);
+            var before = work == WorkLocation.OwnedWorktree ? WorktreeManager.StampDaemonPaths(worktree.Path) : null;
+            try { launcher.Prepare(ctx); }
+            finally { if (before is not null) WorktreeManager.RecordDaemonBaseline(worktree.Path, before); }
             var built = launcher.BuildPassthrough(ctx, args);
 
             // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so

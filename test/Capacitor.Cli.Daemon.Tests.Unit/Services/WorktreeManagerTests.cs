@@ -187,7 +187,7 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
-    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, StagedConfigChange }
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange }
 
     /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
     /// file or a commit no other ref has keeps the worktree and its branch. The daemon's own edits (the
@@ -204,6 +204,7 @@ public class WorktreeManagerTests {
     [Arguments(WorktreeState.LinkToOverlay, true)]
     [Arguments(WorktreeState.LaunchWrittenConfig, false)]
     [Arguments(WorktreeState.LaunchConfigEditedAfter, true)]
+    [Arguments(WorktreeState.AgentEditBeforeRelaunch, true)]
     [Arguments(WorktreeState.StagedConfigChange, true)]
     public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
@@ -239,12 +240,21 @@ public class WorktreeManagerTests {
                 break;
             case WorktreeState.LaunchWrittenConfig:
             case WorktreeState.LaunchConfigEditedAfter:
+            case WorktreeState.AgentEditBeforeRelaunch: {
+                // As a launch's Prepare does: stamp, write the config, record.
+                var before = WorktreeManager.StampDaemonPaths(worktree.Path);
                 tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{}}}""");
                 tree.CreateFile(".claude/settings.local.json", """{"permissions":{"allow":["Bash"]}}""");
-                WorktreeManager.RecordDaemonBaseline(worktree.Path); // as a launch's Prepare does
-                if (state == WorktreeState.LaunchConfigEditedAfter)
+                WorktreeManager.RecordDaemonBaseline(worktree.Path, before);
+                if (state != WorktreeState.LaunchWrittenConfig)
                     tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{},"mine":{}}}""");
+                if (state == WorktreeState.AgentEditBeforeRelaunch) {
+                    // A resume prepares again and keeps the agent's edit; recording must not adopt it.
+                    var again = WorktreeManager.StampDaemonPaths(worktree.Path);
+                    WorktreeManager.RecordDaemonBaseline(worktree.Path, again);
+                }
                 break;
+            }
             case WorktreeState.StagedConfigChange:
                 tree.CreateFile(".mcp.json", """{"mcpServers":{"mine":{}}}""");
                 tree.Do("add", ".mcp.json");

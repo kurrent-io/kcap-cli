@@ -132,8 +132,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         // Fail-closed hooks preflight + TrustWorktree config, exactly as the PTY path — a missing
         // critical hook throws CodexHooksNotInstalledException for the orchestrator's cleanup path.
-        _launcher.Prepare(launcherCtx);
-        if (launcherCtx.Work == Core.LocalIpc.WorkLocation.OwnedWorktree) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path);
+        var owned  = launcherCtx.Work == Core.LocalIpc.WorkLocation.OwnedWorktree;
+        var before = owned ? WorktreeManager.StampDaemonPaths(launcherCtx.Worktree.Path) : null;
+        try { _launcher.Prepare(launcherCtx); }
+        finally { if (owned) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path, before); }
 
         var (sandbox, approval) = CodexPosturePolicy.Resolve(ctx.Work, ctx.IsReviewFlow, ctx.CodexPosture);
         var appServerArgs = _launcher.BuildAppServerLaunchArgs(launcherCtx);
