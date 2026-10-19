@@ -1,11 +1,13 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli;
 
 /// <summary>
 /// The effective "update available" advisory after capping the raw npm-latest target at the connected
-/// server's version. A manually-rolled tenant can trail npm for days, so recommending a CLI newer than
+/// server's version, unless that server is the local installation: its stack moves with the CLI through
+/// <c>kcap local upgrade</c>, so capping would pin it at the version it was installed with. A manually-rolled tenant can trail npm for days, so recommending a CLI newer than
 /// the server it talks to only risks protocol mismatch; the passive update notice, <c>kcap status</c> and
 /// <c>kcap update</c> use this instead of the raw npm result. <see cref="ServerCapped"/> pins the version
 /// <c>kcap update</c> installs.
@@ -16,9 +18,11 @@ internal static class UpdateAdvisoryResolver {
     /// <summary>Production entry: caps against the cached version for the current server.
     /// <paramref name="serverUrl"/> must be the one the authenticated client was built with, or the
     /// cached version is read under a different key than it was captured with.</summary>
+    /// <param name="endpoint"><paramref name="serverUrl"/> measured against the installation registry.</param>
     internal static UpdateAdvisory Resolve(
-            UpdateCommand.UpdateCheckResult? result, string channel, string? serverUrl, ConfigRoot config) =>
-        Resolve(result, channel, serverUrl is null ? null : ServerVersionStore.Get(serverUrl, config));
+            UpdateCommand.UpdateCheckResult? result, string channel, string? serverUrl, LocalEndpointClass endpoint, ConfigRoot config) =>
+        Resolve(result, channel,
+            serverUrl is null || endpoint is LocalEndpointClass.Local ? null : ServerVersionStore.Get(serverUrl, config));
 
     /// <summary>
     /// Pure, testable core. The cap engages ONLY on the stable <c>latest</c> channel (a beta user

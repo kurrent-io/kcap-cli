@@ -16,11 +16,14 @@ sealed class LocalInstallerFactory(
         var service = LocalServerServices.ForCurrentOs(home, time);
         var local   = http.CreateClient(CapacitorClients.LocalInstallation);
 
+        var stack   = new LocalStack(root, home, service, local, time, recorders, config);
+
         return new(root, config, home, service, bundles, local, LocalBundleManifestKey.Load(), LocalPlatform.Current(), time,
             installer => [
                 new LocalSetupRecovery(service, home, local, time, installer.Progress, installer.RolledForward),
                 // Setup may be writing JSON events to stdout, which stopping a daemon would print into.
                 new LocalPurgeRecovery(service, home, recorders, config, mayStop: false, force: false, installer.Progress),
+                new LocalUpgradeRecovery(stack, installer.Progress),
             ]);
     }
 }

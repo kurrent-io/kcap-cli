@@ -5,6 +5,7 @@
 const { execFileSync, spawnSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
+const os = require("os");
 // Platform detection + native-binary resolution live in resolve.js — a
 // side-effect-free module shared with refresh.js (which must never require
 // THIS file: during `kcap update`, runUpdate executes before the final
@@ -41,6 +42,26 @@ function npmUpdateArgs(spec) {
 function probeArgs(updArgs) {
   const channelFlags = (updArgs || []).filter((a) => a === "--beta" || a === "--stable");
   return ["update", "--check", "--no-update-check", ...channelFlags];
+}
+
+// After the CLI moves, `kcap update` runs the new binary's `kcap local upgrade`, the one coordinator that
+// moves a local installation's stack forward. Only where an installation can exist: a cloud machine never
+// spawns it, and an older binary an update pinned to would not know the command.
+function localUpgradeArgs() {
+  return ["local", "upgrade", "--if-installed", "--no-update-check"];
+}
+
+function localRegistryPath(env, home) {
+  const root = env.KCAP_LOCAL_ROOT && env.KCAP_LOCAL_ROOT.trim()
+    ? path.resolve(env.KCAP_LOCAL_ROOT)
+    : path.join(home, ".config", "kcap", "local");
+  return path.join(root, "install.json");
+}
+
+// Exit codes of `kcap local upgrade`: 0 upgraded, 3 nothing to do, 4 no bundle published for this version
+// yet (a CLI release can reach npm first); 1 and 2 are failures it has reported.
+function localUpgradeSucceeded(status) {
+  return status === 0 || status === 3 || status === 4;
 }
 
 // ── Windows binary-lock handling ────────────────────────────────────────────
@@ -384,6 +405,17 @@ function runUpdate(binaryPath, updArgs) {
   require("./refresh").runRefreshes(fs.realpathSync(__filename));
   console.log("kcap updated.");
 
+  let exitCode = 0;
+  if (process.platform !== "win32" && fs.existsSync(localRegistryPath(process.env, os.homedir()))) {
+    const upgrade = spawnSync(binaryPath, localUpgradeArgs(), { stdio: "inherit" });
+    if (upgrade.status === 4) {
+      console.error("The local server stays on its version until a bundle for this kcap is published; run `kcap local upgrade` then.");
+    } else if (!localUpgradeSucceeded(upgrade.status)) {
+      console.error("The local server was not upgraded; run `kcap local upgrade` to retry.");
+      exitCode = 1;
+    }
+  }
+
   // Tell the server about the new version now, so the "CLI out of date"
   // banner clears immediately instead of waiting for the next request.
   try {
@@ -407,7 +439,7 @@ function runUpdate(binaryPath, updArgs) {
     }
   }
 
-  process.exit(0);
+  process.exit(exitCode);
 }
 
 module.exports = {
@@ -420,4 +452,7 @@ module.exports = {
   filterKcapProcesses,
   describeRole,
   restoreMoved,
+  localUpgradeArgs,
+  localRegistryPath,
+  localUpgradeSucceeded,
 };

@@ -48,6 +48,52 @@ public class SettingsViewModelTests {
     }
 
     [Test]
+    public Task Auto_resume_reads_unset_as_on_and_saves_to_the_attached_profile_only() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = Make(store, Connected());
+        await Assert.That(vm.AutoResume).IsTrue();
+
+        vm.AutoResume = false;
+        await WaitUntilAsync(() => vm.AutoResumeMessage is not null);
+
+        await Assert.That(store.Load().AutoResume).IsFalse();
+        await Assert.That(vm.AutoResumeMessage).IsEqualTo("Saved. The daemon reads this when it starts.");
+        ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(Config.Root), out var saved);
+        await Assert.That(saved!.Profiles["another"].Daemon!.AutoResume).IsNull();
+
+        using var reopened = Make(store, Connected());
+        await Assert.That(reopened.AutoResume).IsFalse();
+    });
+
+    [Test]
+    public Task Closing_settings_right_after_a_toggle_still_saves_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        var vm = Make(store, Connected());
+
+        vm.AutoResume = false;
+        vm.Dispose();
+
+        await WaitUntilAsync(() => store.Load().AutoResume == false);
+        await Assert.That(store.Load().AutoResume).IsFalse();
+    });
+
+    [Test]
+    public Task Toggling_auto_resume_back_and_forth_saves_the_last_selection() => AvaloniaSession.RunOnUiAsync(async () => {
+        var store = Seed();
+        using var vm = Make(store, Connected());
+
+        vm.AutoResume = false;
+        vm.AutoResume = true;
+        vm.AutoResume = false;
+        vm.AutoResume = true;
+        await WaitUntilAsync(() => vm.AutoResumeMessage is not null);
+        await Task.Delay(50);
+
+        await Assert.That(store.Load().AutoResume).IsTrue();
+        await Assert.That(vm.AutoResumeMessage).IsEqualTo("Saved. The daemon reads this when it starts.");
+    });
+
+    [Test]
     public Task Rename_waits_for_startup_even_when_unreachable() => AvaloniaSession.RunOnUiAsync(async () => {
         var startup = new TaskCompletionSource();
         var service = Connected();

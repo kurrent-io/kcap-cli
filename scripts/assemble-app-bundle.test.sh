@@ -2,11 +2,13 @@
 set -euo pipefail
 if [ "$(uname -s)" != Darwin ]; then echo "skipped (macOS bundle assembly)"; exit 0; fi
 here="$(cd "$(dirname "$0")" && pwd)"
+source "$here/lib/stub-kcap.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/publish"
-for binary in "Kurrent Capacitor" kcap kcap-daemon libpty_shim.dylib; do
+for binary in "Kurrent Capacitor" kcap-daemon libpty_shim.dylib; do
   printf '%s' "$binary" > "$tmp/publish/$binary"
 done
+write_stub_kcap "$tmp/publish/kcap"
 bundle="$tmp/Kurrent Capacitor.app"
 bash "$here/assemble-app-bundle.sh" "$tmp/publish" "$bundle" 1.3.0-beta.7 >/dev/null
 cmp "$tmp/publish/kcap" "$bundle/Contents/MacOS/kcap"

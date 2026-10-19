@@ -36,7 +36,7 @@ namespace Capacitor.Cli.Commands.Harness;
 ///                       (fire-and-forget; CLI emits no decision so Codex's own prompt takes over).
 ///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
 ///   PreToolUse        → swallowed
-///   PostToolUse       → swallowed
+///   PostToolUse       → swallowed (a hosted agent's tool-settled notice still goes to its daemon)
 /// </remarks>
 sealed class CodexHookCommand(
         ConfigRoot config, ProfileContext profiles, HookClock clock, UserHome home,
@@ -247,8 +247,10 @@ sealed class CodexHookCommand(
             node["agent_host_id"] = agentHostId;
         }
 
-        // Ahead of the disabled and exclusion gates: the hosting daemon's turn-boundary hint is
-        // local display state, not recording.
+        // Ahead of the disabled and exclusion gates: the hosting daemon's hints are local display
+        // state, not recording.
+        await NotifyToolSettledAsync(node, eventName);
+
         if (eventName switch { "Stop" => true, "UserPromptSubmit" or "PreToolUse" => false, _ => (bool?) null } is { } waiting)
             await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
 
@@ -309,6 +311,31 @@ sealed class CodexHookCommand(
             return 0;
         }
     }
+
+    // Retires a prompt the daemon still holds once it was answered in Codex's terminal. A finished
+    // tool carries its name and input, since Codex's permission prompt has no tool id; the main
+    // agent's turn end covers a terminal deny, which runs no tool. A subagent's tool hooks share the
+    // parent's session and name the subagent in agent_id; its stop is SubagentStop, never Stop.
+    Task NotifyToolSettledAsync(JsonNode node, string eventName) {
+        var sessionId  = TryGetString(node, "session_id");
+        var cwd        = TryGetString(node, "cwd");
+        var subagentId = SubagentIdOf(node);
+        var budget     = clock.Budget(Ceiling).Remaining;
+        var sentAt     = clock.Time.GetUtcNow().ToUnixTimeMilliseconds();
+
+        return eventName switch {
+            "PostToolUse" when TryGetString(node, "tool_use_id") is { } toolUseId =>
+                DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "codex", sessionId, cwd, toolUseId, subagentId, budget,
+                    TryGetString(node, "tool_name"), node["tool_input"]?.DeepClone(), sentAt),
+            "Stop" when subagentId is null =>
+                DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "codex", sessionId, cwd, toolUseId: null, subagentId: null, budget, sentAtMs: sentAt),
+            _ => Task.CompletedTask,
+        };
+    }
+
+    // Dashless, the one form the permission hook's bridge payload and the tool-settled relay share.
+    static string? SubagentIdOf(JsonNode node) =>
+        TryGetString(node, "agent_id") is { Length: > 0 } id ? id.Replace("-", "") : null;
 
     // Emit the minimal output Codex's parser requires for the given event — the
     // session-scoped {"continue":true} for SessionStart/Stop, an empty object for
@@ -576,6 +603,9 @@ sealed class CodexHookCommand(
 
     internal static JsonObject BuildBridgePayload(JsonNode node, string? agentId) {
         var payload = (JsonObject)node.DeepClone();
+        // The hook's agent_id is the subagent's; agent_id on this wire is the hosted agent.
+        if (SubagentIdOf(node) is { } subagentId) payload["subagent_id"] = subagentId;
+        payload.Remove("agent_id");
         if (agentId is not null) payload["agent_id"] = agentId;
         return payload;
     }

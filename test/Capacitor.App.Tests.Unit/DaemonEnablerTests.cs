@@ -769,22 +769,21 @@ public class DaemonEnablerTests {
             using var h = new Harness();
             using var cts = new CancellationTokenSource();
             h.Status(Snap());
-            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var entered   = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var laneToken = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+            // The lane owns the child: only the WAITER's token is cancelled here. Read the token itself:
+            // a second registration on it can be disposed by the delay's unwind before its callback runs.
             h.Lane.Behavior = async (_, ct) => {
-                entered.TrySetResult(true);
-                // The lane owns the child: only the WAITER's token is cancelled here.
-                await using var registration = ct.Register(() => cancelled.TrySetResult(true));
+                laneToken.TrySetResult(ct);
                 await Task.Delay(Timeout.Infinite, ct);
                 return new MutationOutcome.Succeeded();
             };
 
             var ensure = h.Ensure(cts.Token);
-            await entered.Task;
+            var token  = await laneToken.Task;
             await cts.CancelAsync();
             await ensure;
 
-            return (cancelled.Task.IsCompleted, h.Vm.Status);
+            return (token.IsCancellationRequested, h.Vm.Status);
         });
 
         await Assert.That(observedCancel).IsTrue();

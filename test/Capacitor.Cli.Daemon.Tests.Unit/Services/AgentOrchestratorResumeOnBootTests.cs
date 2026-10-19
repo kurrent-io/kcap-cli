@@ -151,6 +151,7 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(after.State).IsEqualTo(ResumeState.Running);
         await Assert.That(after.Launch.Prompt).IsEqualTo("build the thing");
         await Assert.That(after.DaemonInstanceId).IsEqualTo("instance-now");
+        await Assert.That(after.StartedAt?.UtcDateTime).IsEqualTo(agent!.CreatedAt);
         await Assert.That(agent!.ResumePending).IsFalse();
 
         var buffered = System.Text.Encoding.UTF8.GetString(agent!.OutputBuffer.Snapshot());
@@ -678,6 +679,65 @@ public class AgentOrchestratorResumeOnBootTests {
 
         await Assert.That(f.Orch.TryDiscardResumeEntry("retry-1")).IsTrue();
         start.SetResult();
+    }
+
+    /// <summary>The desktop app has no other view of an agent without a process: the status payload lists
+    /// each ledger-only entry once, with its launch's identity and, when interrupted, the reason.</summary>
+    [Test]
+    public async Task The_status_snapshot_lists_resuming_and_interrupted_entries_with_the_reason() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-1");
+        var gone = Entry(f, "gone-1", state: ResumeState.Interrupted);
+        f.Orch.ResumeLedger!.Write(gone with { LastError = "too_old", HasTerminal = false, TranscriptFormat = TranscriptFormats.Envelopes });
+
+        f.Orch.LoadResumeLedger();
+        var rows = f.Orch.SnapshotAgentsForStatus().ToDictionary(r => r.Id);
+
+        await Assert.That(rows.Count).IsEqualTo(2);
+        await Assert.That(rows["resume-1"].Status).IsEqualTo("Resuming");
+        await Assert.That(rows["resume-1"].Interruption).IsNull();
+        await Assert.That(rows["gone-1"].Status).IsEqualTo("Interrupted");
+        await Assert.That(rows["gone-1"].Interruption).IsEqualTo("too_old");
+        await Assert.That(rows["gone-1"].SessionId).IsEqualTo("session-gone-1");
+        await Assert.That(rows["gone-1"].WorktreePath).IsEqualTo(gone.Launch.WorktreePath);
+        await Assert.That(rows["gone-1"].Branch).IsEqualTo("capacitor/custom-gone-1");
+        await Assert.That(rows["gone-1"].Title).IsEqualTo("the thing");
+        await Assert.That(rows["gone-1"].Vendor).IsEqualTo("cursor");
+        await Assert.That(rows["gone-1"].Kind).IsEqualTo("agent");
+        await Assert.That(rows["gone-1"].HasTerminal).IsFalse();
+        await Assert.That(rows["gone-1"].TranscriptFormat).IsEqualTo(TranscriptFormats.Envelopes);
+    }
+
+    /// <summary>A borrowed launch's row names its checkout as the live agent's does, so the rail keeps it in place.</summary>
+    [Test]
+    public async Task A_borrowed_entrys_status_row_reports_the_borrowed_checkout() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Entry(f, "borrowed-1", state: ResumeState.Interrupted);
+        f.Orch.ResumeLedger!.Write(entry with { Launch = entry.Launch with { Work = WorkLocation.BorrowedCwd, WorktreePath = f.Repo } });
+
+        f.Orch.LoadResumeLedger();
+        var row = f.Orch.SnapshotAgentsForStatus().Single();
+
+        await Assert.That(row.WorkLocation).IsEqualTo(WorkLocationText.Borrowed);
+        await Assert.That(row.BorrowedFrom).IsEqualTo(f.Repo);
+        await Assert.That(row.WorktreePath).IsEqualTo(f.Repo);
+    }
+
+    /// <summary>An interruption changes nothing else the status payload reads, so it must pulse on its own.</summary>
+    [Test]
+    public async Task An_interrupted_resume_pulses_the_status_notifier() {
+        var f = Build(new ResumableFactory { ThrowsFromSupports = true });
+        await using var _ = f.Orch;
+        Entry(f, "faults-1");
+        f.Orch.LoadResumeLedger();
+        var before = f.Orch.StatusNotifierForTest.Version;
+
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Orch.StatusNotifierForTest.Version).IsGreaterThan(before);
+        await Assert.That(f.Orch.SnapshotAgentsForStatus().Single().Status).IsEqualTo("Interrupted");
     }
 
     /// <summary>A fault outside the resume's own failure path leaves the entry where <c>kcap agent ls</c>

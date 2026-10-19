@@ -29,6 +29,7 @@ using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests.Readers;
 using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -674,7 +675,8 @@ public partial class App : Application {
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: linkGitHub,
             access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
-            commands: commands, drafts: drafts, inputSending: attention.ReplySending);
+            commands: commands, drafts: drafts, inputSending: attention.ReplySending,
+            resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id));
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.

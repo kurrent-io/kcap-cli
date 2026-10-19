@@ -24,7 +24,14 @@ public sealed record ResumeLedgerEntry(
     string? DaemonInstanceId = null,
     // Agents this one continued, whose attachment directories its prompt still names; the boot sweep
     // keeps them for as long as this entry lives.
-    IReadOnlyList<string>? InheritedAgentIds = null
+    IReadOnlyList<string>? InheritedAgentIds = null,
+    // What a client needs to open the agent's terminal and transcript while it has no process: the
+    // runtime's own answers, null in an entry written before the runtime started or by an older daemon.
+    bool? HasTerminal = null,
+    string? TranscriptFormat = null,
+    // When the runtime now recorded started; each launch and each resume stamps its own, so a client can
+    // tell the runtime it attached to from a successor. Null before the runtime starts.
+    DateTimeOffset? StartedAt = null
 ) {
     public const int CurrentSchemaVersion = 1;
 }

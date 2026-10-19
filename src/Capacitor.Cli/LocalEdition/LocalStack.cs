@@ -21,6 +21,9 @@ sealed class LocalStack(
 
     public TimeProvider Time => time;
 
+    /// <summary>What listens on a port; the upgrade's readiness wait gives up early on a stranger there.</summary>
+    public Func<int, PortHolder?> FindHolder { get; init; } = PortHolder.Find;
+
     /// <summary>No lock and no writes, so another command may be changing what this reads. Without the identity probe
     /// a unit naming this root by another spelling is <see cref="OwnerDecision.Unknown"/>.</summary>
     public LocalStackState Read() =>
@@ -39,10 +42,17 @@ sealed class LocalStack(
         CancellationToken ct, bool force = false) {
         // A rolled-forward setup is already committed; the command reads the state it left.
         var recovery  = new LocalSetupRecovery(service, home, local, time, progress, _ => { });
-        var lifecycle = new LocalLifecycle(root, [recovery, new LocalPurgeRecovery(service, home, recorders, config, mayStop: true, force, progress)], time);
+        var lifecycle = new LocalLifecycle(root, [
+            recovery,
+            new LocalPurgeRecovery(service, home, recorders, config, mayStop: true, force, progress),
+            new LocalUpgradeRecovery(this, progress),
+        ], time);
 
         return lifecycle.RunAsync(LeaseWait, (lease, token) => command(lease, ReadRegistry(mayWrite: true), token), ct);
     }
+
+    /// <summary>The registry as <see cref="RunAsync{T}"/> hands it to its command, for a command that changed it.</summary>
+    public LocalStackState ReadUnderLease() => ReadRegistry(mayWrite: true);
 
     LocalStackState ReadRegistry(bool mayWrite) {
         switch (LocalStateFiles.ReadRegistry(root)) {
