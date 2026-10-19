@@ -28,14 +28,16 @@ internal static class PermissionSettlements {
 /// service-lifetime: agent ids are never reused, so it can never suppress a future agent.
 internal sealed class PermissionPromptBroker {
     sealed record Entry(PermissionPendingDto Dto, TaskCompletionSource<PermissionSettlement> Tcs, string? SubagentId, long Seq);
-    sealed record AllowedCall(string AgentId, string SessionId, string? SubagentId, string ToolName, JsonElement Input);
+    sealed record AllowedCall(string AgentId, string SessionId, string? SubagentId, string? ToolUseId, string ToolName, JsonElement? Input);
 
     readonly ConcurrentDictionary<string, Entry> _pending = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<Guid, Channel<PermissionStreamItem>> _subscribers = new();
     readonly HashSet<string> _withdrawnAgents = new(StringComparer.Ordinal);
-    // An id-less prompt allowed before its call finished: that call's notice is its own, and must
-    // not retire an identical prompt still waiting. Kept until the notice or the turn's end.
+    // A Claude prompt allowed before its call finished: that call's notice is its own, and must not
+    // retire an identical prompt still waiting. Kept until the notice or the turn's end, and only
+    // for Claude, whose hook sends both; bounded in case a notice never arrives.
     readonly List<AllowedCall> _allowedCalls = [];
+    const int MaxAllowedCalls = 64;
     readonly object _gate = new();
     long _seq;
 
@@ -116,7 +118,9 @@ internal sealed class PermissionPromptBroker {
                 e.Dto.AgentId == agentId && e.Dto.SessionId == sessionId && e.Dto.ToolUseId == toolUseId);
             if (entry is null && toolName is not null && toolInput is { } input) {
                 var owed = _allowedCalls.FindIndex(c => c.AgentId == agentId && c.SessionId == sessionId
-                    && c.SubagentId == subagentId && c.ToolName == toolName && JsonElement.DeepEquals(c.Input, input));
+                    && (c.ToolUseId == toolUseId
+                     || c.ToolUseId is null && c.SubagentId == subagentId && c.ToolName == toolName
+                        && c.Input is { } ran && JsonElement.DeepEquals(ran, input)));
                 if (owed >= 0) {
                     _allowedCalls.RemoveAt(owed);
                     return false;
@@ -156,9 +160,11 @@ internal sealed class PermissionPromptBroker {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
         // The call runs with the input the answer gave it, when it gave one.
-        if (decision.Behavior == PermissionSettlements.Allow && entry.Dto.ToolUseId is null
-            && (decision.UpdatedInput ?? entry.Dto.ToolInput) is { } ran)
-            _allowedCalls.Add(new AllowedCall(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolName, ran));
+        if (decision.Behavior == PermissionSettlements.Allow && entry.Dto.Vendor == "claude") {
+            _allowedCalls.Add(new AllowedCall(entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId, entry.Dto.ToolUseId,
+                entry.Dto.ToolName, decision.UpdatedInput ?? entry.Dto.ToolInput));
+            if (_allowedCalls.Count > MaxAllowedCalls) _allowedCalls.RemoveAt(0);
+        }
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;

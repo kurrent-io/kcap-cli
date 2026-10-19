@@ -211,6 +211,32 @@ public class PermissionPromptBrokerTests {
         await Assert.That(waiting.IsCompleted).IsTrue();
     }
 
+    /// An allowed prompt that carried its tool id is owed that call too, so the call's notice cannot
+    /// fall through to an identical id-less prompt still waiting.
+    [Test]
+    public async Task A_call_owed_by_id_does_not_fall_through_to_an_id_less_prompt() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", toolUseId: "toolu_1", input: """{"command":"ls"}"""));
+        var waiting = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
+    /// Only Claude's hook reports a finished call with its name and input, so another vendor's
+    /// allowed prompt is owed nothing and a later identical prompt is still retired.
+    [Test]
+    public async Task Another_vendors_allowed_prompt_owes_no_call() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}""") with { Vendor = "codex" });
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(later.IsCompleted).IsTrue();
+    }
+
     /// A denied prompt runs no call, and a finished turn has run all of its own, so neither leaves
     /// a call owed that would keep a later prompt from being retired.
     [Test]
