@@ -1,0 +1,22 @@
+{
+  "vendor": "gemini",
+  "stop": "idle",
+  "kill": "sigterm",
+  "version": "0.60.0",
+  "argv": [
+    "gemini",
+    "--experimental-acp",
+    "--skip-trust",
+    "--allowed-mcp-server-names",
+    "__kcap_probe_unmatchable__"
+  ],
+  "started": "2026-10-19T09:26:30.361980+00:00",
+  "codeword": "PELICAN-4D510A",
+  "load_session_advertised": true,
+  "session_id": null,
+  "session_new_error": {
+    "code": -32000,
+    "message": "You do not have a valid license of this product. Please contact your administrator to request a license. If you are not an enterprise user and believe you are receiving this message as an error, please try using the latest version and logging in again. (#3501)"
+  },
+  "ended": "2026-10-19T09:26:34.535497+00:00"
+}

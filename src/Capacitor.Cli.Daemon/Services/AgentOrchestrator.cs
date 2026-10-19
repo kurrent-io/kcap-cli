@@ -77,6 +77,26 @@ internal record AgentInstance(
 
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
+
+    int _reopenedTranscript;
+
+    /// Whether the server records the ACP session this agent reopened. Pending until it accepts the
+    /// session's first event or refuses it; one transition wins, so a held first turn is released only
+    /// when the resume has not already been judged failed.
+    public ReopenedTranscript ReopenedTranscript => (ReopenedTranscript)Volatile.Read(ref _reopenedTranscript);
+
+    public void MarkReopenedTranscriptPending() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Pending, (int)ReopenedTranscript.None);
+
+    public bool TryAcceptReopenedTranscript() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Accepted, (int)ReopenedTranscript.Pending)
+            == (int)ReopenedTranscript.Pending;
+
+    /// True when the transcript is refused, whether by this call or an earlier one.
+    public bool TryRefuseReopenedTranscript() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Refused, (int)ReopenedTranscript.Pending)
+            is (int)ReopenedTranscript.Pending or (int)ReopenedTranscript.Refused;
+
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }
@@ -2896,6 +2916,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // StartAcpForwardingAsync itself still enforces the load-bearing ordering (bind strictly
             // after RegisterAgentAsync above, strictly before any AcpSessionEvents) by awaiting the
             // bind before constructing the forwarder.
+            // A private agent records nothing, so there is no acceptance to wait for.
+            if (isPrivate && start.Transcript is { Reopened: true } privateTranscript) privateTranscript.ReleaseFirstTurn();
+
             if (!isPrivate && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
                 // FinalizeAgentRunAsync to cancel even if the agent finalizes before the bind below
@@ -4883,7 +4906,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
     /// immediately below the bind await closes that race.
     /// </summary>
+    /// <remarks>A <see cref="IAcpTranscriptSource.Reopened"/> session already has events on the server,
+    /// and a forwarder numbering from 0 would have each new one deduplicated away until it passed the
+    /// server's cursor. <c>AcpSessionStarted</c> reports no cursor, so it is read with an empty
+    /// <c>AcpSessionEvents</c> batch, which the server answers without appending. Neither call reveals a
+    /// terminal binding, which only drops the next event, so the session's first turn is held until the
+    /// server has accepted the event before it.</remarks>
     async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
+        var reopened = transcript.Reopened;
+        if (reopened) agent.MarkReopenedTranscriptPending();
+
         try {
             await _server.AcpSessionStartedAsync(
                 agent.Id,
@@ -4895,10 +4927,37 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 acpCts.Token
             );
 
-            // Non-envelope AcpSessionStarted bind: no source-claim cursor, so always a fresh forwarder
-            // (SessionStarted@0). §2.7 B4's rebind cursor rides ONLY the source-claim path below.
-            StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq: -1);
+            var acceptedSeq = -1L;
+
+            if (reopened) {
+                var cursor = await _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, [], acpCts.Token);
+
+                if (cursor.Rejected) {
+                    agent.TryRefuseReopenedTranscript();
+                    LogReopenedTranscriptRefused(agent.Id);
+
+                    return;
+                }
+
+                acceptedSeq = cursor.AcceptedSeq;
+            }
+
+            StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq);
+
+            if (!reopened) return;
+
+            if (agent.AcpForwarder is { } forwarder
+             && await forwarder.Forwarder.FirstEventAccepted.WaitAsync(acpCts.Token)
+             && agent.TryAcceptReopenedTranscript()) {
+                transcript.ReleaseFirstTurn();
+
+                return;
+            }
+
+            agent.TryRefuseReopenedTranscript();
+            LogReopenedTranscriptRefused(agent.Id);
         } catch (Exception ex) {
+            if (reopened) agent.TryRefuseReopenedTranscript();
             LogAcpBindFailed(ex, agent.Id);
         }
     }
@@ -4911,12 +4970,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>AcpSessionStarted</c> — can reuse it verbatim without re-binding. Synchronous (no awaits). The
     /// CALLER owns the try/catch.
     ///
-    /// <para><paramref name="acceptedSeq"/> (§2.7 B4): a FRESH bind (<c>-1</c>, the default) builds the
-    /// SessionStarted@0 initial envelope and the forwarder's local seq starts at 0. An envelope-sourced
-    /// REBIND (a parked reviewer relaunch, <c>≥ 0</c>) initializes the forwarder from the source-claim's
-    /// canonical <c>AcceptedSeq</c> instead — no SessionStarted, new events numbered from that seq + 1
-    /// (see §2.5 item 6). Only the <see cref="StartEnvelopeSourcedSessionAsync"/> source-claim path can
-    /// carry a cursor; the non-envelope <see cref="StartAcpForwardingAsync"/> path always passes -1.</para>
+    /// <para><paramref name="acceptedSeq"/>: <c>-1</c> for a session the server holds no events of, which
+    /// starts with SessionStarted@0; otherwise the server's cursor — a parked reviewer's source claim, or
+    /// a session a restart resume reopened — and the forwarder sends no SessionStarted and numbers from
+    /// the next seq.</para>
     /// </summary>
     void StartForwarderAfterBind(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts, long acceptedSeq = -1) {
         // Liveness check: the bind await (either path) can span a reconnect outage. If finalize already
@@ -6185,6 +6242,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
     partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server records nothing of the ACP session agent {AgentId} reopened; its first turn stays held")]
+    partial void LogReopenedTranscriptRefused(string agentId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
     partial void LogAcpBindAbortedAgentGone(string agentId);

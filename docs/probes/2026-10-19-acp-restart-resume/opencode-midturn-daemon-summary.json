@@ -1,0 +1,52 @@
+{
+  "vendor": "opencode",
+  "stop": "midturn",
+  "kill": "daemon",
+  "version": "1.18.31",
+  "argv": [
+    "opencode",
+    "acp"
+  ],
+  "started": "2026-10-19T11:52:38.066873+00:00",
+  "codeword": "PELICAN-10858E",
+  "load_session_advertised": true,
+  "session_id": "ses_eabfe4de5ffem97p941YWijxZv",
+  "turn_a_stop": "end_turn",
+  "turn_c_stop": "end_turn",
+  "stopped_mid_turn": true,
+  "stop1": {
+    "cancel_sent": true,
+    "ended_by": "eof",
+    "exit_code": 0,
+    "elapsed_s": 0.27,
+    "group_outlived_leader": false
+  },
+  "load_session_advertised_after": true,
+  "load": {
+    "ok": true,
+    "error": null,
+    "replayed_updates": 13,
+    "replayed_kinds": [
+      "agent_message_chunk",
+      "agent_thought_chunk",
+      "tool_call",
+      "tool_call_update",
+      "user_message_chunk"
+    ],
+    "conversation_updates_after_response": 0,
+    "trailer_kinds": [
+      "available_commands_update"
+    ]
+  },
+  "recall_stop": "end_turn",
+  "recall_answer": "PELICAN-10858E",
+  "codeword_recalled": true,
+  "stop2": {
+    "cancel_sent": false,
+    "ended_by": "eof",
+    "exit_code": 0,
+    "elapsed_s": 0.21,
+    "group_outlived_leader": false
+  },
+  "ended": "2026-10-19T11:53:16.453741+00:00"
+}

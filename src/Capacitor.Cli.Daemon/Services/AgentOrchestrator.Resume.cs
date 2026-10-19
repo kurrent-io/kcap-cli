@@ -481,6 +481,9 @@ internal partial class AgentOrchestrator {
 
     const string NativeResumeUnsupported = "native_resume_unsupported";
     const string StoppedDuringResume     = "stopped";
+    const string TranscriptRefusedReason = "acp_binding_unavailable";
+
+    static bool TranscriptRefused(AgentInstance agent) => agent.ReopenedTranscript == ReopenedTranscript.Refused;
 
     static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
@@ -873,9 +876,18 @@ internal partial class AgentOrchestrator {
 
         if (resume.Agent is not { } agent) return ("runtime_exited", null);
 
-        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct);
+        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct, judgeTranscript: true);
 
         if (agent.StopRequested) return (StoppedDuringResume, null);
+
+        if (!survived && TranscriptRefused(agent)) {
+            // Its first turn was never sent, so kcap continue repeats nothing; still pending its resume,
+            // the teardown this starts keeps the worktree for it.
+            await agent.Runtime.TerminateAsync(ShutdownTerminateGrace);
+
+            return (TranscriptRefusedReason, null);
+        }
+
         if (!survived) return ("runtime_exited", agent.Runtime.ExitCode);
 
         lock (_ledgerLock) {
@@ -887,13 +899,15 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Whether the resumed runtime is still running, and still this agent, once the readiness
-    /// window has passed since it published.</summary>
-    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct) {
+    /// window has passed since it published. <paramref name="judgeTranscript"/> also fails it unless the
+    /// server has accepted the session it reopened by then.</summary>
+    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct, bool judgeTranscript = false) {
         var started = _time.GetTimestamp();
 
-        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)) {
+        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)
+            && !(judgeTranscript && TranscriptRefused(agent))) {
             var left = _config.ResumeReadinessWindow - _time.GetElapsedTime(started);
-            if (left <= TimeSpan.Zero) return true;
+            if (left <= TimeSpan.Zero) return !(judgeTranscript && agent.TryRefuseReopenedTranscript());
 
             await Task.Delay(left < ReadinessPoll ? left : ReadinessPoll, _time, ct);
         }

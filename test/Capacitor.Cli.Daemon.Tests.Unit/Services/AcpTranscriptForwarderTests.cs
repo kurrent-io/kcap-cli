@@ -125,6 +125,49 @@ public class AcpTranscriptForwarderTests {
         await Assert.That(forwarder.UnackedCount).IsEqualTo(0);
     }
 
+    static AcpTranscriptForwarder ResumedForwarder(
+            Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> send, ChannelReader<AcpEventEnvelope> envelopes) =>
+        new(send, initialEnvelope: null, envelopes, NullLogger.Instance, TimeProvider.System,
+            FastRetryDelay, FastRetryDelay, resumeFromSeq: 41);
+
+    /// <summary>A resumed session's held first turn waits on this: an all-ephemeral batch leaves the
+    /// cursor where it was, so it must not count as the server accepting anything.</summary>
+    [Test]
+    public async Task FirstEventAccepted_waits_for_a_canonical_envelope_past_the_resumed_cursor() {
+        var channel = NewChannel();
+        var forwarder = ResumedForwarder(
+            (batch, _) => {
+                var canonical = batch.Where(static e => !e.Ephemeral).ToArray();
+                var accepted  = canonical.Length == 0 ? 41 : canonical[^1].Seq;
+                return Task.FromResult(new AcpBatchAck(accepted, accepted));
+            },
+            channel.Reader);
+        using var cts = new CancellationTokenSource();
+        var run = forwarder.RunAsync(cts.Token);
+
+        channel.Writer.TryWrite(NewEphemeralEnvelope("streaming"));
+        await Task.Delay(100);
+        await Assert.That(forwarder.FirstEventAccepted.IsCompleted).IsFalse();
+
+        channel.Writer.TryWrite(NewTextEnvelope("a"));
+        await Assert.That(await forwarder.FirstEventAccepted.WaitAsync(HangGuard)).IsTrue();
+
+        channel.Writer.Complete();
+        await run.WaitAsync(HangGuard);
+    }
+
+    [Test]
+    public async Task FirstEventAccepted_is_false_when_a_terminal_binding_drops_the_first_event() {
+        var channel = NewChannel();
+        channel.Writer.TryWrite(NewTextEnvelope("a"));
+        var forwarder = ResumedForwarder((_, _) => Task.FromResult(new AcpBatchAck(41, 41)), channel.Reader);
+
+        await forwarder.RunAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(forwarder.IsTerminal).IsTrue();
+        await Assert.That(await forwarder.FirstEventAccepted.WaitAsync(HangGuard)).IsFalse();
+    }
+
     [Test]
     public async Task Fresh_mode_still_sends_SessionStarted_at_seq_0_first() {
         // The discriminating companion: with resumeFromSeq null (default) and a non-null initialEnvelope,
