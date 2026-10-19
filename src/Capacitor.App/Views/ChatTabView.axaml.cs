@@ -159,8 +159,13 @@ public partial class ChatTabView : UserControl {
             return;
         }
         _smoothFrameQueued = true;
-        top.RequestAnimationFrame(OnSmoothScrollFrame);
+        RequestSmoothFrame(top, OnSmoothScrollFrame);
     }
+
+    /// The render loop stamps frames with wall-clock time and ticks on its own timer, so a test
+    /// that asserts on the curve supplies the frames and their timestamps itself.
+    internal Action<TopLevel, Action<TimeSpan>> RequestSmoothFrame { get; set; } =
+        static (top, frame) => top.RequestAnimationFrame(frame);
 
     void OnSmoothScrollFrame(TimeSpan timestamp) {
         _smoothFrameQueued = false;
