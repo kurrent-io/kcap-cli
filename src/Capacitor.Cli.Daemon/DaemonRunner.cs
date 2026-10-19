@@ -148,9 +148,12 @@ public static partial class DaemonRunner {
             StdErrCapture.Apply(capturePath);
         }
 
-        // Strip our custom args before passing to host builder
-        var hostArgs = Array.Empty<string>();
-        var builder  = Host.CreateApplicationBuilder(hostArgs);
+        // The host watches its content root for appsettings changes, and on Linux that watch is an
+        // inotify entry on every subdirectory, registered before the socket opens. Under a service
+        // manager the default root is the home directory, which takes longer than the verify budget.
+        // The daemon reads no appsettings, so its root is its own small state directory.
+        paths.EnsureDirectory();
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = [], ContentRootPath = paths.Directory });
 
         // Configure logging: file when detached, console when foreground.
         // Minimum level defaults to Information; raise verbosity for transport
