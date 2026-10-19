@@ -82,7 +82,7 @@ internal record AgentInstance(
     /// or sent. Claimed once, so a stop and the finalizer never both report it.
     public int                  RunReport;
 
-    /// Stops in progress; the last to settle sends the owed report.
+    /// Stops in progress, under the orchestrator's ledger lock; the last to settle sends the owed report.
     public int                  StopsInFlight;
 
     /// Completes once every stop has settled and the report is sent, so the finalizer ends the session
@@ -4074,7 +4074,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         lock (_ledgerLock) {
             agent.StopRequested = true;
             if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
-            Interlocked.Increment(ref agent.StopsInFlight);
+            agent.StopsInFlight++;
         }
 
         try {
@@ -4201,8 +4201,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             return false;
         } finally {
-            // The last stop to settle reports what it found, a stop that threw included.
-            if (Interlocked.Decrement(ref agent.StopsInFlight) == 0) {
+            // The last stop to settle reports what it found, a stop that threw included. Counted under the
+            // lock that marks a stop requested, so no stop already under way is missed.
+            bool last;
+            lock (_ledgerLock) last = --agent.StopsInFlight == 0;
+            if (last) {
                 SendOwedStopReport(agent);
                 agent.StopSettled.TrySetResult();
             }
