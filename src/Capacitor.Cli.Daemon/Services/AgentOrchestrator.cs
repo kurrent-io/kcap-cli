@@ -2642,7 +2642,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
 
                     if (work == WorkLocation.OwnedWorktree) {
-                        try { await WorktreeManager.RemoveAsync(worktree, _time); } catch { /* best-effort */ }
+                        try { await RemoveOwnedWorktreeAsync(worktree, agentId); } catch { /* best-effort */ }
                     }
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2775,7 +2775,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // A borrowed cwd is the user's real checkout; removing it here would `git worktree
                 // remove` the user's tree (spec's top safety invariant; mirrors CleanupAgentAsync).
                 if (work == WorkLocation.OwnedWorktree && resume is null) {
-                    try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
+                    try { await RemoveOwnedWorktreeAsync(worktree, agentId); } catch {
                         /* best-effort */
                     }
                 }
@@ -3073,7 +3073,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     }
                 }
 
-                try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
+                try { await RemoveOwnedWorktreeAsync(worktree, agentId); } catch {
                     /* best-effort */
                 }
             }
@@ -5766,7 +5766,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // This is the spec's top safety invariant.
         // A pending resume keeps everything the successor daemon resumes from.
         if (agent.Work == WorkLocation.OwnedWorktree && !agent.ResumePending) {
-            try { await WorktreeManager.RemoveAsync(agent.Worktree, _time); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+            try { await RemoveOwnedWorktreeAsync(agent.Worktree, agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
 
         if (!agent.ResumePending) {
@@ -6271,6 +6271,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Kept the worktree of agent {AgentId} at {Path} (branch {Branch}): it holds {Reason}. Remove it with `git worktree remove` once the work is saved")]
+    partial void LogWorktreeKept(string agentId, string path, string branch, string reason);
+
+    async Task RemoveOwnedWorktreeAsync(WorktreeInfo worktree, string agentId) {
+        var removal = await WorktreeManager.RemoveAsync(worktree, _time);
+        if (removal.KeptBecause is { } reason) LogWorktreeKept(agentId, worktree.Path, worktree.Branch, reason);
+    }
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Agent {AgentId} did not exit after a stop; reporting it Failed rather than Completed")]
     partial void LogStopUnconfirmed(string agentId);

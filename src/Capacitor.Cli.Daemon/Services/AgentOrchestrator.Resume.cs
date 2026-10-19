@@ -666,7 +666,7 @@ internal partial class AgentOrchestrator {
     async Task RemoveDiscardedResourcesAsync(ResumeLedgerEntry entry) {
         if (entry.Launch.Work == WorkLocation.OwnedWorktree) {
             try {
-                await WorktreeManager.RemoveAsync(ResumedWorktree(entry), _time);
+                await RemoveOwnedWorktreeAsync(ResumedWorktree(entry), entry.AgentId);
             } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "removing a discarded resume's worktree", entry.AgentId);
             }
@@ -1117,7 +1117,8 @@ internal partial class AgentOrchestrator {
             path,
             launch.WorktreeBranch ?? $"capacitor/{Path.GetFileName(path)}",
             launch.WorktreeSourceRepo ?? launch.RepoPath,
-            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git"))) {
+            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git")),
+            FetchedRef: WorktreeManager.FetchedRefFor(Path.GetFileName(path))) {
             GitRelativeCwd = launch.GitRelativeCwd
         };
     }

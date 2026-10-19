@@ -412,7 +412,9 @@ internal partial class AgentOrchestrator {
                 Work = work
             };
 
-            launcher.Prepare(ctx);
+            var before = work == WorkLocation.OwnedWorktree ? WorktreeManager.StampDaemonPaths(worktree.Path) : null;
+            try { launcher.Prepare(ctx); }
+            finally { if (before is not null) WorktreeManager.RecordDaemonBaseline(worktree.Path, before); }
             var built = launcher.BuildPassthrough(ctx, args);
 
             // Records to the account either way. Keep KCAP_URL and re-add ANTHROPIC_API_KEY so
@@ -461,7 +463,7 @@ internal partial class AgentOrchestrator {
             // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
             // spawn fails after the worktree was created (mirrors the server launch path).
             if (ownedWorktree is { } leaked) {
-                try { await WorktreeManager.RemoveAsync(leaked, _time); } catch { /* best-effort */ }
+                try { await RemoveOwnedWorktreeAsync(leaked, agentId); } catch { /* best-effort */ }
             }
 
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
