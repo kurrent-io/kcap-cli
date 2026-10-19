@@ -288,7 +288,7 @@ public partial class App : Application {
             var laneProbe  = TerminalPathProbe.Create(laneRunner, Environment.GetEnvironmentVariable);
             var channel    = new OutcomeChannel();
             var lane = new DaemonMutationLane(
-                _daemonStore, laneProbe, channel, ResolveCliOverride,
+                _daemonStore, laneProbe, channel, ResolvePinnedCli,
                 (request, pinnedPath) => new KcapCli(
                     laneRunner, pinnedPath, request.DaemonName, request.Profile, laneProbe.TerminalPathAsync,
                     canonicalServer: request.CanonicalServer),
@@ -1531,6 +1531,15 @@ public partial class App : Application {
             // across a failed evaluation — so there genuinely is nothing to hand back.
             return (new GateResult.Incomplete(GateReason.EvaluationFailed), null);
         }
+    }
+
+    // The daemon the app installs is the one it ships and updates. A kcap elsewhere on PATH is the
+    // operator's own; only an explicit KCAP_APP_CLI_PATH pins another.
+    static string? ResolvePinnedCli() => ResolveCliOverride() ?? ResolveBundledCli(Program.Host.CliDirectory, File.Exists);
+
+    internal static string? ResolveBundledCli(string cliDirectory, Func<string, bool> fileExists) {
+        var sibling = Path.Combine(cliDirectory, CliResolver.BundledCliFileName);
+        return fileExists(sibling) ? sibling : null;
     }
 
     // Reads KCAP_APP_CLI_PATH directly, not CliResolver.ResolvePath (its no-override "kcap" answer is indistinguishable from a real override): set+exists → absolute pin; set+missing or absent → null.

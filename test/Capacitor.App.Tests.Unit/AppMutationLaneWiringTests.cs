@@ -6,7 +6,7 @@ using AppUnderTest = Capacitor.App.App;
 namespace Capacitor.App.Tests.Unit;
 
 /// Composition-root helpers wiring the mutation lane into App.axaml.cs: outcome-channel
-/// presentation routing, cliOverride absolute-pin resolution, and shutdown quiesce composition.
+/// presentation routing, pinned-CLI resolution, and shutdown quiesce composition.
 /// Plain TUnit, no Avalonia session needed — pure/async functions over interfaces and fakes
 /// (FakeLifecycleSurface/FakeKcapCli/FakeLoginShellProbe are shared from
 /// DaemonLifecycleControllerTests.cs, same namespace).
@@ -33,6 +33,15 @@ public class AppMutationLaneWiringTests {
         throw new InvalidOperationException("runMutation must not be called");
 
     static Func<CancellationToken, Task<string?>> FixedTerminalPath(string? path) => _ => Task.FromResult(path);
+
+    // ---- ResolveBundledCli ----
+
+    [Test]
+    public async Task ResolveBundledCli_is_the_kcap_beside_the_app_when_present() {
+        var expected = Path.Combine("/opt/app", CliResolver.BundledCliFileName);
+        await Assert.That(AppUnderTest.ResolveBundledCli("/opt/app", p => p == expected)).IsEqualTo(expected);
+        await Assert.That(AppUnderTest.ResolveBundledCli("/opt/app", _ => false)).IsNull();
+    }
 
     // ---- ResolveCliOverrideCore ----
 
