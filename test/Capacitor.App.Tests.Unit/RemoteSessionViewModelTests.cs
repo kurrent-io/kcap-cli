@@ -399,6 +399,28 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A transient empty snapshot also removes a live row, so only a removal this workspace asked
+    /// for, or a terminal status, tells the window the session is over.
+    [Test]
+    [Arguments(false, false, false)]
+    [Arguments(true, false, true)]
+    [Arguments(false, true, true)]
+    public async Task Only_a_stopped_removal_or_a_terminal_status_reports_the_end(bool stop, bool terminal, bool ends) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row());
+            var ended = false;
+            using var sub = vm.Ended.Subscribe(_ => ended = true);
+
+            if (stop) await vm.StopCommand.Execute();
+            if (terminal) h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
+            else h.Directory.Rows.Remove("remote:a1");
+
+            await Assert.That(ended).IsEqualTo(ends);
+            await vm.TeardownAsync();
+        });
+    }
+
     /// The local daemon proving the twin retires the remote row while the agent keeps running:
     /// nothing ended, and the window opens the local workspace for the same id instead.
     [Test]

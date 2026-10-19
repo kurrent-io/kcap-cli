@@ -128,6 +128,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
 
+    readonly ReplaySubject<Unit> _ended = new(1);
+    public IObservable<Unit> Ended => _ended.Take(1);
+    // A transient empty registry snapshot also removes a live row, so only a removal this workspace
+    // asked for counts as an end.
+    bool _stopRequested;
+
     // Same reason as _sessionEndedChanges above: Stop's canExecute reads the flag through a subject.
     readonly BehaviorSubject<bool> _originChangedChanges = new(false);
     public IObservable<bool> OriginChangedChanges => _originChangedChanges.AsObservable();
@@ -284,6 +290,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                         } else {
                             SessionEnded = true;
                             PublishSession(ended: true);
+                            if (_stopRequested) _ended.OnNext(Unit.Default);
                         }
                         Release();
                         continue;
@@ -299,7 +306,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             .CombineLatest(_originChangedChanges, actions.StopsInFlight,
                 (ended, movedLocal, inFlight) => !ended && !movedLocal && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(
-            () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
+            () => {
+                _stopRequested = true;
+                actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote);
+            },
             canStop);
         ShowPullRequestCommand = ReactiveCommand.Create(() => { if (ShowsPullRequestTab) ActiveTab = RemoteTab.PullRequest; });
         _disposables.Add(ShowPullRequestCommand);
@@ -323,6 +333,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (SessionStatusDots.IsTerminal(row.Status)) {
             SessionEnded = true;
             PublishSession(ended: true);
+            _ended.OnNext(Unit.Default);
             Release();
             return;
         }

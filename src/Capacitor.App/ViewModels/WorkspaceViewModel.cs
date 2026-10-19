@@ -48,6 +48,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     public TerminalTabViewModel Terminal { get; }
 
+    public IObservable<Unit> Ended { get; }
+
     ChatTabViewModel? _chat;
     /// Built once, on the first dto; the reader comes from transcript_format and the input channel
     /// from has_terminal.
@@ -164,6 +166,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Scan(new AgentPresence(null, false), Accumulate)
             .Replay(1)
             .RefCount();
+        // A terminal status, not a removed row: a row dropped while its twin takes over on the
+        // server lane is still a live session.
+        Ended = presence.Where(p => SessionStatusDots.IsTerminal(p.Dto?.Status)).Take(1).Select(_ => Unit.Default);
 
         var runs = new SessionRuns(time);
         commands?.Track($"local:{agentId}", runs).DisposeWith(_disposables);
