@@ -203,11 +203,11 @@
                                 </SelectableTextBlock.IsVisible>
                             </SelectableTextBlock>
                             <Panel Grid.Column="2">
-                                <Border x:Name="ToolStatusPill" Classes="toolStatus" Width="14" Height="8"
+                                <Border x:Name="ToolStatusPill" Classes="toolStatus" Width="8" Height="8"
                                         CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
                                         IsVisible="{Binding IsSettled}"
                                         Background="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
-                                <Border Classes="toolRunning toolStatus" Width="14" Height="8"
+                                <Border Classes="toolRunning toolStatus" Width="8" Height="8"
                                         CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
                                         IsVisible="{Binding IsRunning}" views:PulseClock.IsActive="{Binding IsRunning}"
                                         Background="{StaticResource KcapWarningBrush}" />
