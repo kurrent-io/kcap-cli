@@ -410,6 +410,8 @@ public class ChatTabViewSmokeTests {
             var center = PresentAndLocate(host, markdown);
             var bottomRow = items.GetRealizedContainers().MaxBy(c => c.Bounds.Bottom)!;
             var startY = bottomRow.TranslatePoint(default, host.Scroll)!.Value.Y;
+            Action<TimeSpan>? pending = null;
+            host.View.RequestSmoothFrame = (_, frame) => pending = frame;
 
             host.Window.MouseWheel(center, new Vector(0, 1));
             host.Settle();
@@ -417,8 +419,10 @@ public class ChatTabViewSmokeTests {
             await Assert.That(firstY - startY).IsGreaterThan(5).And.IsLessThan(45);
 
             var ys = new List<double> { firstY };
-            for (var frame = 0; frame < 30; frame++) {
-                AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            for (var frame = 1; frame <= 30; frame++) {
+                var next = pending;
+                pending = null;
+                next?.Invoke(TimeSpan.FromSeconds(frame / 60.0));
                 host.Settle();
                 ys.Add(bottomRow.TranslatePoint(default, host.Scroll)!.Value.Y);
             }
