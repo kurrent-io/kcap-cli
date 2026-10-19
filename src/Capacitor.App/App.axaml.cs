@@ -176,6 +176,9 @@ public partial class App : Application {
     SessionRailViewModel? _rail;
     // Shared by every window Home over this graph, so owned here rather than by any one of them.
     LocalServerRecoveryViewModel? _localServer;
+    // Only on a machine whose server is its local installation; a quit settles the upgrade like the install.
+    LocalUpgradeController? _localUpgrade;
+    LocalStackViewModel? _localStack;
     // The server-side clients that outlive a window rebuild (MainWindowCoordinator can build a
     // second window over the same launch client) and own live transports. Torn down through one
     // holder on both teardown paths, after _home — never before, or a launch still in flight would
@@ -339,7 +342,7 @@ public partial class App : Application {
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 _lifecycle, _lane);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -681,9 +684,19 @@ public partial class App : Application {
             }
             OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true);
         });
+        // The bundled CLI's own coordinator, never a hook: the stack follows the CLI this app ships.
+        var localUpgrade = isLocalServer ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
+        _localUpgrade = localUpgrade;
+        IObservable<bool>? upgrading = null;
+        if (localUpgrade is not null) upgrading = localUpgrade.WhenAnyValue(x => x.Running);
         var localServer = new LocalServerRecoveryViewModel(
-            serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token);
+            serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
+            busy: upgrading);
         _localServer = localServer;
+        var localStack = localUpgrade is null ? null : new LocalStackViewModel(
+            Observable.Start(() => LocalEndpoints.Read(_localRoot).Active?.Version, ReactiveUI.Reactive.RxSchedulers.TaskpoolScheduler),
+            serverLane.Status, localUpgrade, () => serverLane.RestartAsync(), _shutdown.Token);
+        _localStack = localStack;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
@@ -750,7 +763,7 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer)),
+                localServer: localServer, localStack: localStack)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -765,6 +778,10 @@ public partial class App : Application {
         // they are read back off the window's DataContext for disposal.
         _home = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Home;
         _rail = (_coordinator.Window?.DataContext as MainWindowViewModel)?.Rail;
+
+        if (localUpgrade is not null && !_shutdownStarted)
+            _ = localUpgrade.StartAfterUpdateAsync(
+                Program.UpdateRelaunch, isLocalServer, () => LocalSetupState.Pending(_localRoot), _shutdown.Token);
 
         if (!_shutdownStarted) {
             var notificationSettings = new NotificationSettingsService(_config.Path("notifications.json"));
@@ -1389,7 +1406,7 @@ public partial class App : Application {
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
-            LocalServerRecoveryViewModel? localServer = null) {
+            LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1420,7 +1437,7 @@ public partial class App : Application {
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
-            launchFailed: agentId => vm?.CloseFailedLaunch(agentId));
+            launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
         // `vm`, not a local, so no two-step forward-declaration is needed.
@@ -1440,7 +1457,9 @@ public partial class App : Application {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
-            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon);
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon) {
+            LocalStack = localStack,
+        };
         var window = adopt ?? new MainWindow();
         window.DataContext = vm;
         window.Notifier = notifier;
@@ -2040,8 +2059,8 @@ public partial class App : Application {
         // An in-flight sign-in always settles, mutations get a bounded chance
         // to — both while the UI is still up, before teardown.
         if (_wizardAuth is not null || _historyImport is not null || _localInstall is not null || _lifecycle is not null
-         || _lane is not null)
-            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time)
+         || _lane is not null || _localUpgrade is not null)
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time, _localUpgrade)
                 .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -2052,7 +2071,7 @@ public partial class App : Application {
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _rail, _pause, _restartPending],
+                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });
         } else {
@@ -2095,14 +2114,17 @@ public partial class App : Application {
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install finish uncapped
-    /// so an in-progress commit or rollback isn't torn down, then lifecycle/lane quiesce under the cap.</summary>
+    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install and upgrade finish
+    /// uncapped so an in-progress commit, switch or rollback isn't torn down, then lifecycle/lane quiesce
+    /// under the cap.</summary>
     internal static async Task QuiesceAppAsync(
             WizardAuthService? auth, HistoryStepViewModel? import, LocalInstallController? install,
-            DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time) {
+            DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time,
+            LocalUpgradeController? upgrade = null) {
         var authTerminal = CancelAndAwaitAuthAsync(auth);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
         if (install is not null) await install.SettleAsync().ConfigureAwait(false);
+        if (upgrade is not null) await upgrade.SettleAsync().ConfigureAwait(false);
         await authTerminal.ConfigureAwait(false);
         await AwaitQuiescedAsync(() => QuiesceLifecycleAndLaneAsync(lifecycle, lane), cap, time).ConfigureAwait(false);
     }

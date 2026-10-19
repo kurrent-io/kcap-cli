@@ -9,7 +9,8 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// The launcher's "local server is not running" banner. Its evidence is the server lane alone, so a
-/// stopped server behind a healthy daemon still offers Start; a cloud server never does.
+/// stopped server behind a healthy daemon still offers Start; a cloud server never does. While
+/// <c>busy</c> (an upgrade holding the stack) the server still reads down but Start is not offered.
 public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     const int MessageTailLines = 12;
 
@@ -18,13 +19,15 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     readonly CancellationToken _shutdown;
     readonly CompositeDisposable _disposables = new();
     readonly ObservableAsPropertyHelper<bool> _visible;
+    readonly ObservableAsPropertyHelper<bool> _serverDown;
     readonly ObservableAsPropertyHelper<bool> _isStarting;
     int _running;
     string? _message;
 
     public LocalServerRecoveryViewModel(
             IObservable<ServerLaneStatus> status, bool isLocalServer,
-            Func<CancellationToken, Task<ProcessResult>> start, Func<Task> reconnect, CancellationToken shutdown) {
+            Func<CancellationToken, Task<ProcessResult>> start, Func<Task> reconnect, CancellationToken shutdown,
+            IObservable<bool>? busy = null) {
         _start = start;
         _reconnect = reconnect;
         _shutdown = shutdown;
@@ -32,7 +35,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
 
         // Sticky across the Connecting of each retry attempt, so the banner does not blink on every
         // backoff step; only an outcome other than retrying takes it down.
-        var visible = isLocalServer
+        var down = isLocalServer
             ? status.Select(s => s.State)
                 .Scan(false, (shown, state) => state switch {
                     ServerLaneState.Retrying   => true,
@@ -41,7 +44,13 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
                 })
                 .DistinctUntilChanged()
             : Observable.Return(false);
-        _visible = visible
+        _serverDown = down
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .ToProperty(this, x => x.ServerDown, initialValue: false)
+            .DisposeWith(_disposables);
+        _visible = down
+            .CombineLatest(busy ?? Observable.Return(false), (d, b) => d && !b)
+            .DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.Visible, initialValue: false)
             .DisposeWith(_disposables);
@@ -55,6 +64,9 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     public bool IsLocalServer { get; }
 
     public bool Visible => _visible.Value;
+
+    /// The server lane's own reading, whether or not Start is offered.
+    public bool ServerDown => _serverDown.Value;
 
     public bool IsStarting => _isStarting.Value;
 

@@ -735,11 +735,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// The "local server is not running" banner, beside the daemon's own recovery.
     public LocalServerRecoveryViewModel? LocalServer { get; private set; }
 
+    /// The local stack's upgrade banner; null unless the server is this machine's local installation.
+    public LocalStackViewModel? LocalStack { get; init; }
+
     public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
         LocalServer = recovery;
         this.RaisePropertyChanged(nameof(LocalServer));
         _localServer.OnNext(recovery.IsLocalServer);
-        recovery.WhenAnyValue(x => x.Visible).Subscribe(_localServerDown).DisposeWith(_disposables);
+        recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
     }
 
     /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.

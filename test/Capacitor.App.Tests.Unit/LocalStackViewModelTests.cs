@@ -1,0 +1,202 @@
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Reactive.Threading.Tasks;
+using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core;
+
+namespace Capacitor.App.Tests.Unit;
+
+[NotInParallel("AvaloniaSession")]
+public class LocalStackViewModelTests {
+    sealed class Harness : IDisposable {
+        public readonly FakeKcapCli Cli = new();
+        public readonly BehaviorSubject<ServerLaneStatus> Status = new(new(ServerLaneState.Connected));
+        public readonly LocalUpgradeController Upgrade;
+        public readonly LocalStackViewModel Vm;
+        public int Reconnects;
+
+        public Harness(string? installed = "1.2.0") {
+            Upgrade = new LocalUpgradeController(() => Cli, action => action());
+            Vm = new LocalStackViewModel(Observable.Return(installed), Status, Upgrade, () => {
+                Reconnects++;
+                return Task.CompletedTask;
+            }, CancellationToken.None);
+        }
+
+        public async Task RunAsync(int exitCode, params string[] lines) {
+            Cli.LocalUpgradeBehavior = UpgradeScript.Prints(exitCode, lines);
+            await Upgrade.StartAsync(CancellationToken.None);
+            await Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+
+        public void Dispose() => Vm.Dispose();
+    }
+
+    static IEnumerable<string?> ShownText(LocalStackViewModel vm) => [vm.Headline, vm.Detail, vm.Guidance, vm.StateText];
+
+    [Test]
+    public async Task The_rail_shows_the_installed_version_and_the_servers_state() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
+            await Assert.That(h.Vm.StateText).IsEqualTo("running");
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(h.Vm.StateText).IsEqualTo("not running");
+            await Assert.That(h.Vm.Attention).IsFalse();
+        });
+    }
+
+    [Test]
+    public async Task A_running_upgrade_shows_its_progress_in_the_banner_and_the_rail() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            var exit = new TaskCompletionSource<StreamingResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Cli.LocalUpgradeBehavior = (onLine, _, _) => {
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, UpgradeScript.Planned("1.2.0", "1.3.0")));
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, "{\"v\":1,\"event\":\"downloading\",\"url\":\"u\",\"bytes\":200}"));
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, "{\"v\":1,\"event\":\"download_progress\",\"received\":50,\"bytes\":200}"));
+                return exit.Task;
+            };
+
+            await h.Upgrade.StartAsync(CancellationToken.None);
+
+            await Assert.That(h.Vm.Upgrading).IsTrue();
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Headline).IsEqualTo("Upgrading Capacitor local 1.2.0 to 1.3.0");
+            await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0… 25%");
+            await Assert.That(h.Vm.DownloadFraction).IsEqualTo(0.25);
+            await Assert.That(h.Vm.StateText).IsEqualTo("upgrading");
+
+            exit.SetResult(new StreamingResult(0, false, []));
+            await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        });
+    }
+
+    [Test]
+    public async Task An_upgrade_moves_the_rail_to_the_new_version_and_reconnects() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(0, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
+                UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+
+            await Assert.That(h.Vm.Version).IsEqualTo("1.3.0");
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+            await Assert.That(h.Vm.Upgrading).IsFalse();
+            await Assert.That(h.Reconnects).IsEqualTo(1);
+        });
+    }
+
+    [Test]
+    public async Task Nothing_to_do_shows_nothing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(3, UpgradeScript.NothingToDo("current", "1.2.0", "1.2.0"));
+
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+            await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
+            await Assert.That(h.Reconnects).IsEqualTo(0);
+        });
+    }
+
+    [Test]
+    public async Task A_failure_before_the_switch_offers_try_again_and_names_no_terminal_command() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(1, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Failed("download_failed",
+                "The download was interrupted. Capacitor local 1.2.0 was left as it was. Run kcap local upgrade to try again.", false));
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Attention).IsTrue();
+            await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local could not be upgraded to 1.3.0");
+            await Assert.That(h.Vm.Detail).IsEqualTo("The download was interrupted. Capacitor local 1.2.0 was left as it was.");
+            await Assert.That(h.Vm.TryAgainVisible).IsTrue();
+            await Assert.That(h.Vm.StateText).IsEqualTo("upgrade failed");
+            await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
+            foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap ");
+
+            h.Cli.LocalUpgradeBehavior = UpgradeScript.Prints(0, UpgradeScript.Upgraded("1.2.0", "1.3.0"));
+            await h.Vm.TryAgainCommand.Execute().ToTask();
+            await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(h.Cli.LocalUpgradeCallCount).IsEqualTo(2);
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+            await Assert.That(h.Vm.Version).IsEqualTo("1.3.0");
+        });
+    }
+
+    [Test]
+    public async Task A_busy_failure_says_another_change_is_running() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(1, UpgradeScript.Failed("lifecycle_busy", "Another kcap local command holds the lifecycle lock.", false));
+
+            await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.BusyGuidance);
+            await Assert.That(h.Vm.TryAgainVisible).IsTrue();
+        });
+    }
+
+    /// The new version stays selected and stopped: running the upgrade again changes nothing, so the
+    /// way forward is the local server's Start, and the failure clears once the server is back.
+    [Test]
+    public async Task A_failure_after_the_switch_points_at_start_and_clears_once_the_server_is_back() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"), UpgradeScript.Failed("start_failed",
+                "Capacitor local 1.3.0 did not start: not ready. It stays selected and stopped. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.", true));
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(h.Vm.Version).IsEqualTo("1.3.0");
+            await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local 1.3.0 did not start after the upgrade");
+            await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.StartGuidance);
+            await Assert.That(h.Vm.TryAgainVisible).IsFalse();
+            foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap ");
+
+            h.Status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+            await Assert.That(h.Vm.StateText).IsEqualTo("running");
+        });
+    }
+
+    [Test]
+    public async Task A_bundle_not_yet_published_is_a_note_not_a_failure() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(4, UpgradeScript.Planned("1.2.0", "1.3.0"),
+                UpgradeScript.Failed("bundle_not_published", "No bundle is published for 1.3.0 yet.", false));
+
+            await Assert.That(h.Vm.BannerVisible).IsTrue();
+            await Assert.That(h.Vm.Attention).IsFalse();
+            await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local 1.3.0 is not available yet");
+            await Assert.That(h.Vm.TryAgainVisible).IsTrue();
+            await Assert.That(h.Vm.StateText).IsEqualTo("running");
+        });
+    }
+
+    [Test]
+    public async Task Dismiss_hides_a_settled_banner() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(1, UpgradeScript.Failed("not_our_server", "The unit is not this installation's.", false));
+            await Assert.That(h.Vm.TryAgainVisible).IsFalse();
+
+            await h.Vm.DismissCommand.Execute().ToTask();
+
+            await Assert.That(h.Vm.BannerVisible).IsFalse();
+            await Assert.That(h.Vm.Attention).IsFalse();
+        });
+    }
+}

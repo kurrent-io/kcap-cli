@@ -8,7 +8,7 @@ public sealed class LocalUpgradeProgress : ReactiveObject {
     long _bytes;
     LocalUpgradePhase _phase;
     double? _downloadFraction;
-    string? _from, _to;
+    string? _from, _to, _switchedTo;
 
     public LocalUpgradePhase Phase {
         get => _phase;
@@ -33,7 +33,10 @@ public sealed class LocalUpgradeProgress : ReactiveObject {
     }
 
     /// Set once the registry names the new version, whatever happens after.
-    public string? SwitchedTo { get; private set; }
+    public string? SwitchedTo {
+        get => _switchedTo;
+        private set => this.RaiseAndSetIfChanged(ref _switchedTo, value);
+    }
 
     public string? ServerUrl { get; private set; }
 

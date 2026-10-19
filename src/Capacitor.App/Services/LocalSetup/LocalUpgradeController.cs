@@ -37,9 +37,14 @@ public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> po
     /// is its committed local installation and with no local setup pending. True when it started.
     public async Task<bool> StartAfterUpdateAsync(bool updateRelaunch, bool committedLocal, Func<bool> setupPending, CancellationToken ct) {
         if (!updateRelaunch || !committedLocal) return false;
-        if (await Task.Run(setupPending, ct).ConfigureAwait(false)) return false;
+        // Resumes on the caller's context: StartAsync changes bound properties.
+        try {
+            if (await Task.Run(setupPending, ct)) return false;
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return false;
+        }
 
-        await StartAsync(ct).ConfigureAwait(false);
+        await StartAsync(ct);
         return true;
     }
 

@@ -53,6 +53,27 @@ public class LocalServerRecoveryViewModelTests {
         });
     }
 
+    /// An upgrade stops the server on purpose, and a Start then would only meet its lock; the server
+    /// still reads as down, so the generic lost-connection notice stays quiet.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Start_hides_while_an_upgrade_runs_and_the_server_still_reads_down() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying, "Connection refused"));
+            var busy = new BehaviorSubject<bool>(true);
+            using var vm = new LocalServerRecoveryViewModel(
+                status, isLocalServer: true, new Recorder().Start, new Recorder().Reconnect, CancellationToken.None, busy);
+
+            await Assert.That(vm.Visible).IsFalse();
+            await Assert.That(vm.ServerDown).IsTrue();
+
+            busy.OnNext(false);
+
+            await Assert.That(vm.Visible).IsTrue();
+            await Assert.That(vm.ServerDown).IsTrue();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_retrying_cloud_server_never_offers_start() {

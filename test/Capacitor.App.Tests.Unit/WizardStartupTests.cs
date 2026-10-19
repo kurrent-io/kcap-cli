@@ -542,6 +542,34 @@ public class WizardStartupTests {
         });
     }
 
+    /// A quit mid-upgrade interrupts it once and waits, uncapped, for the CLI to say how it ended:
+    /// past the download nothing stops for the interrupt, and the app must not exit under a switch.
+    [Test]
+    public async Task Shutdown_quiesce_interrupts_a_local_upgrade_once_and_awaits_its_end_past_the_cap() {
+        var interrupts = 0;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cli = new FakeKcapCli {
+            LocalUpgradeBehavior = async (_, interrupt, _) => {
+                await using (interrupt.Register(() => Interlocked.Increment(ref interrupts))) await release.Task;
+                return new StreamingResult(0, false, []);
+            },
+        };
+        var upgrade = new LocalUpgradeController(() => cli, action => action());
+        await upgrade.StartAsync(CancellationToken.None);
+
+        var quiesce = AppUnderTest.QuiesceAppAsync(
+            auth: null, import: null, install: null, lifecycle: null, lane: null, cap: TimeSpan.FromMilliseconds(20),
+            time: TimeProvider.System, upgrade: upgrade);
+        await Task.Delay(400);
+
+        await Assert.That(quiesce.IsCompleted).IsFalse();
+        await Assert.That(interrupts).IsEqualTo(1);
+
+        release.SetResult();
+        await quiesce.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(upgrade.Outcome).IsTypeOf<LocalUpgradeOutcome.Upgraded>();
+    }
+
     // The other half: the lifecycle/lane wait is still the capped one.
     [Test]
     public async Task Shutdown_quiesce_still_caps_an_in_flight_lane_mutation() {

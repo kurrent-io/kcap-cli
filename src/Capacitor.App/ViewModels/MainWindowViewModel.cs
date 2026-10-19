@@ -177,6 +177,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// so the rail footer does not read as a second "Default" next to connection state).
     public string TenantName { get; }
 
+    /// The local stack's rail row beside the daemon's; null unless the server is this machine's local installation.
+    public LocalStackViewModel? LocalStack { get; init; }
+
     /// The launch auto-open's staleness token — see NavigationGate. Read from the SHARED gate, not
     /// a per-window counter, so a window built after shutdown began sees the latch too.
     public int NavigationGeneration => _navigation.Generation;
