@@ -68,7 +68,7 @@ Windows (PowerShell):
 irm https://www.kurrent.io/install.ps1 | iex
 ```
 
-The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
+The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). On macOS and Windows the [desktop app](#desktop-app) is the easier way in; `kcap setup` is for the terminal, and for scripts — see [Unattended setup](#unattended-setup) for both editions' recipes. Setup asks whether you want Capacitor locally on this Mac or for your team in the cloud (sign-up opens in your browser), signs you in, finds your workspace, offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
 
 ### 2. Start a new agent session
 
@@ -207,9 +207,11 @@ At a glance — each links to its section below:
 ### Initial setup
 
 ```bash
-kcap setup                                   # interactive wizard (discovers your tenant)
+kcap setup                                   # interactive wizard (local, cloud, or a workspace you have)
 kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.ai
 kcap setup --server-url <url> --no-prompt    # CI / scripted
+kcap setup --local --single-user --yes --no-prompt   # local edition, unattended
+kcap setup --server-url <url> --no-prompt --json     # …with JSON progress for a wrapper
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 kcap setup --local                           # run a Capacitor server on this machine
@@ -236,7 +238,7 @@ SSO discovery signs in through a `127.0.0.1` browser callback, which a browser o
 
 The setup wizard walks you through the steps below. Re-run it any time to update the configuration.
 
-1. **Server** — with no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and discovery finds no Capacitor tenant, `kcap setup` asks how to continue: create one for you (name, workspace URL and plan, with the 30-day Team trial offered first; provisioned and waited for until it's live), point at a workspace you already belong to (enter its slug or URL — the same as `kcap setup <tenant>`), or cancel. That middle choice matters because SSO discovery only lists workspaces that use org SSO: a workspace whose members sign in with the GitHub App shows up here as "no tenant", so pick **I already have a workspace**, or re-run with `--github`.
+1. **Server** — a bare `kcap setup` in a terminal first asks the desktop app's question, how you want to run Capacitor: **For you, locally** runs the [local edition](#local-edition) (offered on macOS only); **For your team, cloud** opens kcap-web's sign-up in your browser, where you create the workspace, and once you press Enter carries on to discovery, which finds it; **Already have a workspace?** goes straight to discovery. With no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and discovery finds no Capacitor tenant, `kcap setup` asks how to continue: create one for you (name, workspace URL and plan, with the 30-day Team trial offered first; provisioned and waited for until it's live), point at a workspace you already belong to (enter its slug or URL — the same as `kcap setup <tenant>`), or cancel. That middle choice matters because SSO discovery only lists workspaces that use org SSO: a workspace whose members sign in with the GitHub App shows up here as "no tenant", so pick **I already have a workspace**, or re-run with `--github`.
 2. **Login** — authenticates via your tenant's configured sign-in method; discovery completes the sign-in inline
 
    **Finishing in the browser.** Once you are signed in, if that server offers browser setup, kcap creates a setup link, opens your browser on it, and waits while you work through the screens there:
@@ -304,7 +306,7 @@ The first version is for a machine with one user: on a shared machine, other OS 
 - Builds of kcap for musl Linux are not supported.
 - `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
 
-`--json` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model` and `--no-embeddings`, and uses a running Ollama with the configured model, or `mxbai-embed-large`, unless a flag says otherwise:
+`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model` and `--no-embeddings`, and uses a running Ollama with the configured model, or `mxbai-embed-large`, unless a flag says otherwise:
 
 ```json
 {"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
@@ -321,7 +323,7 @@ The first version is for a machine with one user: on a shared machine, other OS 
 {"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"…","port":9473,"version":"0.13.0"}
 ```
 
-A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed`, or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed` (2 when the code is `answer_required` or `invalid_arguments`: nothing was attempted), or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
 
 The `embeddings_*` events come after `unpacked` for an install and after `preflight_passed` for a reuse, before `starting`. `embeddings_model_pulling` and `embeddings_model_progress` (one per whole percent) appear only when Ollama lacks the model, and `embeddings_configured` carries `replaced_model` when it replaced a different one. When the step does not end in `embeddings_configured`, it ends in `{"v":1,"event":"embeddings_skipped","code":"…","message":"…"}`, which never fails the install; `code` is `declined` (`--no-embeddings`, now or in an earlier setup), `ollama_not_found`, `pull_failed`, `model_unusable` (the model cannot embed text) or `write_failed`. Unless it is `declined`, a model configured earlier stays configured.
 
@@ -340,15 +342,80 @@ kcap local uninstall --purge    # also delete its data and retire its URL
 
 #### Unattended setup
 
+`kcap setup --no-prompt` is the path for a provisioning script, an agent sandbox or a fleet of developer machines; everyone else is better served by the [desktop app](#desktop-app). It never asks a question: every prompt has a flag, a question with a safe default takes it, and one without (the local edition's consents) is refused with exit code 2 before anything changes.
+
+The local edition, on a Mac:
+
 ```bash
+kcap setup --local --single-user --yes --no-embeddings --no-prompt
+```
+
+The cloud edition, against a workspace that exists, with a [machine credential](#machine-credentials-headless-recording) in the environment:
+
+```bash
+export KCAP_CLIENT_ID=client_01ABC… KCAP_CLIENT_SECRET=…
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-`--no-prompt` requires a workspace (`<tenant>` or `--server-url`), unless you are creating the workspace as part of the run — `--org "<name>" --slug <slug>` supply the two answers the creation prompts would have collected, so those replace it:
+`--no-prompt` requires a workspace (`<tenant>` or `--server-url`), `--local`, or `--org "<name>" --slug <slug>` to create the workspace as part of the run — those two supply the answers the creation prompts would have collected:
 
 ```bash
 kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public --no-prompt
 ```
+
+**Signing in with no one at the machine.** Against a server that needs a sign-in, `--no-prompt` tries, in order:
+
+1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If it does not work, the run fails (exit 1) rather than falling back to a person. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
+2. A token already stored for that server, from an earlier `kcap login` on this machine (`kcap login --device` signs in from a browser elsewhere).
+3. Otherwise the sign-in as today: a device code (or the browser, on a machine that has one) that someone has to approve.
+
+**Every question and its flag.** Under `--no-prompt` each takes the default shown.
+
+| Question | Flag | `--no-prompt` |
+|---|---|---|
+| How do you want to run Capacitor? | `<tenant>`, `--server-url`, `--local`, `--org`/`--slug` | required |
+| Re-run setup on a configured machine? | — | yes |
+| Workspace to create (name, slug, plan, invite) | `--org`, `--slug`, `--tier`, `--invite-code` | — |
+| This machine has one user (local) | `--single-user` | required |
+| Install Capacitor local (local) | `--yes` | required, except to reuse an installation |
+| Ollama for search by meaning (local) | `--embedding-model <model>`, `--no-embeddings` | required while Ollama runs and nothing is recorded |
+| Default session visibility | `--default-visibility` | `org_public`; `private` with `--local` |
+| Install kcap for the detected agents? | `--skip-harnesses`, `--skip-<agent>-hooks` and friends | yes |
+| Let Codex's sandbox reach the server? | `--skip-codex-network-access` | yes |
+| Record another Claude/Codex config directory? | — (`kcap accounts add` afterwards) | no; the command is printed |
+| Keep `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in headless calls? | `--use-provider-api-key` | the profile's setting |
+| Daemon name | `--daemon-name` | the suggestion; a held `--daemon-name` fails |
+| Import past sessions? | `--skip-import` | yes |
+| Open an agent to follow the import? | — | not offered |
+
+**Exit codes.** `kcap setup` exits:
+
+| Code | Meaning |
+|---|---|
+| 0 | Done. |
+| 1 | Failed: setup started changing the machine and did not finish. Re-running it carries on. |
+| 2 | Refused: nothing was attempted — an argument was wrong, or a run that cannot ask was missing an answer. |
+| 130 | Interrupted (Ctrl+C or SIGTERM). |
+
+**Progress as JSON.** `--json` with `--no-prompt` writes one JSON object per line to stdout for the whole run, for a wrapper to render, and moves the usual narration to stderr. Each step opens with `step_started` and closes with `step_completed`, and the run ends with `done` or `failed`:
+
+```json
+{"v":1,"event":"step_started","step":"server"}
+{"v":1,"event":"step_completed","step":"server","server_url":"https://acme.kcap.ai","provider":"WorkOS"}
+{"v":1,"event":"step_started","step":"sign_in"}
+{"v":1,"event":"step_completed","step":"sign_in","provider":"WorkOS","credential":"machine"}
+{"v":1,"event":"step_started","step":"visibility"}
+{"v":1,"event":"step_completed","step":"visibility","visibility":"org_public"}
+{"v":1,"event":"step_started","step":"harnesses"}
+{"v":1,"event":"step_completed","step":"harnesses","harnesses":["claude","codex"]}
+{"v":1,"event":"step_started","step":"daemon"}
+{"v":1,"event":"step_completed","step":"daemon","name":"laptop","outcome":"skipped"}
+{"v":1,"event":"step_started","step":"import"}
+{"v":1,"event":"step_completed","step":"import","outcome":"ran"}
+{"v":1,"event":"done","server_url":"https://acme.kcap.ai"}
+```
+
+The steps are `server`, `sign_in`, `visibility`, `harnesses`, `daemon` and `import`. `credential` is `machine`, `stored`, `sign_in` or `none`; the daemon's `outcome` is `enabled`, `enabled_unverified`, `already_enabled`, `refused` or `failed` for its service, or `skipped` when none was set up; the import's is `ran` or `skipped`. With `--local`, the [install's own events](#local-edition) come inside the `server` step. A `failed` line names the step it stopped in and carries a `code`: the local install's codes, or `answer_required`, `invalid_arguments`, `server_unreachable`, `workspace_unavailable`, `sign_in_failed`, `machine_credential_rejected`, `daemon_name_held`, `cancelled`, or `setup_failed` for anything else, with the last error setup printed as its `message`. A refusal is a `failed` line alone.
 
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, `--skip-opencode-hooks`, `--skip-antigravity-hooks`, `--skip-mistral-vibe-hooks`, `--skip-grok-hooks`, and/or `--skip-muse-hooks` (with `--skip-muse-mcp` to leave Muse's MCP block alone). When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
 
