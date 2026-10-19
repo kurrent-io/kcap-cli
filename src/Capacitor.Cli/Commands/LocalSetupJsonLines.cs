@@ -46,5 +46,9 @@ static class LocalSetupJsonLines {
     public static LocalInstallFailure Classify(Exception ex) =>
         ex as LocalInstallFailure ?? new(LocalInstallFailureCode.StartFailed, ex.Message);
 
+    /// <summary>The setup exit a failure stands for: the two codes that mean nothing was attempted are refusals.</summary>
+    public static int Exit(LocalInstallFailureCode code) =>
+        code is LocalInstallFailureCode.AnswerRequired or LocalInstallFailureCode.InvalidArguments ? SetupExit.Refused : SetupExit.Failed;
+
     static string Render(LocalSetupLine line) => JsonSerializer.Serialize(line, LocalSetupJsonContext.Default.LocalSetupLine);
 }

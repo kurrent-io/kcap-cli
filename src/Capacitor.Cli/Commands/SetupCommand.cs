@@ -568,7 +568,7 @@ sealed class SetupCommand(
                 if (args.Contains("--json")) WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.InvalidArguments, refusal));
                 else await Console.Error.WriteLineAsync($"  {refusal}");
 
-                return 1;
+                return SetupExit.Refused;
             }
 
             if (parsed!.Json) return await RunLocalJsonAsync(parsed);
@@ -581,7 +581,7 @@ sealed class SetupCommand(
         if (args.Contains("--json")) {
             WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.InvalidArguments, "--json needs --local (or --discover)."));
 
-            return 1;
+            return SetupExit.Refused;
         }
 
         var serverUrlArg     = GetArg(args, "--server-url");
@@ -639,20 +639,26 @@ sealed class SetupCommand(
         if (museAssistant && MuseAssistantPosture.ArgumentError(tenantGiven: serverUrlArg is not null) is { } museError) {
             await Console.Error.WriteLineAsync($"  {museError}");
 
-            return 1;
+            return SetupExit.Refused;
         }
 
         if (DaemonNameArgumentError(args) is { } daemonNameError) {
             await Console.Error.WriteLineAsync($"  {daemonNameError}");
 
-            return 1;
+            return SetupExit.Refused;
+        }
+
+        if (AnswerValueError(args) is { } answerError) {
+            await Console.Error.WriteLineAsync($"  {answerError}");
+
+            return SetupExit.Refused;
         }
 
         var (requestedWorkspace, workspaceArgError) = ParseRequestedWorkspace(args, serverUrlGiven);
 
         if (workspaceArgError is not null) {
             await Console.Error.WriteLineAsync($"  {workspaceArgError}");
-            return 1;
+            return SetupExit.Refused;
         }
 
         // The flags settle the creation questions and nothing after them, so on a session that cannot
@@ -663,7 +669,7 @@ sealed class SetupCommand(
                 "  --org/--slug answer the workspace questions only; the steps after them still prompt, and this session is non-interactive.");
             await Console.Error.WriteLineAsync("  Add --no-prompt.");
 
-            return 1;
+            return SetupExit.Refused;
         }
 
         // Plain Console.Out: an agent reads this from redirected output. Ahead of the funnel event,
@@ -696,7 +702,7 @@ sealed class SetupCommand(
                 $"--plugin-scope project requires a git working tree, but '{workdir.Path}' is not inside one.");
             await Console.Error.WriteLineAsync(
                 "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
-            return 1;
+            return SetupExit.Refused;
         }
         AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
 
@@ -751,7 +757,7 @@ sealed class SetupCommand(
         } else if (noPrompt && requestedWorkspace is null) {
             await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
             await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace)");
-            return 1;
+            return SetupExit.Refused;
         } else {
             var discovered = await RunDiscoveryAsync(args, forceDevice, requestedWorkspace);
             if (discovered is null) return 1;
@@ -863,12 +869,6 @@ sealed class SetupCommand(
         if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility")
                               ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility : "org_public")).ToLowerInvariant();
-
-            if (!AppConfig.ValidVisibilities.Contains(defaultVisibility)) {
-                await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}");
-
-                return 1;
-            }
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else if (flowVisibility.Apply is { } fromFlow) {
@@ -1122,18 +1122,9 @@ sealed class SetupCommand(
             AnsiConsole.MarkupLine("  [dim]subscription login is used. Keep them if you authenticate via API key (PAYG).[/]");
 
             if (noPrompt) {
-                var flagValue = GetArg(args, "--use-provider-api-key");
-                if (flagValue is not null) {
-                    var parsed = ProviderApiKeyPolicy.TryParseBool(flagValue);
-                    if (parsed is null) {
-                        await Console.Error.WriteLineAsync(
-                            $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
-                        ListChangedBeforeExit();
-
-                        return 1;
-                    }
-                    useProviderApiKey = parsed.Value;
-                }
+                // Validated before anything ran, by AnswerValueError.
+                if (GetArg(args, "--use-provider-api-key") is { } flagValue)
+                    useProviderApiKey = ProviderApiKeyPolicy.TryParseBool(flagValue)!.Value;
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
             } else if (browserAgents is not null) {
                 // The browser has no question for this, and a terminal prompt after it has said setup
@@ -2497,7 +2488,7 @@ sealed class SetupCommand(
             if (LocalSetupTerminal.MissingAnswer(args, plan, installer.RootDirectory) is { } missing) {
                 WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.AnswerRequired, missing));
 
-                return 1;
+                return SetupExit.Refused;
             }
 
             // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
@@ -2509,7 +2500,7 @@ sealed class SetupCommand(
             var failure = LocalSetupJsonLines.Classify(ex);
             WriteJsonLine(LocalSetupJsonLines.Failed(failure.Code, failure.Message));
 
-            return 1;
+            return LocalSetupJsonLines.Exit(failure.Code);
         }
     }
 
@@ -2526,7 +2517,7 @@ sealed class SetupCommand(
         if (DiscoverArgumentError(args) is { } refusal) {
             await Console.Error.WriteLineAsync(refusal);
 
-            return 1;
+            return SetupExit.Refused;
         }
 
         var json   = args.Contains("--json");
@@ -2905,6 +2896,18 @@ sealed class SetupCommand(
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
           + $"  {how} to begin streaming; a session that was already\n"
           + "  running when you ran setup isn't being recorded yet.";
+    }
+
+    /// <summary>Refuses a value that is only read after sign-in, so a script learns of it before anything is
+    /// changed.</summary>
+    internal static string? AnswerValueError(string[] args) {
+        if (GetArg(args, "--default-visibility") is { } visibility && !AppConfig.ValidVisibilities.Contains(visibility.ToLowerInvariant()))
+            return $"Invalid --default-visibility: {visibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}";
+
+        if (GetArg(args, "--use-provider-api-key") is { } key && ProviderApiKeyPolicy.TryParseBool(key) is null)
+            return $"Invalid value for --use-provider-api-key: '{key}'. Must be true/1/yes/on or false/0/no/off.";
+
+        return null;
     }
 
     /// <summary>Refuses a <c>--daemon-name</c> with no usable value before anything is written: the

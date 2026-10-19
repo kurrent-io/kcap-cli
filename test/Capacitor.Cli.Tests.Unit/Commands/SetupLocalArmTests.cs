@@ -121,7 +121,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task Json_without_single_user_fails_with_answer_required_line() {
         var (exit, stdout, spectre, _) = await Run("setup", "--local", "--json", "--yes");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await AssertAllJson(stdout);
         await Assert.That(spectre).IsEmpty();
 
@@ -166,7 +166,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task Json_with_discover_fails_with_invalid_arguments_line() {
         var (exit, stdout, _, _) = await Run("setup", "--local", "--discover", "--json");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stdout.Length).IsEqualTo(1);
 
         var line = JsonNode.Parse(stdout[0])!;
@@ -235,7 +235,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task No_prompt_without_yes_fails() {
         var (exit, _, _, stderr) = await Run("setup", "--local", "--single-user", "--no-prompt");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stderr).Contains("Pass --yes");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(ActiveProfile().ServerUrl).IsNull();
@@ -314,7 +314,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
             "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
         ]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stderr).Contains("--embedding-model mxbai-embed-large");
         await Assert.That(stderr).Contains("--no-embeddings");
         await Assert.That(_log).DoesNotContain("install");
@@ -339,7 +339,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task Plain_setup_refuses_json() {
         var (exit, stdout, spectre, _) = await Run("setup", "--json");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stdout.Length).IsEqualTo(1);
         await Assert.That(spectre).IsEmpty();
         await Assert.That(JsonNode.Parse(stdout[0])!["code"]?.GetValue<string>()).IsEqualTo("invalid_arguments");
@@ -380,7 +380,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
             AnsiConsole.Console = original;
         }
 
-        await Assert.That(run.Exit).IsEqualTo(1);
+        await Assert.That(run.Exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(run.Stderr).Contains("--yes");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(Directory.Exists(Path.Combine(Root.Directory, "bin"))).IsFalse();
