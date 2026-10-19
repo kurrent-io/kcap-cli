@@ -135,4 +135,17 @@ public class PrRefParserTests {
         await Assert.That(PrRefParser.TryParse("https://gitlab.com/owner/repo/-/merge_requests/", out _, out _, out _)).IsFalse();
         await Assert.That(PrRefParser.TryParse("https://gitlab.com/owner/repo/issues/3", out _, out _, out _)).IsFalse();
     }
+
+    [Test]
+    [Arguments("owner/repo#99999999999")]
+    [Arguments("https://github.com/owner/repo/pull/99999999999")]
+    [Arguments("https://gitlab.com/owner/repo/-/merge_requests/99999999999")]
+    public async Task A_number_too_large_for_an_int_is_rejected_not_thrown(string input) {
+        var parsed = PrRefParser.TryParse(input, out var owner, out var repo, out var pr);
+
+        await Assert.That(parsed).IsFalse();
+        await Assert.That(owner).IsEmpty();
+        await Assert.That(repo).IsEmpty();
+        await Assert.That(pr).IsEqualTo(0);
+    }
 }
