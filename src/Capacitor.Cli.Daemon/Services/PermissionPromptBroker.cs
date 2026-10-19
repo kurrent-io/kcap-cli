@@ -182,8 +182,11 @@ internal sealed class PermissionPromptBroker {
     bool SettleLocked(string requestId, PermissionDecision decision, string outcome, string source, bool owesCall = true) {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
-        // The call runs with the input the answer gave it, when it gave one.
-        if (owesCall) OweLocked(entry.Dto, entry.SubagentId, decision.UpdatedInput ?? entry.Dto.ToolInput);
+        // An allow runs the call with the input it gave, when it gave one; any other answer did not
+        // run the call, so a call the terminal ran carries the prompt's own input.
+        if (owesCall)
+            OweLocked(entry.Dto, entry.SubagentId,
+                decision.Behavior == PermissionSettlements.Allow ? decision.UpdatedInput ?? entry.Dto.ToolInput : entry.Dto.ToolInput);
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;

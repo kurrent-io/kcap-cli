@@ -357,6 +357,21 @@ public class PermissionPromptBrokerTests {
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
     }
 
+    /// An input the answer rewrote applies only when that answer is the one that ran the call: a
+    /// call the terminal allowed ran with the prompt's own input, which is what its notice carries,
+    /// whatever a deny settled here attached.
+    [Test]
+    public async Task A_denied_prompt_is_owed_the_call_under_the_prompts_own_input() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", new PermissionDecision("deny", null, Json("""{"command":"rm -rf x"}""")), "deny", "app");
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+    }
+
     /// Only the call's own report settles without owing one: the report is the call's completion.
     [Test]
     public async Task A_withdrawal_by_the_calls_own_report_owes_nothing() {
