@@ -28,6 +28,12 @@ public class SuggestionDiffTests {
         await Assert.That(SuggestionDiff.Rewrite(body, hunk, truncated, side, line, startLine)).IsEqualTo(body);
     }
 
+    /// A hunk carries no file headers, so an added line whose text starts with `++` is a line like any other.
+    [Test]
+    public async Task An_added_line_starting_with_plus_signs_is_anchored() =>
+        await Assert.That(SuggestionDiff.Rewrite("```suggestion\nx\n```", "@@ -1 +1,2 @@\n a\n+++b", false, "RIGHT", 2, null))
+            .IsEqualTo("```diff\n-++b\n+x\n```");
+
     [Test]
     public async Task A_comment_without_a_suggestion_is_unchanged() =>
         await Assert.That(SuggestionDiff.Rewrite("```csharp\nx\n```", Hunk, false, "RIGHT", 4, null)).IsEqualTo("```csharp\nx\n```");

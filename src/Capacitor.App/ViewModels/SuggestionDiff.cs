@@ -26,7 +26,7 @@ public static partial class SuggestionDiff {
     /// The lines a hunk shows on its new side, without their markers.
     static List<string> NewSide(string hunk) =>
         hunk.Replace("\r\n", "\n").Split('\n')
-            .Where(l => l.Length > 0 && l[0] is ' ' or '+' && !l.StartsWith("+++", StringComparison.Ordinal))
+            .Where(l => l.Length > 0 && l[0] is ' ' or '+')
             .Select(l => l[1..])
             .ToList();
 
