@@ -40,7 +40,7 @@ static class McpStdioLoop {
                 response = await callTool(id, request);
             } catch (Exception ex) {
                 // Without an answer the client waits on this id forever.
-                await Console.Error.WriteLineAsync($"kcap mcp {serverName}: unexpected error handling tools/call: {ex}");
+                await LogAsync($"kcap mcp {serverName}: unexpected error handling tools/call: {ex}");
                 response = Error(id, -32603, "Internal error");
             }
             await WriteAsync(response);
@@ -69,8 +69,7 @@ static class McpStdioLoop {
                     foreach (var done in tails.Where(t => t.Value.IsCompleted).Select(t => t.Key).ToList()) tails.Remove(done);
 
                     if (!TryOrderKey(orderKey, request, out var key, out var failure)) {
-                        await Console.Error.WriteLineAsync(
-                            $"kcap mcp {serverName}: refused a tools/call whose order key could not be read: {failure!.Message}");
+                        await LogAsync($"kcap mcp {serverName}: refused a tools/call whose order key could not be read: {failure!.Message}");
                         await WriteAsync(Error(id, -32600, "Invalid request"));
                         continue;
                     }
@@ -126,6 +125,15 @@ static class McpStdioLoop {
             key     = null;
             failure = ex;
             return false;
+        }
+    }
+
+    /// <summary>A diagnostic on stderr. Losing it never stops the server: a broken stderr is not a protocol fault.</summary>
+    static async Task LogAsync(string line) {
+        try {
+            await Console.Error.WriteLineAsync(line);
+        } catch {
+            // stderr is gone; the JSON-RPC answer still goes out on stdout.
         }
     }
 
