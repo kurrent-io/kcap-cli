@@ -1197,7 +1197,7 @@ public class DaemonLifecycleControllerTests {
 
         await Assert.That(h.Surface.Prompts.Count).IsEqualTo(2);
         await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindReloadService);
-        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(3));
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(3, resumes: false));
         await Assert.That(h.Lane.Requests).IsEmpty();
         await Assert.That(h.Reloading()).IsFalse();
     }
@@ -1402,10 +1402,32 @@ public class DaemonLifecycleControllerTests {
 
     [Test]
     public async Task Disclosure_names_the_count_and_says_the_agents_resume() {
-        var text = DaemonLifecycleController.ReloadDisclosure(2);
-        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, mid-turn if need be, and resumed on the new daemon. A review or evaluation still running when it exits may end.");
-        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1)).Contains("Its 1 running agent is stopped");
-        await Assert.That(DaemonLifecycleController.ReloadDisclosure(0)).IsEqualTo("Reloading restarts the daemon now. A review or evaluation still running when it exits may end.");
+        var text = DaemonLifecycleController.ReloadDisclosure(2, resumes: true);
+        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, mid-turn if need be, and resumed on the new daemon unless daemon.auto_resume is off. A review or evaluation still running when it exits may end.");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1, resumes: true)).Contains("Its 1 running agent is stopped");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(0, resumes: true)).IsEqualTo("Reloading restarts the daemon now. A review or evaluation still running when it exits may end.");
+    }
+
+    /// A daemon without the shutdown frame is restarted the old way and keeps no resume ledger.
+    [Test]
+    public async Task Disclosure_for_a_daemon_that_cannot_keep_its_agents_warns_they_end() {
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(2, resumes: false)).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
+    }
+
+    [Test]
+    public async Task Reload_prompt_promises_a_resume_only_when_the_daemon_advertises_it() {
+        await using var h = new Harness();
+        h.Start();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(false);
+        h.Client.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [DaemonLifecycleController.ResumeCapability]));
+        h.PushSnapshot(activeAgents: 2);
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        h.PushConnected();
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(2, resumes: true));
+        await Assert.That(h.Surface.Prompts[1].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(2, resumes: false));
     }
 
     [Test]

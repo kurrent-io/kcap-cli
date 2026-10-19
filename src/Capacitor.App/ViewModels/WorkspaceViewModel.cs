@@ -256,7 +256,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .DisposeWith(_disposables);
 
         presence
-            .Where(p => p.Dto is not null)
+            .Where(p => p.Dto is not null && !LacksRuntimeMetadata(p.Dto))
             .Take(1)
             .Subscribe(p => {
                 var dto = p.Dto!;
@@ -299,6 +299,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         }, canStop);
         _disposables.Add(StopCommand);
     }
+
+    /// A resuming or interrupted row the daemon has no runtime answers for; the reader and input chosen
+    /// from it would be the older-daemon fallbacks, for good.
+    static bool LacksRuntimeMetadata(AgentStatusDto dto) =>
+        dto.Status is "Resuming" or "Interrupted" && dto.HasTerminal is null && dto.TranscriptFormat is null;
 
     static AgentPresence Accumulate(AgentPresence state, IChangeSet<AgentStatusDto, string> changes) {
         var dto = state.Dto;

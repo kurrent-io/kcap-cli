@@ -419,6 +419,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             // teardown removes them.
             if (state == ResolveDtoWon && SessionStatusDots.IsTerminal(dto.Status))
                 HandleAgentEnded();
+            // An interrupted agent retried with `kcap agent resume` comes back under the same id.
+            else if (state == ResolveDtoWon && State.Phase == TerminalSessionPhase.Interrupted && dto.Status != "Interrupted")
+                AwaitRetriedResume();
             return;
         }
     }
@@ -708,6 +711,12 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             Console.Error.WriteLine($"kcap: terminal resume ledger read failed: {ex.Message}");
             return null;
         }
+    }
+
+    void AwaitRetriedResume() {
+        ResumeDeadline = _time.GetUtcNow() + _reconnectWindow;
+        Publish(TerminalSessionState.Resuming, null);
+        _ = WaitForResumeAsync(Volatile.Read(ref _attemptGeneration));
     }
 
     /// Polls the ledger off the UI thread until the successor has published the agent, then attaches

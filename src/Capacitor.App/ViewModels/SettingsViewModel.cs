@@ -38,6 +38,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     bool _notifyOnQuestions = true;
     bool _notifyOnIdle = true;
     bool _autoResume;
+    readonly SemaphoreSlim _autoResumeSaves = new(1, 1);
     string? _autoResumeMessage;
     string? _message;
     string? _notificationMessage;
@@ -117,7 +118,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         set {
             if (value == _autoResume) return;
             this.RaiseAndSetIfChanged(ref _autoResume, value);
-            _ = SaveAutoResumeAsync(value);
+            _ = SaveAutoResumeAsync();
         }
     }
 
@@ -126,17 +127,27 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         private set => this.RaiseAndSetIfChanged(ref _autoResumeMessage, value);
     }
 
-    async Task SaveAutoResumeAsync(bool value) {
-        string message;
+    // Saves run one at a time and each writes the selection current when it starts, so the last one
+    // to finish holds the latest selection whatever order the toggles' writes were scheduled in.
+    async Task SaveAutoResumeAsync() {
+        string? message;
         try {
+            await _autoResumeSaves.WaitAsync(_lifetime.Token);
+        } catch (OperationCanceledException) {
+            return;
+        }
+        try {
+            var value = Volatile.Read(ref _autoResume);
             await _settings.SaveAutoResumeAsync(value, _lifetime.Token);
-            message = "Saved. The daemon reads this when it starts.";
+            message = value == Volatile.Read(ref _autoResume) ? "Saved. The daemon reads this when it starts." : null;
         } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
             return;
         } catch (Exception ex) {
             message = $"Could not save the setting: {ex.Message}";
+        } finally {
+            _autoResumeSaves.Release();
         }
-        if (!_lifetime.IsCancellationRequested) AutoResumeMessage = message;
+        if (message is not null && !_lifetime.IsCancellationRequested) AutoResumeMessage = message;
     }
 
     public bool IsBusy {

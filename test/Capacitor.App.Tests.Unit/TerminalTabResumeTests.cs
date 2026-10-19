@@ -124,6 +124,30 @@ public class TerminalTabResumeTests {
         });
     }
 
+    /// Following the banner's advice brings the agent back under the same id, so the tab follows it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_interrupted_tab_reattaches_once_a_retried_resume_brings_the_agent_back() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Resuming) };
+            var client = await rig.AttachAsync();
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+            rig.Entry = Ledger(ResumeState.Interrupted, "runtime_exited");
+            await rig.TickAsync();
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Interrupted);
+
+            rig.Entry = Ledger(ResumeState.Resuming);
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+
+            rig.Entry = Ledger(ResumeState.Running);
+            await rig.TickAsync();
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+            await rig.Factory.Created[^1].TriggerAttached("back"u8.ToArray());
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Attached);
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_resume_that_outlasts_the_window_fails_as_a_lost_connection() {

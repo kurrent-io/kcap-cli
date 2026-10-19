@@ -97,6 +97,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly BehaviorSubject<bool>         _isReloading        = new(false);
     IDisposable? _snapshots;
     int  _latestActiveAgents;
+    bool _latestResumes;
     int  _reloadClaim;   // 0 free, 1 claimed; Interlocked only
     long _sequence;      // under _lock: both outcome records and read starts
     ReloadState? _standing; // under _lock: the authoritative reload state; the subject only publishes it
@@ -145,11 +146,21 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// True from the claim before the prompt until the outcome is recorded and the follow-up read is done.
     public IObservable<bool> IsReloading => _isReloading.DistinctUntilChanged();
 
-    internal static string ReloadDisclosure(int activeAgents) =>
-        "Reloading restarts the daemon now. " +
-        (activeAgents == 0 ? ""
-            : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, mid-turn if need be, and resumed on the new daemon. ") +
-        "A review or evaluation still running when it exits may end.";
+    /// The capability a daemon that keeps its agents for a successor advertises; one without it ends them on a reload.
+    internal const string ResumeCapability = "shutdown/1";
+
+    internal static string ReloadDisclosure(int activeAgents, bool resumes) => resumes
+        ? "Reloading restarts the daemon now. " +
+          (activeAgents == 0 ? ""
+              : $"Its {activeAgents} running agent{(activeAgents == 1 ? " is" : "s are")} stopped, mid-turn if need be, and resumed on the new daemon " +
+                "unless daemon.auto_resume is off. ") +
+          "A review or evaluation still running when it exits may end."
+        : $"Reloading restarts the daemon and ends everything it hosts: {activeAgents} agent{(activeAgents == 1 ? "" : "s")} now, " +
+          "plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.";
+
+    bool ResumesAgents() {
+        lock (_lock) return _latestResumes;
+    }
 
     /// Subscribes to the attach stream. MUST be called before the host calls
     /// IDaemonClientService.Start() — the host owns pumping the attach loop; a subscription that
@@ -180,6 +191,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         lock (_lock) {
             _generation++;
             _lastObserved = (status.State, status.Reason);
+            if (status.State == AttachState.Connected) _latestResumes = status.Capabilities?.Contains(ResumeCapability) == true;
             if (status.State == AttachState.Connected) _recoveriesSinceConnect = 0;
 
             isFirstTerminalOutcome = status.State != AttachState.Connecting && !_armClaimed;
@@ -580,7 +592,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             var token = linked.Token;
             if (RequireAppRestart()) return;
             var gen0   = CurrentGeneration();
-            var prompt = new LifecyclePrompt(LifecyclePrompt.KindReloadService, null, CliVersion, false, ReloadDisclosure(_latestActiveAgents));
+            var prompt = new LifecyclePrompt(LifecyclePrompt.KindReloadService, null, CliVersion, false, ReloadDisclosure(_latestActiveAgents, ResumesAgents()));
             var accepted = await _surface.ConfirmAsync(prompt, token).ConfigureAwait(false);
             if (!accepted || RequireAppRestart()) return;
 

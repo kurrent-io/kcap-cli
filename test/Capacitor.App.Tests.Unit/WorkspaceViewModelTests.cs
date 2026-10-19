@@ -409,6 +409,27 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A resume row from an entry that never recorded the runtime's metadata cannot choose the reader or
+    /// the input channel, and the chat is built only once, so it waits for a row that can.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_waits_past_a_resume_row_that_carries_no_runtime_metadata() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: null) with { Status = "Resuming" });
+            await Assert.That(vm.Chat).IsNull();
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "cursor", hasTerminal: false) with { TranscriptFormat = TranscriptFormats.Envelopes });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await Assert.That(vm.Chat).IsNotNull();
+            await Assert.That(vm.Chat!.Phase).IsEqualTo(ChatTabPhase.Waiting);
+
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Chat_is_built_on_the_first_dto_of_any_vendor_with_the_reader_the_format_names() {

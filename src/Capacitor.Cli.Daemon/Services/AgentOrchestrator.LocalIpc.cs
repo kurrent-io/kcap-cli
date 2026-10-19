@@ -83,7 +83,21 @@ internal partial class AgentOrchestrator {
                 || _agents.Values.Any(a => a.Status is "Starting" or "Running");
     }
 
-    internal List<AgentStatusDto> SnapshotAgentsForStatus() =>
+    /// <summary>The live agents, then the ledger entries with no live agent. The ledger is read first and
+    /// then filtered against the live rows, so an agent whose resume publishes in between is listed once,
+    /// live, rather than in neither part.</summary>
+    internal List<AgentStatusDto> SnapshotAgentsForStatus() {
+        var ledger = LedgerOnlyAgents();
+        var live   = LiveStatusRows();
+        var listed = live.Select(r => r.Id).ToHashSet(StringComparer.Ordinal);
+
+        return [.. live, .. ledger.Where(l => !listed.Contains(l.Entry.AgentId)).Select(l => LedgerStatusRow(l.Entry, l.Status))];
+    }
+
+    internal static string TranscriptFormatOf(AgentInstance agent) =>
+        agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;
+
+    List<AgentStatusDto> LiveStatusRows() =>
         [.. _agents.Values
             .OrderBy(a => a.CreatedAt)
             .ThenBy(a => a.Id, StringComparer.Ordinal)
@@ -105,22 +119,22 @@ internal partial class AgentOrchestrator {
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
                 AwaitingInput: a.Status == "Running" && a.ActivityClock.AwaitingInput,
-                TranscriptFormat: a.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor,
+                TranscriptFormat: TranscriptFormatOf(a),
                 // Null until the agent's first subagent report, a number from then on: the clock's
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
-                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null)),
-            .. LedgerOnlyAgents().Select(l => LedgerStatusRow(l.Entry, l.Status))];
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
 
     static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) => new(
         entry.AgentId, KindText(LaunchKind.Default), entry.Vendor, entry.Launch.RepoPath, status,
         entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
         string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
-        Title: entry.Launch.Title, WorktreePath: entry.Launch.WorktreePath,
+        HasTerminal: entry.HasTerminal, Title: entry.Launch.Title, WorktreePath: entry.Launch.WorktreePath,
         WorkLocation: entry.Launch.Work == WorkLocation.OwnedWorktree ? WorkLocationText.Owned : WorkLocationText.Borrowed,
         SessionId: entry.SessionId,
         Branch: string.IsNullOrWhiteSpace(entry.Launch.WorktreeBranch) ? null : entry.Launch.WorktreeBranch,
+        TranscriptFormat: entry.TranscriptFormat,
         Interruption: entry.State == ResumeState.Interrupted ? entry.LastError : null);
 
     /// <summary>

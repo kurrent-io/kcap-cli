@@ -71,6 +71,8 @@ public class AgentOrchestratorResumeLedgerTests {
         await Assert.That(after.SessionId).IsEqualTo(agent.SessionId);
         await Assert.That(after.SessionId).IsNotNull();
         await Assert.That(after.Transport).IsEqualTo(agent.RuntimeTransport);
+        await Assert.That(after.HasTerminal).IsEqualTo(agent.Runtime.EmitsTerminalOutput);
+        await Assert.That(after.TranscriptFormat).IsEqualTo(AgentOrchestrator.TranscriptFormatOf(agent));
         await Assert.That(after.Launch.ConsentSource).IsEqualTo("default");
         await Assert.That(after.Launch.ConsentAt).IsEqualTo(atStart.Launch.ConsentAt);
         await Assert.That(after.CreatedAt).IsEqualTo(atStart.CreatedAt);

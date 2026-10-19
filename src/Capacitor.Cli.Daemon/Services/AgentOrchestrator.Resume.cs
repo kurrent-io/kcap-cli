@@ -318,7 +318,9 @@ internal partial class AgentOrchestrator {
             PermissionMode:         cmd?.PermissionMode ?? prior?.Launch.PermissionMode,
             InactivityBoundSeconds: agent.InactivityBoundSeconds);
 
-        return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior);
+        return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
+            HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
+        };
     }
 
     /// The entry an admitted server launch records before its runtime starts, from the command and
@@ -1124,6 +1126,8 @@ internal partial class AgentOrchestrator {
                 DaemonInstanceId      = _config.InstanceId,
                 UpdatedAt             = _time.GetUtcNow(),
                 Transport             = agent.RuntimeTransport,
+                HasTerminal           = agent.Runtime.EmitsTerminalOutput,
+                TranscriptFormat      = TranscriptFormatOf(agent),
                 SessionId             = agent.SessionId ?? entry.SessionId,
                 VendorSession         = agent.VendorSession ?? entry.VendorSession,
                 State                 = ResumeState.Running,

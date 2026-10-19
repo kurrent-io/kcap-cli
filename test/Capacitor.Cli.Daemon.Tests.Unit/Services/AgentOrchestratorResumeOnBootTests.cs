@@ -682,7 +682,7 @@ public class AgentOrchestratorResumeOnBootTests {
         await using var _ = f.Orch;
         Entry(f, "resume-1");
         var gone = Entry(f, "gone-1", state: ResumeState.Interrupted);
-        f.Orch.ResumeLedger!.Write(gone with { LastError = "too_old" });
+        f.Orch.ResumeLedger!.Write(gone with { LastError = "too_old", HasTerminal = false, TranscriptFormat = TranscriptFormats.Envelopes });
 
         f.Orch.LoadResumeLedger();
         var rows = f.Orch.SnapshotAgentsForStatus().ToDictionary(r => r.Id);
@@ -698,6 +698,8 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(rows["gone-1"].Title).IsEqualTo("the thing");
         await Assert.That(rows["gone-1"].Vendor).IsEqualTo("cursor");
         await Assert.That(rows["gone-1"].Kind).IsEqualTo("agent");
+        await Assert.That(rows["gone-1"].HasTerminal).IsFalse();
+        await Assert.That(rows["gone-1"].TranscriptFormat).IsEqualTo(TranscriptFormats.Envelopes);
     }
 
     /// <summary>An interruption changes nothing else the status payload reads, so it must pulse on its own.</summary>
