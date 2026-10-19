@@ -211,6 +211,24 @@ public class LocalStackViewModelTests {
         });
     }
 
+    /// Dismissing would take away the only Start while the upgrade is still journaled.
+    [Test]
+    public async Task A_failure_after_the_switch_cannot_be_dismissed() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+
+            await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
+                UpgradeScript.Failed("start_failed", "Capacitor local 1.3.0 did not start.", true));
+
+            await Assert.That(h.Vm.DismissVisible).IsFalse();
+
+            await h.Vm.DismissCommand.Execute().ToTask();
+
+            await Assert.That(h.Vm.StartVisible).IsTrue();
+            await Assert.That(h.Vm.Attention).IsTrue();
+        });
+    }
+
     [Test]
     public async Task A_failed_start_after_the_switch_keeps_the_failure_and_says_why_without_terminal_advice() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {

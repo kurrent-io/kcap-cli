@@ -89,6 +89,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.IsStarting, initialValue: false)
             .DisposeWith(_disposables);
         DismissCommand  = ReactiveCommand.Create(() => {
+            if (!DismissVisible) return;
             _shown = null;
             Refresh();
         });
@@ -173,7 +174,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         _ => false,
     };
 
-    public bool DismissVisible => !Upgrading && _shown is not null;
+    /// Not for a failure after the switch: its Start is the only way to finish a journaled upgrade.
+    public bool DismissVisible => !Upgrading && _shown is not null && !StartVisible;
 
     public bool StartVisible => !Upgrading && _shown is LocalUpgradeOutcome.Failed { Switched: true };
 
