@@ -91,13 +91,13 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
     string? LocalEmptyMessage => State switch {
         HistoryState.NoHarness =>
-            "No harnesses were connected in this setup. Go back to connect one, or import later from Help and support → Set up Capacitor.",
+            "No harnesses were connected in this setup. Go back to connect one, or import later from Help and support → Set up kcap.",
         HistoryState.NoHistory =>
             $"No history on {MachineName} to import. New sessions will record as they happen.",
         HistoryState.OnlyUnmatched =>
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
         HistoryState.Unreadable =>
-            $"Could not read history on {MachineName}. Import it later from Help and support → Set up Capacitor.",
+            $"Could not read history on {MachineName}. Import it later from Help and support → Set up kcap.",
         _ => null,
     };
 
@@ -138,10 +138,10 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool DeclineVisible => HasRepos;
 
     public const string CloudDeclineNote =
-        "Not now means Capacitor starts its history from today. Nothing is deleted either way, and you can widen the window later with kcap import.";
+        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can widen the window later with kcap import.";
 
     public const string LocalDeclineNote =
-        "Not now means Capacitor starts its history from today. Nothing is deleted either way, and you can import more later from Help and support → Set up Capacitor.";
+        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can import more later from Help and support → Set up kcap.";
 
     public string? DeclineNote => !DeclineVisible ? null : _onLocalPath() ? LocalDeclineNote : CloudDeclineNote;
 

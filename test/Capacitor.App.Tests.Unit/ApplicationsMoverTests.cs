@@ -185,7 +185,7 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task An_older_download_migrates_the_newer_legacy_bundle_without_downgrading() {
         var apps = Tmp.CreateDir("Applications");
-        var legacy = Tmp.PathTo("Applications/Kurrent Capacitor.app");
+        var legacy = Path.Combine(apps, "Kurrent Capacitor.app");
         CompleteBundle(legacy, "2.0.0");
         var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.0.0");
