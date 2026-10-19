@@ -666,7 +666,7 @@ internal partial class AgentOrchestrator {
     async Task RemoveDiscardedResourcesAsync(ResumeLedgerEntry entry) {
         if (entry.Launch.Work == WorkLocation.OwnedWorktree) {
             try {
-                await WorktreeManager.RemoveAsync(ResumedWorktree(entry), _time);
+                await RemoveOwnedWorktreeAsync(ResumedWorktree(entry), entry.AgentId);
             } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "removing a discarded resume's worktree", entry.AgentId);
             }

@@ -621,7 +621,10 @@ public partial class WorktreeManager(
     public static string VendorStateRootFor(string snapshotRoot) =>
         snapshotRoot.TrimEnd(Path.DirectorySeparatorChar) + VendorStateSuffix;
 
-    public static async Task RemoveAsync(WorktreeInfo worktree, TimeProvider time, bool deleteBranch = true) {
+    /// <summary>Removes the worktree and its branch, unless the worktree holds work that exists nowhere
+    /// else: then both stay where they are and the result says why. A borrowed snapshot is the
+    /// daemon's own copy and is always removed.</summary>
+    public static async Task<WorktreeRemoval> RemoveAsync(WorktreeInfo worktree, TimeProvider time, bool deleteBranch = true) {
         if (worktree.IsStandalone) {
             var root = worktree.SnapshotRoot ?? worktree.Path;
 
@@ -635,8 +638,10 @@ public partial class WorktreeManager(
 
             DeleteTreeNoFollow(root);
 
-            return;
+            return WorktreeRemoval.Removed;
         }
+
+        if (await UnsavedWorkAsync(worktree, time) is { } unsaved) return WorktreeRemoval.Keep(unsaved);
 
         // Both of these touch the same metadata tree as `worktree add`: the removal mutates it, and
         // `branch -D` READS it — git refuses to delete a branch checked out in any worktree, so it
@@ -653,6 +658,61 @@ public partial class WorktreeManager(
 
         if (!string.IsNullOrEmpty(worktree.FetchedRef)) {
             await RunGitBestEffort(worktree.SourceRepo, time, "update-ref", "-d", worktree.FetchedRef);
+        }
+
+        return WorktreeRemoval.Removed;
+    }
+
+    /// <summary>Why the worktree holds work that would be lost with it, or null when it holds none: a
+    /// change or untracked file, or a commit no other branch, remote or fetched ref has. The daemon's
+    /// own edits are not work — the MCP config it deletes, and an untracked file identical to the
+    /// source checkout's (a copied overlay). A state that cannot be read counts as work.</summary>
+    internal static async Task<string?> UnsavedWorkAsync(WorktreeInfo worktree, TimeProvider time) {
+        if (!Directory.Exists(worktree.Path)) return null;
+
+        var status = await RunGitCaptureResultUnproven(
+            worktree.Path, GitTimeout, time, sourceReadOnly: true, [], "status", "--porcelain=v1", "-z", "--untracked-files=all");
+        if (status.ExitCode != 0) return "its git status could not be read";
+
+        var changes = ParsePorcelainZ(status.Stdout).Count(entry => !IsDaemonEdit(worktree, entry));
+        if (changes > 0) return $"{changes} uncommitted {(changes == 1 ? "change" : "changes")}";
+
+        string[] uniqueCommits = ["rev-list", "--count", "HEAD", "--not"];
+        if (!string.IsNullOrEmpty(worktree.Branch)) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
+        uniqueCommits = [.. uniqueCommits, "--branches", "--remotes"];
+        if (!string.IsNullOrEmpty(worktree.FetchedRef)) uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];
+
+        var commits = await RunGitCaptureResultUnproven(worktree.Path, GitTimeout, time, sourceReadOnly: true, [], uniqueCommits);
+        if (commits.ExitCode != 0 || !int.TryParse(commits.Stdout.Trim(), out var count)) return "its commits could not be read";
+
+        return count > 0 ? $"{count} {(count == 1 ? "commit" : "commits")} on no other branch or remote" : null;
+    }
+
+    static bool IsDaemonEdit(WorktreeInfo worktree, (string Code, string Path) entry) {
+        if (entry.Code.Contains('D') && WorkspaceMcpConfigPaths.Contains(entry.Path)) return true;
+        if (entry.Code != "??") return false;
+
+        var copy = Path.Combine(worktree.SourceRepo, entry.Path);
+        var file = Path.Combine(worktree.Path, entry.Path);
+        try {
+            return File.Exists(copy) && new FileInfo(copy).Length == new FileInfo(file).Length
+                && File.ReadAllBytes(copy).AsSpan().SequenceEqual(File.ReadAllBytes(file));
+        } catch (IOException) {
+            return false;
+        } catch (UnauthorizedAccessException) {
+            return false;
+        }
+    }
+
+    /// <summary>The entries of <c>git status --porcelain=v1 -z</c>: a two-letter code and the path,
+    /// skipping the original path a rename or copy carries after it.</summary>
+    internal static IEnumerable<(string Code, string Path)> ParsePorcelainZ(string output) {
+        var fields = output.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 0; i < fields.Length; i++) {
+            if (fields[i].Length < 4) continue;
+            var code = fields[i][..2];
+            yield return (code, fields[i][3..]);
+            if (code[0] is 'R' or 'C') i++;
         }
     }
 

@@ -187,6 +187,64 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly }
+
+    /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
+    /// file or a commit no other ref has keeps the worktree and its branch. The daemon's own edits (the
+    /// MCP config it deletes at creation, a file identical to the source checkout's) are not work.</summary>
+    [Test]
+    [Arguments(WorktreeState.Clean, false)]
+    [Arguments(WorktreeState.ChangedFile, true)]
+    [Arguments(WorktreeState.UntrackedFile, true)]
+    [Arguments(WorktreeState.UniqueCommit, true)]
+    [Arguments(WorktreeState.CommitOnAnotherBranch, false)]
+    [Arguments(WorktreeState.DaemonEditsOnly, false)]
+    public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+        var source = repo.Clone;
+        source.CreateFile(".mcp.json", "{}");
+        source.CommitAll("ship an mcp config");
+        source.CreateFile("notes.txt", "overlay");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(source);
+        var tree     = GitRepo.At(worktree.Path);
+
+        switch (state) {
+            case WorktreeState.ChangedFile:
+                tree.CreateFile("main.txt", "edited");
+                break;
+            case WorktreeState.UntrackedFile:
+                tree.CreateFile("new.txt", "work");
+                break;
+            case WorktreeState.UniqueCommit:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                break;
+            case WorktreeState.CommitOnAnotherBranch:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                source.Do("branch", "saved", tree.Head);
+                break;
+            case WorktreeState.DaemonEditsOnly:
+                tree.CreateFile("notes.txt", "overlay");
+                break;
+        }
+
+        try {
+            var removal = await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+
+            await Assert.That(removal.Kept).IsEqualTo(kept);
+            await Assert.That(Directory.Exists(worktree.Path)).IsEqualTo(kept);
+            await Assert.That(source.Try("rev-parse", "--verify", $"refs/heads/{worktree.Branch}").ExitCode == 0).IsEqualTo(kept);
+        } finally {
+            source.Try("worktree", "remove", "--force", worktree.Path);
+            source.Try("branch", "-D", worktree.Branch);
+        }
+    }
+
     [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);

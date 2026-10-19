@@ -461,7 +461,7 @@ internal partial class AgentOrchestrator {
             // Don't leak a daemon-created worktree if Prepare / passthrough-arg building /
             // spawn fails after the worktree was created (mirrors the server launch path).
             if (ownedWorktree is { } leaked) {
-                try { await WorktreeManager.RemoveAsync(leaked, _time); } catch { /* best-effort */ }
+                try { await RemoveOwnedWorktreeAsync(leaked, agentId); } catch { /* best-effort */ }
             }
 
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Launch failed: {ex.Message}"), ct);
