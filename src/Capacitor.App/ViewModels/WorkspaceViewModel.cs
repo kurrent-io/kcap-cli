@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
+using Capacitor.Cli.Core.Resume;
 using DynamicData;
 using ReactiveUI.Reactive;
 
@@ -151,11 +152,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IAttachmentUploader uploader, Action? requestSignIn = null, IObservable<Unit>? signInCompleted = null, IPullRequestSource? pullRequests = null, Action? linkGitHub = null,
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
-            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null) {
+            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
+            Func<string, ResumeLedgerEntry?>? resumeLedger = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
-        Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time) { SurfaceShown = IsTerminalActive };
+        Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time, resumeLedger) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
 
         var presence = daemon.Agents.Connect()

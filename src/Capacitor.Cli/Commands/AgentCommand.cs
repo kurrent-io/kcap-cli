@@ -28,8 +28,6 @@ internal sealed class AgentCommand(
         HarnessRegistry harnesses, BinaryProbe binaries, WorkingDirectory workdir, TimeProvider time) {
     internal static readonly string[] KnownSubcommands = ["start", "ls", "stop", "attach", "resume"];
 
-    const int DefaultAttachReconnectSeconds = 90;
-
     /// Verbs that only ever belonged to the pre-rename `agent` daemon group, minus the
     /// start/stop the new group also owns.
     internal static readonly string[] DaemonOnlySubcommands = ["restart", "status", "logs", "doctor", "service"];
@@ -129,18 +127,12 @@ internal sealed class AgentCommand(
         if (agentId is null) return 1;
 
         var reconnect = new AttachReconnect(
-            agentId, AttachReconnectWindow(), () => ResumeLedgerStore.FindByAgentId(store, agentId));
+            agentId, AttachReconnectWindow.Resolve(), () => ResumeLedgerStore.FindByAgentId(store, agentId));
 
         return await LocalAgentClient.RunAsync(
             sock, new LocalFrame(FrameType.Attach) { Text = agentId }, time, ConsoleAgentTerminal.Instance, reconnect,
             CancellationToken.None);
     }
-
-    static TimeSpan AttachReconnectWindow() =>
-        TimeSpan.FromSeconds(
-            int.TryParse(Environment.GetEnvironmentVariable("KCAP_ATTACH_RECONNECT_SECONDS"), out var seconds) && seconds > 0
-                ? seconds
-                : DefaultAttachReconnectSeconds);
 
     async Task<int> ResumeAsync(string[] args) {
         if (args.Length == 0 || args[0].StartsWith('-')) {

@@ -4,6 +4,7 @@ using System.Text;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using DynamicData;
 using ReactiveUI.Reactive;
 using System.Reactive;
@@ -17,7 +18,8 @@ namespace Capacitor.App.ViewModels;
 /// (not Dispose/WhenActivated) is the one lifecycle exit a tab tracker calls when the tab closes.
 ///
 /// State machine (TerminalSessionPhase): Resolving -> {NoTerminal | NotFound | Connecting} ->
-/// {Attached -> Detached/Exited/Failed/SessionEnded}. Two independent linearizations guard it:
+/// {Attached -> Detached/Exited/Failed/SessionEnded}; a drop while the resume ledger holds the agent
+/// goes to Resuming, then to a fresh attempt, Interrupted or Failed. Two independent linearizations guard it:
 ///
 /// * Resolve gate (_resolveState, CAS 0 pending/1 dto-won/2 timeout-won/3 disposed): the FIRST of
 ///   {a DTO observed, the 10s TimeProvider timeout, TeardownAsync} claims the gate from pending.
@@ -61,8 +63,21 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     // inside that window into a newline.
     static readonly TimeSpan SubmitDelay = TimeSpan.FromMilliseconds(150);
 
+    public static readonly TimeSpan ResumeRetryGap = TimeSpan.FromSeconds(1);
+
     readonly string _agentId;
     readonly IDaemonClientService _daemon;
+    readonly Func<string, ResumeLedgerEntry?>? _resumeLedger;
+    readonly TimeSpan _reconnectWindow;
+    // Set by the first drop of a restart and cleared by the next attach, so retries share one window.
+    // Read off the UI thread too, hence the lock.
+    readonly Lock _resumeLock = new();
+    DateTimeOffset? _resumeDeadline;
+
+    DateTimeOffset? ResumeDeadline {
+        get { lock (_resumeLock) return _resumeDeadline; }
+        set { lock (_resumeLock) _resumeDeadline = value; }
+    }
     readonly TerminalAttachClientFactory _factory;
     readonly Func<ITerminalSurface> _surfaceFactory;
     readonly TimeProvider _time;
@@ -125,7 +140,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 TerminalSessionPhase.Attached => SendAvailability.ReadOnly,
                 TerminalSessionPhase.Resolving or TerminalSessionPhase.Connecting => SendAvailability.Connecting,
                 TerminalSessionPhase.Detached or TerminalSessionPhase.Failed => SendAvailability.Reattach,
-                TerminalSessionPhase.Exited or TerminalSessionPhase.SessionEnded => SendAvailability.Ended,
+                TerminalSessionPhase.Resuming => SendAvailability.Connecting,
+                TerminalSessionPhase.Exited or TerminalSessionPhase.SessionEnded or TerminalSessionPhase.Interrupted => SendAvailability.Ended,
                 _ => SendAvailability.NoTerminal,
             };
         }
@@ -340,11 +356,16 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     /// mapping) -- awaited after driving a fake client's Result/RunStarted from outside.
     internal Task? CurrentRunForTesting => _runTask;
 
+    /// <param name="resumeLedger">Reads an agent's resume ledger entry; null leaves a dropped connection final.</param>
+    /// <param name="reconnectWindow">How long a dropped connection waits for the agent to resume.</param>
     public TerminalTabViewModel(
             string agentId, IDaemonClientService daemon, TerminalAttachClientFactory factory,
-            Func<ITerminalSurface> surfaceFactory, TimeProvider time) {
+            Func<ITerminalSurface> surfaceFactory, TimeProvider time,
+            Func<string, ResumeLedgerEntry?>? resumeLedger = null, TimeSpan? reconnectWindow = null) {
         _agentId = agentId;
         _daemon = daemon;
+        _resumeLedger = resumeLedger;
+        _reconnectWindow = reconnectWindow ?? AttachReconnectWindow.Resolve();
         _factory = factory;
         _surfaceFactory = surfaceFactory;
         _time = time;
@@ -614,6 +635,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         var text = decoder.Decode(snapshot);
         await Dispatcher.UIThread.InvokeAsync(() => {
             if (Retired(generation)) return;
+            ResumeDeadline = null;
             Deliver(generation, surface, text);
             Publish(TerminalSessionState.Attached(reason), openingToken);
         }, DispatcherPriority.Default, ct);
@@ -641,17 +663,80 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             return;
         }
 
+        if (ResumeVerdict(outcome) is { } verdict) {
+            await FinishAttemptAsync(generation, openingToken, surface, decoder, verdict).ConfigureAwait(false);
+            if (verdict.Phase == TerminalSessionPhase.Resuming) _ = WaitForResumeAsync(generation);
+            return;
+        }
+
         var mapped = outcome switch {
             AttachOutcome.Detached          => TerminalSessionState.DetachedState,
             AttachOutcome.Exited(var code)   => TerminalSessionState.Exited(code),
             AttachOutcome.Failed(var msg)    => TerminalSessionState.Failed(msg),
-            AttachOutcome.ConnectionLost    => TerminalSessionState.Failed("the terminal lost connection to the daemon"),
+            AttachOutcome.ConnectionLost    => TerminalSessionState.Failed(LostConnection),
             _                                => TerminalSessionState.Failed("unknown attach outcome"),
         };
         await FinishAttemptAsync(generation, openingToken, surface, decoder, mapped).ConfigureAwait(false);
     }
 
     static string Describe(AttachCallbackException ex) => ex.InnerException?.Message ?? ex.Message;
+
+    const string LostConnection = "the terminal lost connection to the daemon";
+
+    /// What a drop means while the resume ledger holds the agent: Resuming while it is coming back,
+    /// Interrupted once the daemon gave up. Null leaves the outcome to the ordinary mapping. The
+    /// successor refuses an attach as an unknown agent until the resume publishes it, and a dial can
+    /// fail outright while no daemon listens, so mid-restart any failure counts as a drop.
+    TerminalSessionState? ResumeVerdict(AttachOutcome outcome) {
+        var drop = outcome is AttachOutcome.ConnectionLost
+                || outcome is AttachOutcome.Failed(var message)
+                   && (ResumeDeadline is not null || message.StartsWith(LocalFrame.NoSuchAgentPrefix, StringComparison.Ordinal));
+        if (!drop || ReadLedger() is not { } entry) return null;
+        if (entry.State == ResumeState.Interrupted) return TerminalSessionState.Interrupted(entry.LastError);
+
+        var now = _time.GetUtcNow();
+        DateTimeOffset deadline;
+        lock (_resumeLock) deadline = _resumeDeadline ??= now + _reconnectWindow;
+        return now < deadline ? TerminalSessionState.Resuming : null;
+    }
+
+    ResumeLedgerEntry? ReadLedger() {
+        if (_resumeLedger is null) return null;
+        try {
+            return _resumeLedger(_agentId);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Console.Error.WriteLine($"kcap: terminal resume ledger read failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// Polls the ledger off the UI thread until the successor has published the agent, then attaches
+    /// by id; the daemon's first replay is the persisted ring and its restart marker.
+    async Task WaitForResumeAsync(int generation) {
+        while (true) {
+            await Task.Delay(ResumeRetryGap, _time).ConfigureAwait(false);
+            if (Retired(generation)) return;
+
+            var entry = ReadLedger();
+            if (entry is { State: ResumeState.Running }) {
+                await TryStartAttemptAsync().ConfigureAwait(false);
+                return;
+            }
+
+            var end = entry is null ? TerminalSessionState.Failed("This session did not come back after the daemon restarted; see `kcap agent ls`.")
+                    : entry.State == ResumeState.Interrupted ? TerminalSessionState.Interrupted(entry.LastError)
+                    : _time.GetUtcNow() >= ResumeDeadline ? TerminalSessionState.Failed(LostConnection)
+                    : null;
+            if (end is null) continue;
+
+            await Dispatcher.UIThread.InvokeAsync(() => {
+                if (Retired(generation) || State.Phase != TerminalSessionPhase.Resuming) return;
+                ResumeDeadline = null;
+                Publish(end, null);
+            });
+            return;
+        }
+    }
 
     // CancellationToken.None deliberately: the Retired check inside the dispatched action already
     // guards correctness, and the outcome must still apply when the attempt's own token is
