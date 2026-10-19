@@ -76,17 +76,19 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             profiles?.Resolution.ServerUrl,
             credentials is null
                 ? () => Task.FromResult<string?>(null)
-                : async () => (await credentials.ResolveAsync(default)).Bearer) {
-        _localRoot = localRoot;
-        _refusal   = profiles is null ? null : LocalDestination.Refusal(profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint);
-    }
+                : async () => (await credentials.ResolveAsync(default)).Bearer,
+            localRoot: localRoot,
+            refusal: profiles is null ? null : LocalDestination.Refusal(profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint)) { }
 
     readonly LocalRoot? _localRoot;
     readonly string?    _refusal;
 
     internal ServerConnectionService(
             TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
-            TimeSpan[]? reconnectDelays = null, Action<ILoggingBuilder>? hubLogging = null) {
+            TimeSpan[]? reconnectDelays = null, Action<ILoggingBuilder>? hubLogging = null,
+            LocalRoot? localRoot = null, string? refusal = null) {
+        _localRoot = localRoot;
+        _refusal   = refusal;
         _time = time;
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;

@@ -11,9 +11,10 @@ public sealed record DaemonStatusDto(DaemonInfoDto Daemon, List<AgentStatusDto> 
     // Launches whose runtime is still starting, before an agent exists to list under Agents. Null
     // from an older daemon, which a client reads as unknown, never as "nothing starting".
     List<PendingLaunchDto>? Pending = null,
-    // Agents running or starting, counted so that one moving from Pending to Agents is never missed, which the two
-    // lists, read one after the other, cannot promise. Null from an older daemon, which a client reads as unknown.
-    int? Busy = null);
+    // Whether any agent is running or starting, admitted launches included, observed at once: the two lists, read one
+    // after the other, cannot promise that. A yes, not a count, since one launch can be admitted and published at
+    // once. Null from an older daemon, which a client reads as unknown.
+    bool? Busy = null);
 
 /// <summary>
 /// <see cref="Connection"/> ∈ connected|connecting|reconnecting|disconnected (lowercase).

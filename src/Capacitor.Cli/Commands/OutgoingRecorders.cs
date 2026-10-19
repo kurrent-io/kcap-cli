@@ -22,8 +22,8 @@ sealed class OutgoingRecorders(
                 case null:
                     busy.Add($"daemon '{name}': it cannot say whether agents are running");
                     break;
-                case > 0 and var running:
-                    busy.Add($"daemon '{name}': {running} agent(s) running or starting");
+                case true:
+                    busy.Add($"daemon '{name}' is running or starting agents");
                     break;
             }
         }
