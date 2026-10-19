@@ -262,6 +262,18 @@ public class PermissionPromptBrokerTests {
         await Assert.That((await WaitBounded(held, "the matching call withdrew it")).Source).IsEqualTo(PermissionSettlements.SourceToolSettled);
     }
 
+    /// A notice whose name and input were too large to send still names its call by id, so a call
+    /// owed by that id is paid rather than held until the turn ends.
+    [Test]
+    public async Task A_notice_without_name_or_input_still_pays_the_call_owed_by_its_id() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", toolUseId: "toolu_1", input: """{"command":"ls"}"""));
+        await Assert.That(broker.TrySettle("r1", Allow, "allow", "app")).IsTrue();
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1")).IsFalse();
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
+    }
+
     /// A turn's end that reaches the daemon late can find the next turn's prompt already waiting,
     /// so it retires only what was registered before the hook sent it.
     [Test]
