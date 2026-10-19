@@ -54,7 +54,7 @@ public class AcpInteractionBridgePolicyTests {
     }
 
     sealed class Harness {
-        public AcpInteractionBridge         Bridge    { get; init; } = null!;
+        public AcpInteractionBridge         Bridge    { get; set; } = null!;
         public List<PolicyDecisionEventV1>  Decisions { get; } = [];
         public List<AcpAutoApprovalNotice>  Notices   { get; } = [];
         public bool                         Forwarded { get; set; }
@@ -77,24 +77,22 @@ public class AcpInteractionBridgePolicyTests {
         AcpLaunchPermissionPreset? preset = null;
         if (presetToken is not null) AcpPermissionPresets.TryResolve(presetToken, out preset);
 
-        Harness harness = null!;
-        harness = new Harness {
-            Bridge = new AcpInteractionBridge(
-                requestInteraction: (_, _) => {
-                    harness.Forwarded = true;
+        var harness = new Harness();
+        harness.Bridge = new AcpInteractionBridge(
+            requestInteraction: (_, _) => {
+                harness.Forwarded = true;
 
-                    return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null));
-                },
-                agentId: AgentId,
-                logger: NullLogger.Instance,
-                unattendedPolicy: policy,
-                preset: preset,
-                notifyAutoApproval: harness.Notices.Add,
-                policySnapshot: snapshot,
-                policyVendor: vendor,
-                notifyPolicyDecision: harness.Decisions.Add,
-                policyCwd: cwd, time: TimeProvider.System)
-        };
+                return Task.FromResult(new AcpInteractionDecision("cancel", null, null, null, null, null));
+            },
+            agentId: AgentId,
+            logger: NullLogger.Instance,
+            unattendedPolicy: policy,
+            preset: preset,
+            notifyAutoApproval: harness.Notices.Add,
+            policySnapshot: snapshot,
+            policyVendor: vendor,
+            notifyPolicyDecision: harness.Decisions.Add,
+            policyCwd: cwd, time: TimeProvider.System);
 
         return harness;
     }
