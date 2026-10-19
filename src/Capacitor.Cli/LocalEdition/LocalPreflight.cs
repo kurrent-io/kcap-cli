@@ -17,20 +17,25 @@ sealed class LocalPreflight(
 
     /// <summary>Platform, socket paths, ancestors, journal and registry, then (unless a journal calls for
     /// recovery first) profiles, the empty slot and the config, then the version; the other kcap copies last, since
-    /// asking them spawns each one.</summary>
+    /// asking them spawns each one. An old copy never blocks a recovery: <see cref="Recheck"/> refuses it after.</summary>
     public LocalPlan Check(string version) {
         CheckPlatform();
         CheckSockets();
         CheckAncestors();
 
         var plan = Decide(version, afterRecovery: false);
-        CheckClients();
+        if (plan.Hint != PlanHint.Recover) CheckClients();
 
         return plan;
     }
 
     /// <summary>Under the lease, after recovery: a journal still present is a bug in the caller.</summary>
-    public LocalPlan Recheck(string version) => Decide(version, afterRecovery: true);
+    public LocalPlan Recheck(string version) {
+        var plan = Decide(version, afterRecovery: true);
+        CheckClients();
+
+        return plan;
+    }
 
     public static int SocketLimit(LocalPlatform p) => p.IsMacOS ? 103 : 107;
 

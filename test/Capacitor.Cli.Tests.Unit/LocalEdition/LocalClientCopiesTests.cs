@@ -37,13 +37,13 @@ public class LocalClientCopiesTests {
             new ClientCopy(ClientCopyKind.OnPath, onPath, "1.2.0"),
             new ClientCopy(ClientCopyKind.DesktopApp, app, "1.3.0+abc"),
         ]);
-        await Assert.That(runner.Ran).Contains($"{onPath} --version");
+        await Assert.That(runner.Ran).Contains($"{onPath} --version --no-update-check");
     }
 
     [Test]
     public async Task The_running_kcap_is_not_asked_even_through_a_link() {
         var self = Kcap("real");
-        Directory.CreateDirectory(Tmp.PathTo("bin"));
+        Tmp.CreateDir("bin");
         File.CreateSymbolicLink(Tmp.PathTo("bin", "kcap"), self);
         var runner = new FakeRunner([]);
 
@@ -56,7 +56,7 @@ public class LocalClientCopiesTests {
     [Test]
     public async Task A_path_link_to_the_desktop_apps_kcap_is_one_copy_of_the_app() {
         var app = Kcap("Kurrent Capacitor.app/Contents/MacOS");
-        Directory.CreateDirectory(Tmp.PathTo("bin"));
+        Tmp.CreateDir("bin");
         File.CreateSymbolicLink(Tmp.PathTo("bin", "kcap"), app);
         var runner = new FakeRunner(new() { [app] = Prints("1.2.0") });
 

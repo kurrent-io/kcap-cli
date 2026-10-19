@@ -44,11 +44,16 @@ public static class HttpClientExtensions {
     public static string? CliVersion => ObservationHeaderHandler.ProcessVersion;
 
     /// <summary>
-    /// Adds <see cref="CliVersionHeader"/> to a hub connection's headers, which SignalR sends on negotiation. A local
-    /// server refuses a hub negotiation without it, since that is how a kcap below its client floor arrives.
+    /// Adds what <see cref="ObservationHeaderHandler"/> adds to a request to a hub connection's headers, which SignalR
+    /// sends on negotiation. A local server refuses a hub negotiation without the version, since that is how a kcap
+    /// below its client floor arrives; and a server reads a version without <see cref="UpdateCheckHeader"/> as the
+    /// update check being on, so an opt-out must ride along.
     /// </summary>
-    public static void TagCliVersion(IDictionary<string, string> headers) {
-        if (CliVersion is { } version) headers[CliVersionHeader] = version;
+    public static void AddObservationHeaders(IDictionary<string, string> headers, bool updateCheckOff) {
+        if (CliVersion is not { } version) return;
+
+        headers[CliVersionHeader] = version;
+        if (updateCheckOff) headers[UpdateCheckHeader] = UpdateCheckOffValue;
     }
 
     /// <summary>Response header carrying the connected server's own version, captured by

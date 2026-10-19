@@ -40,11 +40,12 @@ sealed class LocalClientCopies(IProcessRunner runner, string? searchPath, string
             yield return new(ClientCopyKind.OnPath, onPath, null);
     }
 
+    /// <summary>Without <c>--no-update-check</c> the copy would run its npm update check on the way out.</summary>
     string? VersionOf(string path) {
         ProcessResult result;
 
         try {
-            result = runner.RunBoundedAsync(path, ["--version"], new(Timeout: VersionTimeout), OutputLimit, CancellationToken.None)
+            result = runner.RunBoundedAsync(path, ["--version", "--no-update-check"], new(Timeout: VersionTimeout), OutputLimit, CancellationToken.None)
                 .GetAwaiter().GetResult();
         } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) {
             return null;

@@ -332,6 +332,20 @@ public class LocalPreflightTests {
         await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
     }
 
+    /// <summary>An interrupted setup is finished or undone whatever else is installed; the old copy is refused after.</summary>
+    [Test]
+    public async Task An_old_copy_waits_until_recovery_has_run() {
+        var old = new ClientCopy(ClientCopyKind.OnPath, "/usr/local/bin/kcap", "1.2.0");
+        Journal(Root);
+
+        await Assert.That(Preflight(copies: old).Check(Version).Hint).IsEqualTo(PlanHint.Recover);
+
+        File.Delete(Root.JournalPath);
+        var failure = await Refusal(() => Preflight(copies: old).Recheck(Version));
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
+    }
+
     [Test]
     public async Task A_refused_platform_asks_no_copy() {
         var copies = new CountingCopies();

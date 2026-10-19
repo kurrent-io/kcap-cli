@@ -48,21 +48,28 @@ public class ServerConnectionServiceTests {
         await Assert.That(daemons![0].Name).IsEqualTo("work-mac");
     }
 
-    /// A local server refuses a hub negotiation that names no kcap version at or above its client floor.
+    /// A local server refuses a hub negotiation that names no kcap version above its client floor, and a server reads
+    /// a version without the update-check opt-out as the update check being on.
     [Test]
-    public async Task The_negotiation_carries_the_cli_version() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task The_negotiation_carries_the_cli_version_and_the_update_check_opt_out(bool updateCheckOff) {
         string? negotiated = null;
+        string? updateCheck = null;
         await using var host = await HubTestHost.StartAsync(inspect: request => {
-            if (request.Path.Value?.EndsWith("/negotiate", StringComparison.Ordinal) == true)
-                negotiated = request.Headers[Capacitor.Cli.Core.HttpClientExtensions.CliVersionHeader].ToString();
+            if (request.Path.Value?.EndsWith("/negotiate", StringComparison.Ordinal) != true) return;
+            negotiated  = request.Headers[Capacitor.Cli.Core.HttpClientExtensions.CliVersionHeader].ToString();
+            updateCheck = request.Headers[Capacitor.Cli.Core.HttpClientExtensions.UpdateCheckHeader].ToString();
         });
-        await using var lane = Lane(host);
+        await using var lane = new ServerConnectionService(
+            TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), updateCheckOff: updateCheckOff);
         lane.Start();
 
         await Next(lane.Status, s => s.State == ServerLaneState.Connected);
 
         await Assert.That(Capacitor.Cli.Core.HttpClientExtensions.CliVersion).IsNotNull();
         await Assert.That(negotiated).IsEqualTo(Capacitor.Cli.Core.HttpClientExtensions.CliVersion);
+        await Assert.That(updateCheck).IsEqualTo(updateCheckOff ? "off" : "");
     }
 
     [Test]
