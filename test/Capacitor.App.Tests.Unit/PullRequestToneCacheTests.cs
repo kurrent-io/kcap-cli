@@ -11,6 +11,59 @@ namespace Capacitor.App.Tests.Unit;
 /// overviews on a slow cadence, independent of which workspace is open.
 public class PullRequestToneCacheTests {
     [Test]
+    public async Task A_workspace_refresh_discovers_attached_PRs_without_refreshing_other_sessions() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.Links = [];
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        directory.Rows.AddOrUpdate(Row("a2", "s2"));
+        await WaitUntilAsync(() => source.Lists == 2, "initial empty lists");
+
+        source.Links = [FakePullRequestSource.Link(142)];
+        cache.Refresh("s1");
+
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "attached PR in rail");
+        await Assert.That(cache.CurrentSummaries["s1"].Subject!.Number).IsEqualTo(142);
+        await Assert.That(cache.CurrentSummaries.ContainsKey("s2")).IsFalse();
+        cache.Refresh("unlisted");
+        await Assert.That(source.Lists).IsEqualTo(3);
+
+        source.Links = [];
+        cache.Refresh("s1");
+        await WaitUntilAsync(() => !cache.CurrentSummaries.ContainsKey("s1"), "detached PR removed");
+        await Assert.That(cache.Current.ContainsKey("s1")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_workspace_refresh_during_a_read_rejects_old_results_and_queues_one_follow_up() {
+        var (directory, source, _, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        var oldRead = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var newRead = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.Links = [FakePullRequestSource.Link(1)];
+        source.OverviewResponses.Enqueue((_, ct) => oldRead.Task.WaitAsync(ct));
+        source.OverviewResponses.Enqueue((_, ct) => newRead.Task.WaitAsync(ct));
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        await WaitUntilAsync(() => source.Overviews == 1, "old read started");
+
+        source.Links = [FakePullRequestSource.Link(2)];
+        cache.Refresh("s1");
+        cache.Refresh("s1");
+        await Assert.That(source.Lists).IsEqualTo(1);
+        oldRead.SetResult(source.Overview(PullRequestWire.Subject(FakePullRequestSource.Link(1))));
+
+        await WaitUntilAsync(() => source.Overviews == 2, "follow-up read started");
+        await Assert.That(cache.CurrentSummaries.ContainsKey("s1")).IsFalse();
+        await Assert.That(cache.Current.ContainsKey("s1")).IsFalse();
+        newRead.SetResult(source.Overview(PullRequestWire.Subject(FakePullRequestSource.Link(2))));
+        await WaitUntilAsync(() => cache.CurrentSummaries.ContainsKey("s1"), "new PR published");
+        await Assert.That(cache.CurrentSummaries["s1"].Subject!.Number).IsEqualTo(2);
+        await Assert.That(source.Lists).IsEqualTo(2);
+    }
+
+    [Test]
     [Arguments("empty")]
     [Arguments("denied")]
     [Arguments("transient")]
