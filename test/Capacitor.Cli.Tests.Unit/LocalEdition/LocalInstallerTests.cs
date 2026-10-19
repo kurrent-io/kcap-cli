@@ -603,6 +603,21 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task Reuse_over_a_foreign_unit_pulls_no_model() {
+        using var ollama = new FakeOllama().Running().Pulls("""{"status":"success"}""").Embeds(1024);
+        await Install();
+        Tmp.CreateDir("other");
+        var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
+        Service.OwnerOverride = new(other, other);
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(ReuseWithOllama, ollama: ollama));
+
+        await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(ollama.Requests("/api/pull")).IsEqualTo(0);
+        await Assert.That(ollama.Requests("/api/version")).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task Reuse_over_a_foreign_unit_leaves_the_embedding_setting_alone() {
         using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
         await Install(YesWithOllama, ollama: ollama);

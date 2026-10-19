@@ -252,6 +252,11 @@ sealed class LocalInstaller(
     /// <returns>The unit as installed.</returns>
     async Task<LocalServerUnit> ReuseEmbeddingsAsync(LocalServerUnit unit, LocalInstallAnswers answers, Func<LocalInstallFailure> notOurs,
         CancellationToken ct) {
+        // Before the decision, which may pull a model: a refused setup changes nothing, Ollama included.
+        var owner = service.Owner(unit);
+        if (owner is not { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent } && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
+            throw notOurs();
+
         var previous = LocalEmbeddingFile.Read(root);
         var target   = await DecideEmbeddingsAsync(answers, ct) ?? (previous is { Pending: true } ? previous with { Pending = false } : null);
         var rewrite  = target is not null && (previous is { Pending: true } || target.Model != unit.EmbeddingModel);
