@@ -673,7 +673,7 @@ public partial class App : Application {
             requestSignIn: requestSignIn, signInCompleted: serverClients.SignInCompleted, pullRequests: readers,
             linkGitHub: linkGitHub,
             access: sessionAccess, localDaemonOnAppServer: directory.LocalDaemonOnAppServer, directory: directory, plans: plans, planArtifacts: planArtifacts,
-            commands: commands, drafts: drafts);
+            commands: commands, drafts: drafts, pullRequestLinksChanged: pullRequestTones.Refresh);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -682,7 +682,8 @@ public partial class App : Application {
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
-                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts)
+                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts,
+                    pullRequestLinksChanged: pullRequestTones.Refresh)
                 : null;
 
         _coordinator = new MainWindowCoordinator(
