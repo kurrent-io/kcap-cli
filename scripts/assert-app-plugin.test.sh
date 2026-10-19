@@ -25,6 +25,11 @@ chmod +x "$bundle/Contents/MacOS/kcap"
 if bash "$here/assert-app-plugin.sh" "$bundle" "$version" >/dev/null 2>&1; then
   echo "FAIL: accepted a CLI that cannot install its plugin"; exit 1
 fi
+printf '#!/usr/bin/env bash\ncase "$*" in *--codex*) exit 1 ;; esac\nmkdir -p .claude && : > .claude/settings.local.json\n' \
+  > "$bundle/Contents/MacOS/kcap"
+if bash "$here/assert-app-plugin.sh" "$bundle" "$version" >/dev/null 2>&1; then
+  echo "FAIL: accepted a CLI that cannot install the Codex plugin"; exit 1
+fi
 mv "$tmp/kcap" "$bundle/Contents/MacOS/kcap"
 printf 'broken hook' > "$plugin/hooks/hooks.json"
 if bash "$here/assert-app-plugin.sh" "$bundle" "$version" >/dev/null 2>&1; then
