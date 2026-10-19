@@ -252,6 +252,18 @@ public class PermissionPromptBrokerTests {
             sentAt: DateTimeOffset.UtcNow.AddMinutes(1))).IsTrue();
     }
 
+    /// A call the agent's policy allowed raises no prompt, but is owed its notice all the same, so
+    /// that notice does not retire an identical prompt still waiting for the user.
+    [Test]
+    public async Task A_policy_allowed_call_is_owed_its_notice() {
+        var broker = new PermissionPromptBroker();
+        var waiting = broker.Register(Dto("waiting", input: """{"command":"ls"}"""));
+        broker.OweCall(Dto("policy", input: """{"command":"ls"}"""), subagentId: null);
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_p", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(waiting.IsCompleted).IsFalse();
+    }
+
     /// A late notice cannot spend a call owed to a prompt registered after it was sent, so that
     /// prompt's own notice is still the one that consumes it.
     [Test]

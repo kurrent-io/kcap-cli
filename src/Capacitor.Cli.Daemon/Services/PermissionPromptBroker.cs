@@ -175,14 +175,24 @@ internal sealed class PermissionPromptBroker {
         if (!_pending.TryGetValue(requestId, out var entry)) return false;
         if (!_pending.TryRemove(new KeyValuePair<string, Entry>(requestId, entry))) return false;
         // The call runs with the input the answer gave it, when it gave one.
-        if (decision.Behavior == PermissionSettlements.Allow && entry.Dto.Vendor == "claude") {
-            var turn = (entry.Dto.AgentId, entry.Dto.SessionId, entry.SubagentId);
-            if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
-            else _allowedCalls.Add(new AllowedCall(entry.Dto, entry.SubagentId, decision.UpdatedInput ?? entry.Dto.ToolInput));
-        }
+        if (decision.Behavior == PermissionSettlements.Allow) OweLocked(entry.Dto, entry.SubagentId, decision.UpdatedInput ?? entry.Dto.ToolInput);
         Broadcast(new PermissionStreamItem.Resolved(new PermissionResolvedDto(requestId, outcome, source)));
         entry.Tcs.TrySetResult(new PermissionSettlement(decision, outcome, source));
         return true;
+    }
+
+    /// A call allowed without a prompt (by the agent's policy) is owed its notice just the same, so
+    /// the notice does not retire an identical prompt still waiting for the user.
+    public void OweCall(PermissionPendingDto dto, string? subagentId) {
+        lock (_gate) OweLocked(dto, subagentId, dto.ToolInput);
+    }
+
+    // Caller holds _gate.
+    void OweLocked(PermissionPendingDto dto, string? subagentId, JsonElement? input) {
+        if (dto.Vendor != "claude") return;
+        var turn = (dto.AgentId, dto.SessionId, subagentId);
+        if (_allowedCalls.Count(c => (c.AgentId, c.SessionId, c.SubagentId) == turn) >= MaxAllowedCallsPerTurn) _overflowed.Add(turn);
+        else _allowedCalls.Add(new AllowedCall(dto, subagentId, input));
     }
 
     // An unparsed stamp is no ordering, so such a prompt is left to the turn's end.

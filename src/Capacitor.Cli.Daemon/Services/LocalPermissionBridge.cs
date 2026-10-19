@@ -688,6 +688,7 @@ internal sealed partial class LocalPermissionBridge(
                             _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
                             // No Register: a call the policy answered raises no card, and the
                             // decision log plus the run event are its audit trail.
+                            if (behavior == PermissionSettlements.Allow && pending is not null) _broker.OweCall(pending, SubagentIdOf(node));
                             await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
 
                             return;
