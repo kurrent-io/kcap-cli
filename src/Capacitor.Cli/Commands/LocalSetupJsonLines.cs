@@ -50,5 +50,5 @@ static class LocalSetupJsonLines {
     public static int Exit(LocalInstallFailureCode code) =>
         code is LocalInstallFailureCode.AnswerRequired or LocalInstallFailureCode.InvalidArguments ? SetupExit.Refused : SetupExit.Failed;
 
-    static string Render(LocalSetupLine line) => JsonSerializer.Serialize(line, LocalSetupJsonContext.Default.LocalSetupLine);
+    public static string Render(LocalSetupLine line) => JsonSerializer.Serialize(line, LocalSetupJsonContext.Default.LocalSetupLine);
 }

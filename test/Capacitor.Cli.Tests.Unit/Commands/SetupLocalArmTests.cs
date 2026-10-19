@@ -163,6 +163,25 @@ internal sealed class SetupLocalArmTests : IDisposable {
     }
 
     [Test]
+    public async Task Json_with_no_prompt_reports_the_install_and_every_later_step() {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(stderr);
+        await AssertAllJson(stdout);
+        await Assert.That(spectre).IsEmpty();
+        await Assert.That(stderr).Contains("Step 2/6");
+
+        var events = Events(stdout);
+        await Assert.That(events[0]).IsEqualTo("step_started");
+        await Assert.That(events).Contains("committed");
+        await Assert.That(Array.IndexOf(events, "committed")).IsLessThan(Array.LastIndexOf(events, "step_started"));
+        await Assert.That(events[^1]).IsEqualTo("done");
+        await Assert.That(JsonNode.Parse(stdout[^1])!["server_url"]?.GetValue<string>()).IsEqualTo(ActiveProfile().ServerUrl);
+    }
+
+    [Test]
     public async Task Json_with_discover_fails_with_invalid_arguments_line() {
         var (exit, stdout, _, _) = await Run("setup", "--local", "--discover", "--json");
 

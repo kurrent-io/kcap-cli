@@ -123,6 +123,20 @@ public class SetupUnattendedSignInTests {
     }
 
     [Test]
+    public async Task Under_json_a_refused_machine_credential_ends_with_its_own_code() {
+        using var server = WorkOSServer(MachineToken);
+        Mints(server, 401);
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        var exit = await Command(Machine(server)).HandleAsync([.. Args(server), "--json"]);
+
+        var last = System.Text.Json.Nodes.JsonNode.Parse(capture.GetCapturedOutput().Split('\n', StringSplitOptions.RemoveEmptyEntries)[^1])!;
+        await Assert.That(exit).IsEqualTo(SetupExit.Failed);
+        await Assert.That(last["code"]?.GetValue<string>()).IsEqualTo(SetupFailureCodes.MachineCredentialRejected);
+        await Assert.That(last["step"]?.GetValue<string>()).IsEqualTo(SetupJsonReport.SignIn);
+    }
+
+    [Test]
     public async Task A_machine_credential_the_server_refuses_fails() {
         using var server = WorkOSServer("some-other-bearer");
         Mints(server, 200);

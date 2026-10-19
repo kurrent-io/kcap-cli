@@ -7,7 +7,8 @@ namespace Capacitor.Cli.Commands;
 
 /// <summary>The install of <c>kcap setup --local</c> in a terminal: the preflight, the two answers, then the install
 /// rendered as status lines.</summary>
-sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args) {
+/// <param name="report">The whole run's JSON report, which takes every install event and failure as well.</param>
+sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args, SetupJsonReport? report = null) {
     public const string SingleUserNotice =
         "This first version is for a machine with one user: on a shared machine, other users can open the web UI and act as its admin.";
 
@@ -134,16 +135,19 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         return (0, null);
     }
 
-    static Task<(int, LocalInstallEvent.Committed?)> RefuseAsync(string message) =>
+    Task<(int, LocalInstallEvent.Committed?)> RefuseAsync(string message) =>
         FailAsync(new LocalInstallFailure(LocalInstallFailureCode.AnswerRequired, message));
 
-    static async Task<(int, LocalInstallEvent.Committed?)> FailAsync(LocalInstallFailure failure) {
+    async Task<(int, LocalInstallEvent.Committed?)> FailAsync(LocalInstallFailure failure) {
         await Console.Error.WriteLineAsync($"  Error: {failure.Message}");
+        report?.Failed(failure.Code.Wire(), failure.Message);
 
         return (LocalSetupJsonLines.Exit(failure.Code), null);
     }
 
     void Render(LocalInstallEvent e) {
+        report?.Install(e);
+
         if (Line(e, _version) is { } line) AnsiConsole.MarkupLine($"  {Markup.Escape(line)}");
 
         if (e is LocalInstallEvent.Reused reused && reused.InstalledVersion != _version)

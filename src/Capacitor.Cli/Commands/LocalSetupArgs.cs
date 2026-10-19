@@ -4,8 +4,10 @@ using Capacitor.Cli.LocalEdition;
 namespace Capacitor.Cli.Commands;
 
 /// <summary>What <c>kcap setup --local</c> was asked. Every other step's flags pass through to the terminal arm
-/// untouched; under <c>--json</c> nothing else is accepted, because the wizard owns those steps.</summary>
-sealed partial record LocalSetupArgs(bool Json, bool SingleUser, bool Yes, bool NoPrompt, string? EmbeddingModel = null, bool NoEmbeddings = false) {
+/// untouched; under <c>--json</c> alone nothing else is accepted, because the desktop app's wizard owns those steps.
+/// <c>--json --no-prompt</c> is the whole run, reported.</summary>
+sealed partial record LocalSetupArgs(
+        bool Json, bool SingleUser, bool Yes, bool NoPrompt, string? EmbeddingModel = null, bool NoEmbeddings = false, bool WholeRun = false) {
     public const string EmbeddingModelFlag = "--embedding-model";
     public const string NoEmbeddingsFlag   = "--no-embeddings";
 
@@ -63,13 +65,14 @@ sealed partial record LocalSetupArgs(bool Json, bool SingleUser, bool Yes, bool 
         if (!string.IsNullOrEmpty(kcapUrlEnv))
             return Refuse($"KCAP_URL is set ({kcapUrlEnv}), so every later step would talk to that server instead of the local one. Unset it to use --local.");
 
-        var json = rest.Contains("--json");
+        var json     = rest.Contains("--json");
+        var noPrompt = rest.Contains("--no-prompt");
 
-        if (json && Flags(rest).FirstOrDefault(a => !JsonAccepts.Contains(a)) is { } extra)
-            return Refuse($"{extra} cannot be used with --local --json, which accepts only --single-user, --yes, --no-update-check, "
-                        + $"{EmbeddingModelFlag} and {NoEmbeddingsFlag}.");
+        if (json && !noPrompt && Flags(rest).FirstOrDefault(a => !JsonAccepts.Contains(a)) is { } extra)
+            return Refuse($"{extra} cannot be used with --local --json, which runs only the install and accepts only --single-user, --yes, "
+                        + $"--no-update-check, {EmbeddingModelFlag} and {NoEmbeddingsFlag}. Add --no-prompt to run every step.");
 
-        return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || rest.Contains("--no-prompt"), model, noEmbeddings), null);
+        return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || noPrompt, model, noEmbeddings, json && noPrompt), null);
     }
 
     /// <summary>The <c>--embedding-model=&lt;model&gt;</c> form as two tokens.</summary>
