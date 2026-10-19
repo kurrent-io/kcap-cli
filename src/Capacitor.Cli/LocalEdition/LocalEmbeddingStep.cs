@@ -17,12 +17,12 @@ static class LocalEmbeddingStep {
         if (answer is LocalEmbeddingAnswer.Skip) {
             progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.Declined, "Search by meaning is off; search works by keyword."));
 
-            return current == LocalEmbeddingSetting.Declined ? null : LocalEmbeddingSetting.Declined;
+            return current is { Model: null } ? null : LocalEmbeddingSetting.Declined;
         }
 
         var named = ((LocalEmbeddingAnswer.Ollama)answer).Model;
 
-        if (named is null && current == LocalEmbeddingSetting.Declined) {
+        if (named is null && current is { Model: null }) {
             progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.Declined,
                 $"Search by meaning stays off, as an earlier setup chose; --embedding-model <model> turns it on."));
 
@@ -63,13 +63,22 @@ static class LocalEmbeddingStep {
     }
 
     /// <summary>Records <paramref name="setting"/>. A failure is reported, not thrown: the next setup decides again.</summary>
-    public static void Record(LocalRoot root, LocalEmbeddingSetting setting, IProgress<LocalInstallEvent> progress) {
+    /// <returns>False when it could not be written.</returns>
+    public static bool Record(LocalRoot root, LocalEmbeddingSetting setting, IProgress<LocalInstallEvent> progress) {
         try {
             LocalEmbeddingFile.Write(root, setting);
+            return true;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.WriteFailed,
                 $"{LocalEmbeddingFile.PathFor(root)} could not be written ({ex.Message}); run kcap setup --local again."));
+            return false;
         }
+    }
+
+    /// <summary>Puts back what <see cref="LocalEmbeddingFile.Read"/> returned before a change, absence included.</summary>
+    public static void Restore(LocalRoot root, LocalEmbeddingSetting? previous) {
+        if (previous is null) LocalEmbeddingFile.Delete(root);
+        else LocalEmbeddingFile.Write(root, previous);
     }
 
     static LocalEmbeddingSetting? Skipped(IProgress<LocalInstallEvent> progress, LocalEmbeddingSkipCode code, string why,

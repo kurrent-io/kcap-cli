@@ -543,14 +543,14 @@ public class LocalInstallerTests {
     }
 
     [Test]
-    public async Task A_failed_rewrite_records_nothing_so_the_next_setup_rewrites_again() {
+    public async Task A_failed_rewrite_leaves_the_setting_pending_so_the_next_setup_rewrites_again() {
         using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
         await Install();
         Service.InstallFailure = new LocalLifecycleException("systemctl restart failed");
 
         await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(ReuseWithOllama, ollama: ollama));
 
-        await Assert.That(File.Exists(LocalEmbeddingFile.PathFor(Root))).IsFalse();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(new LocalEmbeddingSetting(OllamaClient.DefaultModel) { Pending = true });
 
         Service.InstallFailure = null;
         _log.Clear();
@@ -558,7 +558,36 @@ public class LocalInstallerTests {
         await Install(ReuseWithOllama, ollama: ollama);
 
         await Assert.That(_log).Contains("install");
-        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo(OllamaClient.DefaultModel);
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(new LocalEmbeddingSetting(OllamaClient.DefaultModel));
+    }
+
+    /// <summary>What a setup that stopped between marking the setting and rewriting the unit leaves behind; the
+    /// recorded model alone would read as already served.</summary>
+    [Test]
+    public async Task A_pending_setting_is_applied_by_the_next_setup_even_one_that_decides_nothing() {
+        await Install();
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting(OllamaClient.DefaultModel) { Pending = true });
+        _log.Clear();
+
+        await Install(new(false, false));
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(Service.Installed!.EmbeddingModel).IsEqualTo(OllamaClient.DefaultModel);
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(new LocalEmbeddingSetting(OllamaClient.DefaultModel));
+    }
+
+    [Test]
+    public async Task A_setting_that_cannot_be_marked_leaves_the_unit_as_it_was() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        await Install();
+        Directory.CreateDirectory(LocalEmbeddingFile.PathFor(Root));
+        _log.Clear();
+
+        await Install(ReuseWithOllama, ollama: ollama);
+
+        await Assert.That(_log).Contains("start");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code).IsEqualTo(LocalEmbeddingSkipCode.WriteFailed);
     }
 
     [Test]
@@ -572,7 +601,7 @@ public class LocalInstallerTests {
         var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(new(false, false, new LocalEmbeddingAnswer.Skip()), ollama: ollama));
 
         await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
-        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo(OllamaClient.DefaultModel);
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(new LocalEmbeddingSetting(OllamaClient.DefaultModel));
     }
 
     [Test]

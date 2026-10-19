@@ -215,16 +215,7 @@ sealed class LocalInstaller(
                 await RestageAsync(details, ct);
             }
 
-            // Recorded only once the unit serves it: a refused or failed rewrite leaves the old setting for the next
-            // setup to find different again.
-            var setting = await DecideEmbeddingsAsync(answers, ct);
-            var rewrite = setting is not null && setting.Model != unit.EmbeddingModel;
-
-            if (rewrite) unit = unit with { EmbeddingModel = setting!.Model };
-
-            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true, rewrite: rewrite);
-
-            if (setting is not null) LocalEmbeddingStep.Record(root, setting, _progress);
+            unit = await ReuseEmbeddingsAsync(unit, answers, NotOurs, ct);
         } finally {
             unitLock.Dispose();
         }
@@ -252,6 +243,38 @@ sealed class LocalInstaller(
         _progress.TryReport(committed);
 
         return committed;
+    }
+
+    /// <summary>Brings the recorded embedding setting and the unit together. The setting is marked pending before the
+    /// unit changes and cleared after, so a setup that stops anywhere in between rewrites the unit next time; a refused
+    /// rewrite restores what was recorded before.</summary>
+    /// <returns>The unit as installed.</returns>
+    async Task<LocalServerUnit> ReuseEmbeddingsAsync(LocalServerUnit unit, LocalInstallAnswers answers, Func<LocalInstallFailure> notOurs,
+        CancellationToken ct) {
+        var previous = LocalEmbeddingFile.Read(root);
+        var target   = await DecideEmbeddingsAsync(answers, ct) ?? (previous is { Pending: true } ? previous with { Pending = false } : null);
+        var rewrite  = target is not null && (previous is { Pending: true } || target.Model != unit.EmbeddingModel);
+
+        if (rewrite && !LocalEmbeddingStep.Record(root, target! with { Pending = true }, _progress)) (rewrite, target) = (false, null);
+
+        if (rewrite) unit = unit with { EmbeddingModel = target!.Model };
+
+        try {
+            LocalOwnUnit.Ensure(root, unit, service, notOurs, startPresent: true, rewrite: rewrite);
+        } catch (LocalInstallFailure refused) when (rewrite) {
+            try {
+                LocalEmbeddingStep.Restore(root, previous);
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                throw new LocalInstallFailure(refused.Code,
+                    $"{refused.Message} {LocalEmbeddingFile.PathFor(root)} could not be restored ({ex.Message}).");
+            }
+
+            throw;
+        }
+
+        if (target is not null) LocalEmbeddingStep.Record(root, target, _progress);
+
+        return unit;
     }
 
     /// <returns>The embedding setting to record, or null when the recorded one stands.</returns>

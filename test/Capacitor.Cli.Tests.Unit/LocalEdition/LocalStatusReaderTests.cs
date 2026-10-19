@@ -77,6 +77,11 @@ public class LocalStatusReaderTests {
         LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large"));
 
         await Assert.That(Text(await Read())).Contains("Search: by meaning through Ollama with mxbai-embed-large while it answers, and by keyword");
+        await Assert.That(Text(await Read())).DoesNotContain("not yet applied");
+
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large") { Pending = true });
+
+        await Assert.That(Text(await Read())).Contains("(not yet applied; kcap setup --local applies it)");
     }
 
     [Test]

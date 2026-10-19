@@ -25,9 +25,9 @@ static partial class LocalEmbeddingFile {
     public static LocalEmbeddingSetting? Read(LocalRoot root) {
         try {
             return JsonSerializer.Deserialize(File.ReadAllBytes(PathFor(root)), FileJsonContext.Default.Wire) switch {
-                { Provider: OllamaProvider, Model: { Length: > 0 } model } => new(model),
-                { Provider: NoProvider }                                   => LocalEmbeddingSetting.Declined,
-                _                                                          => null,
+                { Provider: OllamaProvider, Model: { Length: > 0 } model } wire => new(model) { Pending = wire.Pending },
+                { Provider: NoProvider } wire                                   => LocalEmbeddingSetting.Declined with { Pending = wire.Pending },
+                _                                                               => null,
             };
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException) {
             return null;
@@ -42,9 +42,20 @@ static partial class LocalEmbeddingFile {
 
         DurableDirectory.Ensure(Path.GetDirectoryName(path)!, root.Directory, OperatingSystem.IsWindows() ? null : OwnerOnly);
 
-        var wire  = setting.Model is { } model ? new Wire { Provider = OllamaProvider, Model = model } : new Wire { Provider = NoProvider };
+        var wire = setting.Model is { } model
+            ? new Wire { Provider = OllamaProvider, Model = model, Pending = setting.Pending }
+            : new Wire { Provider = NoProvider, Pending = setting.Pending };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(wire, FileJsonContext.Default.Wire);
         AtomicFile.Replace(path, bytes, OperatingSystem.IsWindows() ? null : OwnerReadWrite, followLink: false, durable: true);
+    }
+
+    public static void Delete(LocalRoot root) {
+        var path = PathFor(root);
+
+        if (!File.Exists(path)) return;
+
+        File.Delete(path);
+        DurableDirectory.Sync(Path.GetDirectoryName(path)!);
     }
 
     internal sealed class Wire {
@@ -52,6 +63,9 @@ static partial class LocalEmbeddingFile {
 
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? Model { get; set; }
+
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool Pending { get; set; }
     }
 
     [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower, WriteIndented = true)]
