@@ -72,11 +72,12 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         null                                         => null,
         { Affordance: LocalInstallAffordance.Busy }  => BusyText,
         { Affordance: LocalInstallAffordance.Retry } => RetryGuidance(Failure.Code),
-        var failed                                   => failed.Message,
+        var failed                                   => TerminalAdvice.Strip(failed.Message) ?? LockedText,
     };
 
-    /// The CLI's own words behind a retryable failure. They can name a terminal command, so they never lead.
-    public string? FailureDetail => Failure is { Affordance: LocalInstallAffordance.Retry } failed ? failed.Message : null;
+    /// The CLI's own words behind a retryable failure, with its terminal commands dropped.
+    public string? FailureDetail =>
+        Failure is { Affordance: LocalInstallAffordance.Retry } failed ? TerminalAdvice.Strip(failed.Message) : null;
 
     public bool FailureDetailVisible => FailureDetail is not null && !Running;
 

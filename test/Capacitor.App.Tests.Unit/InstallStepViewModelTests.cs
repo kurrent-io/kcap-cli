@@ -147,10 +147,10 @@ public class InstallStepViewModelTests {
     }
 
     /// A retryable failure's CLI message names the terminal command; the page leads with Try again instead
-    /// and keeps the CLI's words as the detail.
+    /// and keeps the CLI's cause as the detail.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_retryable_failure_leads_with_app_guidance_and_keeps_the_cli_message_as_detail() {
+    public async Task A_retryable_failure_leads_with_app_guidance_and_keeps_the_cli_cause_as_detail() {
         const string cliMessage = "The local server did not confirm it left setup mode. The setup journal is kept; run kcap setup --local again to finish it.";
         var cli = new FakeKcapCli {
             SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("commit_failed", cliMessage)),
@@ -165,8 +165,29 @@ public class InstallStepViewModelTests {
 
         await Assert.That(message).IsEqualTo(InstallStepViewModel.NotStartedText);
         await Assert.That(message!).DoesNotContain("kcap ");
-        await Assert.That(detail).IsEqualTo(cliMessage);
+        await Assert.That(detail).IsEqualTo("The local server did not confirm it left setup mode. The setup journal is kept.");
         await Assert.That(detailVisible).IsTrue();
+    }
+
+    /// Every failure line the page shows comes from the installer, which addresses a terminal user.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("commit_failed", "Setup could not finish its commit (disk full). Nothing was removed; run kcap setup --local again to finish it.", "disk full")]
+    [Arguments("recovery_failed", "The interrupted setup cannot be finished: /x/kcap-server is missing. The setup journal /x/journal.json is kept.", "kcap-server is missing")]
+    [Arguments("registry_unreadable", "The installation registry /x/registry.json cannot be read (bad json). Fix or remove it, then run kcap setup --local again.", "cannot be read (bad json)")]
+    public async Task No_displayed_failure_text_names_a_terminal_command(string code, string cliMessage, string cause) {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed(code, cliMessage)) };
+
+        var shown = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return string.Join("\n", new[] { install.FailureMessage, install.FailureDetail }.Where(t => t is not null));
+        });
+
+        await Assert.That(shown).DoesNotContain("kcap setup");
+        await Assert.That(shown).DoesNotContain("run kcap");
+        await Assert.That(shown).Contains(cause);
     }
 
     [Test]
