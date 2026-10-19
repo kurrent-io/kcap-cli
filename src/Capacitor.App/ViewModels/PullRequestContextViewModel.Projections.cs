@@ -229,7 +229,7 @@ public sealed partial class PullRequestContextViewModel {
                 item.RootComment is { Availability: "available", Author: { } author } ? Author(author) : null),
             item.RootComment?.Availability == "available"
                 // The hunk is from the comment's original commit, so its line numbers are the original ones.
-                ? SuggestionDiff.Rewrite(item.RootComment.Body, item.RootComment.BodyTruncated, item.DiffHunk, item.HunkTruncated, item.DiffSide,
+                ? SuggestionDiff.Rewrite(item.RootComment.Body, item.RootComment.BodyTruncated, item.DiffHunk, item.HunkTruncated, item.DiffSide, item.StartDiffSide,
                     item.OriginalLine ?? item.Line, item.OriginalLine is null ? item.StartLine : item.OriginalStartLine)
                 : null,
             item.DiffHunk, PrLink(item.Url, subject),

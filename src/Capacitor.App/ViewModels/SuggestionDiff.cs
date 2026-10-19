@@ -15,10 +15,11 @@ public static partial class SuggestionDiff {
 
     /// The body with each top-level suggestion fence shown as a diff, or unchanged when it cannot be
     /// shown faithfully: a truncated body or hunk, a comment on the old side, or a range the hunk does
-    /// not hold. <paramref name="line"/> and <paramref name="startLine"/> are on the hunk's own side.
-    public static string? Rewrite(string? body, bool bodyTruncated, string? hunk, bool hunkTruncated, string? side, int? line, int? startLine) {
+    /// not hold, or a range starting on the old side. <paramref name="line"/> and <paramref name="startLine"/> are on the hunk's own side.
+    public static string? Rewrite(
+            string? body, bool bodyTruncated, string? hunk, bool hunkTruncated, string? side, string? startSide, int? line, int? startLine) {
         if (body is null || bodyTruncated || hunk is null || hunkTruncated || line is not { } last) return body;
-        if (side is not null && !side.Equals("right", StringComparison.OrdinalIgnoreCase)) return body;
+        if (!OnNewSide(side) || !OnNewSide(startSide)) return body;
         var first = startLine ?? last;
         if (first > last) return body;
         var removed = NewSide(hunk).Where(l => l.Number >= first && l.Number <= last).Select(l => l.Text).ToList();
@@ -40,6 +41,8 @@ public static partial class SuggestionDiff {
 
         return rewritten.ToString();
     }
+
+    static bool OnNewSide(string? side) => side is null || side.Equals("right", StringComparison.OrdinalIgnoreCase);
 
     /// The lines a hunk shows on its new side, numbered from its header, without their markers. A hunk
     /// has no file headers, so a line starting `+++` is an added line like any other.
