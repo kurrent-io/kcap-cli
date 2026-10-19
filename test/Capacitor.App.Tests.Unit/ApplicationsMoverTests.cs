@@ -37,7 +37,7 @@ public class ApplicationsMoverTests {
         Directory.CreateDirectory(Path.Combine(root, "Contents", "MacOS"));
         File.WriteAllText(Path.Combine(root, "Contents", "Info.plist"),
             $"<plist><dict><key>CFBundleIdentifier</key><string>{id}</string><key>CFBundleVersion</key><string>{version}</string></dict></plist>");
-        File.WriteAllText(Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor"), "exe");
+        File.WriteAllText(Path.Combine(root, "Contents", "MacOS", "kcap-desktop"), "exe");
     }
 
     static bool MovePromote(string from, string to) {
@@ -49,21 +49,43 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task Complete_copy_is_promoted_and_nothing_is_left_staged() {
         var apps = Tmp.CreateDir("Applications");
-        var source = Tmp.CreateDir("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.CreateDir("Downloads/kcap.app");
         CompleteBundle(source);
         var mover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, apps);
 
         var outcome = await mover.MoveAsync(source, CancellationToken.None);
 
         await Assert.That(outcome.Moved).IsTrue();
-        await Assert.That(outcome.InstalledPath).IsEqualTo(Path.Combine(apps, "Kurrent Capacitor.app"));
+        await Assert.That(outcome.InstalledPath).IsEqualTo(Path.Combine(apps, "kcap.app"));
+        await Assert.That(Directory.GetDirectories(apps).Length).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Rebrand_updates_legacy_install_in_place_to_preserve_CLI_and_service_paths() {
+        if (!OperatingSystem.IsMacOS()) return;
+        var apps = Tmp.CreateDir("Applications");
+        var installed = Tmp.PathTo("Applications/Kurrent Capacitor.app");
+        CompleteBundle(installed);
+        File.Move(Path.Combine(installed, "Contents", "MacOS", "kcap-desktop"),
+            Path.Combine(installed, "Contents", "MacOS", "Kurrent Capacitor"));
+        var source = Tmp.PathTo("Downloads/kcap.app");
+        CompleteBundle(source, "1.1.0");
+        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")),
+            MovePromote, apps, ApplicationsMover.SwapAtomic);
+
+        await Assert.That(mover.Inspect(source).Action).IsEqualTo(ApplicationsInstallAction.Update);
+        var outcome = await mover.MoveAsync(source, CancellationToken.None);
+
+        await Assert.That(outcome.Moved).IsTrue();
+        await Assert.That(outcome.InstalledPath).IsEqualTo(installed);
+        await Assert.That(File.Exists(Path.Combine(installed, "Contents", "MacOS", "kcap-desktop"))).IsTrue();
         await Assert.That(Directory.GetDirectories(apps).Length).IsEqualTo(1);
     }
 
     [Test]
     public async Task Incomplete_copy_is_removed_and_reported() {
         var apps = Tmp.CreateDir("Applications");
-        var source = Tmp.CreateDir("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.CreateDir("Downloads/kcap.app");
         CompleteBundle(source);
         var mover = new ApplicationsMover(new FakeDitto(root => Directory.CreateDirectory(Path.Combine(root, "Contents"))), MovePromote, apps);
 
@@ -77,8 +99,8 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task Existing_destination_refuses_before_copying() {
         var apps = Tmp.CreateDir("Applications");
-        Tmp.CreateDir("Applications/Kurrent Capacitor.app");
-        var source = Tmp.CreateDir("Downloads/Kurrent Capacitor.app");
+        Tmp.CreateDir("Applications/kcap.app");
+        var source = Tmp.CreateDir("Downloads/kcap.app");
         CompleteBundle(source);
         var ditto = new FakeDitto(CompleteBundle);
         var mover = new ApplicationsMover(ditto, MovePromote, apps);
@@ -93,7 +115,7 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task Destination_appearing_mid_move_fails_promotion_and_cleans_staging() {
         var apps = Tmp.CreateDir("Applications");
-        var source = Tmp.CreateDir("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.CreateDir("Downloads/kcap.app");
         CompleteBundle(source);
         var mover = new ApplicationsMover(new FakeDitto(CompleteBundle), (_, _) => false, apps);
 
@@ -107,7 +129,7 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task Cancellation_mid_copy_removes_staging_and_propagates() {
         var apps = Tmp.CreateDir("Applications");
-        var source = Tmp.CreateDir("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.CreateDir("Downloads/kcap.app");
         CompleteBundle(source);
         var mover = new ApplicationsMover(new CancellingDitto(), MovePromote, apps);
 
@@ -145,8 +167,8 @@ public class ApplicationsMoverTests {
     [Arguments("unknown", ApplicationsInstallAction.OpenInstalled)]
     public async Task Existing_verified_copy_is_updated_only_when_source_is_newer(string version, ApplicationsInstallAction expected) {
         var apps = Tmp.CreateDir("Applications");
-        CompleteBundle(Tmp.PathTo("Applications/Kurrent Capacitor.app"));
-        var source = Tmp.PathTo("Downloads/Kurrent Capacitor.app");
+        CompleteBundle(Tmp.PathTo("Applications/kcap.app"));
+        var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, version);
         var ditto = new FakeDitto(CompleteBundle);
         var mover = new ApplicationsMover(ditto, MovePromote, apps);
@@ -160,9 +182,9 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task Failed_swap_preserves_installed_copy_and_cleans_new_copy() {
         var apps = Tmp.CreateDir("Applications");
-        var installed = Tmp.PathTo("Applications/Kurrent Capacitor.app");
+        var installed = Tmp.PathTo("Applications/kcap.app");
         CompleteBundle(installed);
-        var source = Tmp.PathTo("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")), MovePromote, apps, (_, _) => false);
         await Assert.That((await mover.MoveAsync(source, CancellationToken.None)).Moved).IsFalse();
@@ -174,9 +196,9 @@ public class ApplicationsMoverTests {
     public async Task Newer_bundle_is_atomically_swapped_and_old_copy_is_removed() {
         if (!OperatingSystem.IsMacOS()) return;
         var apps = Tmp.CreateDir("Applications");
-        var installed = Tmp.PathTo("Applications/Kurrent Capacitor.app");
+        var installed = Tmp.PathTo("Applications/kcap.app");
         CompleteBundle(installed);
-        var source = Tmp.PathTo("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")),
             MovePromote, apps, ApplicationsMover.SwapAtomic);
@@ -188,8 +210,8 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task Running_installed_copy_is_not_replaced() {
         var apps = Tmp.CreateDir("Applications");
-        CompleteBundle(Tmp.PathTo("Applications/Kurrent Capacitor.app"));
-        var source = Tmp.PathTo("Downloads/Kurrent Capacitor.app");
+        CompleteBundle(Tmp.PathTo("Applications/kcap.app"));
+        var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var ditto = new FakeDitto(CompleteBundle);
         var mover = new ApplicationsMover(ditto, MovePromote, apps, (_, _) => true, _ => true);
@@ -200,9 +222,9 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task A_destination_changed_during_copy_is_not_overwritten() {
         var apps = Tmp.CreateDir("Applications");
-        var installed = Tmp.PathTo("Applications/Kurrent Capacitor.app");
+        var installed = Tmp.PathTo("Applications/kcap.app");
         CompleteBundle(installed);
-        var source = Tmp.PathTo("Downloads/Kurrent Capacitor.app");
+        var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var swapped = false;
         var mover = new ApplicationsMover(new FakeDitto(root => {
@@ -218,8 +240,8 @@ public class ApplicationsMoverTests {
     [Test]
     public async Task An_unrelated_bundle_is_never_replaced() {
         var apps = Tmp.CreateDir("Applications");
-        CompleteBundle(Tmp.PathTo("Applications/Kurrent Capacitor.app"), "1.0.0", "another.application");
-        var source = Tmp.PathTo("Downloads/Kurrent Capacitor.app");
+        CompleteBundle(Tmp.PathTo("Applications/kcap.app"), "1.0.0", "another.application");
+        var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var ditto = new FakeDitto(CompleteBundle);
         var mover = new ApplicationsMover(ditto, MovePromote, apps, (_, _) => true);

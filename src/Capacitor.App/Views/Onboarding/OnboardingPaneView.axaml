@@ -49,7 +49,7 @@
 
                 <TextBlock Classes="frNote" Margin="0,6,0,0">
                     <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
-                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor." />
+                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in kcap." />
                 </TextBlock>
             </StackPanel>
         </DataTemplate>
@@ -89,7 +89,7 @@
                           Height="18" Stretch="Uniform" HorizontalAlignment="Left" />
                     <Button Grid.Column="1" Classes="frQuiet" Content="Finish later"
                             Command="{Binding FinishLaterCommand}"
-                            ToolTip.Tip="Continue setup from Help and support in Capacitor" />
+                            ToolTip.Tip="Continue setup from Help and support in kcap" />
                 </Grid>
 
                 <StackPanel Spacing="14">

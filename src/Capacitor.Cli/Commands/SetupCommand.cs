@@ -764,7 +764,7 @@ sealed class SetupCommand(
                 "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
             return SetupExit.Refused;
         }
-        AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
+        AnsiConsole.Write(new Rule("[bold green]Welcome to kcap[/]").Centered());
 
 
         // Check if already configured
@@ -980,7 +980,7 @@ sealed class SetupCommand(
                 : $"  [dim]· Chosen in the browser: {Markup.Escape(VisibilityLabel(fromFlow))}[/]");
         } else {
             var visibilityPrompt = new SelectionPrompt<string>()
-                .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
+                .Title("Which of your sessions should be readable by other users in the same kcap account by default?")
                 .AddChoices(AppConfig.ValidVisibilities)
                 .UseConverter(VisibilityLabel);
 
@@ -999,7 +999,7 @@ sealed class SetupCommand(
         // Step 4: Harnesses
         AnsiConsole.Write(new Rule("[yellow]Step 4/6 — Harnesses[/]").LeftJustified());
         _json?.Started(SetupJsonReport.Harnesses);
-        await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your harnesses.");
+        await Console.Out.WriteLineAsync("  kcap records sessions by installing hooks into your harnesses.");
         await Console.Out.WriteLineAsync();
 
         var detected   = new CodingAgentsStep.DetectedAgents(
@@ -1086,7 +1086,7 @@ sealed class SetupCommand(
             ? MuseAssistantPosture.Apply(stepOptions)
             : SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 
-        // allowlist the Capacitor server(s) Codex skills need to reach. A single
+        // allowlist the kcap server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
         // proxy; self-hosted servers are added as exact hosts. Derived from the active
         // server URL plus every configured profile so switching profiles still works.
@@ -1555,7 +1555,7 @@ sealed class SetupCommand(
     /// <summary>Source folder name under <c>kcap/skills/</c>; <c>kcap-</c>-prefixed once installed.</summary>
     internal const string GuidedTourSkillName = "guided-tour";
 
-    internal const string GuidedTourQuestion = "New to Capacitor?";
+    internal const string GuidedTourQuestion = "New to kcap?";
 
     /// <summary>
     /// A prompt, not <c>/kcap:guided-tour</c>: this box prints for every vendor and only Claude Code
@@ -1568,7 +1568,7 @@ sealed class SetupCommand(
     internal const string GuidedTourPromptQuoted = $"\"{GuidedTourPrompt}\"";
 
     internal const string GuidedTourAction =
-        $"Prompt {GuidedTourPromptQuoted} in your coding agent to see what Capacitor can do for you";
+        $"Prompt {GuidedTourPromptQuoted} in your coding agent to see what kcap can do for you";
 
     internal const string GuidedTourCallToAction = $"{GuidedTourQuestion} {GuidedTourAction}";
 
@@ -1597,14 +1597,14 @@ sealed class SetupCommand(
     /// the local installation: who owns it is not knowable here, so the reader self-selects on the question. Says "server",
     /// never "workspace" — that word means the local tree everywhere else in this CLI.
     /// </summary>
-    internal const string ServerSetupQuestion = "Did you create this Capacitor server?";
+    internal const string ServerSetupQuestion = "Did you create this kcap server?";
 
     internal const string ServerSetupAction = "Complete server setup with instructions here:";
 
     internal const string ServerSetupDocsUrl =
         "https://capacitor.kurrent.io/docs/getting-started/setup-server/";
 
-    internal const string LocalServerQuestion = "Where is your local Capacitor server?";
+    internal const string LocalServerQuestion = "Where is your local kcap server?";
 
     internal const string LocalServerAction = "Open it in a browser:";
 
@@ -1676,7 +1676,7 @@ sealed class SetupCommand(
             if (inputs.BrowserHandoffPrompt is not null && HandoffVendorEligibility.Eligible(harnesses, inputs.Paths).Count == 0) {
                 AnsiConsole.MarkupLine(
                     $"  [yellow]![/] No agent has the kcap {EvalWatchSkillName} skill, so the prompt the browser showed has nothing to answer it. "
-                  + $"Follow the import in Capacitor instead: {Markup.Escape(inputs.ServerUrl.TrimEnd('/'))}/sessions?status=ended");
+                  + $"Follow the import in kcap instead: {Markup.Escape(inputs.ServerUrl.TrimEnd('/'))}/sessions?status=ended");
 
                 return new ImportStepResult(false, null, null, null);
             }
@@ -1858,7 +1858,7 @@ sealed class SetupCommand(
         if (reason is HandoffSuppressedReason.SkillNotInstalled or HandoffSuppressedReason.NoAgentDetected) {
             // Point at ended sessions: those are the ones far enough along to carry eval results.
             var sessionsUrl = Markup.Escape($"{serverUrl.TrimEnd('/')}/sessions?status=ended");
-            AnsiConsole.MarkupLine($"  Watch the import and its evals in the Capacitor UI: [cyan]{sessionsUrl}[/]");
+            AnsiConsole.MarkupLine($"  Watch the import and its evals in the kcap UI: [cyan]{sessionsUrl}[/]");
 
             if (reason == HandoffSuppressedReason.SkillNotInstalled) {
                 AnsiConsole.MarkupLine(
@@ -2752,7 +2752,7 @@ sealed class SetupCommand(
         }
 
         if (payload.Workspaces.Count == 0) {
-            AnsiConsole.MarkupLine("  No Capacitor workspace found for this account.");
+            AnsiConsole.MarkupLine("  No kcap workspace found for this account.");
             AnsiConsole.MarkupLine(payload.CanCreate
                 ? "  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]"
                 : "  [dim]Ask an admin to install the Kurrent GitHub App on your org, or use `kcap setup --server-url <url>`.[/]");

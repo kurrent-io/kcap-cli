@@ -4,14 +4,14 @@
         xmlns:svc="clr-namespace:Capacitor.App.Services"
         x:Class="Capacitor.App.Views.AboutWindow"
         x:DataType="vm:MainWindowViewModel"
-        Title="About Kurrent Capacitor"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="About kcap"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="360" Height="300" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <StackPanel Margin="24" Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center">
-        <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png" Width="64" Height="64"
+        <Image Source="avares://kcap-desktop/Assets/kcap-icon.png" Width="64" Height="64"
                HorizontalAlignment="Center" />
-        <TextBlock Text="Kurrent Capacitor" Classes="kcapTitle" HorizontalAlignment="Center" />
+        <TextBlock Text="kcap" Classes="kcapTitle" HorizontalAlignment="Center" />
         <TextBlock x:Name="AboutVersionText"
                    Text="{Binding Source={x:Static svc:AppVersion.Display}, StringFormat='Version {0}'}"
                    Foreground="{StaticResource KcapMutedBrush}" FontSize="13" HorizontalAlignment="Center" />

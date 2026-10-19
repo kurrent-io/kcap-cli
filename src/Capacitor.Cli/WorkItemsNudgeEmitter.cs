@@ -5,7 +5,7 @@ namespace Capacitor.Cli;
 
 /// <summary>
 /// Builds the SessionStart "work items" nudge fragment: short standing guidance telling the agent it
-/// is in a recorded Kurrent Capacitor session and that it should register the session with its work
+/// is in a recorded kcap session and that it should register the session with its work
 /// item and declare the work's structure (breakdown + dependencies) as it discovers them.
 ///
 /// <para>Unlike the team-memory index and judge-fact guidelines, this nudge takes no server round-trip
@@ -64,7 +64,7 @@ static class WorkItemsNudgeEmitter {
 
         return
             "## Work items\n" +
-            $"You are in a recorded Kurrent Capacitor session (id: `{id}`). When you start work on a " +
+            $"You are in a recorded kcap session (id: `{id}`). When you start work on a " +
             "tracked item, register this session with it using the kcap-workitems MCP tool " +
             "`declare_work_item` — attach by the issue key, PR number, or existing work-item id you are " +
             "working on; create a new item by title ONLY when there is genuinely no tracker item, and " +

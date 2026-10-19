@@ -115,7 +115,7 @@ write one that stands alone:
 - name the files, the issue or the loose end it concerns,
 - include what you learned here that it would otherwise have to rediscover,
 - and make sure it names the session it came from, by ending it with:
-  "This task was handed over from Kurrent Capacitor session `<your session
+  "This task was handed over from kcap session `<your session
   id>`. Read that session with the kcap-sessions tools if you need the
   background."
 

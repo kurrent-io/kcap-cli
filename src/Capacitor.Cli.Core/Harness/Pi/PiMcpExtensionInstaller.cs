@@ -21,7 +21,7 @@ public static class PiMcpExtensionInstaller {
 
     const string Header =
         """
-        // kcap-mcp.ts — Kurrent Capacitor MCP-bridge extension for Pi.
+        // kcap-mcp.ts — kcap MCP-bridge extension for Pi.
         // Pi has no built-in MCP, so this bridges the kcap stdio servers (`kcap mcp <name>`)
         // into Pi as native tools: spawn each, handshake, register its tools. Dependency-free
         // (node:child_process only) and fail-safe — one bad server never blocks the rest.

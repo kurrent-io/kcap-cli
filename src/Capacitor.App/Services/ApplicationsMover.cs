@@ -16,14 +16,18 @@ public sealed partial class ApplicationsMover(
     public ApplicationsInstallPlan Inspect(string bundleRoot) {
         var name = Path.GetFileName(bundleRoot.TrimEnd('/'));
         var target = Path.Combine(applicationsDir, name);
+        // Keep an existing install at its stable path: CLI symlinks and launchd point into it.
+        var legacyTarget = Path.Combine(applicationsDir, "Kurrent Capacitor.app");
+        if (name == "kcap.app" && !Directory.Exists(target) && !File.Exists(target) && ReadVersion(legacyTarget) is not null)
+            target = legacyTarget;
         var source = ReadVersion(bundleRoot);
         if (source is null)
-            return new(ApplicationsInstallAction.Blocked, target, Error: "This copy of Capacitor is incomplete or cannot be verified. Download it again.");
+            return new(ApplicationsInstallAction.Blocked, target, Error: "This copy of kcap is incomplete or cannot be verified. Download it again.");
         if (!Directory.Exists(target) && !File.Exists(target))
             return new(ApplicationsInstallAction.Install, target, source);
         var installed = ReadVersion(target);
         if (installed is null)
-            return new(ApplicationsInstallAction.Blocked, target, source, Error: $"{name} already exists in {applicationsDir}, but is not a verified Capacitor bundle. Move it aside in Finder and try again.");
+            return new(ApplicationsInstallAction.Blocked, target, source, Error: $"{name} already exists in {applicationsDir}, but is not a verified kcap bundle. Move it aside in Finder and try again.");
         return new(PrereleaseSemver.IsNewer(source, installed)
             ? ApplicationsInstallAction.Update : ApplicationsInstallAction.OpenInstalled, target, source, installed);
     }
@@ -34,7 +38,7 @@ public sealed partial class ApplicationsMover(
         if (plan.Action == ApplicationsInstallAction.Blocked) return new(false, plan.Target, plan.Error);
         if (plan.Action == ApplicationsInstallAction.OpenInstalled) return new(true, plan.Target, null);
         if (plan.Action == ApplicationsInstallAction.Update && isRunning?.Invoke(plan.Target) == true)
-            return new(false, plan.Target, "Quit the installed copy of Capacitor, then try updating again.");
+            return new(false, plan.Target, "Quit the installed copy of kcap, then try updating again.");
 
         var name = Path.GetFileName(plan.Target);
         var staging = Path.Combine(applicationsDir, $"{name}.staging-{Guid.NewGuid():N}");
@@ -51,7 +55,7 @@ public sealed partial class ApplicationsMover(
                 return Fail(staging, "The installed copy changed while copying. Try again.");
             if (plan.Action == ApplicationsInstallAction.Update) {
                 if (isRunning?.Invoke(plan.Target) == true)
-                    return Fail(staging, "Quit the installed copy of Capacitor, then try updating again.");
+                    return Fail(staging, "Quit the installed copy of kcap, then try updating again.");
                 if (swap?.Invoke(staging, plan.Target) != true)
                     return Fail(staging, "The update could not be installed. The existing copy has not been changed.");
                 // After the atomic swap, staging contains only the previous bundle.
@@ -71,7 +75,8 @@ public sealed partial class ApplicationsMover(
     static string? ReadVersion(string root) {
         try {
             if (!Directory.Exists(root) || new DirectoryInfo(root).LinkTarget is not null ||
-                !File.Exists(Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor"))) return null;
+                (!File.Exists(Path.Combine(root, "Contents", "MacOS", "kcap-desktop")) &&
+                 !File.Exists(Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor")))) return null;
             using var reader = XmlReader.Create(Path.Combine(root, "Contents", "Info.plist"),
                 new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null });
             var entries = XDocument.Load(reader).Root?.Element("dict")?.Elements().ToArray();

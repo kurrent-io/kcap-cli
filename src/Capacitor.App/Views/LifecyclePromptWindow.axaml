@@ -7,7 +7,7 @@
                      x:TypeArguments="vm:LifecyclePromptViewModel"
                      x:DataType="vm:LifecyclePromptViewModel"
                      Title="{Binding Title}"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                     Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="480" SizeToContent="Height" MaxHeight="560"
                      CanResize="False" Topmost="True" WindowStartupLocation="CenterOwner"
                      Background="{StaticResource KcapCanvasBrush}"
@@ -22,7 +22,7 @@
             <ScrollViewer Grid.Row="0">
                 <StackPanel>
                     <Panel Width="64" Height="64" HorizontalAlignment="Center">
-                        <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                        <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                                RenderOptions.BitmapInterpolationMode="HighQuality" />
                         <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
                     </Panel>

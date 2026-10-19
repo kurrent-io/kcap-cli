@@ -4,14 +4,14 @@ description: >-
   This skill should be used whenever you write or read a plan, spec or design
   document, when you start executing a plan, and whenever a task list, todo
   list or checklist comes up — yours or the user's. It says how to record the
-  plan and its tasks in Kurrent Capacitor through the `kcap mcp plans` MCP
+  plan and its tasks in kcap through the `kcap mcp plans` MCP
   tools, so progress shows in the session view and survives context
   compaction.
 ---
 
 # Plans — declaring the document and its tasks
 
-Capacitor keeps its own record of the plan a session executes: the document,
+kcap keeps its own record of the plan a session executes: the document,
 the ordered task list, and each task's status. It is written only by you,
 through the `kcap-plans` MCP tools; nothing infers it. Three rules:
 
@@ -41,7 +41,7 @@ through the `kcap-plans` MCP tools; nothing infers it. Three rules:
    development `progress.md`, an executing-plans checklist. Pair every write to
    that ledger with an `update_plan_task` in the same turn: `in_progress` when
    you start or dispatch a task, `completed` when it passes its review rather
-   than when the work first comes back. The user watches the Capacitor ledger,
+   than when the work first comes back. The user watches the kcap ledger,
    and a task finished only in your own file still reads as `pending` there.
    When subagents do the tasks, the coordinating session makes these calls — a
    subagent's own session is not on the plan.

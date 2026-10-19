@@ -1,28 +1,28 @@
 ---
 name: capacitor-recording
 description: >-
-  Record this user's Muse chats into Kurrent Capacitor as private sessions, with their
+  Record this user's Muse chats into kcap as private sessions, with their
   explicit written consent, through `kcap muse-assistant`. Use when the user asks to
-  "record my chats", "record this chat in Capacitor", "start recording", "stop
-  recording", "stop recording this chat", "what is Capacitor recording", or asks to
-  include their chat history in Capacitor; and on every run of the
+  "record my chats", "record this chat in kcap", "start recording", "stop
+  recording", "stop recording this chat", "what is kcap recording", or asks to
+  include their chat history in kcap; and on every run of the
   `capacitor-recording` cron.
 metadata:
   includeInPrompt: true
 ---
 
-# Capacitor recording
+# kcap recording
 
 `kcap` is `~/workspace/kcap/node_modules/.bin/kcap`, installed and signed in by the
 connect-capacitor skill. If it is missing, `kcap muse-assistant --help` fails, or
-`kcap whoami` reports no user, tell the user to say "reconnect Capacitor" first;
+`kcap whoami` reports no user, tell the user to say "reconnect kcap" first;
 nothing below works without it.
 
 ## What recording means
 
 For each chat the user has put in scope, every message with role `user`, `assistant`
 or `commentary` is sent, exactly as `chat.read_messages` returns it, to the user's
-Capacitor workspace by `kcap muse-assistant ingest`, as private sessions owned by
+kcap workspace by `kcap muse-assistant ingest`, as private sessions owned by
 their signed-in kcap user. Items with role `developer` (runtime instructions, including
 "background command finished" prompts) are never sent. Tool calls, browser actions,
 approvals and files are not in `chat.read_messages` and are not recorded. Two hours
@@ -56,17 +56,17 @@ once a walk finds two and a half hours of quiet.
    text below back to the user, filling the brackets from steps 1 and 2, the workspace
    address and the user's words, and wait for a clear yes:
 
-   > Recording scope: Capacitor will record these chats: [chat ids, with "main chat"
+   > Recording scope: kcap will record these chats: [chat ids, with "main chat"
    > where it applies]. From each, every message with role `user`, `assistant` or
    > `commentary` — what you say, what I say, and my one-line narration of my own
    > work — is sent verbatim to [the workspace address] by
    > `kcap muse-assistant ingest`, run by a cron on this VM every 15 minutes, as
-   > private Capacitor sessions owned by your signed-in kcap user. Nothing with role
+   > private kcap sessions owned by your signed-in kcap user. Nothing with role
    > `developer` is sent. [Only messages from now on are recorded. | Your earlier
-   > messages in these chats are recorded too; for a chat Capacitor recorded before,
+   > messages in these chats are recorded too; for a chat kcap recorded before,
    > only those since its recording last stopped.] Say "stop recording" at any time;
    > `kcap muse-assistant scope remove` ends it and nothing further is sent. What was
-   > already sent stays in Capacitor.
+   > already sent stays in kcap.
 
 4. On a clear yes, run one command per chat, choosing the flag from what you read in
    step 2 and what the user said:
@@ -110,9 +110,9 @@ Tell the user what the exit code says, and nothing more hopeful:
   cannot close its open session and it may stay open (see **3**).
 - **3** (`scope remove`, or `scope reset` for each stderr line saying "set aside" or
   "no grant recorded") — this chat's recording record is missing, unreadable, or
-  belongs to another Capacitor account. kcap has taken the chat off its list (and set
+  belongs to another kcap account. kcap has taken the chat off its list (and set
   an unreadable record aside), so the cron sends nothing more from it, but a session
-  already open in Capacitor for it may stay open, and `sweep` cannot close it. Granting
+  already open in kcap for it may stay open, and `sweep` cannot close it. Granting
   the chat again now starts afresh. Say this plainly, quoting the stderr line. A
   `scope reset` exit 3 stopped every other chat too.
 - **4** — kcap could **not** confirm that recording stopped (nothing was revoked, or
@@ -140,7 +140,7 @@ below, exactly. The timeout is generous on purpose: the first walk of a long cha
 granted with history pages 20 items per call, and a run cut off mid-walk ingests
 nothing. Runs that overlap are safe; the instruction handles them.
 
-> You are the Capacitor recorder. `KCAP` below means
+> You are the kcap recorder. `KCAP` below means
 > `~/workspace/kcap/node_modules/.bin/kcap` and `ROOT` means
 > `$HOME/workspace/capacitor/ingest`. Every command runs on its own: write the literal
 > values (paths, `<key>`, `<FETCHED>`, chat ids) into each one, and never rely on a
@@ -155,7 +155,7 @@ nothing. Runs that overlap are safe; the instruction handles them.
 >    printed: remember each stderr line that says "no usable state" (it ends with
 >    `chat=<chat_id>`) and still process the printed chats. For the user's next turn,
 >    tell them once (not again for the same chat since the last successful run) that
->    Capacitor cannot record chat `<chat_id>` and that saying "stop recording" for it,
+>    kcap cannot record chat `<chat_id>` and that saying "stop recording" for it,
 >    then granting it again, restores recording. If the exit code is not 0, also
 >    remember the last stderr line that is not a "no usable state" line, for the user's
 >    next turn, and carry on with the lines printed. Only if it exits 0, guarded-delete
@@ -214,8 +214,8 @@ nothing. Runs that overlap are safe; the instruction handles them.
 >         one failed walk, and the next fresh walk re-reads the same items. Otherwise
 >         keep it.
 >       - An exit 2 whose stderr names a `seq` at or above 1000000000 means this chat
->         cannot be recorded: Capacitor cannot track message numbers that large.
->         Remember "Capacitor cannot record chat <chat_id> (its message numbers are too
+>         cannot be recorded: kcap cannot track message numbers that large.
+>         Remember "kcap cannot record chat <chat_id> (its message numbers are too
 >         large); say 'stop recording' for it".
 > 4. Never edit a page file, never retype a page from your own view, never run any
 >    kcap command other than `ingest` and `sweep` here, and do not wake the user. If

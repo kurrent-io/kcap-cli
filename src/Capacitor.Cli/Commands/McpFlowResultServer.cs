@@ -223,7 +223,7 @@ sealed class McpFlowResultServer(
         using var response = reply.Response;
 
         if (response is null)
-            return ($"Error: the Capacitor server is unreachable ({reply.Failure}).\n{FallbackHint}", true);
+            return ($"Error: the kcap server is unreachable ({reply.Failure}).\n{FallbackHint}", true);
 
         if (response.IsSuccessStatusCode)
             return ("Result recorded. You may end your reply now.", false);
@@ -346,7 +346,7 @@ sealed class McpFlowResultServer(
         if (response is null)
             // No retry hint: a new call mints a new message_id, so a send that landed unanswered
             // would reach the driver twice.
-            return ($"Error: the Capacitor server is unreachable ({reply.Failure}). The message may or may not have reached the flow driver; sending it again could deliver it twice.", true);
+            return ($"Error: the kcap server is unreachable ({reply.Failure}). The message may or may not have reached the flow driver; sending it again could deliver it twice.", true);
 
         if (response.IsSuccessStatusCode)
             return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);

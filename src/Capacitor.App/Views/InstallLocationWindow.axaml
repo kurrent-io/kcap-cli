@@ -2,8 +2,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.InstallLocationWindow"
-        Title="Kurrent Capacitor"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="kcap"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="480" SizeToContent="Height"
         CanResize="False" WindowStartupLocation="CenterScreen"
         Background="{StaticResource KcapCanvasBrush}"
@@ -15,7 +15,7 @@
         <StackPanel Margin="36,52,36,28" Spacing="0">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="14">
                 <Panel Width="64" Height="64">
-                    <Image Source="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                    <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                            RenderOptions.BitmapInterpolationMode="HighQuality" />
                     <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
                 </Panel>

@@ -6,8 +6,8 @@ public sealed record ApplicationsInstallPlan(
     ApplicationsInstallAction Action, string Target, string? SourceVersion = null,
     string? InstalledVersion = null, string? Error = null) {
     public string Title => Action switch {
-        ApplicationsInstallAction.Update => "Update Capacitor",
-        ApplicationsInstallAction.OpenInstalled => "Capacitor is already installed",
+        ApplicationsInstallAction.Update => "Update kcap",
+        ApplicationsInstallAction.OpenInstalled => "kcap is already installed",
         _ => "Move to Applications",
     };
 

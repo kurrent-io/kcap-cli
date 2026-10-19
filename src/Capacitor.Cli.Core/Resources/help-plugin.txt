@@ -75,7 +75,7 @@ Options:
   --skip-codex-network-access
                       With --codex: skip enabling Codex sandbox network access.
                       By default `install --codex` also allows Codex's
-                      workspace-write sandbox to reach your configured Capacitor
+                      workspace-write sandbox to reach your configured kcap
                       server(s) (a network_proxy allowlist in
                       ~/.codex/config.toml) so kcap skills work. The
                       --if-installed refresh path never touches this, so the npm

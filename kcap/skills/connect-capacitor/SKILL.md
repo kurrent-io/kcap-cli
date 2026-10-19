@@ -1,18 +1,18 @@
 ---
 name: connect-capacitor
 description: >-
-  This skill should be used when the user asks to "connect Capacitor", "set up
-  Capacitor", "set up kcap", "install kcap", "log in to Capacitor", "reconnect
-  Capacitor", or pastes the npm package name @kurrent/kcap; and when a kcap tool
+  This skill should be used when the user asks to "connect kcap", "set up
+  kcap", "set up kcap", "install kcap", "log in to kcap", "reconnect
+  kcap", or pastes the npm package name @kurrent/kcap; and when a kcap tool
   or skill fails because `kcap` is not installed or not signed in. Installs the
-  kcap CLI and signs it in. On a Muse Assistant VM it also registers Capacitor's
+  kcap CLI and signs it in. On a Muse Assistant VM it also registers kcap's
   MCP servers as a custom connector, writes the `capacitor` skill and keeps the
   sign-in warm with an hourly cron.
 ---
 
-# Connect Capacitor
+# Connect kcap
 
-Kurrent Capacitor records a team's coding-agent sessions and serves them back as
+kcap records a team's coding-agent sessions and serves them back as
 tools: search past sessions, team memory, analytics, work items, plans and
 knowledge. `kcap` is its CLI. This skill installs `kcap` and signs it in; what
 happens after that depends on the machine.
@@ -38,7 +38,7 @@ Never start `kcap daemon` unless the user asks for hosted agents.
 2. Install: requires Node.js 18+ (`node -v`). `npm install -g @kurrent/kcap`,
    then `command -v kcap` must print a path (otherwise add `$(npm prefix -g)/bin`
    to PATH in the shell profile — the hooks run `kcap` by name).
-3. Sign in: ask the user for their Capacitor server URL (for example
+3. Sign in: ask the user for their kcap server URL (for example
    `https://acme.kcap.ai`) unless they gave it, then run `kcap setup --server-url <url>`.
    With no browser on this machine add `--device`: it prints a URL and a short
    code — **show both to the user** and ask them to approve on their own device;
@@ -55,7 +55,7 @@ user has not given one. Never guess a tenant.
 
 Then say this to the user, naming the workspace's own host:
 
-> Connecting Capacitor needs a few approvals from you in this chat. Each time I
+> Connecting kcap needs a few approvals from you in this chat. Each time I
 > first contact a new host, a card appears here with **Allow once / Always allow
 > this site / Deny**. Please choose **Always allow this site** on each. The first
 > two are your workspace (`<its host>`) and `phog.kurrent.io` (kcap's anonymous
@@ -136,9 +136,9 @@ unreachable server as "not yet approved".
 If sign-in lapses later (`kcap status` reports an expired or missing token):
 `"$KCAP" login --device`, show the URL and code again.
 
-### B4. Register Capacitor as a custom connector
+### B4. Register kcap as a custom connector
 
-Capacitor's tools are stdio MCP servers started by `kcap mcp <name>`. Register
+kcap's tools are stdio MCP servers started by `kcap mcp <name>`. Register
 them as one custom connector at `~/workspace/custom-connectors/custom.kcap/`.
 The directory holds `connector.yaml`, `CONNECTOR.md`, and a stdio helper
 `mcp_call.py` — write the helper yourself, the way other custom connectors on
@@ -153,7 +153,7 @@ field names; these are the servers, commands and args:
 ```yaml
 name: kcap
 description: >-
-  Kurrent Capacitor: the team's recorded coding-agent sessions, team memory,
+  kcap: the team's recorded coding-agent sessions, team memory,
   analytics, work items, plans and curated knowledge.
 servers:
   kcap-sessions:
@@ -185,9 +185,9 @@ servers:
 `CONNECTOR.md`:
 
 ```markdown
-# kcap — Kurrent Capacitor
+# kcap
 
-Six stdio MCP servers over the team's Capacitor workspace. Call a tool with
+Six stdio MCP servers over the team's kcap workspace. Call a tool with
 `python3 mcp_call.py <server> <tool> '<json-args>'`; list tools with
 `python3 mcp_call.py <server> tools/list`.
 
@@ -225,7 +225,7 @@ Create `~/workspace/skills/capacitor/SKILL.md` with this content:
 ---
 name: capacitor
 description: >-
-  Use Kurrent Capacitor — the team's recorded coding-agent sessions, team
+  Use kcap — the team's recorded coding-agent sessions, team
   memory, analytics, work items, plans and curated knowledge — through the
   `kcap` custom connector. Triggers: "what did my team work on", "what did we
   do last week", "find the session where", "did we ever", "who worked on",
@@ -235,9 +235,9 @@ metadata:
   includeInPrompt: true
 ---
 
-# Capacitor
+# kcap
 
-Capacitor's tools are the `kcap` custom connector
+kcap's tools are the `kcap` custom connector
 (`~/workspace/custom-connectors/custom.kcap/`): `python3 mcp_call.py <server>
 <tool> '<json>'`. Read `CONNECTOR.md` there for the servers and tools.
 
@@ -269,26 +269,26 @@ Capacitor's tools are the `kcap` custom connector
    "Granting" section.
 8. **A 401 or "token" error:** run `~/workspace/kcap/node_modules/.bin/kcap
    status`. If the sign-in has lapsed, tell the user to say "reconnect
-   Capacitor"; the connect-capacitor skill runs `kcap login --device` and shows
+   kcap"; the connect-capacitor skill runs `kcap login --device` and shows
    them the code.
 9. Cite what you found: session title, date, author, and the `session_id`, so
-   the user can open it in Capacitor.
+   the user can open it in kcap.
 ```
 
 ### B6. Keep the sign-in warm: an hourly `kcap status` cron
 
 Ask the user first: the cron runs every hour while they are away, uses the
-Capacitor sign-in to refresh it, appends to `~/workspace/capacitor/cron.log`,
+kcap sign-in to refresh it, appends to `~/workspace/capacitor/cron.log`,
 and survives a VM replacement. Create it only once they agree; without it the
-sign-in can lapse on a VM left idle, and "reconnect Capacitor" restores it.
+sign-in can lapse on a VM left idle, and "reconnect kcap" restores it.
 
 Create a cron (title `kcap-hourly-status`, every hour) whose instruction is:
 
 > Run `~/workspace/kcap/node_modules/.bin/kcap status --no-update-check >> ~/workspace/capacitor/cron.log 2>&1`,
 > then keep only the last 500 lines of that file. Do nothing else and do not
 > wake the user — unless the output says the token is expired, missing or the
-> server rejected it, in which case add one line to the chat: "Capacitor
-> sign-in lapsed — say 'reconnect Capacitor' when you have a minute."
+> server rejected it, in which case add one line to the chat: "kcap
+> sign-in lapsed — say 'reconnect kcap' when you have a minute."
 
 `kcap status` refreshes the token when it can, so the hourly run is what keeps a
 long-idle VM signed in; `~/workspace/capacitor/cron.log` is where a lapse shows.
@@ -314,11 +314,11 @@ section: it reads the consent scope back to the user, runs
 
 ### B8. Tell the user
 
-- Capacitor is connected: ask me things like "what did my team work on this
+- kcap is connected: ask me things like "what did my team work on this
   week", "find the session where we fixed X", or "save this for the team".
 - Nothing on this VM is recorded until you ask: say "record my chats" and I
   will read the exact scope back to you before anything is sent.
 - Everything lives under your home — `~/workspace/kcap`, `~/.config/kcap`,
   the connector, the skill and the cron (if you agreed to it) — so it survives
   a VM replacement.
-- If a tool ever says the sign-in lapsed, say "reconnect Capacitor".
+- If a tool ever says the sign-in lapsed, say "reconnect kcap".

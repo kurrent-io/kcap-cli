@@ -354,7 +354,7 @@ public class OnboardingViewModelTests {
     [NotInParallel("AvaloniaSession")]
     public async Task Window_renders_the_current_steps_title() {
         var rendered = await AvaloniaSession.DispatchAsync(async () => {
-            var connect = new FakeWizardStep(WizardStepId.Edition, "Connect to Capacitor");
+            var connect = new FakeWizardStep(WizardStepId.Edition, "Connect to kcap");
             var vm = new OnboardingViewModel([connect]);
             await vm.PendingEnterForTesting;
 
@@ -372,9 +372,9 @@ public class OnboardingViewModelTests {
             return (title?.Text, title?.Classes.Contains("frHeadline"), eyebrow?.Text);
         });
 
-        await Assert.That(rendered.Item1).IsEqualTo("Connect to Capacitor");
+        await Assert.That(rendered.Item1).IsEqualTo("Connect to kcap");
         await Assert.That(rendered.Item2).IsTrue();
-        await Assert.That(rendered.Item3).IsEqualTo("STEP 1 OF 1 · CONNECT TO CAPACITOR");
+        await Assert.That(rendered.Item3).IsEqualTo("STEP 1 OF 1 · CONNECT TO KCAP");
     }
 
     // ── Busy gate and veto handling ──────────────────────────

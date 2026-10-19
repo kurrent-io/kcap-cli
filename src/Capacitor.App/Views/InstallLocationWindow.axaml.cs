@@ -37,7 +37,7 @@ public partial class InstallLocationWindow : Window {
         _moving = moving;
         MoveButton.IsEnabled = !moving;
         QuitButton.IsEnabled = !moving;
-        MoveButton.Content = moving ? "Preparing Capacitor…" : _actionLabel;
+        MoveButton.Content = moving ? "Preparing kcap…" : _actionLabel;
         if (moving) ErrorPanel.IsVisible = false;
     }
 

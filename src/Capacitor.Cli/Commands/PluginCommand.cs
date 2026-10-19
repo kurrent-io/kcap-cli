@@ -484,7 +484,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         AgentsSkillsInstaller.CleanLegacyCodexSkills(codex.SkillsDir);
 
         // enable Codex sandbox network access so the skills just installed can
-        // reach the Capacitor server. Opt out with --skip-codex-network-access. The
+        // reach the kcap server. Opt out with --skip-codex-network-access. The
         // --if-installed refresh path returns earlier, so npm postinstall never flips this.
         if (!args.Contains("--skip-codex-network-access"))
             await EnableCodexNetworkAccessAsync();
@@ -512,7 +512,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
     /// <summary>
     /// turn on Codex's <c>workspace-write</c> sandbox network access, constrained
-    /// to the Capacitor server(s) of every configured profile, so kcap skills can reach the
+    /// to the kcap server(s) of every configured profile, so kcap skills can reach the
     /// server. Never fails the install: a write error is a warning, not an error code.
     /// </summary>
     async Task EnableCodexNetworkAccessAsync() {
@@ -522,7 +522,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         if (domains.Count == 0) {
             await env.Stdout.WriteLineAsync(
-                "No Capacitor server configured yet — run `kcap setup` to allow Codex network access for kcap skills.");
+                "No kcap server configured yet — run `kcap setup` to allow Codex network access for kcap skills.");
 
             return;
         }

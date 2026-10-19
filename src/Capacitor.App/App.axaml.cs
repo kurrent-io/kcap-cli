@@ -416,7 +416,7 @@ public partial class App : Application {
                 if (outcome.Moved) {
                     var launcher = new ApplicationsLauncher(new ProcessRunner(_time), InstalledAppState, _time);
                     if (!await launcher.OpenAsync(outcome.InstalledPath!, _shutdown.Token))
-                        return new MoveOutcome(false, outcome.InstalledPath, "Could not confirm Capacitor opened. Open the copy in Applications, then quit this window.");
+                        return new MoveOutcome(false, outcome.InstalledPath, "Could not confirm kcap opened. Open the copy in Applications, then quit this window.");
                     Quit();
                 }
                 return outcome;
@@ -430,12 +430,13 @@ public partial class App : Application {
     static bool InstalledAppRunning(string root) => InstalledAppState(root) != false;
 
     static bool? InstalledAppState(string root) {
-        var executable = Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor");
+        string[] names = ["kcap-desktop", "Kurrent Capacitor"];
+        var executables = names.Select(name => Path.Combine(root, "Contents", "MacOS", name)).ToArray();
         var unknown = false;
-        foreach (var process in Process.GetProcessesByName("Kurrent Capacitor")) {
+        foreach (var process in names.SelectMany(Process.GetProcessesByName)) {
             using (process) {
                 try {
-                    if (process.Id != Environment.ProcessId && process.MainModule?.FileName == executable) return true;
+                    if (process.Id != Environment.ProcessId && executables.Contains(process.MainModule?.FileName)) return true;
                 } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
                     unknown = true;
                 }
@@ -447,9 +448,9 @@ public partial class App : Application {
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null) {
         var where = kind switch {
-            InstallLocationKind.DmgVolume   => "Kurrent Capacitor is running from the disk image.",
-            InstallLocationKind.Translocated => "Kurrent Capacitor is running from a temporary location.",
-            _                                => "Kurrent Capacitor is not in your Applications folder.",
+            InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
+            InstallLocationKind.Translocated => "kcap is running from a temporary location.",
+            _                                => "kcap is not in your Applications folder.",
         };
         return new InstallLocationWindow(where, move, quit, plan);
     }
@@ -863,7 +864,7 @@ public partial class App : Application {
 
     internal static LifecyclePrompt SetupRestartPrompt(bool importRunning) => new(
         LifecyclePrompt.KindSetup, null, null, false,
-        "Capacitor will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."
+        "kcap will restart to reopen setup. Your running sessions will keep going, and your settings and sign-in will stay intact."
         + (importRunning ? " Your history import will stop. Sessions already imported are kept; you can retry from setup." : ""));
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
@@ -1359,7 +1360,7 @@ public partial class App : Application {
     // copyable for a bug report.
     internal static Window BuildStartupErrorWindow(Exception ex) =>
         new() {
-            Title = "Kurrent Capacitor — startup failed",
+            Title = "kcap — startup failed",
             Icon = ProductIcon.WindowIcon,
             Width = 640,
             Height = 400,

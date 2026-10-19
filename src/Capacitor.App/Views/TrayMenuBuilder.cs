@@ -7,7 +7,7 @@ namespace Capacitor.App.Views;
 /// in full every time — NativeMenu has no ItemsSource, and a full rebuild is cheap at these sizes.
 /// Layout: disabled header, separator, agent entries with a Stop/Open-in-web submenu each (only
 /// when the model has entries, with a trailing separator), the pause toggle, "Open Kurrent
-/// Capacitor", the shim-install and update items (each only when applicable), a separator, then
+/// kcap", the shim-install and update items (each only when applicable), a separator, then
 /// "Quit".
 public sealed class TrayMenuBuilder(TrayViewModel vm) {
     public void Rebuild(NativeMenu menu, TrayMenuModel model) {
@@ -27,7 +27,7 @@ public sealed class TrayMenuBuilder(TrayViewModel vm) {
             menu.Items.Add(new NativeMenuItem("Review pending launches…") { Command = vm.ReviewPendingCommand });
 
         menu.Items.Add(BuildPauseItem(model.Pause));
-        menu.Items.Add(new NativeMenuItem("Open Kurrent Capacitor") { Command = vm.OpenMainWindowCommand });
+        menu.Items.Add(new NativeMenuItem("Open kcap") { Command = vm.OpenMainWindowCommand });
         menu.Items.Add(new NativeMenuItem("Settings…") { Command = vm.OpenSettingsCommand });
 
         // Visible only while applicable-but-absent (ShimOfferCoordinator.Offerable) —

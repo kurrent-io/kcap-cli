@@ -28,7 +28,7 @@ public static class OpenCodeExtensionInstaller {
     /// </summary>
     public const string ExtensionContent =
         """
-        // kcap.ts — Kurrent Capacitor live-ingest plugin for SST OpenCode.
+        // kcap.ts — kcap live-ingest plugin for SST OpenCode.
         //
         // Installed by `kcap setup` / `kcap plugin install --opencode` into
         // ~/.config/opencode/plugins/kcap.ts, which OpenCode auto-loads in-process.

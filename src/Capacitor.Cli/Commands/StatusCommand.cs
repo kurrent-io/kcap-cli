@@ -355,7 +355,7 @@ public sealed class StatusCommand(
                 : $"kcap {current} (update available: {target})"
             : $"kcap {current}";
 
-    internal static string FormatBundledVersionLine(string current) => $"kcap {current} (bundled with Kurrent Capacitor)";
+    internal static string FormatBundledVersionLine(string current) => $"kcap {current} (bundled with the kcap desktop app)";
 
     internal static string DaemonLine(IReadOnlyList<DaemonEntry> entries) {
         var live = entries.Where(e => e.Alive).ToList();

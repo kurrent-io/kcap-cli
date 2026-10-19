@@ -74,7 +74,7 @@ public class LauncherPaneViewSmokeTests {
                 var beforeText = subtitle.Text;
                 var beforeVisible = subtitle.IsVisible;
 
-                await vm.SelectRepositoryAsync("/repos/Kurrent-Capacitor-New-Machine");
+                await vm.SelectRepositoryAsync("/repos/kcap-New-Machine");
                 Dispatcher.UIThread.RunJobs();
 
                 var afterText = subtitle.Text;
@@ -91,7 +91,7 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(subtitleVisibleBefore).IsFalse();
         await Assert.That(subtitleBefore ?? "").IsEqualTo("");
         await Assert.That(subtitleVisibleAfter).IsTrue();
-        await Assert.That(subtitleAfter).IsEqualTo("Kurrent-Capacitor-New-Machine");
+        await Assert.That(subtitleAfter).IsEqualTo("kcap-New-Machine");
     }
 
     [Test]

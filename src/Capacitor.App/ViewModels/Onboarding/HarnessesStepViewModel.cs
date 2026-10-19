@@ -21,7 +21,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         new("project", "People I share a project with", "Readable by other members of your projects that hold the repository."),
         new("org_public", "Everyone in the account, for your organization's repositories",
             "Sessions in a repository your organization owns are readable account-wide. Your other repositories stay private unless a project you share covers them."),
-        new("public", "Everyone in the account", "Readable by every member of this Capacitor account."),
+        new("public", "Everyone in the account", "Readable by every member of this kcap account."),
     ];
 
     internal static readonly IReadOnlyList<string> ProviderKeys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"];
@@ -79,7 +79,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     const string PrivacyRequiredMessage = "Choose who can read new sessions before continuing.";
 
     public WizardStepId Id => WizardStepId.Harnesses;
-    public string Title => "Connect Capacitor to your harnesses";
+    public string Title => "Connect kcap to your harnesses";
     public string Eyebrow => "Your harnesses";
     public bool Applicable => true;
     public string SkipLabel => "Not now";
