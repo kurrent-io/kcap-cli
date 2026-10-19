@@ -46,11 +46,12 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Created on demand (not at startup) so a session that never publishes pays no
-        // network/token/stderr cost. Nullable field rather than Lazy<Task> so a transient
-        // creation failure leaves it null and the next call retries. Safe without locking:
-        // the stdio loop handles one request at a time.
-        HttpClient? client = null;
+        // Created on first use, so a session that never publishes stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(async () => {
+            var created = await http.ForSessionAsync();
+            LiftClientTimeout(created);
+            return created;
+        });
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
@@ -60,10 +61,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                if (client is null) {
-                    client = await http.ForSessionAsync();
-                    LiftClientTimeout(client);
-                }
+                var client = await sessionClient.GetAsync();
 
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl);
             } catch (Exception ex) {
@@ -96,40 +94,13 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                request = TryParseRequest(line);
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = McpWorkItemsServer.DecodeMethod(request);
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "pages");
 
         return 0;
     }

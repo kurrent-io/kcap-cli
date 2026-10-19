@@ -54,23 +54,13 @@ static class McpReviewContextServer {
         using var reader = new StreamReader(stdin, Encoding.UTF8);
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false)) { AutoFlush = true };
 
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-            JsonObject? request;
-            try { request = JsonNode.Parse(line)?.AsObject(); } catch { continue; }
-            if (request is null || request["id"] is not { } id) continue;
-
-            var method = request["method"]?.GetValue<string>();
-            var response = method switch {
-                "initialize" => BuildInitializeResponse(id, request),
-                "tools/list" => ToResponse(
-                    id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),
-                "tools/call" => await DispatchToolCallAsync(client, validated!, id, request),
-                _ => McpProtocol.TryHandleStandardMethod(method, id)
-                     ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-            };
-            await writer.WriteLineAsync(response);
-        }
+        await McpStdioLoop.RunAsync(reader, writer, (id, request) => DispatchToolCallAsync(client, validated!, id, request), (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => ToResponse(
+                id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),
+            _ => McpProtocol.TryHandleStandardMethod(method, id)
+                 ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "review");
         return 0;
     }
 

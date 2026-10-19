@@ -37,17 +37,18 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var mcp = new McpTelemetry(telemetry);
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
-        HttpClient? client = null;
+        using var sessionClient = new OnDemand<HttpClient>(async () => {
+            var created = await http.ForSessionAsync();
+            created.Timeout = Timeout.InfiniteTimeSpan;
+            return created;
+        });
 
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                if (client is null) {
-                    client = await http.ForSessionAsync();
-                    client.Timeout = Timeout.InfiniteTimeSpan;
-                }
+                var client = await sessionClient.GetAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, await repository.GetHashAsync());
             } catch (Exception ex) {
                 // The detail goes to stderr, not the client: an IO error's message can carry local paths.
@@ -76,38 +77,13 @@ sealed class McpKnowledgeServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-                try {
-                    request = JsonNode.Parse(line) as JsonObject;
-                } catch {
-                    continue;
-                }
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = McpWorkItemsServer.DecodeMethod(request);
-                if (id is null) continue;
-
-                var response = method switch {
-                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => ToResponse(id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch { }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => ToResponse(id, new McpToolsResult(tools), McpJsonContext.Default.McpToolsResult),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "knowledge");
 
         return 0;
     }

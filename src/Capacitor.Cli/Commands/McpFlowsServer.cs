@@ -55,14 +55,16 @@ class McpFlowsServer(
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // The authenticated client is created on the first tools/call, not at startup: kcap-flows
-        // auto-registers, so Claude Code spawns `kcap mcp flows` for every session —
-        // deferring keeps startup local-only (no GET /auth/config, token load, or stderr re-auth
-        // hint) for sessions that never invoke a flows tool. Created on demand into a nullable
-        // field (rather than a Lazy<Task>) so a transient creation failure leaves it null and the
-        // next call retries, instead of a faulted task sticking for the rest of the session. Safe
-        // without locking: the stdio loop handles one request at a time.
-        HttpClient? client = null;
+        // Created on first use, so a session that never calls a flows tool stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(async () => {
+            var created = await http.ForSessionAsync();
+            // A start or round POST can be held open server-side: an admission wait on a
+            // current server, the whole round on an older blocking one. The default 100s
+            // timeout would abort it, which the server sees as a cancel and tears the
+            // reviewer down — so no client-wide deadline; each lane bounds its own requests.
+            created.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
+            return created;
+        });
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
@@ -72,14 +74,7 @@ class McpFlowsServer(
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                if (client is null) {
-                    client = await http.ForSessionAsync();
-                    // A start or round POST can be held open server-side: an admission wait on a
-                    // current server, the whole round on an older blocking one. The default 100s
-                    // timeout would abort it, which the server sees as a cancel and tears the
-                    // reviewer down — so no client-wide deadline; each lane bounds its own requests.
-                    client.Timeout = System.Threading.Timeout.InfiniteTimeSpan;
-                }
+                var client = await sessionClient.GetAsync();
 
                 return await HandleToolCallAsync(
                     callId, callRequest, client, baseUrl, cwd, repoRoot, await repository.GetAsync(),
@@ -117,43 +112,12 @@ class McpFlowsServer(
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue;
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "flows");
 
         return 0;
     }

@@ -53,17 +53,15 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
 
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Created on demand so a session that never calls a tool pays no network cost; nullable so
-        // a transient creation failure leaves it null and the next call retries. The stdio loop
-        // handles one request at a time, so no locking.
-        HttpClient? client = null;
+        // Created on first use, so a session that never calls a tool stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(() => http.ForSessionAsync());
 
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk)
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                var client = await sessionClient.GetAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, cwd, repoRoot);
             } catch (Exception ex) {
                 // The detail goes to stderr, not the client, which could leak local paths.
@@ -92,44 +90,14 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue;
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = DecodeMethod(request);
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        // In arrival order: a task call addresses the plan that the call before it declared.
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "plans", serialCalls: true);
 
         return 0;
     }
