@@ -454,7 +454,10 @@ public class AppStartupTests {
                 desktop, new InvalidOperationException("boom"), service: null, new CancellationTokenSource(), [],
                 upgrade: upgrade);
             Dispatcher.UIThread.RunJobs();
-            return upgrade.Outcome is not null && !upgrade.Running;
+            var result = upgrade.Outcome is not null && !upgrade.Running;
+            // The headless session is shared by every UI test; an error window left open stays active.
+            fake.MainWindow?.Close();
+            return result;
         });
 
         await Assert.That(interrupts).IsEqualTo(1);
