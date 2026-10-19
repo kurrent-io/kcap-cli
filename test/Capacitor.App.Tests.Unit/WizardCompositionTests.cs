@@ -424,17 +424,22 @@ public class WizardCompositionLocalPathTests {
             var during = (graph.ViewModel.Current.Id, harness.Lane.Requests.Count, harness.Cli.StatusCallCount);
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            await Task.Delay(100);
+            var afterLine = harness.Lane.Requests.Count;
             exit.SetResult(new StreamingResult(0, false, []));
             await WizardFixtures.WaitUntilAsync(
                 () => graph.ViewModel.Current.Id == WizardStepId.Harnesses, what: "the install to advance");
-            await graph.Daemon.EnsureAsync(CancellationToken.None);
+            await WizardFixtures.WaitUntilAsync(
+                () => harness.Lane.Requests.Count == 1, what: "the settled install to enable the daemon");
 
-            return (during, visited, graph.ViewModel.Current.Id, harness.Lane.Requests.ToList());
+            return ((during.Id, during.Count, during.StatusCallCount, afterLine), visited, graph.ViewModel.Current.Id,
+                harness.Lane.Requests.ToList());
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(during.Id).IsEqualTo(WizardStepId.Install);
         await Assert.That(during.Count).IsEqualTo(0);
         await Assert.That(during.StatusCallCount).IsEqualTo(0);
+        await Assert.That(during.afterLine).IsEqualTo(0);
         await Assert.That(visited).DoesNotContain(WizardStepId.SignIn);
         await Assert.That(after).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
@@ -454,7 +459,8 @@ public class WizardCompositionLocalPathTests {
             var backVisible = graph.ViewModel.BackVisible;
 
             await graph.ViewModel.BackCommand.Execute().ToTask();
-            await graph.Daemon.EnsureAsync(CancellationToken.None);
+            await WizardFixtures.WaitUntilAsync(
+                () => harness.Lane.Requests.Count == 1, what: "composition to enable the daemon");
 
             return (start, backVisible, graph.ViewModel.Current.Id,
                 !graph.Steps.OfType<SignInStepViewModel>().Single().PassThrough,
