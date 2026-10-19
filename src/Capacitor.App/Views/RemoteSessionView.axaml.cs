@@ -23,23 +23,33 @@ public partial class RemoteSessionView : UserControl {
                 TerminalHost.Focus();
         };
         DataContextChanged += (_, _) => {
-            _tabFocus?.Dispose();
             ArtefactsPane.Content = null;
             PullRequestPane.Content = null;
-            var model = DataContext as RemoteSessionViewModel;
-            _tabFocus = model is null ? null : model
-                .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
-                .Subscribe(pair => Dispatcher.UIThread.Post(() => {
-                    if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
-                    if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
-                        ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
-                    if (pair.Property1 == RemoteTab.PullRequest && PullRequestPane.Content is null && model?.PullRequests is { } pullRequests)
-                        PullRequestPane.Content = new PullRequestReader { DataContext = pullRequests };
-                    if (PullRequestPane.Content is PullRequestReader reader) reader.IsVisible = pair.Property1 == RemoteTab.PullRequest;
-                    if (pair.Property1 == RemoteTab.Chat) ChatHost.FocusComposer();
-                    else if (pair.Property1 == RemoteTab.Terminal) TerminalHost.Focus();
-                }, DispatcherPriority.Loaded));
+            ArmTabFocus();
         };
+    }
+
+    void ArmTabFocus() {
+        _tabFocus?.Dispose();
+        var model = DataContext as RemoteSessionViewModel;
+        _tabFocus = model is null ? null : model
+            .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
+            .Subscribe(pair => Dispatcher.UIThread.Post(() => {
+                if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
+                if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
+                    ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
+                if (pair.Property1 == RemoteTab.PullRequest && PullRequestPane.Content is null && model?.PullRequests is { } pullRequests)
+                    PullRequestPane.Content = new PullRequestReader { DataContext = pullRequests };
+                if (PullRequestPane.Content is PullRequestReader reader) reader.IsVisible = pair.Property1 == RemoteTab.PullRequest;
+                if (pair.Property1 == RemoteTab.Chat) ChatHost.FocusComposer();
+                else if (pair.Property1 == RemoteTab.Terminal) TerminalHost.Focus();
+            }, DispatcherPriority.Loaded));
+    }
+
+    /// A host that re-attaches this view with its DataContext unchanged raises no DataContextChanged.
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        if (_tabFocus is null) ArmTabFocus();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {

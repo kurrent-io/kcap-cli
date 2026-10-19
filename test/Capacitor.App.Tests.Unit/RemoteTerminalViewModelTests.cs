@@ -9,7 +9,7 @@ using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// The read-only terminal: subscribed only once access stands, sized by the source, its viewport
+/// The read-only terminal: subscribed only once access stands and the pane has been shown, sized by the source, its viewport
 /// reported while the pane is showing and released when it stops driving, and a fresh surface per
 /// subscription.
 [NotInParallel(nameof(AvaloniaSession))]
@@ -169,19 +169,20 @@ public class RemoteTerminalViewModelTests {
         });
     }
 
-    /// The server takes the smallest viewport across viewers, so a pane nobody is looking at —
-    /// still carrying its unmeasured constructor size — would clamp the live agent's PTY for
-    /// everyone. The subscription itself stays eager: the replay is what the tab switch shows.
+    /// A workspace kept on its Chat tab costs the server no replay or stream: the pane subscribes on
+    /// its first showing and stays subscribed when hidden again. Hidden, it reports no viewport — the
+    /// server takes the smallest across viewers, so an unmeasured pane would clamp the agent's PTY.
     [Test]
-    public async Task A_hidden_pane_subscribes_without_a_viewport_and_reports_one_when_it_is_shown() {
+    public async Task A_pane_subscribes_when_first_shown_and_holds_no_viewport_while_hidden() {
         await RunOnUiAsync(async () => {
             var h = new Harness(visible: false);
             h.Access.OnNext(SessionAccessState.Established);
-            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
-            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
-            await Assert.That(h.Lane.Resizes).IsEmpty();
+            await Task.Delay(50);
+            await Assert.That(h.Lane.TerminalSubscribes).IsEmpty();
 
             h.Visible.OnNext(true);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+            await Assert.That(h.Lane.TerminalSubscribes).IsEquivalentTo(new[] { "a1" });
             await WaitUntilAsync(() => h.Lane.Resizes.Contains(("a1", 80, 24)), what: "the viewport");
 
             h.Visible.OnNext(false);
@@ -235,6 +236,33 @@ public class RemoteTerminalViewModelTests {
             await Task.Delay(50);
             await Assert.That(h.Lane.TerminalUnsubscribes).IsEmpty();
             await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// A stale subscribe the hub took while a newer one was in flight holds the connection in the
+    /// group; if that newer one is then refused, the membership is given back.
+    [Test]
+    public async Task A_stale_subscribe_behind_a_refused_one_is_released() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            var stale = new TaskCompletionSource<HubCallOutcome>();
+            var newer = new TaskCompletionSource<HubCallOutcome>();
+            var calls = 0;
+            h.Lane.TerminalSubscribeHandler = _ => ++calls == 1 ? stale.Task : newer.Task;
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 1, what: "the first subscribe");
+            h.Access.OnNext(SessionAccessState.Unavailable);
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 2, what: "the second subscribe");
+
+            stale.SetResult(HubCallOutcome.Ok);
+            await Task.Delay(50);
+            await Assert.That(h.Lane.TerminalUnsubscribes).IsEmpty();
+
+            newer.SetResult(HubCallOutcome.Denied("no"));
+            await WaitUntilAsync(() => h.Lane.TerminalUnsubscribes.Count == 1, what: "the stray membership released");
+            await Assert.That(h.Vm.Phase).IsEqualTo(RemoteTerminalPhase.Offline);
             await h.Vm.TeardownAsync();
         });
     }

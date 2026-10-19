@@ -54,16 +54,20 @@ sealed class SpyHostedAgentRuntimeFactory(string vendor) : IHostedAgentRuntimeFa
     /// afterwards — the seam for asserting what the orchestrator had already published by then.</summary>
     public Action? OnStart { get; init; }
 
-    public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+    /// <summary>When set, the start holds here like a vendor handshake, until released or cancelled.</summary>
+    public TaskCompletionSource? StartGate { get; init; }
+
+    public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
         OnStart?.Invoke();
         StartCalls++;
         LastAgentId = ctx.AgentId;
         LastContext = ctx;
         if (StartThrow is not null) throw StartThrow;
+        if (StartGate is not null) await StartGate.Task.WaitAsync(ct);
 
         var runtime = new FakeHostedAgentRuntime(Vendor, EmitsTerminalOutput);
         LastRuntime = runtime;
 
-        return Task.FromResult(new HostedRuntimeStart(runtime, McpConfigPath: null));
+        return new HostedRuntimeStart(runtime, McpConfigPath: null);
     }
 }

@@ -1470,6 +1470,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// standalone snapshot and a raw <c>git … failed:</c> line are rewritten; every other reason
     /// passes through (the server already truncates to 400 characters).
     internal static string FriendlyLaunchFailure(string reason) {
+        if (reason == WireTokens.LaunchCancelled)
+            return "The launch was cancelled.";
         if (reason.StartsWith(WireTokens.LaunchDeniedByOwnerPrefix, StringComparison.Ordinal))
             return "That machine's consent policy denied the launch. Approve it there, or pre-set a rule with kcap consent.";
         if (reason.StartsWith("attachment_unavailable:", StringComparison.Ordinal))

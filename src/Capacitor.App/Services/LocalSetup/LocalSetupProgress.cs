@@ -85,16 +85,13 @@ public sealed class LocalSetupProgress : ReactiveObject {
                 Download.State   = RowState.Running;
                 DownloadFraction = Fraction(root.Num("received") ?? 0);
                 break;
-            case "verified":
+            case "verified" or "unpacked":
                 Download.State = RowState.Done;
                 Verify.State   = RowState.Done;
+                StartInstall();
                 break;
-            case "unpacked":
-                Download.State = RowState.Done;
-                Verify.State   = RowState.Done;
-                Install.State  = RowState.Done;
-                break;
-            case "port_chosen" or "starting" or "committing":
+            // Not port_chosen: the CLI picks the port before it downloads anything.
+            case "starting" or "committing":
                 StartFirstStart();
                 break;
             case "ready":
@@ -134,7 +131,15 @@ public sealed class LocalSetupProgress : ReactiveObject {
 
     double? Fraction(long received) => _bytes > 0 ? Math.Clamp((double)received / _bytes, 0, 1) : null;
 
+    // Installing spans unpacking, the embedding setup and writing the unit; the CLI marks only its start and end.
+    void StartInstall() {
+        if (Install.State == RowState.Pending) Install.State = RowState.Running;
+    }
+
     void StartFirstStart() {
+        Download.State = RowState.Done;
+        Verify.State   = RowState.Done;
+        Install.State  = RowState.Done;
         if (FirstStart.State == RowState.Pending) FirstStart.State = RowState.Running;
     }
 

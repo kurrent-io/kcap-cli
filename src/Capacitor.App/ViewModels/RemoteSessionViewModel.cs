@@ -378,7 +378,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _lease.Disposable = new CompositeDisposable(states, lease);
     }
 
-    void PublishSession(bool ended) => _session.OnNext(ChatSessionInfo.FromRemote(_row, ended));
+    /// An unchanged row republishes nothing, so the pane's session handling runs only on a change.
+    void PublishSession(bool ended) {
+        var info = ChatSessionInfo.FromRemote(_row, ended);
+        if (info != _session.Value) _session.OnNext(info);
+    }
 
     void Release() {
         _leasedSession = null;

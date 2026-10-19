@@ -77,6 +77,7 @@ partial class WatchCommand(
                     options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
                     options.HttpMessageHandlerFactory = inner =>
                         new BearerRejectionReportHandler(time, report => Log(time, report)) { InnerHandler = inner };
+                    HttpClientExtensions.AddObservationHeaders(options.Headers, profiles.Effective?.UpdateCheck == false);
                     options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
                         context.Uri, context.Options.AccessTokenProvider, time, report => Log(time, report), ct);
                 }
