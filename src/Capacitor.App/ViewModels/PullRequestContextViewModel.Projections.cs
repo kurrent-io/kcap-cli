@@ -228,8 +228,9 @@ public sealed partial class PullRequestContextViewModel {
             Joined(item.IsResolved switch { true => "Resolved", false => "Unresolved", _ => null }, item.IsOutdated == true ? "Outdated" : null,
                 item.RootComment is { Availability: "available", Author: { } author } ? Author(author) : null),
             item.RootComment?.Availability == "available"
-                ? SuggestionDiff.Rewrite(item.RootComment.Body, item.DiffHunk, item.HunkTruncated, item.DiffSide, item.Line ?? item.OriginalLine,
-                    item.Line is null ? item.OriginalStartLine : item.StartLine)
+                // The hunk is from the comment's original commit, so its line numbers are the original ones.
+                ? SuggestionDiff.Rewrite(item.RootComment.Body, item.RootComment.BodyTruncated, item.DiffHunk, item.HunkTruncated, item.DiffSide,
+                    item.OriginalLine ?? item.Line, item.OriginalLine is null ? item.StartLine : item.OriginalStartLine)
                 : null,
             item.DiffHunk, PrLink(item.Url, subject),
             "available", item.HunkTruncated || item.RootComment?.BodyTruncated == true, IsThread: true)
