@@ -64,12 +64,27 @@ public sealed class SingleInstance : IDisposable {
         _lock.Dispose();
     }
 
-    // FileShare.None is an flock on Unix, released by the kernel however the holder exits.
+    // FileShare.None is an flock on Unix, released by the kernel however the holder exits. A held
+    // lock surfaces as an IOException like any other open failure, and every managed open takes a
+    // shared flock, so the file itself cannot be probed. A directory that still takes a file had
+    // only the lock in the way; any other failure propagates so the caller drops the guard instead
+    // of taking it for a running copy.
     static FileStream? TryLock(string path) {
         try {
             return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        } catch (IOException) {
+        } catch (IOException) when (TakesFiles(Path.GetDirectoryName(path)!)) {
             return null;
+        }
+    }
+
+    static bool TakesFiles(string directory) {
+        var probe = Path.Combine(directory, $".kcap-app.{Guid.NewGuid():N}");
+        try {
+            File.WriteAllBytes(probe, []);
+            File.Delete(probe);
+            return true;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return false;
         }
     }
 
