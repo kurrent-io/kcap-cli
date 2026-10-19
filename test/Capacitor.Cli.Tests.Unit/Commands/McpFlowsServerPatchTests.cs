@@ -98,6 +98,19 @@ public class McpFlowsServerPatchTests {
         await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Path)).IsEquivalentTo([StartV5]);
     }
 
+    /// <summary>Blank patch arguments name no patch, so the start takes its usual route and a 404 there is not
+    /// blamed on a missing v5.</summary>
+    [Test]
+    public async Task Blank_patch_arguments_start_without_a_patch_and_a_404_is_not_a_patch_refusal() {
+        using var server = Answering(404, "");
+
+        var (isError, text) = Unwrap(await Call(server, StartRequest("start_review_flow", " ", "")));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).DoesNotContain("patch_protocol_required");
+        await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Path)).DoesNotContain(StartV5);
+    }
+
     /// <summary>A retried post sends the bytes read for the call, not the file as it is by then.</summary>
     [Test]
     public async Task A_retried_patch_start_posts_the_patch_read_once() {

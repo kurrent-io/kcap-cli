@@ -313,7 +313,7 @@ partial class McpFlowsServer(
 
                 // A patch start goes only to v5; an older server answers that route with a 404 and started
                 // nothing, so the caller is told to update rather than seeing a run without its patch.
-                if (toolName is "start_review_flow" or "start_flow" && arguments?["patch_path"] is not null
+                if (startPatch is not null
                     && postResponse.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
                     return BuildToolResult(id, PatchProtocolRequiredMessage, isError: true);
 
