@@ -142,26 +142,18 @@ public class TelemetryClientTests {
         await Assert.That(spool.DrainAll().Count).IsEqualTo(1);
     }
 
-    // Regression test for the finding that FlushAsync's budget only bounded the HTTP phase:
-    // DrainAll (disk I/O) and PostHogPayload.Build (serializing the batch) ran unbounded before
-    // the timer started, so a slow drain could still let a doomed HTTP request start and burn the
-    // remaining wall-clock time anyway. With the fix, the drain/serialize phase (simulated here
-    // as a deterministic 10-second "elapsed" via FakeTimeProvider) is charged against the budget
-    // BEFORE the HTTP phase — a 1-second budget is already exhausted by then, so no request is
-    // attempted at all. Against the old (unfixed) code this budget difference is invisible: the
-    // full 1-second budget would still reach the HTTP phase, and the stub handler (which responds
-    // instantly, no real network latency) would succeed well within it — ok=true, Calls=1 — so
-    // this test fails on the old code and passes only once the remaining-budget check exists.
+    // Each clock read advances one second: the check before the drain sees 1s of a 1.5s budget and goes on,
+    // the check after the build sees 2s and must spill rather than post.
     [Test]
     public async Task Budget_already_exhausted_by_drain_and_build_spills_without_a_request() {
         var handler = new StubHandler(HttpStatusCode.OK);
         using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
         var spool   = new TelemetrySpool(spoolPath);
-        var clock   = new FakeTimeProvider(TimeSpan.FromSeconds(10));
+        var clock   = new FakeTimeProvider(TimeSpan.FromSeconds(1));
         var client  = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", clock);
         client.Enqueue(Event("cli_command"));
 
-        var ok = await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(1));
+        var ok = await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(1.5));
 
         await Assert.That(ok).IsFalse();
         await Assert.That(handler.Calls).IsEqualTo(0);
