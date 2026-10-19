@@ -13,12 +13,31 @@ public sealed partial class ApplicationsMover(
         Func<string, string, bool>? swap = null, Func<string, bool>? isRunning = null) {
     static readonly TimeSpan CopyTimeout = TimeSpan.FromMinutes(2);
 
+    public static string SelectApplicationsDirectory(string bundleRoot, string userApplicationsDir,
+            string systemApplicationsDir = "/Applications") {
+        var name = Path.GetFileName(bundleRoot.TrimEnd('/'));
+        bool HasDestination(string directory) {
+            var target = Path.Combine(directory, name);
+            var anotherCopy = Path.GetFullPath(target) != Path.GetFullPath(bundleRoot.TrimEnd('/'))
+                && (Directory.Exists(target) || File.Exists(target));
+            return anotherCopy || (name == "kcap.app"
+                && ReadVersion(Path.Combine(directory, "Kurrent Capacitor.app")) is not null);
+        }
+        if (HasDestination(systemApplicationsDir)) return systemApplicationsDir;
+        if (HasDestination(userApplicationsDir)) return userApplicationsDir;
+        return Path.GetDirectoryName(bundleRoot.TrimEnd('/')) == userApplicationsDir
+            ? userApplicationsDir : systemApplicationsDir;
+    }
+
     public ApplicationsInstallPlan Inspect(string bundleRoot) {
         var name = Path.GetFileName(bundleRoot.TrimEnd('/'));
         var target = Path.Combine(applicationsDir, name);
         // Keep an existing install at its stable path: CLI symlinks and launchd point into it.
         var legacyTarget = Path.Combine(applicationsDir, "Kurrent Capacitor.app");
-        if (name == "kcap.app" && !Directory.Exists(target) && !File.Exists(target) && ReadVersion(legacyTarget) is not null)
+        if (name == "kcap.app"
+                && (Path.GetFullPath(target) == Path.GetFullPath(bundleRoot.TrimEnd('/'))
+                    || (!Directory.Exists(target) && !File.Exists(target)))
+                && ReadVersion(legacyTarget) is not null)
             target = legacyTarget;
         var source = ReadVersion(bundleRoot);
         if (source is null)

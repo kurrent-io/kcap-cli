@@ -111,7 +111,7 @@ Updates arrive through the app: it checks a few times a day, downloads in the ba
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
 
-Existing macOS installations keep their original application folder during upgrades so CLI links and background services continue to work; the app displays as **kcap**.
+**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** directly from the new disk image and choose **Update and open**. The app finds verified existing installations in `/Applications` and `~/Applications` and updates them at their original path, preserving CLI links and background services. If you already dragged `kcap.app` into Applications, opening that copy offers the same upgrade of the existing installation; after the installed copy opens, you can remove the extra `kcap.app` copy. The app displays as **kcap**.
 
 ### Desktop app on Windows
 

@@ -391,14 +391,13 @@ public partial class App : Application {
         if (!OperatingSystem.IsMacOS()) return false;
         var root = InstallLocation.BundleRoot(Environment.ProcessPath);
         var kind = InstallLocation.Classify(root, _userHome.Path);
-        if (InstallLocation.Passes(kind)) return false;
-
-        var name = Path.GetFileName(root!);
+        if (kind == InstallLocationKind.NotABundle) return false;
         var userApps = Path.Combine(_userHome.Path, "Applications");
-        var apps = !Directory.Exists(Path.Combine("/Applications", name)) && Directory.Exists(Path.Combine(userApps, name))
-            ? userApps : "/Applications";
+        var apps = ApplicationsMover.SelectApplicationsDirectory(root!, userApps);
         var mover = new ApplicationsMover(new ProcessRunner(_time), ApplicationsMover.PromoteExclusive, apps,
             swap: ApplicationsMover.SwapAtomic, isRunning: InstalledAppRunning);
+        var plan = mover.Inspect(root!);
+        if (!ShouldPromptToInstall(kind, root!, plan)) return false;
         // Shutdown(0) closes this window as a side effect, which the window's own Closed handler
         // below turns back into a Quit call — this flag is what keeps that reentry from calling
         // Shutdown twice, whichever of the three paths (Quit, a successful move, or the titlebar
@@ -421,11 +420,17 @@ public partial class App : Application {
                 }
                 return outcome;
             },
-            quit: Quit, plan: mover.Inspect(root!));
+            quit: Quit, plan: plan);
         desktop.MainWindow = window;
         window.Show();
         return true;
     }
+
+    internal static bool ShouldPromptToInstall(InstallLocationKind kind, string root, ApplicationsInstallPlan plan) =>
+        !InstallLocation.Passes(kind)
+        || (kind is InstallLocationKind.Applications or InstallLocationKind.UserApplications
+            && Path.GetFileName(root.TrimEnd('/')) == "kcap.app"
+            && Path.GetFileName(plan.Target) == "Kurrent Capacitor.app");
 
     static bool InstalledAppRunning(string root) => InstalledAppState(root) != false;
 
@@ -450,6 +455,8 @@ public partial class App : Application {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
             InstallLocationKind.Translocated => "kcap is running from a temporary location.",
+            InstallLocationKind.Applications or InstallLocationKind.UserApplications =>
+                $"An existing kcap installation was found at {plan?.Target}.",
             _                                => "kcap is not in your Applications folder.",
         };
         return new InstallLocationWindow(where, move, quit, plan);
