@@ -62,7 +62,7 @@ public sealed record AgentRow(
     /// A launch the local daemon is still starting: no session, no worktree yet, and it opens as
     /// a local workspace because the daemon will publish it as one.
     public static AgentRow FromPending(PendingLaunchDto dto, RepoIdentity repo) => new(
-        Key: $"pending:{dto.Id}", Origin: AgentOrigin.Pending, Id: dto.Id, SessionId: null, Kind: "agent",
+        Key: $"pending:{dto.Id}", Origin: AgentOrigin.Pending, Id: dto.Id, SessionId: null, Kind: dto.Kind ?? "agent",
         Vendor: dto.Vendor, Status: "Starting", CreatedAt: dto.CreatedAt, RepoPath: dto.RepoPath,
         Title: dto.Title, Model: null, RequesterDisplay: null,
         WorktreePath: null, WorkLocation: null, BorrowedFrom: null,

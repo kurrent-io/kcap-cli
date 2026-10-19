@@ -2037,6 +2037,10 @@ public class HomeViewModelTests {
             .Contains("consent policy denied");
 
     [Test]
+    public async Task A_cancelled_launch_reads_as_cancelled() =>
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure(WireTokens.LaunchCancelled)).IsEqualTo("The launch was cancelled.");
+
+    [Test]
     public async Task An_empty_snapshot_failure_is_a_sentence() {
         await Assert.That(HomeViewModel.FriendlyLaunchFailure("standalone_snapshot_empty"))
             .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);

@@ -72,6 +72,8 @@ public static class SpecialKeys {
 public static class WireTokens {
     /// LaunchFailed reason prefix for a consent-gate denial on the target machine.
     public const string LaunchDeniedByOwnerPrefix = "launch_denied_by_owner";
+    /// LaunchFailed reason for a launch its owner stopped before the agent registered.
+    public const string LaunchCancelled = "launch_cancelled";
     /// HubException message fragment for a session the caller may not see.
     public const string SessionNotVisible = "Session not visible to caller";
     /// HubException message for a transient post-admit re-check fault; retryable, never a denial.
