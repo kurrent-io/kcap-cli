@@ -1,0 +1,51 @@
+{
+  "vendor": "opencode",
+  "stop": "midturn",
+  "kill": "sigterm",
+  "version": "1.18.31",
+  "argv": [
+    "opencode",
+    "acp"
+  ],
+  "started": "2026-10-19T09:29:43.230749+00:00",
+  "codeword": "PELICAN-118313",
+  "load_session_advertised": true,
+  "session_id": "ses_eac8124eeffeJCQ6gVLc0bg76N",
+  "turn_a_stop": "end_turn",
+  "turn_c_stop": "end_turn",
+  "stopped_mid_turn": true,
+  "stop1": {
+    "cancel_sent": true,
+    "ended_by": "eof",
+    "exit_code": 0,
+    "elapsed_s": 0.29,
+    "group_outlived_leader": false
+  },
+  "load_session_advertised_after": true,
+  "load": {
+    "ok": true,
+    "error": null,
+    "replayed_updates": 11,
+    "replayed_kinds": [
+      "agent_message_chunk",
+      "tool_call",
+      "tool_call_update",
+      "user_message_chunk"
+    ],
+    "conversation_updates_after_response": 0,
+    "trailer_kinds": [
+      "available_commands_update"
+    ]
+  },
+  "recall_stop": "end_turn",
+  "recall_answer": "</think>PELICAN-118313",
+  "codeword_recalled": true,
+  "stop2": {
+    "cancel_sent": false,
+    "ended_by": "eof",
+    "exit_code": 0,
+    "elapsed_s": 0.25,
+    "group_outlived_leader": false
+  },
+  "ended": "2026-10-19T09:30:12.913017+00:00"
+}

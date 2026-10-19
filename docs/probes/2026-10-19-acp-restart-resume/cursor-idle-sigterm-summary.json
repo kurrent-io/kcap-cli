@@ -1,0 +1,51 @@
+{
+  "vendor": "cursor",
+  "stop": "idle",
+  "kill": "sigterm",
+  "version": "2026.09.15-d2fe57e",
+  "argv": [
+    "cursor-agent",
+    "acp"
+  ],
+  "started": "2026-10-19T09:24:48.674359+00:00",
+  "codeword": "PELICAN-3C529A",
+  "load_session_advertised": true,
+  "session_id": "ad36b945-79ad-4c8c-8a0a-d41e35c9b42e",
+  "turn_a_stop": "end_turn",
+  "turn_c_stop": "end_turn",
+  "stop1": {
+    "cancel_sent": false,
+    "ended_by": "sigterm",
+    "exit_code": 143,
+    "elapsed_s": 5.02,
+    "group_outlived_leader": true
+  },
+  "load_session_advertised_after": true,
+  "load": {
+    "ok": true,
+    "error": null,
+    "replayed_updates": 17,
+    "replayed_kinds": [
+      "agent_message_chunk",
+      "agent_thought_chunk",
+      "tool_call",
+      "tool_call_update",
+      "user_message_chunk"
+    ],
+    "conversation_updates_after_response": 0,
+    "trailer_kinds": [
+      "available_commands_update"
+    ]
+  },
+  "recall_stop": "end_turn",
+  "recall_answer": "PELICAN-3C529A\n\nError: RetriableError: WritableIterable is closed",
+  "codeword_recalled": true,
+  "stop2": {
+    "cancel_sent": false,
+    "ended_by": "sigterm",
+    "exit_code": 143,
+    "elapsed_s": 5.03,
+    "group_outlived_leader": true
+  },
+  "ended": "2026-10-19T09:25:40.371639+00:00"
+}
