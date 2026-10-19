@@ -4,6 +4,29 @@
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.ChatTabView"
              x:DataType="vm:ChatTabViewModel">
+    <UserControl.Resources>
+        <DataTemplate x:Key="ActiveRunItem" x:DataType="vm:RunRow">
+            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                <Border Classes="toolRunning" Width="7" Height="7" CornerRadius="3.5" VerticalAlignment="Center"
+                        UseLayoutRounding="False" Background="{StaticResource KcapPurpleBrush}"
+                        views:PulseClock.IsActive="{Binding IsRunning}"
+                        ToolTip.Tip="{Binding StateText}" AutomationProperties.Name="{Binding StateText}" />
+                <DockPanel Grid.Column="1" VerticalAlignment="Center" Background="Transparent" ToolTip.Tip="{Binding RowTip}">
+                    <views:AppIcon DockPanel.Dock="Left" Kind="Terminal" Size="12" Margin="0,0,5,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis" AutomationProperties.HelpText="{Binding StateText}"
+                               Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding Description}" FontSize="12.5" Margin="8,0,0,0"
+                               TextTrimming="CharacterEllipsis" Foreground="{StaticResource KcapMutedBrush}"
+                               VerticalAlignment="Center" IsVisible="{Binding HasDescription}" />
+                </DockPanel>
+                <TextBlock Grid.Column="2" Text="{Binding ElapsedText}" FontSize="12.5"
+                           ToolTip.Tip="{Binding StateText}" Foreground="{StaticResource KcapMutedBrush}"
+                           VerticalAlignment="Center" />
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
     <UserControl.Styles>
         <Style Selector="Border.toolGroup">
             <Setter Property="Margin" Value="0,4,0,22" />
@@ -39,6 +62,31 @@
                          Button.toolSummary:pressed /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Button.runGroup">
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="Button.runGroup.expanded /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.runGroup:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.runGroup:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+        </Style>
+        <Style Selector="Button.runGroup.expanded:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderStrongBrush}" />
+        </Style>
+        <Style Selector="Border.runGroupSection">
+            <Setter Property="Padding" Value="0,1,0,3" />
+        </Style>
+        <Style Selector="Border.runGroupSection.divided">
+            <Setter Property="BorderThickness" Value="0,1,0,0" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="Margin" Value="0,6,0,0" />
+            <Setter Property="Padding" Value="0,8,0,3" />
         </Style>
         <!-- A card's body is inset from its header on both sides, so a row's status pill reads as
              part of the body rather than as a second column of card chrome under the chevron. The
@@ -303,36 +351,75 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto">
-                <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="13,10"
+                <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="6"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                         BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningRuns}">
-                    <ScrollViewer MaxHeight="144" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
-                        <ItemsControl x:Name="RunningRunsList" ItemsSource="{Binding RunningRuns}">
+                    <StackPanel>
+                        <ItemsControl x:Name="RunGroupHeaders" ItemsSource="{Binding RunGroups}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <StackPanel Spacing="8" />
+                                    <StackPanel Orientation="Horizontal" Spacing="6" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
-                                <DataTemplate x:DataType="vm:RunRow">
-                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" ToolTip.Tip="{Binding Description}">
-                                        <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
-                                                Background="{StaticResource KcapPurpleBrush}" views:PulseClock.IsActive="{Binding IsRunning}"
-                                                ToolTip.Tip="{Binding StateText}" AutomationProperties.Name="{Binding StateText}" />
-                                        <Grid Grid.Column="1" ColumnDefinitions="Auto,*">
-                                            <views:AppIcon Kind="Terminal" Size="12" Margin="0,0,5,0" VerticalAlignment="Center"
-                                                           Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
-                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
-                                                       AutomationProperties.HelpText="{Binding StateText}" Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                                        </Grid>
-                                        <TextBlock Grid.Column="2" Text="{Binding ElapsedText}" FontSize="13.5"
-                                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                                    </Grid>
+                                <DataTemplate x:DataType="vm:RunGroupViewModel">
+                                    <Button Classes="toolSummary runGroup" Classes.expanded="{Binding IsExpanded}"
+                                            Command="{Binding ToggleCommand}" Click="OnRunGroupToggleClick" IsVisible="{Binding HasRows}"
+                                            AutomationProperties.Name="{Binding AccessibleName}">
+                                        <StackPanel Orientation="Horizontal" Spacing="7">
+                                            <views:AppIcon Kind="{Binding IconKind}" Size="12" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                            <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                            <Border Background="{StaticResource KcapPurpleDimBrush}" CornerRadius="999" Padding="6,1"
+                                                    VerticalAlignment="Center">
+                                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5"
+                                                            VerticalAlignment="Center" UseLayoutRounding="False"
+                                                            Background="{StaticResource KcapPurpleBrush}"
+                                                            views:PulseClock.IsActive="{Binding HasRows}"
+                                                            ToolTip.Tip="{Binding AccessibleName}" />
+                                                    <TextBlock Text="{Binding Count}" FontSize="11.5" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource KcapPurpleBrush}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Panel Width="12" Height="12" VerticalAlignment="Center">
+                                                <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
+                                                               Foreground="{StaticResource KcapMutedBrush}" />
+                                                <views:AppIcon Kind="ChevronRight" Size="12" IsVisible="{Binding !IsExpanded}"
+                                                               Foreground="{StaticResource KcapFaintBrush}" />
+                                            </Panel>
+                                        </StackPanel>
+                                    </Button>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
-                    </ScrollViewer>
+                        <Border BorderThickness="0,1,0,0" BorderBrush="{StaticResource KcapBorderBrush}"
+                                Margin="2,6,2,0" Padding="0,7,0,1"
+                                IsVisible="{Binding HasExpandedRunGroups}">
+                            <ScrollViewer x:Name="ExpandedRunsScroll" MaxHeight="144"
+                                          IsVisible="{Binding HasExpandedRunGroups}"
+                                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding RunGroups}" Margin="6,0,6,0">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:RunGroupViewModel">
+                                            <Border Classes="runGroupSection" Classes.divided="{Binding HasTopDivider}"
+                                                    IsVisible="{Binding IsExpanded}">
+                                                <ItemsControl x:Name="RunningRunsList" ItemsSource="{Binding Rows}"
+                                                              ItemTemplate="{StaticResource ActiveRunItem}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <StackPanel Spacing="7" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                </ItemsControl>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </Border>
+                    </StackPanel>
                 </Border>
 
                 <Border x:Name="QueuedMessagesBanner" Grid.Row="1" Margin="0,0,0,8" Padding="13,10"

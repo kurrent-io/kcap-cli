@@ -593,6 +593,9 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
             await Assert.That(h.Chat.RunningRuns.Single().Name).IsEqualTo("Run the full suite");
             await Assert.That(h.Chat.RunningRuns.Single().StateText).StartsWith("running in background · ");
+            await Assert.That(h.Chat.AgentRuns.HasRows).IsFalse();
+            await Assert.That(h.Chat.CommandRuns.Count).IsEqualTo(1);
+            await Assert.That(h.Chat.CommandRuns.IsExpanded).IsFalse();
 
             File.AppendAllText(path, ShellCallLine.Replace("toolu_S", "toolu_T") + "\n" + ShellLaunchLine.Replace("toolu_S", "toolu_T").Replace("bcyix00ks", "b2") + "\n");
             await h.TickAsync();
@@ -601,6 +604,9 @@ public class ChatTabViewModelTests {
             File.AppendAllText(path, AgentCallLine + "\n" + AgentLaunchLine + "\n");
             await h.TickAsync();
             await Assert.That(h.Chat.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_S", "toolu_T", "toolu_A" }, CollectionOrdering.Matching);
+            await Assert.That(h.Chat.AgentRuns.Rows.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_A" });
+            await Assert.That(h.Chat.CommandRuns.Rows.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_S", "toolu_T" }, CollectionOrdering.Matching);
+            await Assert.That(h.Chat.AgentRuns.IsExpanded).IsFalse();
 
             File.AppendAllText(path, ShellFinishLine + "\n");
             await h.TickAsync();

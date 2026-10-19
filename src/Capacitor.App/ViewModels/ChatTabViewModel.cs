@@ -151,10 +151,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         this.RaisePropertyChanged(nameof(QueueSummary));
     }
 
+    public RunGroupViewModel AgentRuns { get; } = new("Agents", shells: false);
+    public RunGroupViewModel CommandRuns { get; } = new("Commands", shells: true);
+    public IReadOnlyList<RunGroupViewModel> RunGroups { get; }
+    public bool HasExpandedRunGroups => AgentRuns.IsExpanded || CommandRuns.IsExpanded;
+
     public IAvaloniaReadOnlyList<RunRow> RunningRuns => _runs.Running;
     public bool HasRunningRuns => _runs.RunningCount > 0;
 
     void RefreshRuns() {
+        AgentRuns.Refresh(_runs.Running);
+        CommandRuns.Refresh(_runs.Running);
         this.RaisePropertyChanged(nameof(HasRunningRuns));
         RefreshAgentStatus();
     }
@@ -569,6 +576,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _time = time;
         _permissions = permissions;
         _runs = runs;
+        RunGroups = [AgentRuns, CommandRuns];
+        foreach (var group in RunGroups) {
+            group.Refresh(_runs.Running);
+            group.DisposeWith(_disposables);
+            group.WhenAnyValue(x => x.IsExpanded)
+                .Subscribe(_ => {
+                    CommandRuns.HasTopDivider = AgentRuns.IsExpanded && CommandRuns.IsExpanded;
+                    this.RaisePropertyChanged(nameof(HasExpandedRunGroups));
+                })
+                .DisposeWith(_disposables);
+        }
         _runs.Changed += RefreshRuns;
         _lifetimeToken = _lifetime.Token;
         _phase = openFeed is null ? ChatTabPhase.Unavailable : ChatTabPhase.Waiting;

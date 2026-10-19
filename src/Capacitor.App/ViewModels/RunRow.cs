@@ -46,6 +46,9 @@ public sealed class RunRow : ReactiveObject {
 
     public string ElapsedText { get => _elapsedText; private set => this.RaiseAndSetIfChanged(ref _elapsedText, value); }
 
+    public bool HasDescription => Description.Length > 0;
+    public string RowTip => Description.Length > 0 ? Description : Name;
+
     public bool IsRunning => State == RunState.Running;
     public bool IsFailed  => State == RunState.Failed;
 
