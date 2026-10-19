@@ -54,6 +54,7 @@ public partial class ChatTabView : UserControl {
         // than the press, by which time a flag armed on the press alone has been released.
         ChatItems.AddHandler(PointerPressedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerMovedEvent, OnSelectionDrag, RoutingStrategies.Bubble, handledEventsToo: true);
+        ChatItems.AddHandler(PointerMovedEvent, OnSelectionMove, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnSelectionDragEnded, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerWheelChangedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -397,7 +398,8 @@ public partial class ChatTabView : UserControl {
         var reachedEstimatedEnd = e.OffsetDelta.Y > 0 && e.ExtentDelta.Y > 0
             && ChatItems.ItemsPanelRoot is ChatVirtualizingPanel { MeasuredAtEstimatedEnd: true };
         _followTail = _readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd;
-        if (_followTail && !atBottom) scroll.ScrollToEnd();
+        if (SelectionHeld()) _followTail = false;
+        else if (_followTail && !atBottom) scroll.ScrollToEnd();
     }
 
     void OnSelectionDrag(object? sender, PointerEventArgs e) {
@@ -455,6 +457,17 @@ public partial class ChatTabView : UserControl {
         }
         QueueEdgeScroll();
     }
+
+    void OnSelectionMove(object? sender, PointerEventArgs e) {
+        if (!e.GetCurrentPoint(ChatItems).Properties.IsLeftButtonPressed || !OriginatesFromMarkdown(e)) return;
+        _followTail = false;
+    }
+
+    bool SelectionHeld() =>
+        ChatItems.GetVisualDescendants().OfType<MarkdownView>().Any(static view => view.HasSelection);
+
+    static bool OriginatesFromMarkdown(RoutedEventArgs e) =>
+        e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<MarkdownView>().Any();
 
     static bool OriginatesFromTextBox(RoutedEventArgs e) =>
         e.Source is Visual visual && (visual is TextBox || visual.GetVisualAncestors().OfType<TextBox>().Any());
