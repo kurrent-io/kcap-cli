@@ -78,6 +78,20 @@ internal record AgentInstance(
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
 
+    /// Who reports this run's ending: <see cref="AgentOrchestrator.RunReportUnclaimed"/>, owed by a stop,
+    /// or sent. Claimed once, so a stop and the finalizer never both report it.
+    public int                  RunReport;
+
+    /// Stops in progress, under the orchestrator's ledger lock; the last to settle sends the owed report.
+    public int                  StopsInFlight;
+
+    /// Orders a reconnect's status send against a stop's report: whichever starts its sends first is sent first.
+    public readonly Lock        StatusSendGate = new();
+
+    /// Completes once every stop has settled and the report is sent, so the finalizer ends the session
+    /// only after it.
+    public TaskCompletionSource StopSettled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     int _reopenedTranscript;
 
     /// Whether the server records the ACP session this agent reopened. Pending until it accepts the
@@ -3469,7 +3483,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? exitCode is null or 0 ? "Completed" : "Failed"
                 : "Failed";
 
-            if (agent.Status is not "Completed" and not "Failed") {
+            // Under the lock a stop marks itself requested by, so a stop already under way keeps its report.
+            bool reportsItself;
+            lock (_ledgerLock)
+                reportsItself = agent.Status is not "Completed" and not "Failed" && !agent.StopRequested
+                    && ClaimRunReport(agent, RunReportSent);
+
+            if (reportsItself) {
                 if (!agent.Runtime.HasExited) LogOutputEndedWhileRunning(agent.Id);
 
                 // A startup failure means the process exited before establishing
@@ -3531,6 +3551,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         LogCleanupStepFailed(ex, "recording the run's stop", agent.Id);
                     }
                 }
+            } else if (agent.StopRequested) {
+                // The read loop ends as soon as a stop cancels it, before the stop has terminated the
+                // agent and reported it; the session ends only after that report.
+                try { await agent.StopSettled.Task.WaitAsync(StopSettleWait, _time); } catch (TimeoutException) { /* report what is known */ }
+
+                SendOwedStopReport(agent);
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -4057,6 +4083,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         lock (_ledgerLock) {
             agent.StopRequested = true;
             if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
+            agent.StopsInFlight++;
         }
 
         try {
@@ -4086,6 +4113,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // the Completed send below. No-op in production.
             StopGateAfterSnapshotHookForTest?.Invoke();
 
+            // The server hears of the stop only once termination is confirmed or refuted, below. An
+            // unregistered agent has no server-side row.
+            if (!agent.IsPrivate) ClaimRunReport(agent, RunReportOwedByStop);
+
             // Set status BEFORE cancelling ReadCts so the read loop's finally
             // block sees "Completed" and skips its own status change / event append.
             if (!suppressCompleted) SetAgentStatus(agent, "Completed");
@@ -4096,18 +4127,6 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
             // default, so server-side attribution can tell a TTL/idle reap from a user stop.
             if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
-
-            // An unregistered agent has no server-side row to update.
-            if (!agent.IsPrivate) {
-                // Atomic check + send-INITIATION under the runtime's own gate: the round-1 second
-                // check narrowed but did not CLOSE the check-to-send race — a verdict could publish
-                // between the check and this send. The gate holds the publication lock across BOTH,
-                // so a Completed frame, if sent at all, is initiated before publication and is
-                // therefore ordered-before any LaunchFailed on the single hub connection.
-                if (agent.Runtime is ITerminationVerdictSource || !suppressCompleted)
-                    TrySendAgentStatus(agent, "Completed", null, out _);
-                _ = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
-            }
 
             // Try a graceful shutdown first: send /exit so claude can fire its own
             // session-end hook (drains transcript, writes SessionEnded + summary,
@@ -4179,18 +4198,73 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // teardown, and is idempotent: if claude already fired its own session-end
             // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
-            await agent.Runtime.TerminateAsync(shuttingDown ? ShutdownTerminateGrace : TimeSpan.FromSeconds(10));
+            await agent.Runtime.TerminateAsync(shuttingDown ? ShutdownTerminateGrace : StopTerminateGrace);
 
             // TerminateAsync's SIGKILL is followed by a single non-blocking waitpid, so the
             // child is usually not reaped yet; poll briefly before calling the stop a failure.
-            if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(2));
+            if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(StopExitPoll);
 
             return agent.Runtime.HasExited;
         } catch (Exception ex) {
             LogStopError(ex, agentId);
 
             return false;
+        } finally {
+            // The last stop to settle reports what it found, a stop that threw included. Decided and claimed
+            // under the lock that registers a stop, so no stop already under way is missed.
+            bool last, claimed;
+            lock (_ledgerLock) {
+                last    = --agent.StopsInFlight == 0;
+                claimed = last && ClaimOwedStopReport(agent);
+            }
+            if (claimed) SendStopReport(agent);
+            if (last) agent.StopSettled.TrySetResult();
         }
+    }
+
+    internal const int RunReportUnclaimed  = 0;
+    internal const int RunReportOwedByStop = 1;
+    internal const int RunReportSent       = 2;
+
+    static bool ClaimRunReport(AgentInstance agent, int claim) =>
+        Interlocked.CompareExchange(ref agent.RunReport, claim, RunReportUnclaimed) == RunReportUnclaimed;
+
+    static readonly TimeSpan StopTerminateGrace = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan StopExitPoll       = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long the finalizer waits for a stop still terminating: longer than the slowest stop
+    /// (the graceful send and exit waits, the terminate grace and the post-kill poll), so only a stop
+    /// that hangs is reported for it.</summary>
+    TimeSpan StopSettleWait => 2 * GracefulExitWait + StopTerminateGrace + StopExitPoll + TimeSpan.FromSeconds(10);
+
+    /// <summary>The report a stop owes the server, sent at most once: Completed and a user stop when the
+    /// agent is confirmed gone, Failed when it is not, since a live agent must never read as stopped. A
+    /// published launch-failure verdict has already reported Failed, so only the stop event follows it.
+    /// The finalizer sends it only when a stop stalled past its wait. The sends are started, not awaited:
+    /// a stop must not wait on a hub that is reconnecting, and starting them before the stop settles is
+    /// what orders them ahead of the session's end.</summary>
+    void SendOwedStopReport(AgentInstance agent) {
+        if (ClaimOwedStopReport(agent)) SendStopReport(agent);
+    }
+
+    static bool ClaimOwedStopReport(AgentInstance agent) =>
+        Interlocked.CompareExchange(ref agent.RunReport, RunReportSent, RunReportOwedByStop) == RunReportOwedByStop;
+
+    void SendStopReport(AgentInstance agent) {
+        lock (agent.StatusSendGate) SendStopReportGated(agent);
+    }
+
+    void SendStopReportGated(AgentInstance agent) {
+        var gone = agent.Runtime.HasExited;
+        if (!gone) {
+            LogStopUnconfirmed(agent.Id);
+            SetAgentStatus(agent, "Failed");
+            TrySendAgentStatus(agent, "Failed", null, out _);
+        } else if (!VerdictForbidsNonFailureStatus(agent)) {
+            TrySendAgentStatus(agent, "Completed", null, out _);
+        }
+
+        _ = _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(gone ? "user" : "failed", null));
     }
 
     /// <summary>Observes an abandoned graceful-stop send (see <see cref="StopAgentCoreAsync"/>) so its
@@ -5314,8 +5388,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // now published, else initiates it before publication can proceed so it is
                     // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
                     // it across initiation), preserving the retry-on-failure semantics.
-                    if (!TrySendAgentStatus(agent, agent.Status, null, out var statusSend))
-                        break; // verdict published → terminal Failed; skip this agent's re-registration
+                    // A stop under way reports the ending once termination is confirmed; its Completed is not yet
+                    // true. Started under the gate a stop's report takes, so it can never follow that report.
+                    Task? statusSend;
+                    lock (agent.StatusSendGate) {
+                        // The stop state and the status together, under the lock a stop marks itself requested by.
+                        string? status;
+                        lock (_ledgerLock) status = agent.StopRequested ? null : agent.Status;
+                        if (status is null) break;
+                        if (!TrySendAgentStatus(agent, status, null, out statusSend))
+                            break; // verdict published → terminal Failed; skip this agent's re-registration
+                    }
                     await statusSend;
 
                     // Re-send the fixed PTY dims. The server stores them in memory, so a
@@ -6188,6 +6271,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Agent {AgentId} did not exit after a stop; reporting it Failed rather than Completed")]
+    partial void LogStopUnconfirmed(string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
