@@ -275,13 +275,17 @@ partial class McpFlowsServer(
                 // extend the total past the single-call deadline.
                 var settlementStartedAt = clock.UtcNow;
 
+                var startPatch = toolName is "start_review_flow" or "start_flow"
+                    ? await ReadPatchAsync(arguments, CancellationToken.None)
+                    : null;
+
                 var sendResult = toolName switch {
                     "start_review_flow"   => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "kind", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff),
                     "start_flow"          => wasModelStart
-                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock)
-                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct), clock, backoff),
+                        ? await SendOnceWithDeadlineAsync(client, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock)
+                        : await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => StartFlowAsync(c, apiRoot, arguments, hostCwd, hostRoot, hostInfo, kindArgName: "definition_id", requestingSessionId: requestingSessionId, ct: ct, patch: startPatch), clock, backoff),
                     // Round submission also retries the coded participant_unreachable 409 (see
                     // ParticipantUnreachableCode) — never a start, which can't return it.
                     "submit_review_round" => await SendWithSettlementRetryAsync(client, apiRoot, (c, ct) => SubmitRoundAsync(c, apiRoot, arguments, contextArgName: "context", participant: null, async: true, ct: ct), clock, backoff, extraRetryableCode: ParticipantUnreachableCode),
@@ -385,7 +389,7 @@ partial class McpFlowsServer(
                         (c, ct) => StartFlowAsync(
                             c, apiRoot, arguments, hostCwd, hostRoot, hostInfo,
                             kindArgName: toolName == "start_review_flow" ? "kind" : "definition_id",
-                            requestingSessionId: requestingSessionId, ct: ct),
+                            requestingSessionId: requestingSessionId, ct: ct, patch: startPatch),
                         clock, backoff, budgetStartedAt: settlementStartedAt);
 
                     if (retryResult is SettlementSendResult.DeadlineExhausted retryExhausted)
@@ -1191,9 +1195,10 @@ partial class McpFlowsServer(
     [GeneratedRegex("^[0-9a-f]{40}$")]
     private static partial Regex FullShaPattern();
 
-    /// <summary>The start's patch and base commit, or null when it names none. Checked before anything is
-    /// posted, so a bad path or SHA never starts a run.</summary>
-    static async Task<(string Text, string BaseCommit)?> ReadPatchAsync(JsonObject? arguments, CancellationToken ct) {
+    /// <summary>The start's patch and base commit, or null when it names none. Read once per tool call and
+    /// checked before anything is posted, so a bad path or SHA never starts a run and a retried post sends the
+    /// same bytes.</summary>
+    internal static async Task<(string Text, string BaseCommit)?> ReadPatchAsync(JsonObject? arguments, CancellationToken ct) {
         var path       = McpToolArguments.OptionalString(arguments, "patch_path");
         var baseCommit = McpToolArguments.OptionalString(arguments, "base_commit")?.ToLowerInvariant();
         if (path is null && baseCommit is null) return null;
@@ -1201,12 +1206,23 @@ partial class McpFlowsServer(
             throw new ArgumentException("patch_path and base_commit must be given together.");
         if (!FullShaPattern().IsMatch(baseCommit))
             throw new ArgumentException("base_commit must be a full 40-character commit SHA.");
+        // Context-only forbids reading the worktree; a patch run is reviewed by reading it.
+        if (string.Equals(McpToolArguments.OptionalString(arguments, "mode"), "context-only", StringComparison.Ordinal))
+            throw new ArgumentException("a patch run reviews a real worktree, so it cannot also be context-only; omit mode.");
         if (!Path.IsPathFullyQualified(path) || !File.Exists(path))
             throw new ArgumentException("patch_path must be an absolute path to an existing file.");
-        if (new FileInfo(path).Length is var size && size > MaxPatchBytes)
-            throw new ArgumentException($"the patch is {size} bytes; at most {MaxPatchBytes} can be reviewed.");
 
-        var bytes = await File.ReadAllBytesAsync(path, ct);
+        byte[] bytes;
+        try {
+            if (new FileInfo(path).Length > MaxPatchBytes)
+                throw new ArgumentException($"the patch is larger than {MaxPatchBytes} bytes.");
+            bytes = await File.ReadAllBytesAsync(path, ct);
+        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
+            throw new ArgumentException($"patch_path could not be read: {e.Message}");
+        }
+        // The file can grow between the length check and the read.
+        if (bytes.Length > MaxPatchBytes)
+            throw new ArgumentException($"the patch is larger than {MaxPatchBytes} bytes.");
         if (bytes.Length == 0)
             throw new ArgumentException("the patch file is empty; there is nothing to review.");
 
@@ -1242,7 +1258,8 @@ partial class McpFlowsServer(
             RepositoryPayload? repoInfo,
             string             kindArgName,
             string?            requestingSessionId,
-            CancellationToken  ct = default
+            CancellationToken  ct = default,
+            (string Text, string BaseCommit)? patch = null
         ) {
         string? kind;
         string? definitionYaml = null;
@@ -1276,7 +1293,6 @@ partial class McpFlowsServer(
         // Both throw ArgumentException, which HandleToolCallAsync turns into a clean tool error
         // WITHOUT a POST (so a rejected pairing never mints a run and never retries v2).
         var model = NormalizeModel(arguments?["model"]?.GetValue<string>());
-        var patch = await ReadPatchAsync(arguments, ct);
 
         if (model is not null) {
             if (definitionYaml is not null)

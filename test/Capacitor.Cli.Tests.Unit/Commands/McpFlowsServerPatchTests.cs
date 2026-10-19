@@ -23,13 +23,13 @@ public class McpFlowsServerPatchTests {
             new FixedCapacitorHttpClient(), NoTelemetry.Startup, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), time: TimeProvider.System);
 
     string PatchFile(byte[] content) {
-        var path = Path.Combine(Files.Path, $"{Guid.NewGuid():N}.patch");
+        var path = Files.PathTo($"{Guid.NewGuid():N}.patch");
         File.WriteAllBytes(path, content);
 
         return path;
     }
 
-    static JsonObject StartRequest(string tool, string? patchPath, string? baseCommit) {
+    static JsonObject StartRequest(string tool, string? patchPath, string? baseCommit, string? mode = null) {
         var arguments = new JsonObject {
             ["target_kind"]   = "pr",
             ["target_ref"]    = "123",
@@ -38,6 +38,7 @@ public class McpFlowsServerPatchTests {
             ["context"]       = "some context",
             ["patch_path"]    = patchPath,
             ["base_commit"]   = baseCommit,
+            ["mode"]          = mode,
         };
         if (tool == "start_review_flow") arguments["kind"] = "code-review";
         else arguments["definition_id"] = "code-review";
@@ -97,15 +98,57 @@ public class McpFlowsServerPatchTests {
         await Assert.That(server.LogEntries.Select(e => e.RequestMessage.Path)).IsEquivalentTo([StartV5]);
     }
 
+    /// <summary>A retried post sends the bytes read for the call, not the file as it is by then.</summary>
+    [Test]
+    public async Task A_retried_patch_start_posts_the_patch_read_once() {
+        var path = PatchFile(System.Text.Encoding.UTF8.GetBytes(Diff));
+        using var server = WireMockServer.Start();
+        server.Given(Request.Create().WithPath(StartV5).UsingPost()).InScenario("retry").WillSetStateTo("second")
+            .RespondWith(Response.Create().WithCallback(_ => {
+                File.Delete(path);
+                return new WireMock.ResponseMessage {
+                    StatusCode = 409,
+                    BodyData   = new WireMock.Util.BodyData {
+                        BodyAsString     = """{"error":"flow_settlement_busy","message":"busy"}""",
+                        DetectedBodyType = WireMock.Types.BodyType.String,
+                    },
+                };
+            }));
+        server.Given(Request.Create().WithPath(StartV5).UsingPost()).InScenario("retry").WhenStateIs("second")
+            .RespondWith(Response.Create().WithStatusCode(400).WithBody("""{"error":"no_daemon_available","message":"none"}"""));
+        using var client = new HttpClient();
+
+        await Server().HandleToolCallAsync(
+            JsonNode.Parse("1")!, StartRequest("start_review_flow", path, Base), client, server.Url!,
+            cwd: "/tmp/session", repoRoot: "/tmp/session", repoInfo: null, requestingSessionId: "s1",
+            backoff: new SettlementBackoff(() => 0.0));
+
+        var posts = server.LogEntries.Select(e => JsonNode.Parse(e.RequestMessage.Body!)!["patch"]!.GetValue<string>()).ToList();
+        await Assert.That(posts).Count().IsEqualTo(2);
+        await Assert.That(posts.All(p => p == Diff)).IsTrue();
+    }
+
     public static IEnumerable<Func<(string Name, Func<McpFlowsServerPatchTests, (string? Path, string? Base)> Arguments)>> Refusals() {
         yield return () => ("path without base", t => (t.PatchFile("+x\n"u8.ToArray()), null));
         yield return () => ("base without path", _ => (null, Base));
         yield return () => ("short sha", t => (t.PatchFile("+x\n"u8.ToArray()), "abc123"));
         yield return () => ("relative path", _ => ("relative.patch", Base));
-        yield return () => ("missing file", t => (Path.Combine(t.Files.Path, "absent.patch"), Base));
+        yield return () => ("missing file", t => (t.Files.PathTo("absent.patch"), Base));
         yield return () => ("empty file", t => (t.PatchFile([]), Base));
         yield return () => ("too large", t => (t.PatchFile(new byte[McpFlowsServer.MaxPatchBytes + 1]), Base));
         yield return () => ("not UTF-8", t => (t.PatchFile([0xC3, 0x28]), Base));
+    }
+
+    [Test]
+    public async Task A_patch_with_context_only_is_refused_before_anything_is_posted() {
+        using var server = Answering(500, "");
+
+        var (isError, text) = Unwrap(await Call(server,
+            StartRequest("start_review_flow", PatchFile("+x\n"u8.ToArray()), Base, mode: "context-only")));
+
+        await Assert.That(isError).IsTrue();
+        await Assert.That(text).Contains("context-only");
+        await Assert.That(server.LogEntries).IsEmpty();
     }
 
     [Test]
