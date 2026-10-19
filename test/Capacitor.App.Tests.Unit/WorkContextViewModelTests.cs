@@ -5,13 +5,11 @@ using Avalonia.Controls;
 using Avalonia.Threading;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
-using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Plans;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.WorkItems;
 using Microsoft.Extensions.Time.Testing;
-using TUnit.Assertions.Enums;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
@@ -68,12 +66,6 @@ public class WorkContextViewModelTests {
     static WorkContextRead Ready() => WorkContextRead.Of(WorkContextReadKind.Ready) with {
         Summary = new SessionSummaryDto { SessionId = SessionA },
     };
-
-    static ChatProjectionResult Spawn(string callId, DateTimeOffset at) =>
-        new([], [], [new RunSignal.Started(callId, "Explore", "Map the UI", at)]);
-
-    static ChatProjectionResult Finish(string callId, DateTimeOffset at) =>
-        new([], [], [new RunSignal.Finished(callId, null, RunOutcome.Done, at)]);
 
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1551,132 +1543,6 @@ public class WorkContextViewModelTests {
 
             await Assert.That(h.Vm.PartsExpanded).IsFalse();
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
-            await h.Vm.TeardownAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_section_is_hidden_without_rows_and_its_header_counts_running_and_total() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            var raised = new List<string?>();
-            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            await Assert.That(h.Vm.HasRuns).IsFalse();
-
-            var now = h.Time.GetUtcNow();
-            h.Runs.Apply(Spawn("c1", now));
-            h.Runs.Apply(Spawn("c2", now));
-            await Assert.That(h.Vm.HasRuns).IsTrue();
-            await Assert.That(h.Vm.Runs).Count().IsEqualTo(2);
-            await Assert.That(h.Vm.RunsHeader).IsEqualTo("2 running");
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasRuns));
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.RunsHeader));
-
-            h.Runs.Apply(Finish("c1", now.AddSeconds(5)));
-            await Assert.That(h.Vm.RunsHeader).IsEqualTo("1 of 2 running");
-            h.Runs.Apply(Finish("c2", now.AddSeconds(6)));
-            await Assert.That(h.Vm.RunsHeader).IsEqualTo("2");
-            await Assert.That(h.Vm.HasRuns).IsTrue();
-            await h.Vm.TeardownAsync();
-        });
-    }
-
-    /// The section is a session-local fact like the facts under SESSION: it renders whatever
-    /// phase the server read is in.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_section_renders_while_the_pane_read_is_loading_or_failed() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            var gate = h.Source.Gate();
-            h.Push(Dto());
-            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
-            h.Runs.Apply(Spawn("c1", h.Time.GetUtcNow()));
-            await Assert.That(h.Vm.HasRuns).IsTrue();
-            await Assert.That(h.Vm.RunsHeader).IsEqualTo("1 running");
-
-            gate.SetResult(WorkContextRead.Of(WorkContextReadKind.Unreachable, "no response"));
-            await h.Vm.PendingReadForTesting!;
-            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Unreachable);
-            await Assert.That(h.Vm.HasRuns).IsTrue();
-
-            h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
-            await h.TickAsync();
-            await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.SignedOut);
-            await Assert.That(h.Vm.HasRuns).IsTrue();
-            await Assert.That(h.Vm.Runs).Count().IsEqualTo(1);
-            await h.Vm.TeardownAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_subagents_section_starts_collapsed_and_the_toggle_opens_it() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            await Assert.That(h.Vm.RunsExpanded).IsFalse();
-            await h.Vm.ToggleRunsCommand.Execute();
-            await Assert.That(h.Vm.RunsExpanded).IsTrue();
-            await h.Vm.ToggleRunsCommand.Execute();
-            await Assert.That(h.Vm.RunsExpanded).IsFalse();
-            await h.Vm.TeardownAsync();
-        });
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_collapsed_subagents_list_holds_the_running_rows_and_empties_when_the_session_is_over() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            await Assert.That(h.Vm.HasRunningRuns).IsFalse();
-
-            var now = h.Time.GetUtcNow();
-            h.Runs.Apply(Spawn("c1", now));
-            h.Runs.Apply(Spawn("c2", now));
-            h.Runs.Apply(Finish("c1", now.AddSeconds(5)));
-            await Assert.That(h.Vm.HasRunningRuns).IsTrue();
-            await Assert.That(h.Vm.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "c2" });
-
-            var raised = new List<string?>();
-            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            h.Runs.SessionOver = true;
-
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.HasRunningRuns));
-            await Assert.That(h.Vm.HasRunningRuns).IsFalse();
-            await Assert.That(h.Vm.RunningRuns).IsEmpty();
-            await h.Vm.TeardownAsync();
-        });
-    }
-
-    /// The collapsed summary lists running, completed, failed, stopped in that order and leaves
-    /// out a state nothing is in, so its numbers always add up to the list.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_collapsed_subagents_summary_counts_each_state_in_order_and_omits_the_empty_ones() {
-        await RunOnUiAsync(async () => {
-            var h = new Harness();
-            await Assert.That(h.Vm.RunCounts).IsEmpty();
-
-            var now = h.Time.GetUtcNow();
-            h.Runs.Apply(Spawn("c1", now));
-            h.Runs.Apply(Spawn("c2", now));
-            h.Runs.Apply(Spawn("c3", now));
-            h.Runs.Apply(Finish("c1", now.AddSeconds(5)));
-            h.Runs.Apply(new([], [], [new RunSignal.Finished("c2", null, RunOutcome.Failed, now.AddSeconds(6))]));
-            var raised = new List<string?>();
-            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            await Assert.That(h.Vm.RunCounts).IsEquivalentTo(new RunCount[] {
-                new(RunState.Running, 1), new(RunState.Done, 1), new(RunState.Failed, 1),
-            }, CollectionOrdering.Matching);
-            await Assert.That(h.Vm.RunCounts.Select(c => c.Label))
-                .IsEquivalentTo(new[] { "1 running", "1 completed", "1 failed" }, CollectionOrdering.Matching);
-
-            h.Runs.SessionOver = true;
-            await Assert.That(raised).Contains(nameof(WorkContextViewModel.RunCounts));
-            await Assert.That(h.Vm.RunCounts).IsEquivalentTo(new RunCount[] {
-                new(RunState.Done, 1), new(RunState.Failed, 1), new(RunState.Stopped, 1),
-            }, CollectionOrdering.Matching);
             await h.Vm.TeardownAsync();
         });
     }

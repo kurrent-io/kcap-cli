@@ -303,27 +303,35 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
             <Grid RowDefinitions="Auto,Auto,Auto,Auto">
-                <!-- Runs that outlive the turn. Warning marks work in flight here as it does on a running
-                     tool, not attention. -->
                 <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="13,10"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                         BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningRuns}">
-                    <Grid ColumnDefinitions="Auto,*">
-                        <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" Margin="0,0,8,0" VerticalAlignment="Center"
-                                Background="{StaticResource KcapWarningBrush}" RenderTransform="translateY(-1.5px)"
-                                views:PulseClock.IsActive="{Binding HasRunningRuns}" />
-                        <!-- The name gives way on a narrow pane; the state line with its timer never does. -->
-                        <Grid x:Name="RunningSubagentText" Grid.Column="1" ColumnDefinitions="*,Auto" HorizontalAlignment="Left" VerticalAlignment="Center"
-                              IsVisible="{Binding RunningRow, Converter={x:Static ObjectConverters.IsNotNull}}">
-                            <TextBlock Text="{Binding RunningRow.Name}" FontSize="13.5" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"
-                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                            <TextBlock Grid.Column="1" Margin="6,0,0,0" Text="{Binding RunningRow.StateText}" FontSize="13.5"
-                                       Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                        </Grid>
-                        <TextBlock x:Name="SubagentSummaryText" Grid.Column="1" TextTrimming="CharacterEllipsis" Text="{Binding RunSummary}" FontSize="13.5" FontWeight="SemiBold"
-                                   Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center"
-                                   IsVisible="{Binding RunningRow, Converter={x:Static ObjectConverters.IsNull}}" />
-                    </Grid>
+                    <ScrollViewer MaxHeight="144" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="RunningRunsList" ItemsSource="{Binding RunningRuns}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Spacing="8" />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:RunRow">
+                                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8" ToolTip.Tip="{Binding Description}">
+                                        <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" VerticalAlignment="Center"
+                                                Background="{StaticResource KcapPurpleBrush}" views:PulseClock.IsActive="{Binding IsRunning}" />
+                                        <Grid Grid.Column="1" ColumnDefinitions="Auto,*">
+                                            <views:AppIcon Kind="Terminal" Size="12" Margin="0,0,5,0" VerticalAlignment="Center"
+                                                           Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
+                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13.5" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}"
+                                                       Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                        </Grid>
+                                        <TextBlock Grid.Column="2" Text="{Binding StateText}" FontSize="13.5"
+                                                   Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
                 </Border>
 
                 <Border x:Name="QueuedMessagesBanner" Grid.Row="1" Margin="0,0,0,8" Padding="13,10"

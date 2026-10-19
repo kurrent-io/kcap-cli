@@ -151,45 +151,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         this.RaisePropertyChanged(nameof(QueueSummary));
     }
 
-    /// While a turn is live a foreground launch is already a Task row in the transcript, so the
-    /// strip keeps only the runs that outlive the turn.
-    IEnumerable<RunRow> StripRows =>
-        ActivityNote.Length == 0 ? _runs.Running : _runs.Running.Where(static r => r.IsBackground);
-
-    public bool HasRunningRuns => StripRows.Any();
-
-    /// The one strip row when there is exactly one: the view reads its name and state line, which
-    /// the row itself keeps current, so a tick changes nothing here.
-    public RunRow? RunningRow {
-        get {
-            using var rows = StripRows.GetEnumerator();
-            if (!rows.MoveNext()) return null;
-            var only = rows.Current;
-            return rows.MoveNext() ? null : only;
-        }
-    }
-
-    public string RunSummary {
-        get {
-            var running = StripRows.ToList();
-            if (running.Count < 2) return "";
-            var shells = running.Count(r => r.IsShell);
-            var agents = running.Count - shells;
-            var counts = (agents, shells) switch {
-                (_, 0) => $"{agents} subagents",
-                (0, _) => $"{shells} commands",
-                _      => $"{Plural(agents, "subagent")}, {Plural(shells, "command")}",
-            };
-            return running.All(r => r.IsBackground) ? $"{counts} running in background" : $"{counts} running";
-        }
-    }
-
-    static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+    public IAvaloniaReadOnlyList<RunRow> RunningRuns => _runs.Running;
+    public bool HasRunningRuns => _runs.RunningCount > 0;
 
     void RefreshRuns() {
         this.RaisePropertyChanged(nameof(HasRunningRuns));
-        this.RaisePropertyChanged(nameof(RunningRow));
-        this.RaisePropertyChanged(nameof(RunSummary));
         RefreshAgentStatus();
     }
 
@@ -435,12 +401,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         get => _activityNote;
         private set {
             if (_activityNote == value) return;
-            var turnChanged = _activityNote.Length == 0 != (value.Length == 0);
             this.RaiseAndSetIfChanged(ref _activityNote, value);
-            if (!turnChanged) return;
-            this.RaisePropertyChanged(nameof(HasRunningRuns));
-            this.RaisePropertyChanged(nameof(RunningRow));
-            this.RaisePropertyChanged(nameof(RunSummary));
         }
     }
 

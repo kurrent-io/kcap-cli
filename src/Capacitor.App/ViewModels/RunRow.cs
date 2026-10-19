@@ -3,7 +3,7 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// One subagent or background command as the sidebar shows it. Outcome is the row's own state;
+/// One subagent or background command in the session. Outcome is the row's own state;
 /// State is what it presents, which reads Stopped for a still-running row once the session is over.
 public sealed class RunRow : ReactiveObject {
     bool _isBackground;

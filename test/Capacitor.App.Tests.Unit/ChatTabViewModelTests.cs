@@ -561,23 +561,18 @@ public class ChatTabViewModelTests {
             var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
             await h.PushAsync(Dto(path));
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
-            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Explore");
-            await Assert.That(h.Chat.RunningRow!.StateText).StartsWith("running in background · ");
-            await Assert.That(h.Chat.RunSummary).IsEmpty();
+            await Assert.That(h.Chat.RunningRuns.Single().Name).IsEqualTo("Explore");
+            await Assert.That(h.Chat.RunningRuns.Single().StateText).StartsWith("running in background · ");
             await Assert.That(h.Runs.Rows.Single().IsBackground).IsTrue();
             await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
-            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunningRow));
-            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunSummary));
 
             File.AppendAllText(path, AgentCallLine.Replace("toolu_A", "toolu_B") + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.RunningRow).IsNull();
-            await Assert.That(h.Chat.RunSummary).IsEqualTo("2 subagents running");
+            await Assert.That(h.Chat.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_A", "toolu_B" }, CollectionOrdering.Matching);
 
             File.AppendAllText(path, AgentFinishLine + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.RunningRow!.StateText).StartsWith("running · ");
-            await Assert.That(h.Chat.RunSummary).IsEmpty();
+            await Assert.That(h.Chat.RunningRuns.Single().StateText).StartsWith("running · ");
             await Assert.That(h.Chat.Items.OfType<SystemNoteItem>().Count()).IsEqualTo(1);
 
             File.AppendAllText(path, ToolResultLine.Replace("t1", "toolu_B") + "\n");
@@ -596,21 +591,20 @@ public class ChatTabViewModelTests {
             var path = Tmp.CreateFile("t.jsonl", [ShellCallLine, ShellLaunchLine]);
             await h.PushAsync(Dto(path));
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
-            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
-            await Assert.That(h.Chat.RunningRow!.StateText).StartsWith("running in background · ");
+            await Assert.That(h.Chat.RunningRuns.Single().Name).IsEqualTo("Run the full suite");
+            await Assert.That(h.Chat.RunningRuns.Single().StateText).StartsWith("running in background · ");
 
             File.AppendAllText(path, ShellCallLine.Replace("toolu_S", "toolu_T") + "\n" + ShellLaunchLine.Replace("toolu_S", "toolu_T").Replace("bcyix00ks", "b2") + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.RunningRow).IsNull();
-            await Assert.That(h.Chat.RunSummary).IsEqualTo("2 commands running in background");
+            await Assert.That(h.Chat.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_S", "toolu_T" }, CollectionOrdering.Matching);
 
             File.AppendAllText(path, AgentCallLine + "\n" + AgentLaunchLine + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.RunSummary).IsEqualTo("1 subagent, 2 commands running in background");
+            await Assert.That(h.Chat.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_S", "toolu_T", "toolu_A" }, CollectionOrdering.Matching);
 
             File.AppendAllText(path, ShellFinishLine + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.RunSummary).IsEqualTo("1 subagent, 1 command running in background");
+            await Assert.That(h.Chat.RunningRuns.Select(r => r.CallId)).IsEquivalentTo(new[] { "toolu_T", "toolu_A" }, CollectionOrdering.Matching);
             await Assert.That(h.Runs.Rows.Single(r => r.CallId == "toolu_S").State).IsEqualTo(RunState.Done);
 
             File.AppendAllText(path, ShellCallLine.Replace("toolu_S", "toolu_F") + "\n" + ToolResultLine.Replace("t1", "toolu_F") + "\n");
@@ -620,35 +614,27 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A foreground launch is already a Task row while its turn is live, so the strip leaves it
-    /// out until the turn is over.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_strip_leaves_a_foreground_run_to_the_transcript_while_a_turn_is_live() {
+    public async Task The_strip_shows_a_foreground_subagent_during_and_after_the_parent_turn() {
         await RunOnUiAsync(async () => {
             var h = Claude();
-            var raised = new List<string?>();
-            h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
             var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
             await h.PushAsync(Dto(path) with { AwaitingInput = false });
             await h.TickAsync();
             await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
-            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
-            await Assert.That(h.Chat.RunningRow).IsNull();
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
 
-            raised.Clear();
             await h.PushAsync(Dto(path) with { AwaitingInput = true });
             await Assert.That(h.Chat.ActivityNote).IsEmpty();
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
-            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Explore");
-            await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
-            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunningRow));
+            await Assert.That(h.Chat.RunningRuns.Single().Name).IsEqualTo("Explore");
             await h.TeardownAsync();
         });
     }
 
     /// The next prompt starts a live turn; a run still going in the background stays in the strip
-    /// until it ends, as it stays in the sidebar.
+    /// until it ends.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_background_run_stays_in_the_strip_through_the_next_turn() {
@@ -662,24 +648,23 @@ public class ChatTabViewModelTests {
             await h.TickAsync();
             await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
-            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
+            await Assert.That(h.Chat.RunningRuns.Single().Name).IsEqualTo("Run the full suite");
 
             File.AppendAllText(path, AgentCallLine + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
-            await Assert.That(h.Chat.RunSummary).IsEmpty();
+            await Assert.That(h.Chat.RunningRuns.Select(r => r.Name)).IsEquivalentTo(new[] { "Run the full suite", "Explore" }, CollectionOrdering.Matching);
 
             File.AppendAllText(path, ShellFinishLine + "\n");
             await h.TickAsync();
-            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await Assert.That(h.Chat.RunningRuns.Single().Name).IsEqualTo("Explore");
             await h.TeardownAsync();
         });
     }
 
-    /// A detach changes no state count, yet it is what brings a mid-turn run into the strip.
+    /// A detach updates the row without changing the running count.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_run_sent_to_the_background_mid_turn_joins_the_strip() {
+    public async Task A_run_sent_to_the_background_mid_turn_updates_the_strip() {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var raised = new List<string?>();
@@ -687,14 +672,35 @@ public class ChatTabViewModelTests {
             var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
             await h.PushAsync(Dto(path) with { AwaitingInput = false });
             await h.TickAsync();
-            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
 
             raised.Clear();
             File.AppendAllText(path, AgentLaunchLine + "\n");
             await h.TickAsync();
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
-            await Assert.That(h.Chat.RunningRow!.StateText).StartsWith("running in background · ");
+            await Assert.That(h.Chat.RunningRuns.Single().StateText).StartsWith("running in background · ");
             await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(RunOutcome.Done)]
+    [Arguments(RunOutcome.Failed)]
+    [Arguments(RunOutcome.Stopped)]
+    public async Task The_strip_removes_an_agent_after_any_terminal_outcome(RunOutcome outcome) {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine])));
+            await Assert.That(h.Chat.RunningRuns).Count().IsEqualTo(1);
+
+            h.Runs.Apply(new([], [], [new RunSignal.Finished("toolu_A", null, outcome, h.Time.GetUtcNow())]));
+
+            await Assert.That(h.Chat.RunningRuns).IsEmpty();
+            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await Assert.That(h.Runs.Rows).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.Items.OfType<ToolGroupItem>().Any()).IsTrue();
             await h.TeardownAsync();
         });
     }

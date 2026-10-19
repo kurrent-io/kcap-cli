@@ -1975,6 +1975,44 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_active_runs_list_scrolls_without_taking_focus_from_the_composer() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("runs.jsonl", [UserLine]));
+            var now = host.Time.GetUtcNow();
+            host.Runs.Apply(new([], [], [.. Enumerable.Range(1, 12).Select(i =>
+                new RunSignal.Started($"c{i}", $"Agent {i}", $"Task {i}", now))]));
+            host.Settle();
+            var list = host.View.FindControl<ItemsControl>("RunningRunsList")!;
+            var scroll = list.GetVisualAncestors().OfType<ScrollViewer>().First();
+            host.Composer.Focus();
+            var point = PresentAndLocate(host, scroll);
+            host.Window.MouseWheel(point, new Vector(0, -100));
+            host.Settle();
+
+            await Assert.That(scroll.Offset.Y).IsGreaterThan(0);
+            await Assert.That(host.Composer.IsFocused).IsTrue();
+            host.Type("keep typing");
+            await Assert.That(host.Chat.ComposerText).IsEqualTo("keep typing");
+            await Assert.That(list.ItemCount).IsEqualTo(12);
+
+            host.Runs.Apply(new([], [], [
+                new RunSignal.Finished("c1", null, RunOutcome.Done, now),
+                new RunSignal.Finished("c2", null, RunOutcome.Failed, now),
+                new RunSignal.Finished("c3", null, RunOutcome.Stopped, now),
+            ]));
+            host.Settle();
+            await Assert.That(list.ItemCount).IsEqualTo(9);
+            await Assert.That(host.Chat.RunningRuns.Select(r => r.CallId)).DoesNotContain("c2");
+            host.Runs.SessionOver = true;
+            host.Settle();
+            await Assert.That(host.View.FindControl<Border>("SubagentsBanner")!.IsVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
     /// A command's name can run to 80 characters; on a narrow pane the name gives way, never the
     /// state line with its timer. 550 is the chat pane at the window's minimum width, beside the
     /// rail and the work-context pane.
