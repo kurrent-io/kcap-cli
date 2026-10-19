@@ -67,7 +67,7 @@ public interface IProcessRunner {
 /// -d</c> keeps running) and still throws OperationCanceledException; KillTree kills the tree and
 /// awaits its exit first, then STILL throws — cancellation is cancellation, TimedOut is only for
 /// the internal Timeout.
-public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
+public sealed class ProcessRunner(TimeProvider time, Func<int, bool>? interrupt = null) : IProcessRunner {
     public async Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
         var psi = StartInfo(fileName, args, options);
 
@@ -200,7 +200,11 @@ public sealed class ProcessRunner(TimeProvider time) : IProcessRunner {
         using var interruptRegistration = options.Interrupt.Register(() => {
             try {
                 if (process.HasExited) return;
-                ProcessSignals.Interrupt(process.Id);
+                // Undelivered (always so on Windows), there is no cleanup to wait for.
+                if (!(interrupt ?? ProcessSignals.Interrupt)(process.Id)) {
+                    graceExpired.Cancel();
+                    return;
+                }
             } catch (InvalidOperationException) { return; }
 
             _ = Task.Delay(grace, time, interruptDone.Token).ContinueWith(
