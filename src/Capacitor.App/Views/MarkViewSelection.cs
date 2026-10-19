@@ -32,6 +32,17 @@ static class MarkViewSelection {
         host.AddHandler(InputElement.KeyDownEvent, (_, e) => OnKeyDown(copy, e), RoutingStrategies.Tunnel);
     }
 
+    /// Continues a drag at a point in the viewer's coordinates. Used when the chat scrolls under a
+    /// pointer that is sitting on the viewport edge, so the selection grows without a new move.
+    public static void Extend(MarkdownViewer viewer, Point pointInViewer) {
+        if (LayerOf(viewer) is not Visual layer) return;
+        if (Anchor(layer) is null) return;
+        IsDragging(viewer) = true;
+        var point = viewer.TranslatePoint(pointInViewer, layer) ?? pointInViewer;
+        if (HitTestOffset(layer, point) is not null) MoveFocus(layer, point);
+        else if (Nearest(layer, point) is { } inside) MoveFocus(layer, inside);
+    }
+
     public static bool HasSelection(MarkdownViewer viewer) =>
         LayerOf(viewer) is { } layer && Anchor(layer) is { } anchor && Focus(layer) is { } focus && anchor != focus;
 
