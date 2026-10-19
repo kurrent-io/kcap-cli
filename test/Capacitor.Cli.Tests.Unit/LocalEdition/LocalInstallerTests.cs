@@ -719,4 +719,35 @@ public class LocalInstallerTests {
         await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.Cancelled);
         await Assert.That(File.ReadAllBytes(ConfigPath).SequenceEqual(before)).IsTrue();
     }
+
+    /// <summary>The desktop wizard tells another kcap at work from a failure by this code, so a held lifecycle lock must
+    /// end in it, not in a start failure.</summary>
+    [Test]
+    public async Task A_lifecycle_lock_held_past_the_wait_fails_as_lifecycle_busy() {
+        using var held = await LifecycleLease.AcquireAsync(Root, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
+        _time.OnTimerCreated = _ => Task.Run(() => _time.Advance(TimeSpan.FromSeconds(11)));
+
+        var failure = await Failure();
+
+        await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.LifecycleBusy);
+        await Assert.That(Capacitor.Cli.Commands.LocalSetupJsonLines.Failed(failure.Code, failure.Message)).Contains("\"code\":\"lifecycle_busy\"");
+        await Assert.That(_log).DoesNotContain("install");
+    }
+
+    /// <summary>The unit is per user, so another root's setup holding its lock is the same busy, not a failure.</summary>
+    [Test]
+    public async Task A_unit_lock_another_root_holds_fails_as_lifecycle_busy() {
+        using var held = await LocalUnitLock.AcquireAsync(Home, TimeSpan.Zero, TimeProvider.System, CancellationToken.None);
+        var installer = new LocalInstaller(Root, Config, Home, Service, Bundle.Client(), new HttpClient(Server), Bundle.Key, MacArm, _time, _ => []) {
+            Version      = Version,
+            SocketLimit  = int.MaxValue,
+            UnitLockWait = TimeSpan.Zero,
+        };
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => installer.InstallAsync(Yes, _events, CancellationToken.None));
+
+        await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.LifecycleBusy);
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(LocalStateFiles.ReadJournal(Root)).IsTypeOf<StateRead<LifecycleJournalEntry>.Absent>();
+    }
 }

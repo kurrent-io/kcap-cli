@@ -34,6 +34,9 @@ sealed class LocalInstaller(
     /// <summary>Replaces the platform's socket-path limit.</summary>
     public int? SocketLimit { get; init; }
 
+    /// <summary>How long it waits for another root's hold on the per-user unit lock.</summary>
+    public TimeSpan UnitLockWait { get; init; } = LocalUnitLock.Wait;
+
     /// <summary>Required when the answers carry an embedding answer.</summary>
     public OllamaClient? Ollama { get; init; }
 
@@ -105,7 +108,7 @@ sealed class LocalInstaller(
 
         try {
             // Held from the empty-slot check of the unit through Install, so two roots cannot both pass it.
-            unitLock = await LocalUnitLock.AcquireAsync(home, LocalUnitLock.Wait, TimeProvider.System, ct);
+            unitLock = await LocalUnitLock.AcquireAsync(home, UnitLockWait, TimeProvider.System, ct);
             plan     = Checks.Recheck(Version);
 
             _progress.Report(new LocalInstallEvent.PreflightPassed(plan.Hint, plan.Version, root.Directory));
