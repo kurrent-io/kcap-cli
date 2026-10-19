@@ -71,6 +71,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     // name and input instead; each call retires one card, kept here once claimed.
     readonly Dictionary<string, RecordedCall> _calls = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _callForRequest = new(StringComparer.Ordinal);
+    // A card that left without claiming a call (answered in the app, or retired by the daemon
+    // first) may still have a call coming, and that call is its, not an identical card's. One that
+    // never comes only keeps a later card up until its turn ends.
+    readonly List<DepartedCard> _departed = [];
     readonly HashSet<string> _withdrawing = new(StringComparer.Ordinal);
     readonly Dictionary<string, int> _withdrawFailures = new(StringComparer.Ordinal);
     readonly ConcurrentDictionary<string, byte> _loggedFailures = new(StringComparer.Ordinal);
@@ -623,6 +627,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     switch (change.Reason) {
                         case ChangeReason.Add or ChangeReason.Update: _requests[change.Key] = change.Current; break;
                         case ChangeReason.Remove:
+                            NoteDeparted(change.Current);
                             _requests.Remove(change.Key);
                             _withdrawing.Remove(change.Key);
                             _withdrawFailures.Remove(change.Key);
@@ -940,6 +945,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _questionAsks.Clear();
         _calls.Clear();
         _callForRequest.Clear();
+        _departed.Clear();
         _openGroup = null;
         _openShell = null;
         _marked.Clear();
@@ -1064,6 +1070,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _questionAsks.Clear();
                 _calls.Clear();
                 _callForRequest.Clear();
+                _departed.Clear();
                 _openGroup = null;
                 _openShell = null;
                 _marked.Clear();
@@ -1308,14 +1315,25 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool ClaimsCall(PendingPermissionRequest request) {
         if (_callForRequest.ContainsKey(request.Key)) return true;
         if (request.ToolInputOmitted || Parse(request.ToolInputJson) is not { } input) return false;
-        var claimed = _callForRequest.Values.ToHashSet(StringComparer.Ordinal);
-        var call = _calls.Values
-            .Where(c => c.SettledAt is { } settled && settled >= request.RequestedAt && c.Name == request.ToolName
-                     && !claimed.Contains(c.CallId) && JsonNode.DeepEquals(Parse(c.InputJson), input))
-            .MinBy(c => c.SettledAt);
-        if (call is null) return false;
+        foreach (var departed in _departed.Where(d => d.CallId is null).OrderBy(d => d.RequestedAt).ToList())
+            departed.CallId = UnclaimedCall(departed.Name, Parse(departed.InputJson), departed.RequestedAt)?.CallId;
+        if (UnclaimedCall(request.ToolName, input, request.RequestedAt) is not { } call) return false;
         _callForRequest[request.Key] = call.CallId;
         return true;
+    }
+
+    RecordedCall? UnclaimedCall(string name, JsonNode? input, DateTimeOffset since) {
+        var claimed = _callForRequest.Values.Concat(_departed.Select(d => d.CallId).OfType<string>()).ToHashSet(StringComparer.Ordinal);
+        return _calls.Values
+            .Where(c => c.SettledAt is { } settled && settled >= since && c.Name == name
+                     && !claimed.Contains(c.CallId) && JsonNode.DeepEquals(Parse(c.InputJson), input))
+            .MinBy(c => c.SettledAt);
+    }
+
+    void NoteDeparted(PendingPermissionRequest request) {
+        if (_callForRequest.ContainsKey(request.Key) || request.IsQuestion || request.ToolUseId is not null
+            || request.ToolInputOmitted || request.ToolInputJson is not { } json || request.RequestedAt == DateTimeOffset.MinValue) return;
+        _departed.Add(new DepartedCard(request.ToolName, json, request.RequestedAt));
     }
 
     void NoteCall(string callId, string name, string? inputJson) {
@@ -1344,6 +1362,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     static DateTimeOffset? Timestamp(string? iso) =>
         iso is not null && DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var t) ? t : null;
+
+    sealed class DepartedCard(string name, string inputJson, DateTimeOffset requestedAt) {
+        public string Name { get; } = name;
+        public string InputJson { get; } = inputJson;
+        public DateTimeOffset RequestedAt { get; } = requestedAt;
+        public string? CallId { get; set; }
+    }
 
     sealed class RecordedCall(string callId, string name, string inputJson) {
         public string CallId { get; } = callId;

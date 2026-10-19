@@ -1220,6 +1220,39 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A card retired elsewhere before its call's result arrives (by the daemon, or answered in the
+    /// app) still owns that call, so the result never retires an identical card that is still waiting.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_call_belongs_to_a_card_that_left_before_its_result_not_to_an_identical_one() {
+        await RunOnUiAsync(async () => {
+            const string status = """{"command":"git status"}""";
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [
+                """{"type":"assistant","timestamp":"2026-08-28T10:00:02Z","message":{"content":[{"type":"tool_use","id":"b1","name":"Bash","input":{"command":"git status"}}]}}""",
+            ]);
+            await h.PushAsync(Dto(path));
+            h.Permissions.Add(PermissionEntries.Entry("c-first",  toolInputJson: status, requestedAt: "2026-08-28T10:00:00.0000000+00:00"));
+            h.Permissions.Add(PermissionEntries.Entry("c-second", toolInputJson: status, requestedAt: "2026-08-28T10:00:01.0000000+00:00"));
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 2, what: "two cards");
+
+            h.Permissions.Remove("c-first");
+            File.AppendAllText(path, """{"type":"user","timestamp":"2026-08-28T10:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"b1","content":"clean"}]}}""" + "\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Chat.PendingCards.Count == 1, what: "the departed card gone");
+            await Assert.That(h.Permissions.Withdrawn).IsEmpty();
+
+            h.Permissions.Queue(PermissionResolveKind.Applied);
+            File.AppendAllText(path,
+                """{"type":"assistant","timestamp":"2026-08-28T10:00:06Z","message":{"content":[{"type":"tool_use","id":"b2","name":"Bash","input":{"command":"git status"}}]}}""" + "\n" +
+                """{"type":"user","timestamp":"2026-08-28T10:00:07Z","message":{"content":[{"type":"tool_result","tool_use_id":"b2","content":"clean"}]}}""" + "\n");
+            await h.TickAsync();
+            await WaitUntilAsync(() => h.Permissions.Withdrawn.Count == 1, what: "the second card's own call retires it");
+            await Assert.That(h.Permissions.Withdrawn).IsEquivalentTo(["c-second"]);
+            await h.TeardownAsync();
+        });
+    }
+
     /// AskUserQuestion's hook has no tool-use id, so the card is retired from the question text
     /// once that ask has a result. A different question, a plain prompt with no id, and a card
     /// requested after the result stay.
