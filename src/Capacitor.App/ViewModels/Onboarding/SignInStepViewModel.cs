@@ -392,7 +392,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     /// moves. Forward is refused while a quarantine notice is up.
     /// </summary>
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
-        StopSignUpClock();
         _attempt?.Cancel();
 
         if (_run is { } run) {
@@ -404,7 +403,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             }
         }
 
-        return direction == WizardNavigation.Back || Satisfied && QuarantineNotice is null;
+        var leaving = direction == WizardNavigation.Back || Satisfied && QuarantineNotice is null;
+        // A refused move leaves the user on the wait, so its clock keeps running.
+        if (leaving) StopSignUpClock();
+
+        return leaving;
     }
 
     /// The command's body, reachable directly so a re-entrant call can be asserted as a no-op.

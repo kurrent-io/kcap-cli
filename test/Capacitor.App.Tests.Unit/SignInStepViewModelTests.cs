@@ -629,6 +629,26 @@ public class SignInStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_refused_forward_move_keeps_the_wait_running() {
+        var (left, expired) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            var expired = 0;
+            h.Vm.SignUpExpired += () => expired++;
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+            h.Time.Advance(SignInStepViewModel.SignUpWait);
+            await WaitUntil(() => expired > 0, "the wait to expire");
+
+            return (left, expired);
+        });
+
+        await Assert.That(left).IsFalse();
+        await Assert.That(expired).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_committed_sign_up_never_expires() {
         var expired = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness { SigningUp = true };
