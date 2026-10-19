@@ -112,7 +112,7 @@ public sealed class LocalInstallController(
         var outcome = LocalInstallOutcome.Settle(progress, result.ExitCode, durable.Pending || durable.CommittedLocal);
         if (outcome is LocalInstallOutcome.Failed failed) {
             // Without a failed line the stderr tail is the only account of why the child stopped.
-            if (progress is { FailedCode: null, FailedMessage: null } && StderrText(result) is { } stderr)
+            if (progress is { FailedCode: null, FailedMessage: null } && StderrTail.Text(result) is { } stderr)
                 outcome = failed with { Message = stderr };
             progress.Halt();
         }
@@ -144,13 +144,6 @@ public sealed class LocalInstallController(
     }
 
     LocalSetupSnapshot Durable() => new(LocalSetupState.Pending(root), committedLocal());
-
-    static string? StderrText(StreamingResult result) {
-        var lines = result.Tail.Where(l => l.Kind == ProcessStreamKind.Stderr && !string.IsNullOrWhiteSpace(l.Text))
-            .Select(l => l.Text.Trim()).ToList();
-
-        return lines.Count == 0 ? null : string.Join(Environment.NewLine, lines);
-    }
 
     static TaskCompletionSource CompletedSource() {
         var source = new TaskCompletionSource();
