@@ -13,6 +13,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public const string BusyText   = "Another kcap setup, upgrade or uninstall is running on this Mac.";
     public const string LockedText     = "The install did not finish.";
+    public const string ProfileMismatchCode = "profile_mismatch";
     public const string NotStartedText = "The local server didn't finish starting. Try again to finish the install.";
 
     readonly LocalInstallController _controller;
@@ -66,7 +67,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     LocalInstallOutcome.Failed? Failure => _controller.Outcome as LocalInstallOutcome.Failed;
 
-    public bool FailureVisible => Failure is not null && !Running;
+    public bool FailureVisible => Failure is not null && !Running && !RefusalVisible;
 
     public string? FailureMessage => Failure switch {
         null                                         => null,
@@ -81,7 +82,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     public bool FailureDetailVisible => FailureDetail is not null && !Running;
 
-    public bool LockedVisible   => Failure is { LockedToLocal: true } && !Running;
+    public bool LockedVisible   => Failure is { LockedToLocal: true } && !Running && !RefusalVisible;
     public bool TryAgainVisible => Failure is { Affordance: LocalInstallAffordance.Retry } && !Running;
     public bool CancelVisible   => Running;
     public bool BackVisible     => !Running && Failure is not { LockedToLocal: true };
@@ -94,6 +95,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             this.RaiseAndSetIfChanged(ref _refusal, value);
             this.RaisePropertyChanged(nameof(RefusalVisible));
             this.RaisePropertyChanged(nameof(ProgressVisible));
+            this.RaisePropertyChanged(nameof(FailureVisible));
+            this.RaisePropertyChanged(nameof(LockedVisible));
         }
     }
 
@@ -120,6 +123,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             RefusalMessage =
                 $"This app is using the profile \"{app}\" (from KCAP_PROFILE), but the install would set up \"{active}\", " +
                 $"the active profile in your kcap config. Unset KCAP_PROFILE or make \"{app}\" the active profile, then reopen setup.";
+            // Settled, not just shown: with nothing to retry, a close must not reopen this page.
+            _controller.Refuse(ProfileMismatchCode, RefusalMessage);
             return;
         }
 

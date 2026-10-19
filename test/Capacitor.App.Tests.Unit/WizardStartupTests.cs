@@ -766,6 +766,45 @@ public class WizardStartupTests {
         await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(built[0].Gate, built[0].LaneQuiesced)).IsTrue();
     }
 
+    /// A profile mismatch refuses before any child starts, and a pending journal locks Edition, so the
+    /// page has no way forward either: a close must not reopen it.
+    [Test]
+    public async Task A_close_after_a_profile_refusal_under_a_pending_setup_builds_one_degraded_graph() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig { ActiveProfile = "personal", Profiles = new() { ["personal"] = new Profile() } });
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.LocalRoot       = LocalSetupScript.PendingSetup(Config);
+        harness.Identity        = null;
+        harness.ProfileOverride = "work";
+        using var shutdown = new CancellationTokenSource();
+        var shown = new List<(WizardGraph Graph, WizardStepId StartedAt)>();
+        var install = new StrongBox<LocalInstallController?>();
+        var built = new List<(GateResult Gate, bool LaneQuiesced)>();
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var runs = WizardRuns(harness, shown, graph => {
+                if (shown.Count > 1) shutdown.Cancel(); // a reopen is the failure; end the loop it would otherwise repeat
+                else graph.ViewModel.RequestClose();
+
+                return Task.CompletedTask;
+            }, shutdown.Token, install);
+
+            await AppUnderTest.RunWizardThenBuildGraphAsync(
+                    new GateResult.Incomplete(GateReason.LocalSetupPending), null, showWizard: true, runs,
+                    Reevaluate(harness), (gate, _, quiesced) => built.Add((gate, quiesced)),
+                    () => LocalSetupState.Pending(harness.LocalRoot), shutdown.Token,
+                    () => AppUnderTest.LocalSetupCannotRetry(install.Value))
+                .WaitAsync(TimeSpan.FromSeconds(10));
+
+            return true;
+        });
+
+        await Assert.That(shown.Count).IsEqualTo(1);
+        await Assert.That(built.Count).IsEqualTo(1);
+        await Assert.That(AppUnderTest.AutoActionsPermanentlyClosed(built[0].Gate, built[0].LaneQuiesced)).IsTrue();
+        await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(0);
+    }
+
     /// A gate that could not be read says nothing about the journal: pending setup still reopens the wizard.
     [Test]
     public async Task A_close_with_pending_setup_reopens_the_wizard_even_when_the_gate_cannot_be_read() {

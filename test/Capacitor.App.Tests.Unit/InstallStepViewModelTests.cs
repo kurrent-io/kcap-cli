@@ -192,6 +192,30 @@ public class InstallStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_profile_mismatch_settles_a_permanent_failure_without_a_child() {
+        var probe = Probe();
+        var cli = new FakeKcapCli();
+        var controller = Controller(cli, LocalSetupScript.PendingSetup(Config), probe);
+
+        var (refusal, tryAgain) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(controller, appProfile: "work", active: "personal");
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return (install.RefusalMessage, install.TryAgainVisible);
+        });
+
+        var failed = (LocalInstallOutcome.Failed)controller.Outcome!;
+        await Assert.That(failed.Code).IsEqualTo("profile_mismatch");
+        await Assert.That(failed.Affordance).IsEqualTo(LocalInstallAffordance.Permanent);
+        await Assert.That(failed.LockedToLocal).IsTrue();
+        await Assert.That(refusal).Contains("\"work\"");
+        await Assert.That(tryAgain).IsFalse();
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
+        await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("profile_mismatch");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Unlocked_transient_failure_offers_retry_and_back_and_try_again_reruns() {
         var probe = Probe();
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed")) };

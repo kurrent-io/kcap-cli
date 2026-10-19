@@ -67,6 +67,15 @@ public sealed class LocalInstallController(
         return StartAsync(ct);
     }
 
+    /// Settles a refusal decided before any child would start, through the same path a run's failure takes.
+    public void Refuse(string code, string message) {
+        if (Running) return;
+
+        var durable = Durable();
+        Publish(new LocalInstallOutcome.Failed(code, message, LocalInstallAffordance.Permanent, durable.Pending || durable.CommittedLocal),
+            durable, code, quitting: false, _exited);
+    }
+
     /// Asks the child to stop and clean up. Every request after the first reuses it.
     public void Interrupt() {
         if (Running) _interrupt?.Cancel();
@@ -99,7 +108,7 @@ public sealed class LocalInstallController(
     void Finish(
             LocalSetupProgress progress, StreamingResult result, string unexplained, bool quitting,
             TaskCompletionSource exited) {
-        var durable = new LocalSetupSnapshot(LocalSetupState.Pending(root), committedLocal());
+        var durable = Durable();
         var outcome = LocalInstallOutcome.Settle(progress, result.ExitCode, durable.Pending || durable.CommittedLocal);
         if (outcome is LocalInstallOutcome.Failed failed) {
             // Without a failed line the stderr tail is the only account of why the child stopped.
@@ -108,6 +117,10 @@ public sealed class LocalInstallController(
             progress.Halt();
         }
 
+        Publish(outcome, durable, unexplained, quitting, exited);
+    }
+
+    void Publish(LocalInstallOutcome outcome, LocalSetupSnapshot durable, string unexplained, bool quitting, TaskCompletionSource exited) {
         Settling?.Invoke(durable);
         _interrupt = null;
         Outcome    = outcome;
@@ -129,6 +142,8 @@ public sealed class LocalInstallController(
             exited.TrySetResult();
         }
     }
+
+    LocalSetupSnapshot Durable() => new(LocalSetupState.Pending(root), committedLocal());
 
     static string? StderrText(StreamingResult result) {
         var lines = result.Tail.Where(l => l.Kind == ProcessStreamKind.Stderr && !string.IsNullOrWhiteSpace(l.Text))
