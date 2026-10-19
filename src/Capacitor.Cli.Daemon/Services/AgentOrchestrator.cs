@@ -130,6 +130,9 @@ internal record AgentInstance(
     /// runtime that writes nothing the daemon locates.
     public string? TranscriptPath { get; set; }
 
+    /// Ends the interrupt watch on the transcript it reads; replaced when discovery moves to a new one.
+    public CancellationTokenSource? InterruptWatch { get; set; }
+
     /// The daemon-written envelope journal for this launch, for the runtimes that emit envelopes.
     /// Null for a PTY runtime, which writes its own transcript and needs none.
     public TranscriptJournal? Journal { get; init; }
@@ -2157,10 +2160,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // CreateActivityClock() gives a real launch, with a controllable time source.
             AgentActivityClock? activityClock = null,
             WorktreeInfo? worktree = null, WorkLocation work = WorkLocation.OwnedWorktree,
-            string? borrowedSnapshotSource = null) {
+            string? borrowedSnapshotSource = null, string vendor = "codex") {
         var agent = new AgentInstance(
-            id, prompt, model, null, "/repo", "codex",
-            new PtyHostedAgentRuntime("codex", pty ?? NoopPtyProcess.Instance, _time),
+            id, prompt, model, null, "/repo", vendor,
+            new PtyHostedAgentRuntime(vendor, pty ?? NoopPtyProcess.Instance, _time),
             worktree ?? new WorktreeInfo("/repo", "b", "/repo"),
             new CancellationTokenSource()) {
             Kind = kind, FlowRunId = flowRunId, FlowRole = flowRole, IsPrivate = isPrivate,
@@ -5651,7 +5654,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // stall on a reconnect and must never hold the app's status push hostage.
                     agent.SessionId ??= winner.SessionId;
                     agent.VendorSession ??= winner.SessionId;
+                    var moved = agent.TranscriptPath != winner.Path;
                     agent.TranscriptPath = winner.Path;
+                    if (moved) StartInterruptWatch(agent, winner.Path);
                     UpdateLedgerSession(agent);
                     StartContinuationTakeover(agent);
                     _statusNotifier.Pulse();
@@ -5669,6 +5674,36 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             LogSessionIdDetectFailed(ex, agent.Id);
         }
     }
+
+    /// <summary>How often a PTY Claude agent's transcript is read for an interrupt marker.</summary>
+    static readonly TimeSpan InterruptPollInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>A PTY Claude agent learns its turn ended only from the hook relay of Claude's Stop,
+    /// which an interrupt never fires; its transcript's interrupt marker stands in for it.</summary>
+    void StartInterruptWatch(AgentInstance agent, string transcriptPath) {
+        if (!agent.Runtime.EmitsTerminalOutput || !string.Equals(agent.Vendor, "claude", StringComparison.OrdinalIgnoreCase)) return;
+
+        var watch    = CancellationTokenSource.CreateLinkedTokenSource(agent.ReadCts.Token, agent.ExitedCts.Token, _shutdownCts.Token);
+        var previous = agent.InterruptWatch;
+        agent.InterruptWatch = watch;
+        try { previous?.Cancel(); } catch (ObjectDisposedException) { /* already ended */ }
+
+        _ = WatchAsync();
+
+        async Task WatchAsync() {
+            try {
+                await ClaudeInterruptWatch.RunAsync(transcriptPath, () => agent.ActivityClock.SetAwaitingInput(true),
+                    _time, InterruptPollInterval, watch.Token).ConfigureAwait(false);
+            } catch (Exception ex) {
+                LogInterruptWatchFailed(ex, agent.Id);
+            } finally {
+                watch.Dispose();
+            }
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Interrupt watch for agent {AgentId} stopped")]
+    partial void LogInterruptWatchFailed(Exception ex, string agentId);
 
     /// <summary>Says, once and early, what the operator is otherwise left to infer from silence.
     /// Never cancels or reaps the launch — detection keeps running while the agent is alive, and

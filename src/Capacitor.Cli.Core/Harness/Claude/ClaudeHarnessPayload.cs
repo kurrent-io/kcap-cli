@@ -20,6 +20,10 @@ public static class ClaudeHarnessPayload {
         "[Request interrupted by user for tool use]",
     ];
 
+    /// <summary>True when <paramref name="text"/> is the marker Claude Code writes when the user interrupts a turn.</summary>
+    public static bool IsInterruptMarker(string? text) =>
+        text is not null && InterruptMarkers.Contains(text.Trim(), StringComparer.Ordinal);
+
     /// <summary>
     /// True when <paramref name="text"/> is wholly a harness payload. A message that merely quotes
     /// one of the tags has words of its own and is a real ask.
