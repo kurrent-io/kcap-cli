@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Remote.Models;
@@ -20,7 +19,8 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     readonly IServerLane _lane;
     readonly TimeProvider _time;
     readonly Action<string> _log;
-    readonly ConcurrentDictionary<string, byte> _logged = new(StringComparer.Ordinal);
+    /// Under <see cref="_lock"/>, so a superseded attempt cannot clear what the current one logged.
+    readonly HashSet<string> _logged = new(StringComparer.Ordinal);
     readonly Lock _lock = new();
     readonly List<ProjectedLine> _pending = new();
     readonly IDisposable _access;
@@ -130,7 +130,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                     failures = 0;
                     // Once per outage: a reason seen before the stream came back is logged again. A
                     // superseded attempt's tail says nothing about the current one's outage.
-                    if (IsCurrent(attempt)) _logged.Clear();
+                    lock (_lock) if (_attempt == attempt) _logged.Clear();
                 }
             } catch (OperationCanceledException) {
                 return;
@@ -223,7 +223,9 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     }
 
     void LogOnce(string reason) {
-        if (_logged.TryAdd(reason, 0)) _log(reason);
+        bool first;
+        lock (_lock) first = _logged.Add(reason);
+        if (first) _log(reason);
     }
 
     public void Dispose() {
