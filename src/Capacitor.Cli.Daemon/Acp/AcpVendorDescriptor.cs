@@ -146,7 +146,7 @@ internal sealed record AcpVendorDescriptor {
     /// capability — all four registered vendors advertise it, and two measurably cannot honor it
     /// across a crashed owner (<c>docs/probes/2026-08-04-acp-reconnect-c0/</c>): Kiro refuses with a
     /// durable stale-owner lock ("Session is active in another process", identical at 0/15/60s), and
-    /// Gemini never persists a crash-killed session ("No previous sessions found"). Flipping a
+    /// Gemini answers session/load before most of its replay. Flipping a
     /// vendor to <see langword="true"/> requires a passing re-run of that probe, because the resume
     /// path additionally relies on the vendor honoring the ACP session/load response-after-replay
     /// barrier — a violation would duplicate transcript content. Runtime eligibility is conjunctive
