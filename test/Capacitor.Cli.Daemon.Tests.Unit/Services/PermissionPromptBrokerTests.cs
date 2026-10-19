@@ -309,24 +309,63 @@ public class PermissionPromptBrokerTests {
         await Assert.That(waiting.IsCompleted).IsFalse();
     }
 
-    /// A denied prompt runs no call, and a finished turn has run all of its own, so neither leaves
-    /// a call owed that would keep a later prompt from being retired.
+    /// A finished turn has run all of its own calls, and a prompt it retires was either denied in
+    /// the terminal or had its call reported before the next turn's prompts exist, so the turn's
+    /// end leaves nothing owed that would keep a later prompt from being retired.
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task A_denied_prompt_or_a_finished_turn_owes_no_call(bool allowThenTurnEnd) {
+    public async Task A_finished_turn_owes_no_call() {
         var broker = new PermissionPromptBroker();
         _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
-        if (allowThenTurnEnd) {
-            broker.TrySettle("r1", Allow, "allow", "app");
-            broker.WithdrawTurn("a1", "s1", subagentId: null);
-        } else {
-            broker.TrySettle("r1", PermissionSettlements.DenyDecision, "deny", "app");
-        }
+        broker.TrySettle("r1", Allow, "allow", "app");
+        _ = broker.Register(Dto("r-pending", input: """{"command":"ls"}"""));
+        broker.WithdrawTurn("a1", "s1", subagentId: null);
         var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
 
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
         await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
         await Assert.That(later.IsCompleted).IsTrue();
+    }
+
+    /// A deny settled here does not prove the call never ran: the terminal can have allowed the
+    /// same prompt first, with the card still showing. So the call is owed its notice like an
+    /// allowed prompt's, or that notice would retire an identical prompt still waiting. The cost
+    /// of a notice that never comes is one card left until the turn's end.
+    [Test]
+    public async Task A_prompt_denied_here_is_still_owed_the_call_the_terminal_may_have_started() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", PermissionSettlements.DenyDecision, "deny", "app");
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+        await Assert.That(later.IsCompleted).IsTrue();
+    }
+
+    /// The app withdraws a prompt as soon as the transcript shows its call's result, which can be
+    /// before the call's own hook has reported; that report is still owed.
+    [Test]
+    public async Task A_withdrawal_on_transcript_evidence_is_still_owed_the_call() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+        broker.TrySettle("r1", PermissionSettlements.DenyDecision, "withdrawn", "tool_settled");
+        var later = broker.Register(Dto("r2", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsFalse();
+        await Assert.That(later.IsCompleted).IsFalse();
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_2", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+    }
+
+    /// Only the call's own report settles without owing one: the report is the call's completion.
+    [Test]
+    public async Task A_withdrawal_by_the_calls_own_report_owes_nothing() {
+        var broker = new PermissionPromptBroker();
+        _ = broker.Register(Dto("r1", input: """{"command":"ls"}"""));
+
+        await Assert.That(broker.TryWithdrawTool("a1", "s1", "toolu_1", toolName: "Bash", toolInput: Json("""{"command":"ls"}"""))).IsTrue();
+
+        await Assert.That(broker.OwedCountForTesting).IsEqualTo(0);
     }
 
     /// A name-and-input match never reaches past what makes the call the prompt's own: another
