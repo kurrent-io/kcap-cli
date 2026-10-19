@@ -47,8 +47,9 @@ Options:
                               search by meaning, pulling it if Ollama lacks it.
                               The model fixes the width of the stored vectors,
                               so changing it later embeds everything again.
-  --no-embeddings             With --local: search by keyword only, removing a
-                              model an earlier setup configured.
+  --no-embeddings             With --local: do not configure Ollama, removing a
+                              model an earlier setup configured. Remembered, so a
+                              later setup without either flag keeps it.
   --json                      With --local: write one JSON object per line,
                               ending with "committed" or "failed", and run only
                               the server and login steps. Exits 0 on "committed",
@@ -188,7 +189,7 @@ Running it again reuses the existing installation.
 When Ollama is running on http://localhost:11434, setup offers it for search by
 meaning with mxbai-embed-large (1024 dimensions, about 670 MB), pulls the model
 if missing, and restarts the server when the model changes. --no-prompt asks
-nothing, so with Ollama running and no model configured it needs
+nothing, so with Ollama running and nothing recorded yet it needs
 --embedding-model or --no-embeddings. Without Ollama, or when the pull fails,
 setup carries on and search works by keyword. A failed or cancelled
 install removes what it created and keeps its logs/ directory. A machine with

@@ -110,6 +110,24 @@ internal sealed class LocalSetupArgsTests {
     }
 
     [Test]
+    public async Task The_embedding_model_takes_the_equals_form_too() {
+        var (terminal, _) = LocalSetupArgs.Parse(["setup", "--local", "--embedding-model=nomic-embed-text"], kcapUrlEnv: null);
+        var (json, error) = LocalSetupArgs.Parse(["setup", "--local", "--json", "--embedding-model=nomic-embed-text"], kcapUrlEnv: null);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(terminal!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Ollama("nomic-embed-text"));
+        await Assert.That(json!.Embeddings).IsEqualTo(new LocalEmbeddingAnswer.Ollama("nomic-embed-text"));
+    }
+
+    [Test]
+    public async Task An_empty_equals_form_is_refused() {
+        var (parsed, error) = LocalSetupArgs.Parse(["setup", "--local", "--embedding-model="], kcapUrlEnv: null);
+
+        await Assert.That(parsed).IsNull();
+        await Assert.That(error).Contains("--embedding-model needs an Ollama model name");
+    }
+
+    [Test]
     public async Task No_embedding_flag_leaves_the_answer_open() {
         var (parsed, _) = LocalSetupArgs.Parse(["setup", "--local", "--no-prompt"], kcapUrlEnv: null);
 

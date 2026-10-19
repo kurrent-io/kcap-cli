@@ -53,7 +53,11 @@ sealed record LocalServerUnit(string ServerBinary, LocalRoot Root, int Port) {
         new(LocalRoot.EnvVar, Root.Directory),
         new("Local__Port", Port.ToString(System.Globalization.CultureInfo.InvariantCulture)),
         .. EmbeddingModel is { } model
-            ? new KeyValuePair<string, string>[] { new("Embedding__Provider", "ollama"), new("Embedding__Ollama__Model", model) }
+            ? new KeyValuePair<string, string>[] {
+                new("Embedding__Provider", "ollama"),
+                new("Embedding__Ollama__Model", model),
+                new("Embedding__Ollama__BaseUrl", OllamaClient.DefaultUrl.ToString().TrimEnd('/')),
+            }
             : [],
     ];
 }

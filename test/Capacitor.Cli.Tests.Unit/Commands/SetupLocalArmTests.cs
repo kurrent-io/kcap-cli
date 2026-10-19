@@ -294,6 +294,19 @@ internal sealed class SetupLocalArmTests : IDisposable {
     }
 
     [Test]
+    public async Task Json_rerun_after_no_embeddings_keeps_search_by_keyword() {
+        Ollama.Running().Pulls("""{"status":"success"}""").Embeds(1024);
+        await Assert.That((await Run("setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings")).Exit).IsEqualTo(0);
+
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--json", "--single-user");
+
+        await Assert.That(exit).IsEqualTo(0);
+        var skipped = stdout.Select(l => JsonNode.Parse(l)!).Single(n => n["event"]!.GetValue<string>() == "embeddings_skipped");
+        await Assert.That(skipped["code"]?.GetValue<string>()).IsEqualTo("declined");
+        await Assert.That(Ollama.Requests("/api/pull")).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task No_prompt_with_ollama_running_and_no_embedding_answer_fails_before_installing() {
         Ollama.Running();
 

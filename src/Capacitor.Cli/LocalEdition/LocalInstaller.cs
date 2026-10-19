@@ -37,8 +37,8 @@ sealed class LocalInstaller(
     /// <summary>Required when the answers carry an embedding answer.</summary>
     public OllamaClient? Ollama { get; init; }
 
-    /// <summary>The Ollama model the installation embeds with, or null. Read without the lease.</summary>
-    public string? ConfiguredEmbeddingModel => LocalEmbeddingFile.ReadModel(root);
+    /// <summary>What setup recorded about semantic search, or null when it never asked. Read without the lease.</summary>
+    public LocalEmbeddingSetting? EmbeddingSetting => LocalEmbeddingFile.Read(root);
 
     /// <summary>Reports to whichever <see cref="InstallAsync"/> is running, so a recovery built before the call can
     /// report into it.</summary>
@@ -135,8 +135,8 @@ sealed class LocalInstaller(
 
         try {
             await StageAsync(details, ct);
-            // Before the unit is written, so the first start already has the model.
-            await EmbeddingsAsync(answers, ct);
+            // Before the unit is written, so the first start already has the model; a rollback deletes it with data/.
+            if (await DecideEmbeddingsAsync(answers, ct) is { } setting) LocalEmbeddingStep.Record(root, setting, _progress);
 
             entry = lease.Advance(entry, LocalSetupJournal.Unit, ServerStart.Fenced);
 
@@ -212,10 +212,16 @@ sealed class LocalInstaller(
                 await RestageAsync(details, ct);
             }
 
-            var changed = await EmbeddingsAsync(answers, ct);
-            unit = LocalServerUnit.ForInstallation(root, existing.Port);
+            // Recorded only once the unit serves it: a refused or failed rewrite leaves the old setting for the next
+            // setup to find different again.
+            var setting = await DecideEmbeddingsAsync(answers, ct);
+            var rewrite = setting is not null && setting.Model != unit.EmbeddingModel;
 
-            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true, rewrite: changed);
+            if (rewrite) unit = unit with { EmbeddingModel = setting!.Model };
+
+            LocalOwnUnit.Ensure(root, unit, service, NotOurs, startPresent: true, rewrite: rewrite);
+
+            if (setting is not null) LocalEmbeddingStep.Record(root, setting, _progress);
         } finally {
             unitLock.Dispose();
         }
@@ -245,11 +251,12 @@ sealed class LocalInstaller(
         return committed;
     }
 
-    /// <returns>True when the embedding configuration changed.</returns>
-    async Task<bool> EmbeddingsAsync(LocalInstallAnswers answers, CancellationToken ct) =>
+    /// <returns>The embedding setting to record, or null when the recorded one stands.</returns>
+    async Task<LocalEmbeddingSetting?> DecideEmbeddingsAsync(LocalInstallAnswers answers, CancellationToken ct) =>
         answers.Embeddings is { } answer
-     && await LocalEmbeddingStep.RunAsync(root, answer, Ollama ?? throw new InvalidOperationException("An embedding answer needs an Ollama client."),
-            _progress, ct);
+            ? await LocalEmbeddingStep.DecideAsync(root, answer,
+                Ollama ?? throw new InvalidOperationException("An embedding answer needs an Ollama client."), _progress, ct)
+            : null;
 
     /// <summary>Downloads, verifies and unpacks the bundle into <c>bin/&lt;version&gt;</c>, then points <c>bin/current</c>
     /// at it. Every step is durable before the journal can say <c>unit</c>.</summary>

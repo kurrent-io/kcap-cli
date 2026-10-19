@@ -85,10 +85,11 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         }
     }
 
-    /// <summary>The flags' answer; else the configured model, or the step's own report when Ollama is not running;
-    /// else the user's. Null when only the user could answer and cannot be asked.</summary>
+    /// <summary>The flags' answer; else what an earlier setup recorded, or the step's own report when Ollama is not
+    /// running; else the user's. Null when only the user could answer and cannot be asked.</summary>
     async Task<LocalEmbeddingAnswer?> EmbeddingsAsync(LocalInstaller installer, bool canAsk) {
-        var configured = installer.ConfiguredEmbeddingModel;
+        var recorded   = installer.EmbeddingSetting;
+        var configured = recorded?.Model;
 
         if (args.Embeddings is { } given) {
             if (configured is not null && given is LocalEmbeddingAnswer.Ollama { Model: { } model } && model != configured)
@@ -97,7 +98,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             return given;
         }
 
-        if (configured is not null) return new LocalEmbeddingAnswer.Ollama(null);
+        if (recorded is not null) return new LocalEmbeddingAnswer.Ollama(null);
 
         var ollama = installer.Ollama ?? throw new InvalidOperationException("The installer has no Ollama client.");
 

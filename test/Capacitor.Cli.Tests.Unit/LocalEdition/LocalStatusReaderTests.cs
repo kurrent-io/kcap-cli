@@ -74,9 +74,9 @@ public class LocalStatusReaderTests {
 
         await Assert.That(Text(await Read())).Contains("Search: by keyword only");
 
-        LocalEmbeddingFile.Write(Root, "mxbai-embed-large");
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large"));
 
-        await Assert.That(Text(await Read())).Contains("Search: by meaning and keyword, embedding with mxbai-embed-large through Ollama");
+        await Assert.That(Text(await Read())).Contains("Search: by meaning through Ollama with mxbai-embed-large while it answers, and by keyword");
     }
 
     [Test]

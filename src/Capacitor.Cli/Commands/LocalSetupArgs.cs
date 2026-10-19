@@ -27,7 +27,7 @@ sealed partial record LocalSetupArgs(bool Json, bool SingleUser, bool Yes, bool 
     /// <param name="args">The command line with the verb at index 0, as <c>HandleAsync</c> receives it.</param>
     /// <param name="kcapUrlEnv">The <c>KCAP_URL</c> environment value.</param>
     public static (LocalSetupArgs? Args, string? Error) Parse(string[] args, string? kcapUrlEnv) {
-        var rest = args.Skip(1).ToArray();
+        var rest = args.Skip(1).SelectMany(Split).ToArray();
 
         foreach (var arg in rest) {
             var flag = arg.Split('=', 2)[0];
@@ -71,6 +71,10 @@ sealed partial record LocalSetupArgs(bool Json, bool SingleUser, bool Yes, bool 
 
         return (new(json, rest.Contains("--single-user"), rest.Contains("--yes"), json || rest.Contains("--no-prompt"), model, noEmbeddings), null);
     }
+
+    /// <summary>The <c>--embedding-model=&lt;model&gt;</c> form as two tokens.</summary>
+    static string[] Split(string arg) =>
+        arg.StartsWith(EmbeddingModelFlag + "=", StringComparison.Ordinal) ? [EmbeddingModelFlag, arg[(EmbeddingModelFlag.Length + 1)..]] : [arg];
 
     /// <summary>Every token but the value of <see cref="EmbeddingModelFlag"/>.</summary>
     static IEnumerable<string> Flags(string[] rest) {

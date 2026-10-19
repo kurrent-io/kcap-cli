@@ -45,7 +45,7 @@ sealed class LocalStatusReader(LocalStack stack, string cliVersion, Func<int, Po
             new("Root", stack.Root.Directory),
             new("Service", $"{service.Describe} {Label(unit)} ({service.UnitFile(unit)})"),
             new("Search", unit.EmbeddingModel is { } model
-                ? $"by meaning and keyword, embedding with {model} through Ollama"
+                ? $"by meaning through Ollama with {model} while it answers, and by keyword"
                 : "by keyword only; kcap setup --local --embedding-model <model> adds search by meaning through Ollama"),
         };
 

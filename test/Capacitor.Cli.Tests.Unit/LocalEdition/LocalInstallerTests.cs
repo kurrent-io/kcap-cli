@@ -543,6 +543,39 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task A_failed_rewrite_records_nothing_so_the_next_setup_rewrites_again() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        await Install();
+        Service.InstallFailure = new LocalLifecycleException("systemctl restart failed");
+
+        await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(ReuseWithOllama, ollama: ollama));
+
+        await Assert.That(File.Exists(LocalEmbeddingFile.PathFor(Root))).IsFalse();
+
+        Service.InstallFailure = null;
+        _log.Clear();
+
+        await Install(ReuseWithOllama, ollama: ollama);
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo(OllamaClient.DefaultModel);
+    }
+
+    [Test]
+    public async Task Reuse_over_a_foreign_unit_leaves_the_embedding_setting_alone() {
+        using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+        await Install(YesWithOllama, ollama: ollama);
+        Tmp.CreateDir("other");
+        var other = new OwnerReading.Root(Tmp.GetResolvedPath("other"));
+        Service.OwnerOverride = new(other, other);
+
+        var failure = await Assert.ThrowsAsync<LocalInstallFailure>(() => Install(new(false, false, new LocalEmbeddingAnswer.Skip()), ollama: ollama));
+
+        await Assert.That(failure!.Code).IsEqualTo(LocalInstallFailureCode.NotOurServer);
+        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo(OllamaClient.DefaultModel);
+    }
+
+    [Test]
     public async Task Reuse_without_ollama_keeps_the_configured_model_and_the_unit() {
         using (var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024))
             await Install(YesWithOllama, ollama: ollama);

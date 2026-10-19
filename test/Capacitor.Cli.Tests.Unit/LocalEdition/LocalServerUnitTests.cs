@@ -27,12 +27,13 @@ public class LocalServerUnitTests {
     [Test]
     public async Task A_recorded_embedding_model_reaches_the_server_as_environment() {
         var root = new LocalRoot(Tmp.CreateDir("embedded"));
-        LocalEmbeddingFile.Write(root, "mxbai-embed-large");
+        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
 
         var unit = LocalServerUnit.ForInstallation(root, 51234);
 
         await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Provider", "ollama"));
         await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Ollama__Model", "mxbai-embed-large"));
+        await Assert.That(unit.Environment).Contains(new KeyValuePair<string, string>("Embedding__Ollama__BaseUrl", "http://localhost:11434"));
         await Assert.That(LocalServerSystemdUnit.Unit(unit)).Contains("Environment=Embedding__Ollama__Model=mxbai-embed-large\n");
     }
 

@@ -17,8 +17,13 @@ public class LocalEmbeddingStepTests {
 
     LocalRoot Root => field ??= new(Tmp.CreateDir("local"));
 
-    Task<bool> Run(FakeOllama ollama, LocalEmbeddingAnswer answer) =>
-        LocalEmbeddingStep.RunAsync(Root, answer, ollama.Client(), _events, CancellationToken.None);
+    /// <returns>Whether the recorded setting changed.</returns>
+    async Task<bool> Run(FakeOllama ollama, LocalEmbeddingAnswer answer) {
+        var setting = await LocalEmbeddingStep.DecideAsync(Root, answer, ollama.Client(), _events, CancellationToken.None);
+        if (setting is not null) LocalEmbeddingStep.Record(Root, setting, _events);
+
+        return setting is not null;
+    }
 
     static readonly LocalEmbeddingAnswer UseOllama = new LocalEmbeddingAnswer.Ollama(null);
 
@@ -65,7 +70,7 @@ public class LocalEmbeddingStepTests {
     [Test]
     public async Task A_model_ollama_has_is_not_pulled_and_an_unchanged_one_needs_no_restart() {
         using var ollama = new FakeOllama().Running($"{Model}:latest").Embeds(1024);
-        LocalEmbeddingFile.Write(Root, Model);
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting(Model));
 
         var changed = await Run(ollama, UseOllama);
 
@@ -77,7 +82,7 @@ public class LocalEmbeddingStepTests {
     [Test]
     public async Task No_model_named_keeps_the_configured_one() {
         using var ollama = new FakeOllama().Running("nomic-embed-text:latest").Embeds(768);
-        LocalEmbeddingFile.Write(Root, "nomic-embed-text");
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("nomic-embed-text"));
 
         await Run(ollama, UseOllama);
 
@@ -88,7 +93,7 @@ public class LocalEmbeddingStepTests {
     [Test]
     public async Task A_named_model_replaces_the_configured_one_and_says_which() {
         using var ollama = new FakeOllama().Running("nomic-embed-text:latest").Embeds(768);
-        LocalEmbeddingFile.Write(Root, Model);
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting(Model));
 
         var changed = await Run(ollama, new LocalEmbeddingAnswer.Ollama("nomic-embed-text"));
 
@@ -100,7 +105,7 @@ public class LocalEmbeddingStepTests {
     [Test]
     public async Task A_failed_pull_skips_and_keeps_what_was_configured() {
         using var ollama = new FakeOllama().Running().Pulls("""{"error":"pull model manifest: file does not exist"}""");
-        LocalEmbeddingFile.Write(Root, "nomic-embed-text");
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("nomic-embed-text"));
 
         var changed = await Run(ollama, new LocalEmbeddingAnswer.Ollama("no-such-model"));
 
@@ -124,21 +129,46 @@ public class LocalEmbeddingStepTests {
     }
 
     [Test]
-    public async Task Declining_removes_a_configured_model_without_asking_ollama() {
+    public async Task Declining_replaces_a_configured_model_without_asking_ollama() {
         using var ollama = new FakeOllama().Running();
-        LocalEmbeddingFile.Write(Root, Model);
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting(Model));
 
         var changed = await Run(ollama, new LocalEmbeddingAnswer.Skip());
 
         await Assert.That(changed).IsTrue();
         await Assert.That(Single<LocalInstallEvent.EmbeddingsSkipped>().Code).IsEqualTo(LocalEmbeddingSkipCode.Declined);
-        await Assert.That(File.Exists(LocalEmbeddingFile.PathFor(Root))).IsFalse();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Declined);
         await Assert.That(ollama.Requests("/api/version")).IsEqualTo(0);
     }
 
     [Test]
-    public async Task Declining_with_nothing_configured_changes_nothing() {
+    public async Task A_decline_outlives_a_later_run_that_names_no_model() {
+        using var ollama = new FakeOllama().Running($"{Model}:latest").Embeds(1024);
+        await Run(ollama, new LocalEmbeddingAnswer.Skip());
+        _events.Reports.Clear();
+
+        var changed = await Run(ollama, UseOllama);
+
+        await Assert.That(changed).IsFalse();
+        await Assert.That(Single<LocalInstallEvent.EmbeddingsSkipped>().Code).IsEqualTo(LocalEmbeddingSkipCode.Declined);
+        await Assert.That(ollama.Requests("/api/version")).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_named_model_overrides_a_decline() {
+        using var ollama = new FakeOllama().Running($"{Model}:latest").Embeds(1024);
+        LocalEmbeddingFile.Write(Root, LocalEmbeddingSetting.Declined);
+
+        var changed = await Run(ollama, new LocalEmbeddingAnswer.Ollama(Model));
+
+        await Assert.That(changed).IsTrue();
+        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo(Model);
+    }
+
+    [Test]
+    public async Task Declining_twice_records_nothing_new() {
         using var ollama = new FakeOllama();
+        await Assert.That(await Run(ollama, new LocalEmbeddingAnswer.Skip())).IsTrue();
 
         await Assert.That(await Run(ollama, new LocalEmbeddingAnswer.Skip())).IsFalse();
     }
