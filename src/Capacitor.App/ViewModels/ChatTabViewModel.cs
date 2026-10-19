@@ -302,6 +302,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     UsageLimitNoticeDto? _usageLimit;
     TerminalDialogDto? _terminalDialog;
+    string? _interruption;
     bool _terminalDialogShown;
     bool _hasTerminalMenu;
     string _terminalMenuTitle = "";
@@ -475,7 +476,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
             answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount,
-            terminalDialog: _terminalDialog is not null);
+            terminalDialog: _terminalDialog is not null, interruption: _interruption, agentId: _agentId);
         StatusText = AgentStatus.Label;
     }
 
@@ -838,6 +839,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ModelLabel = HostedHarnessCatalog.ModelLabelFor(info.Vendor, info.Model ?? "");
         ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         _status = info.Status;
+        _interruption = info.Interruption;
         _ended = info.Ended;
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)

@@ -15,13 +15,14 @@ public sealed record AgentStatusPresentation(
     public bool HasLabel => Label.Length > 0;
     /// The daemon says Running but the turn is unknown (a remote row): live, yet not claimed as Working.
     public bool IsRunningUnknownTurn => !Ended && Kind == AgentStatusKind.Other && Label == "Running";
-    public bool IsInFlight => Kind is AgentStatusKind.Working or AgentStatusKind.Starting || IsRunningUnknownTurn;
-    public bool IsWarning => Kind is AgentStatusKind.Idle or AgentStatusKind.NeedsYou or AgentStatusKind.Answer;
+    public bool IsInFlight => Kind is AgentStatusKind.Working or AgentStatusKind.Starting or AgentStatusKind.Resuming || IsRunningUnknownTurn;
+    public bool IsWarning => Kind is AgentStatusKind.Idle or AgentStatusKind.NeedsYou or AgentStatusKind.Answer or AgentStatusKind.Interrupted;
     public bool IsDanger => Kind == AgentStatusKind.Failed;
     public bool ShowsRing => IsInFlight;
     public bool ShowsClock => Kind == AgentStatusKind.Idle;
     public bool ShowsAsk => Kind == AgentStatusKind.Answer;
     public bool ShowsBang => Kind == AgentStatusKind.NeedsYou;
+    public bool ShowsPause => Kind == AgentStatusKind.Interrupted;
     public bool ShowsCross => Kind == AgentStatusKind.Failed;
     public bool ShowsDash => Kind is AgentStatusKind.Done or AgentStatusKind.Other && !IsRunningUnknownTurn;
 }
