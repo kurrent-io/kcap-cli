@@ -44,6 +44,8 @@ internal static class DaemonBridgeRelay {
     /// turn ended, so a prompt the daemon still holds for it can be retired: the answer was given
     /// in the vendor's own terminal, which the daemon cannot see. A finished tool may also name
     /// the subagent that ran it and carry its name and input, for a prompt held without its id.
+    /// <paramref name="sentAtMs"/> is the hook's own clock: the daemon handles a notice off the
+    /// hook's wait, so a late one must not reach a prompt registered after it was sent.
     /// </summary>
     public static Task NotifyToolSettledAsync(
             HostedAgent hosted, string vendor, string? sessionId, string? cwd, string? toolUseId, string? subagentId, TimeSpan budget,
@@ -58,8 +60,8 @@ internal static class DaemonBridgeRelay {
          && Encoding.UTF8.GetByteCount(toolInput.ToJsonString()) <= PermissionWire.MaxElementBytes) {
             payload["tool_name"]  = toolName;
             payload["tool_input"] = toolInput;
-            if (sentAtMs is { } sent) payload["sent_at"] = sent;
         }
+        if (sentAtMs is { } sent) payload["sent_at"] = sent;
 
         return PostAsync(hosted, vendor, "tool-settled", payload, budget);
     }

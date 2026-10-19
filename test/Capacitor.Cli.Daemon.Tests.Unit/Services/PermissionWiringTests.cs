@@ -107,6 +107,14 @@ public class PermissionWiringTests {
             await Assert.That(bridge.InputWaitHandler).IsNotNull();
             await Assert.That(bridge.ToolSettledHandler).IsNotNull();
 
+            // A turn's end reaches the broker with its stamp: one sent before the prompt leaves it.
+            var held = broker.Register(new Capacitor.Cli.Core.LocalIpc.PermissionPendingDto(
+                "r1", "agent-1", "s1", "codex", "Bash", null, null, false, false, DateTimeOffset.UtcNow.ToString("O"), null));
+            bridge.ToolSettledHandler!("agent-1", new ToolSettledNotice("s1", null, null, SentAt: DateTimeOffset.UtcNow.AddMinutes(-1)));
+            await Assert.That(held.IsCompleted).IsFalse();
+            bridge.ToolSettledHandler!("agent-1", new ToolSettledNotice("s1", null, null, SentAt: DateTimeOffset.UtcNow.AddMinutes(1)));
+            await Assert.That(held.IsCompleted).IsTrue();
+
             await Assert.That(bridge.DecisionLogForTest).IsNotNull();
             await Assert.That(ReferenceEquals(
                 bridge.DecisionLogForTest, provider.GetRequiredService<PermissionDecisionLog>())).IsTrue();
