@@ -5381,9 +5381,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // now published, else initiates it before publication can proceed so it is
                     // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
                     // it across initiation), preserving the retry-on-failure semantics.
-                    // A stop under way reports the ending once termination is confirmed; its Completed is not yet true.
-                    if (agent.StopRequested) break;
-                    if (!TrySendAgentStatus(agent, agent.Status, null, out var statusSend))
+                    // A stop under way reports the ending once termination is confirmed; its Completed is not yet
+                    // true. Read under the lock a stop marks itself requested by, before it sets that status.
+                    string? status;
+                    lock (_ledgerLock) status = agent.StopRequested ? null : agent.Status;
+                    if (status is null) break;
+                    if (!TrySendAgentStatus(agent, status, null, out var statusSend))
                         break; // verdict published → terminal Failed; skip this agent's re-registration
                     await statusSend;
 
