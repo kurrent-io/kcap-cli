@@ -7,36 +7,21 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// Sign-in and workspace creation share one cancellable auth attempt.
+/// One cancellable auth attempt: discovery or a pasted server.
 public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     internal const int LogLimit = 200;
 
     /// How long the re-auth dialog keeps the success line up before it closes.
     internal static readonly TimeSpan SuccessHold = TimeSpan.FromMilliseconds(1600);
 
-    /// One pending UI answer. The flow parks on <see cref="AskAsync"/>; the view resolves it, a
-    /// cancel releases it, and the prompt is torn down either way.
-    sealed class UiQuestion<T> {
-        TaskCompletionSource<T>? _pending;
+    /// How long the page waits on a browser sign-up: twice kcap-web's 15-minute provisioning budget,
+    /// so a slow provision still lands inside it.
+    internal static readonly TimeSpan SignUpWait = TimeSpan.FromMinutes(30);
 
-        public async Task<T> AskAsync(Action<Action> post, Action show, Action hide, CancellationToken ct) {
-            var pending = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Interlocked.Exchange(ref _pending, pending);
+    public const string SignUpExpiredNotice =
+        "Sign-up in your browser didn't finish in time. Choose an edition to start again.";
 
-            using var registration = ct.Register(() => pending.TrySetCanceled(ct));
-
-            post(show);
-
-            try {
-                return await pending.Task.ConfigureAwait(false);
-            } finally {
-                Interlocked.CompareExchange(ref _pending, null, pending);
-                post(hide);
-            }
-        }
-
-        public void Answer(T value) => Interlocked.Exchange(ref _pending, null)?.TrySetResult(value);
-    }
+    public const string WorkspaceNotReady = "Your workspace isn't ready yet.";
 
     readonly WizardAuthService       _service;
     readonly ConnectChoiceViewModel  _connect;
@@ -48,16 +33,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     readonly string?                 _committedDetail;
     readonly TimeProvider            _time;
     readonly Func<bool>?             _passThrough;
-    readonly Func<Func<string, CancellationToken, Task<AvailabilityResponse?>>?> _provisionerCheck;
+    readonly Func<bool>              _signingUp;
+    readonly string                  _signUpUrl;
     string? _workspace;
     public string ConnectionStatus => Uri.TryCreate(_workspace, UriKind.Absolute, out var uri)
         ? $"Connected to {uri.Host}" : "Connected to your workspace";
-
-    readonly UiQuestion<ProvisionMode> _mode    = new();
-    readonly UiQuestion<string?>       _orgName = new();
-    readonly UiQuestion<string?>       _slug    = new();
-    readonly UiQuestion<bool>          _confirm = new();
-    readonly UiQuestion<string?>       _inviteCode = new();
 
     AuthAttempt?   _attempt;
     ConnectIntent? _running;
@@ -76,27 +56,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     string? _quarantineNotice;
     bool    _tenantPickerVisible;
     bool    _tenantChoiceMade;
-    bool    _modeChoiceVisible;
-    bool    _orgNamePromptVisible;
-    bool    _slugPromptVisible;
-    bool    _confirmVisible;
-    bool    _inviteCodePromptVisible;
-    string  _inviteCodeText = "";
-    string? _inviteCodeError;
-    string? _inviteRequestUrl;
-    string  _orgNameText = "";
-    string  _slugText = "";
-    string? _slugError;
-    string  _existingWorkspaceInput = "";
-    string  _confirmText = "";
-    string? _provisioningProgress;
     bool    _urlPanelVisible;
     bool    _statusIsReady;
-    bool    _slugEdited;
-    bool    _settingDerivedSlug;
-    bool    _orgNameAnswered;
-    string? _slugHint;
-    bool    _slugAvailable;
+    bool    _expireAfterRun;
+
+    CancellationTokenSource? _signUpClock;
 
     DiscoveredTenant? _selectedTenant;
 
@@ -111,9 +75,13 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             string?              committedDetail = null,
             TimeProvider?        time = null,
             // True while this run is on the local path, where there is nothing to sign in to.
-            Func<bool>?          passThrough = null) {
+            Func<bool>?          passThrough = null,
+            // True while this run is on the cloud path, where the workspace is created in the browser.
+            Func<bool>?          signingUp = null) {
         _time            = time ?? TimeProvider.System;
         _passThrough     = passThrough;
+        _signingUp       = signingUp ?? (() => false);
+        _signUpUrl       = SignUpUrl(bridges.Endpoints.SignupUrl);
         _service         = service;
         _connect         = connect;
         _picker          = bridges.Picker;
@@ -158,43 +126,14 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             TenantPickerVisible = true;
         });
 
-        var provisioner = bridges.Provisioner;
-        _provisionerCheck = () => provisioner.CheckSlug;
-        provisioner.OfferMode     = OfferModeAsync;
-        provisioner.PromptOrgName = ct => _orgName.AskAsync(
-            _post, () => OrgNamePromptVisible = true, () => OrgNamePromptVisible = false, ct);
-        provisioner.PromptSlug = (suggestion, error, ct) => {
-            // The create form asks for the name and the address together: a first ask with an
-            // address the form already holds is answered from it, and only a complaint shows it again.
-            if (error is null && _orgNameAnswered && !string.IsNullOrWhiteSpace(Slug)) return Task.FromResult<string?>(Slug);
-
-            return _slug.AskAsync(_post, () => {
-                if (string.IsNullOrWhiteSpace(Slug)) SetDerivedSlug(suggestion);
-                SlugError         = error;
-                SlugPromptVisible = true;
-            }, () => SlugPromptVisible = false, ct);
-        };
-        provisioner.ConfirmCreate = (slug, origin, ct) => _confirm.AskAsync(_post, () => {
-            ConfirmText    = $"Create {(string.IsNullOrWhiteSpace(OrgName) ? slug : OrgName.Trim())} at {Host(origin)}?";
-            ConfirmVisible = true;
-        }, () => ConfirmVisible = false, ct);
-        provisioner.PromptInviteCode = (requestUrl, error, ct) => _inviteCode.AskAsync(_post, () => {
-            // A complaint keeps the refused code in the box so a typo can be fixed in place.
-            if (error is null) InviteCode = "";
-            // The URL comes from whichever signup server the client was pointed at; only a web URL is offered.
-            InviteRequestUrl        = LinkPolicy.IsOpenable(requestUrl) ? requestUrl : null;
-            InviteCodeError         = error;
-            InviteCodePromptVisible = true;
-        }, () => InviteCodePromptVisible = false, ct);
-        provisioner.PollProgress = (attempt, max) =>
-            _post(() => ProvisioningProgress = "Your workspace is still being prepared…");
-
         SignInCommand = ReactiveCommand.CreateFromTask(SignInAsync);
 
         ContinueWithWorkAccountCommand = ReactiveCommand.CreateFromTask(() => StartAsync(ConnectChoice.Discover, device: false));
         UseCodeCommand                 = ReactiveCommand.CreateFromTask(() => StartAsync(ConnectChoice.Discover, device: true));
         ToggleUrlPanelCommand          = ReactiveCommand.Create(() => { UrlPanelVisible = !UrlPanelVisible; });
         ContinueWithUrlCommand         = ReactiveCommand.CreateFromTask(() => StartAsync(ConnectChoice.Paste, device: false));
+        ContinueAfterSignUpCommand     = ReactiveCommand.CreateFromTask(() => StartAsync(ConnectChoice.Discover, device: false));
+        ReopenSignUpCommand            = ReactiveCommand.Create(() => Open(_signUpUrl));
         CancelCommand = ReactiveCommand.Create(() => _attempt?.Cancel());
 
         OpenSignInUrlCommand      = ReactiveCommand.Create(() => Open(BrowserUrl));
@@ -207,37 +146,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
             _attempt?.Cancel();
         });
 
-        // Unofferable rather than declinable: a blank submit must never end the whole run.
-        var hasWorkspace = this.WhenAnyValue(x => x.ExistingWorkspaceInput, input => !string.IsNullOrWhiteSpace(input));
-        var hasOrgName   = this.WhenAnyValue(x => x.OrgName, name => !string.IsNullOrWhiteSpace(name));
-
-        CreateWorkspaceCommand      = ReactiveCommand.Create(() => _mode.Answer(new ProvisionMode.Create()));
-        UseExistingWorkspaceCommand = ReactiveCommand.Create(
-            () => _mode.Answer(new ProvisionMode.Existing(ExistingWorkspaceInput)), hasWorkspace);
-        CancelWorkspaceCommand      = ReactiveCommand.Create(() => _mode.Answer(new ProvisionMode.Cancel()));
-
-        SubmitOrgNameCommand = ReactiveCommand.Create(() => _orgName.Answer(OrgName), hasOrgName);
-        SubmitCreateFormCommand = ReactiveCommand.Create(SubmitCreateForm,
-            this.WhenAnyValue(x => x.OrgName, x => x.Slug, (name, slug) => !string.IsNullOrWhiteSpace(name) && !string.IsNullOrWhiteSpace(slug)));
-        CancelCreateFormCommand = ReactiveCommand.Create(() => {
-            if (OrgNamePromptVisible) _orgName.Answer(null);
-            else _slug.Answer(null);
-        });
-        CancelOrgNameCommand = ReactiveCommand.Create(() => _orgName.Answer(null));
-        SubmitSlugCommand    = ReactiveCommand.Create(() => _slug.Answer(Slug));
-        CancelSlugCommand    = ReactiveCommand.Create(() => _slug.Answer(null));
-        ConfirmCreateCommand = ReactiveCommand.Create(() => {
-            // The request and the first status poll are seconds apart; the page says what is
-            // happening across them rather than falling back to the sign-in wait.
-            ProvisioningProgress = "Requesting your workspace…";
-            _confirm.Answer(true);
-        });
-        DeclineCreateCommand = ReactiveCommand.Create(() => _confirm.Answer(false));
-        SubmitInviteCodeCommand = ReactiveCommand.Create(() => _inviteCode.Answer(InviteCode),
-            this.WhenAnyValue(x => x.InviteCode, code => !string.IsNullOrWhiteSpace(code)));
-        CancelInviteCodeCommand     = ReactiveCommand.Create(() => _inviteCode.Answer(null));
-        OpenInviteRequestUrlCommand = ReactiveCommand.Create(() => LinkPolicy.Open(_urlOpener, InviteRequestUrl));
-
         AcknowledgeQuarantineCommand = ReactiveCommand.CreateFromTask(AcknowledgeQuarantineAsync);
     }
 
@@ -245,38 +153,32 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
 
     public SignInPhase Phase =>
-        InviteCodePromptVisible                    ? SignInPhase.InviteCode
-        : ConfirmVisible                           ? SignInPhase.ConfirmCreate
-        : OrgNamePromptVisible || SlugPromptVisible ? SignInPhase.CreateWorkspace
-        : ModeChoiceVisible                          ? SignInPhase.NoWorkspace
-        : TenantPickerVisible                        ? SignInPhase.PickWorkspace
-        : ProvisioningProgress is not null           ? SignInPhase.Provisioning
-        : Busy                                       ? SignInPhase.Waiting
-        :                                              SignInPhase.Start;
+        TenantPickerVisible          ? SignInPhase.PickWorkspace
+        : Busy                       ? SignInPhase.Waiting
+        : _signingUp() && !Satisfied ? SignInPhase.SignUp
+        :                              SignInPhase.Start;
 
     public string Title => Phase switch {
-        SignInPhase.PickWorkspace                                 => "Choose a workspace",
-        SignInPhase.NoWorkspace                                   => "No Capacitor workspace yet",
-        SignInPhase.CreateWorkspace or SignInPhase.ConfirmCreate => "Create your workspace",
-        SignInPhase.InviteCode                                    => "Enter your invite code",
-        SignInPhase.Provisioning                                  => "Setting up your workspace",
-        _                                                         => "Sign in to Capacitor",
+        SignInPhase.PickWorkspace => "Choose a workspace",
+        SignInPhase.SignUp        => "Finish in your browser, then continue here",
+        _                         => "Sign in to Capacitor",
     };
 
-    public string Eyebrow => Phase is SignInPhase.Start or SignInPhase.Waiting ? "Sign in" : "Your workspace";
+    public string Eyebrow => Phase switch {
+        SignInPhase.PickWorkspace => "Your workspace",
+        SignInPhase.SignUp        => "Sign up",
+        _                         => "Sign in",
+    };
 
     public string? Lede => Phase switch {
+        SignInPhase.SignUp =>
+            "Create your workspace on the kcap.ai page that just opened. When it says your workspace is ready, " +
+            "continue here and setup carries on.",
         SignInPhase.Start or SignInPhase.Waiting =>
-            "Use your work account. It finds the Capacitor workspaces you belong to, or helps you create one.",
+            "Use your work account. It finds the Capacitor workspaces you belong to.",
         SignInPhase.PickWorkspace =>
             "Your account belongs to more than one. Pick the one this machine records into.",
-        SignInPhase.NoWorkspace =>
-            "Your account isn't in a Capacitor workspace. Create one now, or point this machine at one you already have.",
-        SignInPhase.CreateWorkspace or SignInPhase.ConfirmCreate =>
-            "Your team's sessions live here. You can invite people from it once it's ready.",
-        SignInPhase.InviteCode   => "Capacitor is invite-only right now.",
-        SignInPhase.Provisioning => "This usually takes about five minutes, sometimes longer. Keep this window open.",
-        _                        => null,
+        _ => null,
     };
 
     /// Sign-in has its own actions on the page. Next stays hidden until it commits, and while a
@@ -299,45 +201,22 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     public ReactiveCommand<Unit, Unit> OpenVerificationUriCommand   { get; }
     public ReactiveCommand<Unit, Unit> ConfirmTenantCommand         { get; }
     public ReactiveCommand<Unit, Unit> CancelTenantCommand          { get; }
-    public ReactiveCommand<Unit, Unit> CreateWorkspaceCommand       { get; }
-    public ReactiveCommand<Unit, Unit> UseExistingWorkspaceCommand  { get; }
-    public ReactiveCommand<Unit, Unit> CancelWorkspaceCommand       { get; }
-    public ReactiveCommand<Unit, Unit> SubmitOrgNameCommand         { get; }
-    public ReactiveCommand<Unit, Unit> CancelOrgNameCommand         { get; }
-    public ReactiveCommand<Unit, Unit> SubmitSlugCommand            { get; }
-    public ReactiveCommand<Unit, Unit> CancelSlugCommand            { get; }
-    public ReactiveCommand<Unit, Unit> ConfirmCreateCommand         { get; }
-    public ReactiveCommand<Unit, Unit> DeclineCreateCommand         { get; }
-    public ReactiveCommand<Unit, Unit> SubmitInviteCodeCommand      { get; }
-    public ReactiveCommand<Unit, Unit> CancelInviteCodeCommand      { get; }
-    public ReactiveCommand<Unit, Unit> OpenInviteRequestUrlCommand  { get; }
     public ReactiveCommand<Unit, Unit> AcknowledgeQuarantineCommand { get; }
     public ReactiveCommand<Unit, Unit> ContinueWithWorkAccountCommand { get; }
     public ReactiveCommand<Unit, Unit> UseCodeCommand               { get; }
     public ReactiveCommand<Unit, Unit> ToggleUrlPanelCommand        { get; }
     public ReactiveCommand<Unit, Unit> ContinueWithUrlCommand       { get; }
-    public ReactiveCommand<Unit, Unit> SubmitCreateFormCommand      { get; }
-    public ReactiveCommand<Unit, Unit> CancelCreateFormCommand      { get; }
+    public ReactiveCommand<Unit, Unit> ContinueAfterSignUpCommand   { get; }
+    public ReactiveCommand<Unit, Unit> ReopenSignUpCommand          { get; }
+
+    /// The browser sign-up outlived <see cref="SignUpWait"/> without a workspace signed in to.
+    public event Action? SignUpExpired;
 
     /// The "I have a workspace URL" field under the work-account action.
     public bool UrlPanelVisible {
         get => _urlPanelVisible;
         set => this.RaiseAndSetIfChanged(ref _urlPanelVisible, value);
     }
-
-    /// The live answer for the address in the create form: "available", "taken", or a reason.
-    public string? SlugHint {
-        get => _slugHint;
-        private set => this.RaiseAndSetIfChanged(ref _slugHint, value);
-    }
-
-    public bool SlugAvailable {
-        get => _slugAvailable;
-        private set => this.RaiseAndSetIfChanged(ref _slugAvailable, value);
-    }
-
-    /// The address the form will create, as it would be typed into a browser.
-    public string SlugOrigin => string.IsNullOrWhiteSpace(Slug) ? "" : $"{SlugValidator.Canonicalize(Slug)}.kcap.ai";
 
     public string Status {
         get => _status;
@@ -434,114 +313,51 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         set => this.RaiseAndSetIfChanged(ref _selectedTenant, value);
     }
 
-    public bool ModeChoiceVisible {
-        get => _modeChoiceVisible;
-        private set {
-            this.RaiseAndSetIfChanged(ref _modeChoiceVisible, value);
-            RestatePhase();
-        }
-    }
-
-    public bool OrgNamePromptVisible {
-        get => _orgNamePromptVisible;
-        private set {
-            this.RaiseAndSetIfChanged(ref _orgNamePromptVisible, value);
-            RestatePhase();
-        }
-    }
-
-    public bool SlugPromptVisible {
-        get => _slugPromptVisible;
-        private set {
-            this.RaiseAndSetIfChanged(ref _slugPromptVisible, value);
-            RestatePhase();
-        }
-    }
-
-    public bool ConfirmVisible {
-        get => _confirmVisible;
-        private set {
-            this.RaiseAndSetIfChanged(ref _confirmVisible, value);
-            RestatePhase();
-        }
-    }
-
-    public bool InviteCodePromptVisible {
-        get => _inviteCodePromptVisible;
-        private set {
-            this.RaiseAndSetIfChanged(ref _inviteCodePromptVisible, value);
-            RestatePhase();
-        }
-    }
-
-    public string InviteCode {
-        get => _inviteCodeText;
-        set => this.RaiseAndSetIfChanged(ref _inviteCodeText, value);
-    }
-
-    /// Why the last code was refused; null on the first ask.
-    public string? InviteCodeError {
-        get => _inviteCodeError;
-        private set => this.RaiseAndSetIfChanged(ref _inviteCodeError, value);
-    }
-
-    /// Where the server says to ask for an invite, when it names one.
-    public string? InviteRequestUrl {
-        get => _inviteRequestUrl;
-        private set => this.RaiseAndSetIfChanged(ref _inviteRequestUrl, value);
-    }
-
-    public string OrgName {
-        get => _orgNameText;
-        set {
-            this.RaiseAndSetIfChanged(ref _orgNameText, value);
-            // The address follows the name until the user types one of their own.
-            if (!_slugEdited) SetDerivedSlug(SlugValidator.Derive(value ?? ""));
-        }
-    }
-
-    public string Slug {
-        get => _slugText;
-        set {
-            this.RaiseAndSetIfChanged(ref _slugText, value);
-            if (!_settingDerivedSlug) _slugEdited = !string.IsNullOrWhiteSpace(value);
-            this.RaisePropertyChanged(nameof(SlugOrigin));
-            SlugError = null;
-            ScheduleSlugCheck(value);
-        }
-    }
-
-    public string? SlugError {
-        get => _slugError;
-        private set => this.RaiseAndSetIfChanged(ref _slugError, value);
-    }
-
-    public string ExistingWorkspaceInput {
-        get => _existingWorkspaceInput;
-        set => this.RaiseAndSetIfChanged(ref _existingWorkspaceInput, value);
-    }
-
-    public string ConfirmText {
-        get => _confirmText;
-        private set => this.RaiseAndSetIfChanged(ref _confirmText, value);
-    }
-
-    public string? ProvisioningProgress {
-        get => _provisioningProgress;
-        private set {
-            this.RaiseAndSetIfChanged(ref _provisioningProgress, value);
-            RestatePhase();
-        }
-    }
-
     public Task OnEnterAsync(CancellationToken ct) {
         if (!Satisfied && !Busy) {
             SetStatus(ReadyStatus(), isError: false, ReadyDetail());
             _statusIsReady = true;
             this.RaisePropertyChanged(nameof(StatusLineVisible));
+
+            if (_signingUp()) {
+                Open(_signUpUrl);
+                StartSignUpClock();
+            }
         }
 
+        RestatePhase();
+
         return Task.CompletedTask;
+    }
+
+    /// kcap-web's Team sign-up; <c>via=desktop</c> is what it records as the desktop setup path.
+    internal static string SignUpUrl(string signupBase) => $"{signupBase.TrimEnd('/')}/get-started?tier=team&via=desktop";
+
+    void StartSignUpClock() {
+        StopSignUpClock();
+        var clock = _signUpClock = new CancellationTokenSource();
+        _ = ExpireAsync(clock.Token);
+    }
+
+    void StopSignUpClock() {
+        _signUpClock?.Cancel();
+        _signUpClock    = null;
+        _expireAfterRun = false;
+    }
+
+    async Task ExpireAsync(CancellationToken ct) {
+        try {
+            await Task.Delay(SignUpWait, _time, ct).ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            return;
+        }
+
+        _post(() => {
+            if (ct.IsCancellationRequested || Satisfied) return;
+            // A Continue in flight decides first: its commit ends the wait, its failure expires it.
+            if (Busy) _expireAfterRun = true;
+            else SignUpExpired?.Invoke();
+        });
     }
 
     internal void RestoreCommitted() {
@@ -556,6 +372,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     /// moves. Forward is refused while a quarantine notice is up.
     /// </summary>
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        StopSignUpClock();
         _attempt?.Cancel();
 
         if (_run is { } run) {
@@ -616,11 +433,14 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         Busy = false;
         await SurfaceQuarantineAsync().ConfigureAwait(true);
 
+        if (Satisfied) StopSignUpClock();
+        if (_expireAfterRun) {
+            _expireAfterRun = false;
+            SignUpExpired?.Invoke();
+        }
+
         if (Satisfied && QuarantineNotice is null) Completed?.Invoke();
     }
-
-    Task<ProvisionMode> OfferModeAsync(CancellationToken ct) =>
-        _mode.AskAsync(_post, () => ModeChoiceVisible = true, () => ModeChoiceVisible = false, ct);
 
     void Apply(AuthResult result) {
         switch (result) {
@@ -640,17 +460,10 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 SetStatus("Sign-in cancelled.", isError: false);
 
                 break;
-            case AuthResult.Retarget retarget:
-                _connect.Prefill(retarget.ServerInput);
-                UrlPanelVisible = true;
-                SetStatus($"Sign in to {retarget.ServerInput}", isError: false,
-                    "Continue below to sign in to that workspace instead.");
-
-                break;
-            // Provisioning outran its poll window. Sign-in itself succeeded and the workspace is on its
-            // way, so headlining a failure here would tell the user something untrue.
-            case AuthResult.Failed { Reason: AuthFailureReason.ProvisioningInProgress } pending:
-                SetStatus(pending.Message, isError: false, _lastReport);
+            // A browser sign-up still provisioning: the wait goes on, so this is not a failed sign-in.
+            case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when _signingUp():
+                SetStatus(WorkspaceNotReady, isError: false,
+                    "Finish creating it in your browser, then continue here. Setting it up can take a few minutes.");
 
                 break;
             // Already rendered through the sink; prefer the last reported line over in-flight
@@ -715,79 +528,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         return SignInAsync();
     }
 
-    void SubmitCreateForm() {
-        if (OrgNamePromptVisible) {
-            _orgNameAnswered = true;
-            _orgName.Answer(OrgName);
-        } else {
-            _slug.Answer(Slug);
-        }
-    }
-
-    internal static readonly TimeSpan SlugCheckDelay = TimeSpan.FromMilliseconds(400);
-
-    CancellationTokenSource? _slugCheck;
-
-    // A check per pause in typing, never per keystroke; an answer for an address the user has
-    // since changed is dropped.
-    void ScheduleSlugCheck(string? slug) {
-        _slugCheck?.Cancel();
-        SlugHint      = null;
-        SlugAvailable = false;
-        if (_provisionerCheck() is null || string.IsNullOrWhiteSpace(slug)) return;
-
-        var cts = _slugCheck = new CancellationTokenSource();
-        _ = CheckSlugAsync(SlugValidator.Canonicalize(slug), cts.Token);
-    }
-
-    async Task CheckSlugAsync(string slug, CancellationToken ct) {
-        try {
-            await Task.Delay(SlugCheckDelay, _time, ct).ConfigureAwait(false);
-            var shape = SlugValidator.Validate(slug);
-            if (!shape.Ok) {
-                Report(false, shape.Reason == "blocked" ? "reserved" : "lowercase letters, digits and hyphens");
-                return;
-            }
-
-            if (_provisionerCheck() is not { } check) return;
-            var answer = await check(slug, ct).ConfigureAwait(false);
-            if (answer is null) return;
-
-            Report(answer.Available || answer.Reason == "yours", answer.Available || answer.Reason == "yours"
-                ? "available"
-                : answer.Reason switch {
-                    "reserved" => "being set up by someone else",
-                    "blocked"  => "reserved",
-                    _          => "taken",
-                });
-        } catch (OperationCanceledException) {
-            // superseded by a newer address
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: slug availability check failed: {ex.Message}");
-        }
-
-        void Report(bool available, string hint) => _post(() => {
-            if (ct.IsCancellationRequested) return;
-            SlugAvailable = available;
-            SlugHint      = hint;
-        });
-    }
-
-    void SetDerivedSlug(string slug) {
-        _settingDerivedSlug = true;
-        try {
-            Slug = slug;
-        } finally {
-            _settingDerivedSlug = false;
-        }
-    }
-
-    static string Host(string origin) =>
-        Uri.TryCreate(origin, UriKind.Absolute, out var uri) ? uri.Host : origin;
-
-    public bool StartPanelVisible   => Phase is SignInPhase.Start or SignInPhase.Waiting;
-    public bool CreateFormVisible   => Phase is SignInPhase.CreateWorkspace;
-    public bool ProvisioningVisible => Phase is SignInPhase.Provisioning;
+    public bool StartPanelVisible  => Phase is SignInPhase.Start or SignInPhase.Waiting;
+    public bool SignUpPanelVisible => Phase is SignInPhase.SignUp;
 
     /// The status line under the work-account action. The ready line only restates the button,
     /// so it stays hidden until something has happened. A committed result uses the success row.
@@ -795,8 +537,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     void RestatePhase() {
         this.RaisePropertyChanged(nameof(StartPanelVisible));
-        this.RaisePropertyChanged(nameof(CreateFormVisible));
-        this.RaisePropertyChanged(nameof(ProvisioningVisible));
+        this.RaisePropertyChanged(nameof(SignUpPanelVisible));
         this.RaisePropertyChanged(nameof(Phase));
         this.RaisePropertyChanged(nameof(Title));
         this.RaisePropertyChanged(nameof(Eyebrow));
@@ -804,23 +545,19 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void ResetForRun(ConnectIntent intent) {
-        _running         = intent;
-        _orgNameAnswered = false;
+        _running    = intent;
         _lastReport = null;
         Log.Clear();
         HidePrompts();
         ClearTransient();
-        SlugError    = null;
         StatusDetail = null;
     }
 
     void ClearTransient() {
-        DeviceCode           = null;
-        VerificationUri      = null;
-        BrowserUrl           = null;
-        WaitingText          = null;
-        ProvisioningProgress = null;
-        InviteCode           = "";
+        DeviceCode      = null;
+        VerificationUri = null;
+        BrowserUrl      = null;
+        WaitingText     = null;
     }
 
     void CommitTenant(DiscoveredTenant? tenant) {
@@ -832,13 +569,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void HidePrompts() {
-        _tenantChoiceMade       = false;
-        TenantPickerVisible     = false;
-        ModeChoiceVisible       = false;
-        OrgNamePromptVisible    = false;
-        SlugPromptVisible       = false;
-        ConfirmVisible          = false;
-        InviteCodePromptVisible = false;
+        _tenantChoiceMade   = false;
+        TenantPickerVisible = false;
     }
 
     void SetStatus(string text, bool isError, string? detail = null) {

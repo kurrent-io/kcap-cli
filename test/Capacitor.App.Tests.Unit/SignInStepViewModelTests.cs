@@ -1,5 +1,4 @@
 using Capacitor.Cli.Core.Telemetry;
-using System.Net;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -9,30 +8,14 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Cli.Core.Http;
 using Microsoft.Extensions.Time.Testing;
-using ReactiveUI.Reactive;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// Sign-in runs one façade operation. The picker, provisioner and progress sink are the real
-/// bridges — they are what this task builds. The service is driven by a scripted operation
-/// (the façade itself is covered in Core).
+/// Sign-in runs one façade operation. The picker and progress sink are the real bridges; the
+/// service is driven by a scripted operation (the façade itself is covered in Core).
 public class SignInStepViewModelTests {
     static readonly TimeSpan Bounded = TimeSpan.FromSeconds(10);
-
-    static bool CanExecute(ReactiveCommand<System.Reactive.Unit, System.Reactive.Unit> command) {
-        Dispatcher.UIThread.RunJobs(); // canExecute is delivered through the dispatcher scheduler
-        var value = false;
-        using var subscription = command.CanExecute.Subscribe(v => value = v);
-
-        return value;
-    }
-
-    static async Task ChooseCreateAsync(Harness h) {
-        await WaitUntil(() => h.Vm.ModeChoiceVisible, "the workspace mode choice");
-        await h.Vm.CreateWorkspaceCommand.Execute().ToTask();
-    }
 
     static async Task WaitUntil(Func<bool> condition, string what) {
         var deadline = DateTime.UtcNow + Bounded;
@@ -45,9 +28,6 @@ public class SignInStepViewModelTests {
     }
 
     static DiscoveredTenant Tenant(string login) => new() { OrgLogin = login, Origin = $"https://{login}.kcap.ai" };
-
-    static WorkOSTokenSource Tokens() =>
-        new("access-token", refreshToken: null, (_, _) => Task.FromResult<WorkOSAuthResponse?>(null), time: TimeProvider.System);
 
     static AuthResult.Committed Committed(string provider = AuthProvider.GitHubApp, string? username = "sam") =>
         new("acme", "https://acme.kcap.ai:443", provider, username, [new AuthIdentity("acme", "https://acme.kcap.ai:443")]);
@@ -70,17 +50,18 @@ public class SignInStepViewModelTests {
         readonly TempConfigRoot                 _config = new();
         public readonly ConnectChoiceViewModel    Connect = new();
         public readonly WizardTenantPicker      Picker;
-        public readonly ScriptedSignupHandler   Signup  = new();
         public readonly RecordingOpener         Opener  = new();
         public readonly FakeAppState            AppState = new();
         public readonly FakeTimeProvider        Time    = new();
         public readonly ConsentFlipClaims       Claims;
         public readonly UiAuthProgress          Progress;
-        public readonly WizardTenantProvisioner Provisioner;
         public readonly WizardAuthService       Service;
         public readonly SignInStepViewModel     Vm;
 
         public int Runs;
+
+        // The edition screen's cloud choice, read the way the composition reads it.
+        public bool SigningUp;
 
         public Func<ConnectIntent, CancellationToken, Task<AuthResult>> Operation =
             (_, _) => Task.FromResult<AuthResult>(Committed());
@@ -88,21 +69,17 @@ public class SignInStepViewModelTests {
         public Harness() {
             Claims = new ConsentFlipClaims(_config.Root);
 
-            var bridges = new WizardBridges(
-                action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults,
-                progress => new WizardTenantProvisioner(
-                    new TenantProvisioningClient(new HttpClient(Signup), ClientAgent.Desktop), "https://signup.example", progress,
-                    CliTelemetry.Disabled(TimeProvider.System), Time));
+            var bridges = new WizardBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
 
-            Picker      = bridges.Picker;
-            Progress    = bridges.Progress;
-            Provisioner = bridges.Provisioner;
+            Picker   = bridges.Picker;
+            Progress = bridges.Progress;
             Service = new WizardAuthService((intent, ct) => {
                 Runs++;
 
                 return Operation(intent, ct);
             });
-            Vm = new SignInStepViewModel(Service, Connect, bridges, Claims, AppState, Opener);
+            Vm = new SignInStepViewModel(
+                Service, Connect, bridges, Claims, AppState, Opener, time: Time, signingUp: () => SigningUp);
         }
 
         public string ClaimsPath => _config.PathTo("consent-flip-claims.json");
@@ -246,36 +223,6 @@ public class SignInStepViewModelTests {
         await Assert.That(status).IsEqualTo("Sign-in cancelled.");
         await Assert.That(isError).IsFalse();
         await Assert.That(detail).IsNull();
-    }
-
-    // The defect this ticket is about: sign-in succeeded and the workspace is being created, so the
-    // generic failure headline below would tell the user something untrue.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_provisioning_timeout_headlines_the_pending_workspace_and_is_not_an_error() {
-        var (status, isError, detail, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Discover;
-            h.Operation = (_, _) => {
-                h.Progress.Notice("Still provisioning — finish later by signing in to 'acme' with \"I have a workspace URL\".");
-
-                return Task.FromResult<AuthResult>(new AuthResult.Failed(
-                    "'acme' is still being created.", AuthFailureReason.ProvisioningInProgress));
-            };
-
-            await h.SignIn();
-
-            return (h.Vm.Status, h.Vm.StatusIsError, h.Vm.StatusDetail, h.Vm.Satisfied);
-        });
-
-        await Assert.That(status).IsEqualTo("'acme' is still being created.");
-        await Assert.That(isError)
-                    .IsFalse()
-                    .Because("nothing failed — the poll outran its window while the workspace was "
-                           + "still being created");
-        await Assert.That(detail).IsEqualTo("Still provisioning — finish later by signing in to 'acme' with \"I have a workspace URL\".");
-        // Still not signed in to anything, so the step cannot be satisfied.
-        await Assert.That(satisfied).IsFalse();
     }
 
     [Test]
@@ -491,62 +438,11 @@ public class SignInStepViewModelTests {
         await Assert.That(error).IsFalse();
     }
 
-    // ── create sub-flow ──────────────────────────────────────────────────────
-
-    /// The form asks the name and the address together: the address follows the name, and the
-    /// provisioner's own address prompt is answered from the form rather than shown again.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_create_form_answers_the_name_and_address_in_one_submit() {
-        var (slugShows, derived, confirmText, satisfied, status) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Discover;
-            h.Signup.Respond = (request, _) => request.RequestUri!.AbsolutePath == "/api/signup/availability"
-                ? (HttpStatusCode.OK, """{"available":true}""")
-                : (HttpStatusCode.OK, """{"slug":"acme-robotics","state":"active","workosOrgId":"org_1","url":"https://acme-robotics.kcap.ai"}""");
-
-            h.Operation = async (_, ct) => {
-                var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
-
-                return offer.Status == ProvisionOfferStatus.Created
-                    ? Committed(AuthProvider.WorkOS)
-                    : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
-            };
-
-            var shows = 0;
-            h.Vm.PropertyChanged += (_, e) => {
-                if (e.PropertyName == nameof(SignInStepViewModel.SlugPromptVisible) && h.Vm.SlugPromptVisible) shows++;
-            };
-
-            var exec = h.SignIn();
-
-            await ChooseCreateAsync(h);
-            await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
-            h.Vm.OrgName = "Acme Robotics";
-            var slug = h.Vm.Slug;
-            await h.Vm.SubmitCreateFormCommand.Execute().ToTask();
-
-            await WaitUntil(() => h.Vm.ConfirmVisible, "the create confirmation");
-            var confirm = h.Vm.ConfirmText;
-            await h.Vm.ConfirmCreateCommand.Execute().ToTask();
-
-            await exec;
-
-            return (shows, slug, confirm, h.Vm.Satisfied, h.Vm.Status);
-        });
-
-        await Assert.That(slugShows).IsEqualTo(0);
-        await Assert.That(derived).IsEqualTo("acme-robotics");
-        await Assert.That(confirmText).IsEqualTo("Create Acme Robotics at acme-robotics.kcap.ai?");
-        await Assert.That(satisfied).IsTrue();
-        await Assert.That(status).IsEqualTo("Signed in as sam");
-    }
-
-    /// The page's headline follows the operation: one workspace list, one "none yet" choice, one form.
+    /// The page's headline follows the operation: the start, then one workspace list.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_headline_follows_the_sign_in_phase() {
-        var (start, picker, none, create) = await AvaloniaSession.DispatchAsync(async () => {
+        var (start, picker) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             var startTitle = h.Vm.Title;
             var pick = new TaskCompletionSource<string>();
@@ -557,331 +453,210 @@ public class SignInStepViewModelTests {
                 pick.SetResult(h.Vm.Title);
                 h.Picker.Select(null);
                 await picking;
-                await h.Provisioner.OfferCreateAsync(Tokens(), ct);
 
                 return new AuthResult.Cancelled();
             };
 
             var exec = h.SignIn();
             var pickerTitle = await pick.Task.WaitAsync(Bounded);
-            await WaitUntil(() => h.Vm.ModeChoiceVisible, "the workspace mode choice");
-            var noneTitle = h.Vm.Title;
-            await h.Vm.CreateWorkspaceCommand.Execute().ToTask();
-            await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
-            var createTitle = h.Vm.Title;
-            await h.Vm.CancelCreateFormCommand.Execute().ToTask();
             await exec;
 
-            return (startTitle, pickerTitle, noneTitle, createTitle);
+            return (startTitle, pickerTitle);
         });
 
         await Assert.That(start).IsEqualTo("Sign in to Capacitor");
         await Assert.That(picker).IsEqualTo("Choose a workspace");
-        await Assert.That(none).IsEqualTo("No Capacitor workspace yet");
-        await Assert.That(create).IsEqualTo("Create your workspace");
     }
 
-    /// The address is checked as it is typed, with the token the offer runs under.
+    // ── cloud sign-up in the browser ─────────────────────────────────────────
+
+    // The delay's continuation runs off Advance's own call, so a "nothing fired" check waits this long first.
+    static readonly TimeSpan SettleGap = TimeSpan.FromMilliseconds(100);
+
+    const string DesktopSignUp = AuthEndpoints.DefaultSignupUrl + "/get-started?tier=team&via=desktop";
+
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_create_form_reports_whether_the_address_is_free() {
-        var (hint, available, asked) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            h.Signup.Respond = (request, _) => (HttpStatusCode.OK,
-                request.RequestUri!.Query.Contains("slug=taken") ? """{"available":false,"reason":"taken"}""" : """{"available":true}""");
-            h.Operation = async (_, ct) => {
-                await h.Provisioner.OfferCreateAsync(Tokens(), ct);
+    public async Task Entering_on_the_cloud_path_opens_the_desktop_sign_up_and_waits_on_the_browser() {
+        var (opened, phase, title, satisfied, runs) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
 
-                return new AuthResult.Cancelled();
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Opener.Opened.ToList(), h.Vm.Phase, h.Vm.Title, h.Vm.Satisfied, h.Runs);
+        });
+
+        await Assert.That(opened).IsEquivalentTo([DesktopSignUp]);
+        await Assert.That(phase).IsEqualTo(SignInPhase.SignUp);
+        await Assert.That(title).IsEqualTo("Finish in your browser, then continue here");
+        await Assert.That(satisfied).IsFalse();
+        await Assert.That(runs).IsEqualTo(0); // nothing is discovered until the user says the browser is done
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_existing_workspace_path_opens_no_sign_up() {
+        var (opened, phase) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Opener.Opened.ToList(), h.Vm.Phase);
+        });
+
+        await Assert.That(opened).IsEmpty();
+        await Assert.That(phase).IsEqualTo(SignInPhase.Start);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Continue_after_the_browser_runs_discovery_and_commits() {
+        var (intent, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            ConnectIntent? seen = null;
+            h.Operation = (i, _) => {
+                seen = i;
+                return Task.FromResult<AuthResult>(Committed(AuthProvider.WorkOS));
             };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
 
-            var exec = h.SignIn();
-            await ChooseCreateAsync(h);
-            await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
-            h.Vm.Slug = "taken";
-            await WaitUntil(() => h.Vm.SlugHint is not null, "the availability answer");
-            var result = (h.Vm.SlugHint, h.Vm.SlugAvailable, h.Signup.Requests.Count(r => r.Contains("availability")));
-            await h.Vm.CancelCreateFormCommand.Execute().ToTask();
-            await exec;
+            await h.Vm.ContinueAfterSignUpCommand.Execute().ToTask();
 
-            return result;
+            return (seen, h.Vm.Satisfied);
         });
 
-        await Assert.That(hint).IsEqualTo("taken");
-        await Assert.That(available).IsFalse();
-        await Assert.That(asked).IsEqualTo(1);
-    }
-
-    /// An address typed by hand stops following the name.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task An_edited_address_stops_following_the_name() {
-        var (afterName, afterEdit, afterRename) = await AvaloniaSession.DispatchAsync(() => {
-            using var h = new Harness();
-            h.Vm.OrgName = "Acme";
-            var first = h.Vm.Slug;
-            h.Vm.Slug = "acme-hq";
-            var edited = h.Vm.Slug;
-            h.Vm.OrgName = "Acme Robotics";
-
-            return Task.FromResult((first, edited, h.Vm.Slug));
-        });
-
-        await Assert.That(afterName).IsEqualTo("acme");
-        await Assert.That(afterEdit).IsEqualTo("acme-hq");
-        await Assert.That(afterRename).IsEqualTo("acme-hq");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Declining_the_create_confirmation_explains_itself_instead_of_a_bare_failure() {
-        var (status, detail, log) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Discover;
-            h.Signup.Respond = (_, _) => (HttpStatusCode.OK, """{"available":true}""");
-            h.Operation = async (_, ct) => {
-                var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
-
-                return offer.Status == ProvisionOfferStatus.Created
-                    ? Committed(AuthProvider.WorkOS)
-                    : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
-            };
-
-            var exec = h.SignIn();
-
-            await ChooseCreateAsync(h);
-            await WaitUntil(() => h.Vm.OrgNamePromptVisible, "the organization-name prompt");
-            h.Vm.OrgName = "Acme";
-            await h.Vm.SubmitOrgNameCommand.Execute().ToTask();
-
-            await WaitUntil(() => h.Vm.SlugPromptVisible, "the slug prompt");
-            await h.Vm.SubmitSlugCommand.Execute().ToTask();
-
-            await WaitUntil(() => h.Vm.ConfirmVisible, "the create confirmation");
-            await h.Vm.DeclineCreateCommand.Execute().ToTask();
-            await exec;
-
-            return (h.Vm.Status, h.Vm.StatusDetail, h.Vm.Log.ToList());
-        });
-
-        await Assert.That(status).IsEqualTo("Sign-in failed.");
-        await Assert.That(detail).IsEqualTo("No workspace created.");
-        await Assert.That(log).Contains("No workspace created.");
-    }
-
-    const string InviteRequestUrl = "https://site.example/get-started#request";
-
-    /// Scripts a create run whose provision POSTs answer from <paramref name="replies"/> in order
-    /// (the last repeats), recording the code each carried; the run commits only on a created workspace.
-    static List<string?> GateProvisioning(Harness h, params (HttpStatusCode Status, string Body)[] replies) {
-        var sent = new List<string?>();
-        h.Connect.Choice = ConnectChoice.Discover;
-        h.Signup.Respond = (request, _) => {
-            if (request.RequestUri!.AbsolutePath == "/api/signup/availability") return (HttpStatusCode.OK, """{"available":true}""");
-
-            var body = System.Text.Json.Nodes.JsonNode.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult())!;
-            sent.Add(body["code"]?.GetValue<string>());
-
-            return replies[Math.Min(sent.Count, replies.Length) - 1];
-        };
-        h.Operation = async (_, ct) => {
-            var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
-
-            return offer.Status == ProvisionOfferStatus.Created
-                ? Committed(AuthProvider.WorkOS)
-                : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
-        };
-
-        return sent;
-    }
-
-    static async Task ConfirmCreateAsync(Harness h) {
-        await ChooseCreateAsync(h);
-        await WaitUntil(() => h.Vm.CreateFormVisible, "the create form");
-        h.Vm.OrgName = "Acme";
-        await h.Vm.SubmitCreateFormCommand.Execute().ToTask();
-        await WaitUntil(() => h.Vm.ConfirmVisible, "the create confirmation");
-        await h.Vm.ConfirmCreateCommand.Execute().ToTask();
-    }
-
-    static readonly (HttpStatusCode, string) InviteRequired =
-        (HttpStatusCode.Forbidden, $$"""{"reason":"invite_required","requestUrl":"{{InviteRequestUrl}}"}""");
-
-    /// A gated workspace asks for a code on its own page, says why a refused one was refused, and
-    /// keeps that code in the box to correct.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task An_invite_gated_create_asks_for_a_code_and_provisions_with_it() {
-        var (first, retry, opened, satisfied, sent) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            var codes = GateProvisioning(h,
-                InviteRequired,
-                (HttpStatusCode.BadRequest, """{"reason":"invalid_code"}"""),
-                (HttpStatusCode.OK, """{"slug":"acme","state":"active","workosOrgId":"org_1","url":"https://acme.kcap.ai"}"""));
-
-            var exec = h.SignIn();
-            await ConfirmCreateAsync(h);
-
-            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
-            var emptySubmittable = CanExecute(h.Vm.SubmitInviteCodeCommand);
-            var firstAsk = (h.Vm.Phase, h.Vm.Title, h.Vm.Lede, h.Vm.InviteRequestUrl, h.Vm.InviteCodeError, emptySubmittable,
-                ProvisioningShown: h.Vm.ProvisioningVisible);
-            await h.Vm.OpenInviteRequestUrlCommand.Execute().ToTask();
-            h.Vm.InviteCode = "ab12";
-            await h.Vm.SubmitInviteCodeCommand.Execute().ToTask();
-
-            await WaitUntil(() => h.Vm.InviteCodePromptVisible && h.Vm.InviteCodeError is not null, "the second ask");
-            var secondAsk = (h.Vm.InviteCodeError, h.Vm.InviteCode);
-            h.Vm.InviteCode = "CD34";
-            await h.Vm.SubmitInviteCodeCommand.Execute().ToTask();
-
-            await exec;
-
-            return (firstAsk, secondAsk, h.Opener.Opened.ToList(), h.Vm.Satisfied, codes);
-        });
-
-        await Assert.That(first.Phase).IsEqualTo(SignInPhase.InviteCode);
-        await Assert.That(first.Title).IsEqualTo("Enter your invite code");
-        await Assert.That(first.Lede).IsEqualTo("Capacitor is invite-only right now.");
-        await Assert.That(first.InviteRequestUrl).IsEqualTo(InviteRequestUrl);
-        await Assert.That(first.InviteCodeError).IsNull();
-        await Assert.That(first.emptySubmittable).IsFalse();
-        await Assert.That(first.ProvisioningShown).IsFalse();
-        await Assert.That(opened).IsEquivalentTo([InviteRequestUrl]);
-        await Assert.That(retry).IsEqualTo(("That invite code isn't valid.", "ab12"));
-        await Assert.That(sent).IsEquivalentTo([null, "ab12", "CD34"]);
+        await Assert.That(intent).IsEqualTo(new ConnectIntent.Discover());
         await Assert.That(satisfied).IsTrue();
     }
 
+    /// Provisioning takes minutes, so a Continue that finds no workspace yet is the wait going on,
+    /// not a failed sign-in.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Cancelling_the_invite_code_fails_the_run_naming_where_to_request_one() {
-        var (status, detail, sent) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            var codes = GateProvisioning(h, InviteRequired);
+    public async Task A_continue_that_finds_no_workspace_yet_keeps_waiting_without_an_error() {
+        var (phase, status, isError) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            h.Operation = (_, _) => Task.FromResult<AuthResult>(
+                new AuthResult.Failed("No Capacitor tenants are linked to your account.", AuthFailureReason.NoTenantsFound));
+            await h.Vm.OnEnterAsync(CancellationToken.None);
 
-            var exec = h.SignIn();
-            await ConfirmCreateAsync(h);
-            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
-            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
-            await exec;
+            await h.Vm.ContinueAfterSignUpCommand.Execute().ToTask();
 
-            return (h.Vm.Status, h.Vm.StatusDetail, codes);
+            return (h.Vm.Phase, h.Vm.Status, h.Vm.StatusIsError);
         });
 
-        await Assert.That(status).IsEqualTo("Sign-in failed.");
-        await Assert.That(detail).IsEqualTo($"Capacitor is invite-only right now. Request an invite at {InviteRequestUrl}.");
-        await Assert.That(sent).IsEquivalentTo([(string?)null]);
-    }
-
-    /// The request URL is server-supplied and the opener launches whatever it is handed.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_request_url_that_is_not_a_web_url_is_never_offered_or_opened() {
-        var (shown, opened, detail) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            GateProvisioning(h, (HttpStatusCode.Forbidden, """{"reason":"invite_required","requestUrl":"file:///Applications/Calculator.app"}"""));
-
-            var exec = h.SignIn();
-            await ConfirmCreateAsync(h);
-            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
-            var url = h.Vm.InviteRequestUrl;
-            await h.Vm.OpenInviteRequestUrlCommand.Execute().ToTask();
-            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
-            await exec;
-
-            return (url, h.Opener.Opened.ToList(), h.Vm.StatusDetail);
-        });
-
-        await Assert.That(shown).IsNull();
-        await Assert.That(opened).IsEmpty();
-        await Assert.That(detail).IsEqualTo("Capacitor is invite-only right now.");
+        await Assert.That(phase).IsEqualTo(SignInPhase.SignUp);
+        await Assert.That(status).IsEqualTo(SignInStepViewModel.WorkspaceNotReady);
+        await Assert.That(isError).IsFalse();
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Leaving_while_the_invite_prompt_is_parked_releases_it_and_cancels() {
-        var (canLeave, promptVisible, provisioning, status, code) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            GateProvisioning(h, InviteRequired);
+    public async Task Reopening_the_sign_up_opens_the_same_page() {
+        var opened = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
 
-            var exec = h.SignIn();
-            await ConfirmCreateAsync(h);
-            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
-            h.Vm.InviteCode = "AB12";
+            await h.Vm.ReopenSignUpCommand.Execute().ToTask();
 
-            var allowed = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
-            await exec;
-
-            return (allowed, h.Vm.InviteCodePromptVisible, h.Vm.ProvisioningVisible, h.Vm.Status, h.Vm.InviteCode);
+            return h.Opener.Opened.ToList();
         });
 
-        await Assert.That(canLeave).IsTrue();
-        await Assert.That(promptVisible).IsFalse();
-        await Assert.That(provisioning).IsFalse();
-        await Assert.That(status).IsEqualTo("Sign-in cancelled.");
-        await Assert.That(code).IsEmpty();
+        await Assert.That(opened).IsEquivalentTo([DesktopSignUp, DesktopSignUp]);
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_empty_create_prompt_cannot_be_submitted_at_all() {
-        var (orgEmpty, orgBlank, orgNamed, existingEmpty, existingBlank, existingNamed) =
-            await AvaloniaSession.DispatchAsync(() => {
-                using var h = new Harness();
+    public async Task A_wait_that_outlives_its_limit_expires_once() {
+        var (early, late) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            var expired = 0;
+            h.Vm.SignUpExpired += () => expired++;
+            await h.Vm.OnEnterAsync(CancellationToken.None);
 
-                var orgEmpty = CanExecute(h.Vm.SubmitOrgNameCommand);
-                h.Vm.OrgName = "   ";
-                var orgBlank = CanExecute(h.Vm.SubmitOrgNameCommand);
-                h.Vm.OrgName = "Acme";
-                var orgNamed = CanExecute(h.Vm.SubmitOrgNameCommand);
+            h.Time.Advance(SignInStepViewModel.SignUpWait - TimeSpan.FromSeconds(1));
+            await Task.Delay(SettleGap);
+            var early = expired;
+            h.Time.Advance(TimeSpan.FromHours(2));
+            await WaitUntil(() => expired > 0, "the wait to expire");
+            await Task.Delay(SettleGap);
 
-                var existingEmpty = CanExecute(h.Vm.UseExistingWorkspaceCommand);
-                h.Vm.ExistingWorkspaceInput = "  ";
-                var existingBlank = CanExecute(h.Vm.UseExistingWorkspaceCommand);
-                h.Vm.ExistingWorkspaceInput = "acme";
-                var existingNamed = CanExecute(h.Vm.UseExistingWorkspaceCommand);
+            return (early, expired);
+        });
 
-                return (orgEmpty, orgBlank, orgNamed, existingEmpty, existingBlank, existingNamed);
-            });
-
-        await Assert.That(orgEmpty).IsFalse();
-        await Assert.That(orgBlank).IsFalse();
-        await Assert.That(orgNamed).IsTrue();
-        await Assert.That(existingEmpty).IsFalse();
-        await Assert.That(existingBlank).IsFalse();
-        await Assert.That(existingNamed).IsTrue();
+        await Assert.That(early).IsEqualTo(0);
+        await Assert.That(late).IsEqualTo(1);
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_zero_tenant_discovery_offers_the_choice_and_retargets_in_place() {
-        var (urlPanel, choice, prefilled, status, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Discover;
-            h.Operation = async (_, ct) => {
-                var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
+    public async Task Leaving_the_wait_stops_its_clock() {
+        var expired = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            var expired = 0;
+            h.Vm.SignUpExpired += () => expired++;
+            await h.Vm.OnEnterAsync(CancellationToken.None);
 
-                return offer.Status == ProvisionOfferStatus.ExistingWorkspace
-                    ? new AuthResult.Retarget(offer.ExistingWorkspaceInput!)
-                    : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
-            };
+            await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
+            h.Time.Advance(SignInStepViewModel.SignUpWait * 2);
+            await Task.Delay(SettleGap);
 
-            var exec = h.SignIn();
-            await WaitUntil(() => h.Vm.ModeChoiceVisible, "the workspace mode choice");
-
-            h.Vm.ExistingWorkspaceInput = "acme";
-            await h.Vm.UseExistingWorkspaceCommand.Execute().ToTask();
-            await exec;
-
-            return (h.Vm.UrlPanelVisible, h.Connect.Choice, h.Connect.ServerInputText, h.Vm.Status, h.Vm.Satisfied);
+            return expired;
         });
 
-        await Assert.That(urlPanel).IsTrue();
-        await Assert.That(choice).IsEqualTo(ConnectChoice.Paste);
-        await Assert.That(prefilled).IsEqualTo("acme");
-        await Assert.That(status).IsEqualTo("Sign in to acme");
-        await Assert.That(satisfied).IsFalse();
+        await Assert.That(expired).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_committed_sign_up_never_expires() {
+        var expired = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            var expired = 0;
+            h.Vm.SignUpExpired += () => expired++;
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            await h.Vm.ContinueAfterSignUpCommand.Execute().ToTask();
+
+            h.Time.Advance(SignInStepViewModel.SignUpWait * 2);
+            await Task.Delay(SettleGap);
+
+            return expired;
+        });
+
+        await Assert.That(expired).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_pane_shows_the_browser_wait_with_its_continue() {
+        var (continueShown, workAccountShown) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
+            var vm = new OnboardingViewModel([edition, h.Vm]);
+            await vm.PendingEnterForTesting;
+
+            var window = new MainWindow { Onboarding = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            await edition.ChooseCloudCommand.Execute().ToTask();
+            await vm.PendingAdvanceForTesting;
+            Dispatcher.UIThread.RunJobs();
+
+            T? Named<T>(string name) where T : Control =>
+                window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
+
+            var shown = (Named<Button>("ContinueAfterSignUpButton")?.IsEffectivelyVisible,
+                Named<Button>("WorkAccountButton")?.IsEffectivelyVisible);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return shown;
+        });
+
+        await Assert.That(continueShown).IsTrue();
+        await Assert.That(workAccountShown).IsFalse();
     }
 
     // ── step transitions across the boundary ─────────────────────────────────
@@ -947,36 +722,6 @@ public class SignInStepViewModelTests {
         await Assert.That(canLeave).IsTrue();
         await Assert.That(satisfied).IsTrue();
         await Assert.That(status).IsEqualTo("Signed in as sam");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Leaving_while_a_create_prompt_is_parked_releases_it_and_cancels() {
-        var (canLeave, promptVisible, status, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            h.Connect.Choice = ConnectChoice.Discover;
-            h.Operation = async (_, ct) => {
-                var offer = await h.Provisioner.OfferCreateAsync(Tokens(), ct);
-
-                return offer.Status == ProvisionOfferStatus.Created
-                    ? Committed(AuthProvider.WorkOS)
-                    : new AuthResult.Failed($"Workspace creation did not complete ({offer.Status}).");
-            };
-
-            var exec = h.SignIn();
-            await ChooseCreateAsync(h);
-            await WaitUntil(() => h.Vm.OrgNamePromptVisible, "the organization-name prompt");
-
-            var allowed = await h.Vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
-            await exec;
-
-            return (allowed, h.Vm.OrgNamePromptVisible, h.Vm.Status, h.Vm.Satisfied);
-        });
-
-        await Assert.That(canLeave).IsTrue();
-        await Assert.That(promptVisible).IsFalse();
-        await Assert.That(status).IsEqualTo("Sign-in cancelled.");
-        await Assert.That(satisfied).IsFalse();
     }
 
     [Test]
@@ -1110,7 +855,7 @@ public class SignInStepViewModelTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            await edition.ChooseCloudCommand.Execute().ToTask(); // Edition -> Sign in
+            await edition.SignInCommand.Execute().ToTask(); // Edition -> Sign in
             await vm.PendingAdvanceForTesting;
             Dispatcher.UIThread.RunJobs();
 
@@ -1131,50 +876,6 @@ public class SignInStepViewModelTests {
         await Assert.That(urlBox!.Classes.Contains("frField")).IsTrue();
         await Assert.That(urlBoxShown).IsFalse(); // behind "I have a workspace URL"
         await Assert.That(statusShown).IsFalse(); // the ready line only restates the button
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_renders_the_invite_code_prompt_on_its_own() {
-        var (box, submit, link, provisioning) = await AvaloniaSession.DispatchAsync(async () => {
-            using var h = new Harness();
-            GateProvisioning(h, InviteRequired);
-            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
-            var vm = new OnboardingViewModel([edition, h.Vm]);
-            await vm.PendingEnterForTesting;
-
-            var window = new MainWindow { Onboarding = vm };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            await edition.ChooseCloudCommand.Execute().ToTask(); // Edition -> Sign in
-            await vm.PendingAdvanceForTesting;
-            var exec = h.SignIn();
-            await ConfirmCreateAsync(h);
-            await WaitUntil(() => h.Vm.InviteCodePromptVisible, "the invite-code prompt");
-            Dispatcher.UIThread.RunJobs();
-
-            T? Named<T>(string name) where T : Control =>
-                window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
-
-            var shown = (
-                Named<TextBox>("InviteCodeBox")?.IsEffectivelyVisible,
-                Named<Button>("SubmitInviteCodeButton")?.IsEffectivelyVisible,
-                Named<Button>("InviteRequestUrlButton")?.Content as string,
-                Named<TextBlock>("ProvisioningText")?.IsEffectivelyVisible);
-
-            await h.Vm.CancelInviteCodeCommand.Execute().ToTask();
-            await exec;
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            return shown;
-        });
-
-        await Assert.That(box).IsTrue();
-        await Assert.That(submit).IsTrue();
-        await Assert.That(link).IsEqualTo(InviteRequestUrl);
-        await Assert.That(provisioning).IsFalse();
     }
 
     [Test]

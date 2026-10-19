@@ -184,4 +184,23 @@ public class EditionStepViewModelTests {
         await Assert.That(nextShown).IsFalse();
         await Assert.That(after).IsEqualTo(WizardStepId.SignIn);
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_notice_stays_until_the_next_choice() {
+        var (shown, afterChoice) = await AvaloniaSession.DispatchAsync(async () => {
+            var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
+            var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
+            await vm.PendingEnterForTesting;
+
+            edition.ShowNotice("The wait ran out.");
+            var shown = (edition.Notice, edition.NoticeVisible);
+            await edition.ChooseCloudCommand.Execute().ToTask();
+
+            return (shown, (edition.Notice, edition.NoticeVisible));
+        });
+
+        await Assert.That(shown).IsEqualTo(("The wait ran out.", true));
+        await Assert.That(afterChoice).IsEqualTo(((string?)null, false));
+    }
 }

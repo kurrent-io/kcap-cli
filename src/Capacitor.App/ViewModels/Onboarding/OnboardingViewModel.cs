@@ -207,7 +207,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     /// <summary>
-    /// Jump straight to a step (the Sign-in step's retarget answer). Goes through the SAME
+    /// Jump straight to a step (an expired browser sign-up back to Edition). Goes through the SAME
     /// serialized gate and the same <see cref="IWizardStep.CanLeaveAsync"/> veto as a button
     /// transition. False = refused: a navigation is already in flight, or that step isn't part of
     /// this run (an inapplicable step was filtered out at construction).
