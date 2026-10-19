@@ -310,6 +310,20 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
     }
 
+    /// <summary>A zero age cap means no cap, as the environment knob documents.</summary>
+    [Test]
+    public async Task A_zero_age_cap_resumes_an_entry_of_any_age() {
+        var f = Build(configure: c => c.ResumeMaxAge = TimeSpan.Zero);
+        await using var _ = f.Orch;
+        Entry(f, "ancient-1", state: ResumeState.Running, at: TimeProvider.System.GetUtcNow() - TimeSpan.FromDays(400));
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts.Count).IsEqualTo(1);
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("ancient-1")!.State).IsEqualTo(ResumeState.Running);
+    }
+
     /// <summary>A heartbeat file outlives the incarnation that wrote it, so an entry written after the
     /// last beat is the newer evidence of life.</summary>
     [Test]

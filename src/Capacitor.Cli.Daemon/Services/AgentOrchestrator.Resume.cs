@@ -542,7 +542,7 @@ internal partial class AgentOrchestrator {
             if (entry.State == ResumeState.Interrupted) continue;
 
             var reason = !_config.AutoResume                                 ? "auto_resume_off"
-                       : now - LastAlive(entry, beat) > _config.ResumeMaxAge ? "too_old"
+                       : _config.ResumeMaxAge > TimeSpan.Zero && now - LastAlive(entry, beat) > _config.ResumeMaxAge ? "too_old"
                        : blocked.Contains(entry.AgentId)                     ? "predecessor_process_unresolved"
                        : !Directory.Exists(entry.Launch.WorktreePath)        ? "worktree_missing"
                        :                                                       null;

@@ -62,7 +62,7 @@ resuming, interrupted), and `kcap agent resume <id>` retries an interrupted one.
 `kcap config set daemon.auto_resume false` leaves agents interrupted instead of
 resuming them at start. Tuning, read from the environment:
   KCAP_RESTART_TURN_WAIT_SECONDS  Turn-boundary wait for a self-update (default 300)
-  KCAP_RESUME_MAX_AGE_SECONDS     Oldest agent a starting daemon resumes (default 86400)
+  KCAP_RESUME_MAX_AGE_SECONDS     Oldest agent a starting daemon resumes (default 86400; 0 for no bound)
   KCAP_RESUME_CONCURRENCY         Agents resumed at once (default 2)
   KCAP_RESUME_READINESS_SECONDS   How long a resumed agent must stay up (default 10)
   KCAP_ATTACH_RECONNECT_SECONDS   How long `kcap agent attach` waits for its agent
