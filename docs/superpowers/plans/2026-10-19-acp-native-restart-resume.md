@@ -21,10 +21,13 @@ Global Constraints apply unchanged).
   binding that already holds N events has its first N events deduplicated away. A resumed ACP agent
   reads the cursor with an empty `AcpSessionEvents` batch (the server answers its cursor and appends
   nothing) and starts the forwarder from it, without a second `SessionStarted`.
-- A binding the server already holds as terminal drops the resumed agent's first event and the
-  forwarder stops; a rejected bind starts no forwarder. Either, inside the readiness window, fails the
-  native resume (`acp_binding_unavailable`): the runtime is terminated with its resume still pending,
-  so the worktree and entry survive, and the lane falls through to kcap continue.
+- Neither the bind nor the cursor read reveals a terminal binding, which only drops the next event. A
+  reopened session therefore emits a system note first and holds its nudge until the server has
+  accepted that note. A rejected cursor, a dropped note, or no acceptance by the end of the readiness
+  window fails the native resume (`acp_binding_unavailable`) before the vendor has acted: the runtime is
+  terminated with its resume still pending, so the worktree and entry survive, and kcap continue
+  repeats nothing. Releasing the turn and judging the resume failed are one compare-and-swap, so only
+  one can happen. Only the ACP runtime opts in; other transcript runtimes keep the fresh forwarder.
 - Flags flip only for vendors whose graceful-stop probe passes:
   `docs/probes/2026-10-19-acp-restart-resume/`.
 
@@ -38,6 +41,7 @@ Global Constraints apply unchanged).
    unsupported or review-flow resume fails before spawn).
 4. Forwarder cursor for a resumed ACP agent (tests: numbering continues from the server's cursor and
    no `SessionStarted` is resent; a fresh launch is unchanged).
-5. Terminal or rejected binding fails the native resume and falls through to continue (test).
+5. The first turn waits for the server to accept the session's first event; a rejected, terminal or
+   silent server fails the native resume before that turn (tests).
 6. Graceful-stop probe against every installed ACP vendor; findings; flip the flags that passed.
 7. Daemon and Core unit suites, AOT publish check, PR.

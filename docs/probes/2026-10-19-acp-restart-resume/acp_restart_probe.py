@@ -52,7 +52,20 @@ def now_iso():
 
 
 class GroupedClient(AcpClient):
-    """Spawns the vendor in its own process group so the stop can reach a self-re-exec'd child."""
+    """Spawns the vendor in its own process group so the stop can reach a self-re-exec'd child.
+
+    The trailer phase starts on the reader the moment the load response is recorded: switching it
+    where the request resumes would tag updates the reader dispatched in between as replay."""
+
+    load_id = None
+    load_label = None
+
+    def record(self, direction, obj, note=None):
+        super().record(direction, obj, note)
+        if (direction == "in" and self.load_id is not None and obj.get("id") == self.load_id
+                and ("result" in obj or "error" in obj)):
+            self.phase_ref[0] = f"{self.load_label}_trailer"
+            self.load_id = None
 
     async def start(self):
         env = dict(os.environ)
@@ -166,6 +179,7 @@ def vendor_version(argv0):
 
 async def load_session(client, cwd, summary, frames, phase_ref, label):
     phase_ref[0] = f"{label}_replay"
+    client.load_id, client.load_label = client.next_id + 1, label
     load_ok, load_err = False, None
     try:
         resp = await client.request(
@@ -175,9 +189,9 @@ async def load_session(client, cwd, summary, frames, phase_ref, label):
         load_err = resp.get("error")
     except (asyncio.TimeoutError, ConnectionError) as ex:
         load_err = repr(ex)
-    client.record("mark", {"event": "load_response_received", "ok": load_ok})
-
+    client.load_id = None
     phase_ref[0] = f"{label}_trailer"
+    client.record("mark", {"event": "load_response_received", "ok": load_ok})
     await asyncio.sleep(3)
 
     replay = [update_kind(fr["frame"]) for fr in frames
