@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
@@ -145,21 +146,18 @@ internal static class WizardComposition {
 
         var root = options.LocalRoot;
 
-        // The journal, config and registry are read here, on Edition entry and on a settled install,
+        // The journal, config and registry are read here, on Edition entry and when an install settles,
         // never per evaluation: PassThrough, BackVisible and bindings run on the UI thread.
-        var pending        = LocalSetupState.Pending(root);
-        var committedLocal = IsCommittedLocal(options);
-        void RefreshDurable() {
-            pending        = LocalSetupState.Pending(root);
-            committedLocal = IsCommittedLocal(options);
-        }
-        bool CommittedLocal() => committedLocal;
+        var durable = new BehaviorSubject<LocalSetupSnapshot>(ReadDurable());
+        LocalSetupSnapshot ReadDurable() => new(LocalSetupState.Pending(root), IsCommittedLocal(options));
+        void RefreshDurable() => durable.OnNext(ReadDurable());
+        bool Pending()        => durable.Value.Pending;
+        bool CommittedLocal() => durable.Value.CommittedLocal;
 
         var install = options.Install ?? NewInstallController(options);
         bool Installed() => install.Outcome is LocalInstallOutcome.Installed;
-        // Ahead of every other Settled handler, so the page that advances on it reads the new state.
-        void OnSettledRefresh(LocalInstallOutcome _) => RefreshDurable();
-        install.Settled += OnSettledRefresh;
+        void OnSettling(LocalSetupSnapshot snapshot) => durable.OnNext(snapshot);
+        install.Settling += OnSettling;
 
         var edition = new EditionStepViewModel(
             options.Bridges.Telemetry.Funnel,
@@ -167,8 +165,8 @@ internal static class WizardComposition {
                 RefreshDurable();
                 return LocalUnavailableReason(options.LocalEditionSupported, options.Root, root);
             },
-            locked: () => Installed() || pending || CommittedLocal());
-        bool OnLocalPath() => edition.Choice == EditionChoice.Local || pending || CommittedLocal();
+            locked: () => Installed() || Pending() || CommittedLocal());
+        bool OnLocalPath() => edition.Choice == EditionChoice.Local || Pending() || CommittedLocal();
         var installStep = new InstallStepViewModel(
             install,
             appProfile: () => options.ResolveIdentity()?.Profile ?? options.ProfileOverride,
@@ -248,16 +246,18 @@ internal static class WizardComposition {
         }, options.UrlOpener);
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
 
-        var startAt = pending ? WizardStepId.Install
+        var startAt = Pending() ? WizardStepId.Install
             : options.AlreadyAuthenticated || committedLocalAtStart ? WizardStepId.Harnesses
             : (WizardStepId?)null;
         var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
+            .Merge(durable.Select(_ => Unit.Default))
             .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
-        var wizard = new OnboardingViewModel(steps, options.ShutdownToken, options.Surface, startAt, canFinishLater);
+        var wizard = new OnboardingViewModel(
+            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
-            install.Settled -= OnSettledRefresh;
+            install.Settling -= OnSettling;
             install.Settled -= OnInstallSettled;
             installStep.Detach();
         };

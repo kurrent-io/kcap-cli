@@ -34,6 +34,11 @@ public sealed class LocalInstallController(
         private set => this.RaiseAndSetIfChanged(ref _outcome, value);
     }
 
+    /// Raised once per run, through <c>post</c>, with the durable state the outcome was decided from,
+    /// before <see cref="Outcome"/> and <see cref="Running"/> change: anything restated by those
+    /// changes reads state that is already current.
+    public event Action<LocalSetupSnapshot>? Settling;
+
     /// Raised once per run, through <c>post</c>, after <see cref="Outcome"/> is set.
     public event Action<LocalInstallOutcome>? Settled;
 
@@ -97,10 +102,12 @@ public sealed class LocalInstallController(
     void Finish(
             LocalSetupProgress progress, StreamingResult result, bool ranWithoutOutput, string unexplained, bool quitting,
             TaskCompletionSource exited) {
-        var outcome = LocalInstallOutcome.Settle(progress, result.ExitCode, LockedToLocal());
+        var durable = new LocalSetupSnapshot(LocalSetupState.Pending(root), committedLocal());
+        var outcome = LocalInstallOutcome.Settle(progress, result.ExitCode, durable.Pending || durable.CommittedLocal);
         if (outcome is LocalInstallOutcome.Failed failed && ranWithoutOutput && StderrText(result) is { } stderr)
             outcome = failed with { Message = stderr };
 
+        Settling?.Invoke(durable);
         _interrupt = null;
         Outcome    = outcome;
         Running    = false;
@@ -121,8 +128,6 @@ public sealed class LocalInstallController(
             exited.TrySetResult();
         }
     }
-
-    bool LockedToLocal() => LocalSetupState.Pending(root) || committedLocal();
 
     static string? StderrText(StreamingResult result) {
         var lines = result.Tail.Where(l => l.Kind == ProcessStreamKind.Stderr && !string.IsNullOrWhiteSpace(l.Text))

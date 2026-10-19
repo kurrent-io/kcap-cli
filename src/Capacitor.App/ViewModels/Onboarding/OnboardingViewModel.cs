@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services.Onboarding;
 using ReactiveUI.Reactive;
 
@@ -10,6 +11,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// Back/Next/Skip all funnel through Current's CanLeaveAsync veto; Next on the last step finishes.
 public sealed class OnboardingViewModel : ReactiveObject {
     readonly CancellationToken _shutdownToken;
+    readonly Subject<Unit>     _restated = new();
     bool _closed;
     bool _navigating;
     bool _advancePending;
@@ -101,7 +103,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public OnboardingViewModel(
             IEnumerable<IWizardStep> steps, CancellationToken shutdownToken = default,
             WizardLifecycleSurface? surface = null, WizardStepId? startAt = null,
-            IObservable<bool>? canFinishLater = null) {
+            IObservable<bool>? canFinishLater = null, IObservable<Unit>? restate = null) {
         _shutdownToken = shutdownToken;
         Surface = surface;
         var applicable = steps.Where(s => s.Applicable).ToList();
@@ -113,7 +115,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
         var idle = this.WhenAnyValue(x => x.Navigating).Select(busy => !busy);
-        var canBack = currentChanged.CombineLatest(idle, (_, notBusy) => notBusy && PreviousShownIndex() >= 0);
+        var canBack = currentChanged.CombineLatest(idle, _restated.StartWith(Unit.Default),
+            (_, notBusy, _) => notBusy && PreviousShownIndex() >= 0);
 
         BackCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Back), canBack);
         SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip),
@@ -122,6 +125,9 @@ public sealed class OnboardingViewModel : ReactiveObject {
             this.WhenAnyValue(x => x.CanGoNext));
         FinishLaterCommand = ReactiveCommand.Create(RequestClose,
             idle.CombineLatest(canFinishLater ?? Observable.Return(true), (notBusy, allowed) => notBusy && allowed));
+
+        // State other steps' PassThrough reads, changed outside the current step.
+        restate?.Subscribe(_ => RestateActions());
 
         if (surface is not null) {
             surface.WhenAnyValue(x => x.StatusText)
@@ -187,6 +193,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(TenantActionsVisible));
         this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
         this.RaisePropertyChanged(nameof(CancelTenantCommand));
+        _restated.OnNext(Unit.Default);
     }
 
     /// Idempotent — a Done-finish close and the window's own Closing event both route here.

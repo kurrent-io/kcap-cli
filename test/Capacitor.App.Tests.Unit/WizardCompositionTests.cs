@@ -523,6 +523,48 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(requests).IsEqualTo(0);
     }
 
+    /// The run's own rollback clears the journal before it fails, so the settle must republish the
+    /// durable state before Back and Finish later are restated, not after.
+    [Test]
+    public async Task A_pending_setup_that_rolls_back_and_fails_unlocked_offers_back_to_edition() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var root = LocalSetupScript.PendingSetup(Config);
+        harness.LocalRoot = root;
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.Cli.SetupLocalBehavior = async (onLine, _, _) => {
+            await release.Task;
+            File.Delete(root.JournalPath);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Failed("start_failed")));
+
+            return new StreamingResult(1, false, []);
+        };
+
+        var (lockedBefore, backVisible, canBack, canFinishLater, afterBack) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            var lastBackVisible = (bool?)null;
+            using var watch = graph.ViewModel.WhenAnyValue(x => x.BackVisible).Subscribe(v => lastBackVisible = v);
+            var lockedBefore = lastBackVisible;
+
+            release.SetResult();
+            await WizardFixtures.WaitUntilAsync(() => graph.Install.Outcome is not null, what: "the install to settle");
+            await graph.Install.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            var backVisible    = lastBackVisible;
+            var canBack        = await graph.ViewModel.BackCommand.CanExecute.FirstAsync();
+            var canFinishLater = await graph.ViewModel.FinishLaterCommand.CanExecute.FirstAsync();
+            await graph.ViewModel.BackCommand.Execute().ToTask();
+
+            return (lockedBefore, backVisible, canBack, canFinishLater, graph.ViewModel.Current.Id);
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(lockedBefore).IsFalse();
+        await Assert.That(backVisible).IsTrue();
+        await Assert.That(canBack).IsTrue();
+        await Assert.That(canFinishLater).IsTrue();
+        await Assert.That(afterBack).IsEqualTo(WizardStepId.Edition);
+    }
+
     [Test]
     public async Task Cloud_forced_setup_is_unchanged() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
