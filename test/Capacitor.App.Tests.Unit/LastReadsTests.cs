@@ -9,7 +9,7 @@ public class LastReadsTests {
     [Arguments(null, "old")]
     public async Task The_verdict_keeps_drops_or_leaves_the_last_read(bool? remember, string? kept) {
         var reads = new LastReads<string>();
-        reads.Set("s", "old");
+        reads.Set("s", "old", reads.Generation);
 
         await reads.RecordAsync("s", () => Task.FromResult("new"), _ => remember);
 
@@ -31,12 +31,23 @@ public class LastReadsTests {
     }
 
     [Test]
+    public async Task A_value_read_before_a_clear_is_not_set() {
+        var reads = new LastReads<string>();
+        var generation = reads.Generation;
+
+        reads.Clear();
+        reads.Set("s", "before the change", generation);
+
+        await Assert.That(reads.Get("s")).IsNull();
+    }
+
+    [Test]
     public async Task Past_capacity_the_least_recently_kept_goes() {
         var reads = new LastReads<string>(capacity: 2);
-        reads.Set("a", "1");
-        reads.Set("b", "2");
-        reads.Set("a", "1 again");
-        reads.Set("c", "3");
+        reads.Set("a", "1", reads.Generation);
+        reads.Set("b", "2", reads.Generation);
+        reads.Set("a", "1 again", reads.Generation);
+        reads.Set("c", "3", reads.Generation);
 
         await Assert.That(reads.Get("b")).IsNull();
         await Assert.That(reads.Get("a")).IsEqualTo("1 again");

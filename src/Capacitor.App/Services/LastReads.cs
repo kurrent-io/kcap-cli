@@ -8,6 +8,10 @@ public sealed class LastReads<T>(int capacity = 64) where T : class {
     readonly OrderedDictionary<string, T> _reads = new(StringComparer.Ordinal);
     long _generation;
 
+    public long Generation {
+        get { lock (_lock) return _generation; }
+    }
+
     public T? Get(string key) {
         lock (_lock) return _reads.GetValueOrDefault(key);
     }
@@ -27,8 +31,9 @@ public sealed class LastReads<T>(int capacity = 64) where T : class {
         return result;
     }
 
-    public void Set(string key, T value) {
-        lock (_lock) Put(key, value);
+    /// `generation` is Generation as read before the read began; a clear since then drops the value.
+    public void Set(string key, T value, long generation) {
+        lock (_lock) if (generation == _generation) Put(key, value);
     }
 
     public void Forget(string key) {

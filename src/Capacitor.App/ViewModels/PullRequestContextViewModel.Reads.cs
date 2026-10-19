@@ -31,6 +31,7 @@ public sealed partial class PullRequestContextViewModel {
         var reportedBranch = _branch;
         var generation = _generation;
         var skipBranchLookup = worktree is null && !_hasCustomBranchReader;
+        var cacheGeneration = _snapshots?.Generation ?? 0;
         if (skipBranchLookup) _readers?.DescribeSession(session, _primaryRepo?.Invoke(), reportedBranch);
         Start(async ct => {
             var branch = reportedBranch;
@@ -57,6 +58,7 @@ public sealed partial class PullRequestContextViewModel {
                 if (links is null) {
                     _listRetryAt = capability.RetryAt;
                     if (capability.Kind == PullRequestCapabilityKind.SignedOut) {
+                        _snapshots?.Clear();
                         ForgetChoices(); ClearProtected(); _notice = "Sign in to see pull requests.";
                     } else {
                         if (!CanReveal && !_overviewPending) EnterGrace("Couldn't discover pull request support. Retry when the server is reachable.");
@@ -67,6 +69,7 @@ public sealed partial class PullRequestContextViewModel {
                 if (links.Kind != PullRequestReadKind.Ready || links.Data is null) {
                     _listRetryAt = links.RetryAt;
                     if (links.Kind is PullRequestReadKind.SubjectUnavailable or PullRequestReadKind.SignedOut || links.AccessFailure is "invalid" or "denied") {
+                        if (links.Kind == PullRequestReadKind.SignedOut) _snapshots?.Clear();
                         ForgetChoices(); ClearProtected();
                         _stopped = links.Reason == "retries_stopped";
                         if (_stopped) _queuedRefresh = false;
@@ -83,7 +86,7 @@ public sealed partial class PullRequestContextViewModel {
                 _sessionItems.Clear();
                 _sessionItems.AddRange(links.Data.Items);
                 _hasListed = true;
-                _snapshots?.Set(session, new([.. links.Data.Items], _snapshots.Get(session)?.Overview));
+                _snapshots?.Set(session, new([.. links.Data.Items], _snapshots.Get(session)?.Overview), cacheGeneration);
                 ApplyChoices(listed: true);
             };
         }, () => _refreshing = false);
@@ -94,6 +97,7 @@ public sealed partial class PullRequestContextViewModel {
             || ReadRetryAt > _time.GetUtcNow().UtcDateTime || _lastOverview is { } last && _time.GetElapsedTime(last).TotalSeconds < 15) return;
         _overviewPending = true;
         _lastOverview = _time.GetTimestamp();
+        var cacheGeneration = _snapshots?.Generation ?? 0;
         Notify();
         Start(async ct => {
             var read = await _source.OverviewAsync(session, choice.Subject, ct).ConfigureAwait(false);
@@ -102,7 +106,7 @@ public sealed partial class PullRequestContextViewModel {
                     var headChanged = _overview?.HeadSha is { } old && old != read.Data.HeadSha;
                     var rollupMoved = _overview?.Checks?.Rollup != read.Data.Checks?.Rollup;
                     _overview = read.Data; _overviewRead = read;
-                    _snapshots?.Set(session, new([.. _sessionItems], read));
+                    _snapshots?.Set(session, new([.. _sessionItems], read), cacheGeneration);
                     _notice = "";
                     if (Learn(choice.Subject, read.Data.Lifecycle) && ReconsiderDefault()) return;
                     // Check rows are a snapshot while the summary tracks the overview: reload them while
@@ -230,7 +234,7 @@ public sealed partial class PullRequestContextViewModel {
     }
     void ForgetOverview() {
         if (_session is { } session && _snapshots?.Get(session) is { Overview: not null } snapshot)
-            _snapshots.Set(session, snapshot with { Overview = null });
+            _snapshots.Set(session, snapshot with { Overview = null }, _snapshots.Generation);
     }
     void ApplyChoices(bool listed) {
         if (_selected is null) ApplyRequestedSubject();

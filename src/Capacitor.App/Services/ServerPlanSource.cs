@@ -16,16 +16,21 @@ public sealed class ServerPlanSource : IPlanSource, IAsyncDisposable {
         _reads = new(config, profiles, env, machine, (http, url) => new SessionPlansClient(http, url), factory, localRoot: localRoot);
     }
 
-    public Task<SessionPlansRead> ReadAsync(string sessionId, CancellationToken ct) => _last.RecordAsync(sessionId, () => _reads.ReadAsync(
-        (channel, token) => channel.ReadAsync(sessionId, token), read => read.Kind == SessionPlansReadKind.SignedOut,
-        SessionPlansRead.Of(SessionPlansReadKind.SignedOut), SessionPlansRead.Of(SessionPlansReadKind.Unreachable), ct),
-        read => read.Kind switch { SessionPlansReadKind.Ready => true, SessionPlansReadKind.Unreachable => null, _ => false });
+    public async Task<SessionPlansRead> ReadAsync(string sessionId, CancellationToken ct) {
+        var read = await _last.RecordAsync(sessionId, () => _reads.ReadAsync(
+            (channel, token) => channel.ReadAsync(sessionId, token), read => read.Kind == SessionPlansReadKind.SignedOut,
+            SessionPlansRead.Of(SessionPlansReadKind.SignedOut), SessionPlansRead.Of(SessionPlansReadKind.Unreachable), ct),
+            read => read.Kind switch { SessionPlansReadKind.Ready => true, SessionPlansReadKind.Unreachable => null, _ => false }).ConfigureAwait(false);
+        // A lapsed credential ends what every session's cache may still show.
+        if (read.Kind == SessionPlansReadKind.SignedOut) _last.Clear();
+        return read;
+    }
 
     public SessionPlansRead? Cached(string sessionId) => _last.Get(sessionId);
 
     public ValueTask DisposeAsync() => _reads.DisposeAsync();
     public void InvalidateAuthentication() {
-        _last.Clear();
         _reads.Invalidate();
+        _last.Clear();
     }
 }
