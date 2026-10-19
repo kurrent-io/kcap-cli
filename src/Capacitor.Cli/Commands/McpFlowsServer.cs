@@ -1216,13 +1216,16 @@ partial class McpFlowsServer(
         try {
             if (new FileInfo(path).Length > MaxPatchBytes)
                 throw new ArgumentException($"the patch is larger than {MaxPatchBytes} bytes.");
-            bytes = await File.ReadAllBytesAsync(path, ct);
+            // At most one byte past the limit, however much the file grew since its length was read.
+            await using var stream = File.OpenRead(path);
+            var buffer = new byte[MaxPatchBytes + 1];
+            var read   = await stream.ReadAtLeastAsync(buffer, buffer.Length, throwOnEndOfStream: false, ct);
+            if (read > MaxPatchBytes)
+                throw new ArgumentException($"the patch is larger than {MaxPatchBytes} bytes.");
+            bytes = buffer[..read];
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             throw new ArgumentException($"patch_path could not be read: {e.Message}");
         }
-        // The file can grow between the length check and the read.
-        if (bytes.Length > MaxPatchBytes)
-            throw new ArgumentException($"the patch is larger than {MaxPatchBytes} bytes.");
         if (bytes.Length == 0)
             throw new ArgumentException("the patch file is empty; there is nothing to review.");
 
