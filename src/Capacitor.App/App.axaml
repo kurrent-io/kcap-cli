@@ -537,11 +537,13 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
+        <!-- Hover dims the fill rather than swapping it, so the button still reads as destructive. -->
         <Style Selector="Button.kcapDangerFill:pointerover /template/ ContentPresenter#PART_ContentPresenter,
                          Button.kcapDangerFill:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="Opacity" Value="0.85" />
         </Style>
         <Style Selector="Button.kcapDangerFill:disabled /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
