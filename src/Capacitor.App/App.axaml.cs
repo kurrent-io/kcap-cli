@@ -443,38 +443,12 @@ public partial class App : Application {
         !InstallLocation.Passes(kind) || plan.Migrates || Path.GetFullPath(root) != Path.GetFullPath(plan.Target)
         || Path.GetFileName(root.TrimEnd('/')) == "Kurrent Capacitor.app";
 
-    async Task<bool> QuitInstalledAppAsync(string root, CancellationToken ct) {
-        if (InstalledAppState(root) == false) return true;
-        var runner = new ProcessRunner(_time);
-        var result = await runner.RunAsync("/usr/bin/osascript",
-            ["-e", "on run argv\ntell application (item 1 of argv) to quit\nend run", "--", root],
-            new RunOptions(Timeout: TimeSpan.FromSeconds(30)), ct);
-        if (result.TimedOut || result.ExitCode != 0) return false;
-        var started = _time.GetTimestamp();
-        while (_time.GetElapsedTime(started) < TimeSpan.FromSeconds(30)) {
-            if (InstalledAppState(root) == false) return true;
-            await Task.Delay(TimeSpan.FromMilliseconds(100), _time, ct);
-        }
-        return false;
-    }
+    Task<bool> QuitInstalledAppAsync(string root, CancellationToken ct) =>
+        InstalledAppProcesses.QuitAsync(root, _time, ct);
 
     static bool InstalledAppRunning(string root) => InstalledAppState(root) != false;
 
-    static bool? InstalledAppState(string root) {
-        string[] names = ["kcap-desktop", "Kurrent Capacitor"];
-        var executables = names.Select(name => Path.Combine(root, "Contents", "MacOS", name)).ToArray();
-        var unknown = false;
-        foreach (var process in names.SelectMany(Process.GetProcessesByName)) {
-            using (process) {
-                try {
-                    if (process.Id != Environment.ProcessId && executables.Contains(process.MainModule?.FileName)) return true;
-                } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
-                    unknown = true;
-                }
-            }
-        }
-        return unknown ? null : false;
-    }
+    static bool? InstalledAppState(string root) => InstalledAppProcesses.Find(root) is { } pids ? pids.Length > 0 : null;
 
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,

@@ -22,7 +22,7 @@ public partial class InstallLocationWindow : Window {
             LocationPanel.IsVisible = selected is not null && selected.Action != ApplicationsInstallAction.Blocked
                 && destinations is not { Count: > 1 };
             LocationPath.Text = selected?.Target;
-            InstallArrow.IsVisible = InstallFolder.IsVisible = selected is null || selected.Action == ApplicationsInstallAction.Install;
+            InstallBadge.IsVisible = selected is null || selected.Action == ApplicationsInstallAction.Install;
             UpdateBadge.IsVisible = selected?.Action == ApplicationsInstallAction.Update;
             ReadyBadge.IsVisible = selected?.Action == ApplicationsInstallAction.OpenInstalled;
             ConflictBadge.IsVisible = selected?.Action == ApplicationsInstallAction.Blocked;

@@ -18,10 +18,15 @@
                     <Image Source="avares://kcap-desktop/Assets/kcap-icon.png"
                            RenderOptions.BitmapInterpolationMode="HighQuality" />
                     <Border CornerRadius="12" BorderThickness="1" BorderBrush="{StaticResource KcapBorderBrush}" />
+                    <Border x:Name="InstallBadge" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
+                            HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSurfaceBrush}">
+                        <views:AppIcon Kind="Folder" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
+                    </Border>
                     <Border x:Name="UpdateBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
-                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapPurpleDimBrush}">
-                        <views:AppIcon Kind="RefreshCw" Size="16" Foreground="{StaticResource KcapPurpleBrush}" />
+                            BorderBrush="{StaticResource KcapCanvasBrush}" Background="{StaticResource KcapSurfaceBrush}">
+                        <views:AppIcon Kind="RefreshCw" Size="16" Foreground="{StaticResource KcapMutedBrush}" />
                     </Border>
                     <Border x:Name="ReadyBadge" IsVisible="False" Width="30" Height="30" CornerRadius="15" Margin="0,0,-8,-8"
                             HorizontalAlignment="Right" VerticalAlignment="Bottom" BorderThickness="3"
@@ -34,8 +39,6 @@
                         <views:AppIcon Kind="TriangleAlert" Size="16" Foreground="{StaticResource KcapWarningBrush}" />
                     </Border>
                 </Panel>
-                <views:AppIcon x:Name="InstallArrow" Kind="ArrowRight" Size="24" VerticalAlignment="Center" Foreground="{StaticResource KcapPurpleBrush}" />
-                <views:AppIcon x:Name="InstallFolder" Kind="Folder" Size="64" Foreground="{StaticResource KcapInfoBrush}" />
             </StackPanel>
 
             <TextBlock x:Name="Heading" Margin="0,24,0,0" Text="Install kcap"

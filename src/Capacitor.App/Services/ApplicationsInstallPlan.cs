@@ -7,7 +7,7 @@ public sealed record ApplicationsInstallPlan(
     string? InstalledVersion = null, string? Error = null, string? ExistingPath = null, string? PayloadPath = null) {
     public bool Migrates => ExistingPath is not null && ExistingPath != Target;
     public string Title => Action switch {
-        ApplicationsInstallAction.Update => Migrates ? "Update to kcap" : "Update kcap",
+        ApplicationsInstallAction.Update => Migrates ? "Upgrade to kcap" : "Update kcap",
         ApplicationsInstallAction.OpenInstalled => "kcap is already installed",
         ApplicationsInstallAction.Blocked => "Cannot install kcap",
         _ => "Install kcap",
