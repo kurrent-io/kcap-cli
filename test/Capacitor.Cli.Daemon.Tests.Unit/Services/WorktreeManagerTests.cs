@@ -291,7 +291,8 @@ public class WorktreeManagerTests {
     [Test]
     public async Task CleanupOrphaned_keeps_a_left_behind_worktree_holding_work() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
-        var manager = new WorktreeManager(new DaemonConfig { AllowedRepoPaths = [repo.Clone.Path] },
+        using var worktreeRoot = new TempDir();
+        var manager = new WorktreeManager(new DaemonConfig { AllowedRepoPaths = [repo.Clone.Path], WorktreeRoot = worktreeRoot.Path },
             NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
         var working = await manager.CreateAsync(repo.Clone, name: "working");
         var clean   = await manager.CreateAsync(repo.Clone, name: "clean");

@@ -773,7 +773,7 @@ public partial class WorktreeManager(
         var hasBranch = !string.IsNullOrEmpty(worktree.Branch) && await RefExistsAsync(worktree.Path, ownBranch, time);
         string[] uniqueCommits = ["rev-list", "--count", "HEAD", .. hasBranch ? [ownBranch] : Array.Empty<string>(), "--not"];
         if (!string.IsNullOrEmpty(worktree.Branch)) uniqueCommits = [.. uniqueCommits, $"--exclude={worktree.Branch}"];
-        uniqueCommits = [.. uniqueCommits, "--branches", "--remotes"];
+        uniqueCommits = [.. uniqueCommits, "--branches", "--remotes", "--tags"];
         if (!string.IsNullOrEmpty(worktree.FetchedRef) && await RefExistsAsync(worktree.Path, worktree.FetchedRef, time))
             uniqueCommits = [.. uniqueCommits, worktree.FetchedRef];
 
