@@ -24,6 +24,13 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// Attention lines are rendered here. Null in tests that don't need them.
     public WizardLifecycleSurface? Surface { get; }
 
+    UsageDataNotice? _usageNotice;
+    /// The usage-data disclosure, set by the composition root once the graph is built.
+    public UsageDataNotice? UsageNotice {
+        get => _usageNotice;
+        set => this.RaiseAndSetIfChanged(ref _usageNotice, value);
+    }
+
     int _index;
 
     IWizardStep? _current;

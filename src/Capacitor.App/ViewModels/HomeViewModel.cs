@@ -277,6 +277,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Same connection/sign-in/daemon banner the launcher shows above the composer.
     public bool ConnectionBannerVisible => _connectionBannerVisible.Value;
 
+    /// The usage-data disclosure, shown on the launcher until it is acknowledged.
+    public UsageDataNotice? UsageNotice { get; init; }
+
     readonly ObservableAsPropertyHelper<bool> _bannerBusy;
     /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
     public bool BannerBusy => _bannerBusy.Value;

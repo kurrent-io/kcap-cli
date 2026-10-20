@@ -62,6 +62,18 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
 
     public void LocalInstallRetried() => Emit("cli_setup_local_install_retried", new JsonObject());
 
+    /// <summary>The desktop wizard put a page on screen; one per entry, Back included, so a drop-off reads
+    /// as the last page shown.</summary>
+    public void StepShown(string step) => Emit("cli_setup_step_shown", new JsonObject { ["step"] = step });
+
+    /// <summary>The desktop wizard's daemon came up enabled, the first time it did in that run.</summary>
+    public void DaemonEnabled() => Emit("cli_setup_daemon_enabled", new JsonObject());
+
+    /// <summary>The desktop wizard closed, on <paramref name="step"/>; <paramref name="finished"/> when it
+    /// closed from its last page.</summary>
+    public void WizardClosed(string step, bool finished) =>
+        Emit("cli_setup_wizard_closed", new JsonObject { ["step"] = step, ["finished"] = finished });
+
     public void SigninOpened(string mode, string provider) =>
         Emit("cli_setup_signin_opened", new JsonObject { ["mode"] = mode, ["provider"] = provider });
 

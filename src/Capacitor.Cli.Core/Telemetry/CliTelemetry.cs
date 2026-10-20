@@ -31,6 +31,7 @@ public sealed class CliTelemetry {
     readonly string?        _deviceId;
     readonly string?        _orgGroup;
     readonly bool           _debug;
+    readonly bool           _desktop;
 
     /// <summary>
     /// Guards <see cref="_shared"/>, which is written after construction as well as during it: the
@@ -47,7 +48,8 @@ public sealed class CliTelemetry {
 
     CliTelemetry(
             ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
-            bool debug, string signupUrl, JsonObject shared, TimeProvider time) {
+            bool debug, string signupUrl, JsonObject shared, TimeProvider time, bool desktop = false) {
+        _desktop  = desktop;
         _sink     = sink;
         _time     = time;
         _command  = command;
@@ -116,7 +118,7 @@ public sealed class CliTelemetry {
                 startup.Debug,
                 startup.SignupUrl,
                 new JsonObject {
-                    ["source"]        = "cli",
+                    ["source"]        = startup.Source,
                     ["cli_version"]   = version,
                     ["build_channel"] = TelemetryEnvironment.BuildChannel(version),
                     ["os"]            = OS(),
@@ -125,14 +127,15 @@ public sealed class CliTelemetry {
                     ["is_headless"]   = Auth.HeadlessEnvironment.IsHeadless(),
                     ["has_server"]    = startup.ServerUrl is not null,
                 },
-                time);
+                time,
+                desktop: startup.Source == TelemetryStartup.DesktopSource);
 
             // Minted here rather than in Announce so the key is in the shared bag before ANY event
             // can be captured — cli_first_run included, which is once per device and unrepairable by
             // a later run. Gated to the two interactive auth commands so it never attaches to a
             // recap or an import, which have no auth run to correlate, and minted ahead of any lane
             // the command later chooses so every setup/login lane carries it.
-            if (startup.Command is "setup" or "login")
+            if (startup.Command is "setup" or "login" || telemetry._desktop)
                 telemetry.Join.Mint();
 
             return telemetry;
@@ -192,11 +195,14 @@ public sealed class CliTelemetry {
     /// run dies — the population being measured is people who quit mid-setup and never run kcap
     /// again, so a deferred event is a lost event, not a delayed one. Safe here because this is a
     /// console app with no SynchronizationContext to deadlock against; do not convert to
-    /// fire-and-forget.
+    /// fire-and-forget. The desktop app is the exception: its callers sit on the UI thread, where
+    /// the wait could deadlock, and the process outlives the step, so the flush runs off-thread.
     /// </summary>
     public void CaptureNow(string name, JsonObject properties) {
         Capture(name, properties);
-        FlushAndClose().GetAwaiter().GetResult();
+
+        if (_desktop) _ = Task.Run(FlushAndClose);
+        else FlushAndClose().GetAwaiter().GetResult();
     }
 
     public void RecordCommand(string command, string[] args, int exitCode, long durationMs) {
@@ -271,7 +277,8 @@ public sealed class CliTelemetry {
     /// </summary>
     public void Announce(ConfigRoot config) {
         try {
-            if (!Enabled || _command == "mcp-server") return;
+            // The desktop app's stderr reaches no one; it shows the notice on screen instead.
+            if (!Enabled || _command == "mcp-server" || _desktop) return;
             if (TelemetryState.Read(config).NoticeShown) return;
 
             Console.Error.WriteLine(
@@ -281,6 +288,26 @@ public sealed class CliTelemetry {
             Console.Error.WriteLine(
                 "Opt out: kcap config set telemetry off (or DO_NOT_TRACK=1).");
             Console.Error.WriteLine("https://capacitor.kurrent.io/privacy");
+
+            TelemetryState.MarkNoticeShown(config);
+            Capture("cli_first_run", new JsonObject());
+        } catch { }
+    }
+
+    /// <summary>Whether the desktop app still owes this device the one-time disclosure.</summary>
+    public bool NoticeDue(ConfigRoot config) {
+        try {
+            return Enabled && !TelemetryState.Read(config).NoticeShown;
+        } catch {
+            return false;
+        }
+    }
+
+    /// <summary>The desktop app showed the disclosure: marks it shown for every kcap process on this device
+    /// and queues <c>cli_first_run</c>, as <see cref="Announce"/> does for the console.</summary>
+    public void AcknowledgeNotice(ConfigRoot config) {
+        try {
+            if (!NoticeDue(config)) return;
 
             TelemetryState.MarkNoticeShown(config);
             Capture("cli_first_run", new JsonObject());

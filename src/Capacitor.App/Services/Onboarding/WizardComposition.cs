@@ -266,12 +266,14 @@ internal static class WizardComposition {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
         };
+        var funnel = WizardFunnel.Attach(wizard, options.Bridges.Telemetry.Funnel, daemon.WhenAnyValue(x => x.Satisfied));
         wizard.CloseRequested += signIn.EndSignUpWait;
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
             install.Settling -= OnSettling;
             install.Settled -= OnInstallSettled;
             installStep.Detach();
+            funnel.Dispose();
         };
 
         return new WizardGraph(wizard, auth, steps, history, connect, daemon, install);
