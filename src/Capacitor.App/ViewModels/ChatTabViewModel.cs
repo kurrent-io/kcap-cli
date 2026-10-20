@@ -106,6 +106,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int _baselineVersion;
     int _readInFlight;
     string? _feedKey;
+    bool _feedReleased;
     /// The session the listed foreign rows belong to.
     string? _queueKey;
     string? _root;
@@ -890,7 +891,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
-        _runs.SessionOver = info.Ended;
+        if (!_feedReleased) _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
@@ -972,6 +973,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
+        // A released tab's runs belong to the monitor that took its feed; this tab reads nothing more.
+        if (_feedReleased) return;
         _items.Clear();
         _history.Clear();
         _literalInputHistory.Clear();
@@ -1551,6 +1554,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void LogOnce(string reason) {
         if (_loggedFailures.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}");
+    }
+
+    /// <summary>Gives up a local feed to whoever carries on reading it after this tab closes. Only between reads,
+    /// so two readers never share it; null otherwise, and the caller reads afresh. The tab reads nothing after.</summary>
+    public TranscriptFeedHandoff? ReleaseFeed() {
+        if (_lease is not { Feed: LocalTranscriptFeed } lease || _feedKey is not { } key) return null;
+        if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return null;
+        Interlocked.Increment(ref _generation);
+        _feedReleased = true;
+        _lease = null;
+        return new TranscriptFeedHandoff(lease.Feed, key, _runs);
     }
 
     public Task TeardownAsync() {
