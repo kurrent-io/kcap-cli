@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using MarkView.Avalonia;
@@ -93,13 +94,21 @@ static class MarkViewSelection {
             layer.InvalidateVisual();
             return;
         }
-        if (e.ClickCount != 1 || HitTestOffset(layer, point) is not null) return;
+        if (e.ClickCount != 1 || HitTestOffset(layer, point) is not null || PressedOnButton(e)) return;
         // Padding sits outside the glyph bounds, so MarkView records no anchor and the drag never starts.
         if (Nearest(layer, point) is not { } inside || HitTestOffset(layer, inside) is not { } snapped) return;
         Anchor(layer) = snapped;
         Focus(layer) = snapped;
         IsDragging(viewer) = true;
         layer.InvalidateVisual();
+    }
+
+    /// A header is a button off the glyphs. Starting a drag there focuses the viewer, and that
+    /// focus scroll moves the release off the toggle.
+    static bool PressedOnButton(PointerPressedEventArgs e) {
+        for (var visual = e.Source as Visual; visual is not null; visual = visual.GetVisualParent())
+            if (visual is Button) return true;
+        return false;
     }
 
     /// MarkView moves the selection's end only while the pointer is over a block, and the chat's
