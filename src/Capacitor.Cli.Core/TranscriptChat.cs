@@ -45,6 +45,15 @@ public static class TranscriptChat {
             ? new TranscriptChatProjection(projection, rules)
             : null;
 
+    /// The chat's view of one subagent's own transcript, in which nothing is hidden for being a sidechain.
+    public static TranscriptChatProjection? ForSubagent(string vendor) =>
+        TranscriptProjection.For(vendor) is { } projection && SubagentRulesFor(vendor) is { } rules
+            ? new TranscriptChatProjection(projection, rules)
+            : null;
+
+    public static IChatDisplayRules? SubagentRulesFor(string vendor) =>
+        vendor.Equals("claude", StringComparison.OrdinalIgnoreCase) ? ClaudeChatRules.Subagent : RulesFor(vendor);
+
     public static IChatDisplayRules? RulesFor(string vendor) => vendor.ToLowerInvariant() switch {
         "claude" => ClaudeChatRules.Instance,
         "codex"  => CodexChatRules.Instance,

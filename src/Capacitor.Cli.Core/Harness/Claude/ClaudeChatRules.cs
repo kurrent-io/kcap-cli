@@ -12,12 +12,17 @@ namespace Capacitor.Cli.Core.Harness.Claude;
 /// if the user had spoken. Also where a subagent's or a background command's launch, detachment
 /// and end are read.
 public sealed partial class ClaudeChatRules : IChatDisplayRules {
-    public static readonly ClaudeChatRules Instance = new();
+    public static readonly ClaudeChatRules Instance = new(ownTranscript: false);
+
+    /// For a subagent's own transcript, every record of which is a sidechain record.
+    public static readonly ClaudeChatRules Subagent = new(ownTranscript: true);
+
+    readonly bool _ownTranscript;
 
     const string StoppedTaskMessage = "Successfully stopped task";
     const string HandbackPointer = "This agent's report was delivered to you as a message";
 
-    ClaudeChatRules() { }
+    ClaudeChatRules(bool ownTranscript) => _ownTranscript = ownTranscript;
 
     public IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) {
         if (raw.Kind != AcpEventKind.UserMessage || raw.Text is not { Length: > 0 } text) return [];
@@ -52,7 +57,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
+        if (!_ownTranscript && SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
         // A peer message delivered while the session is idle is a meta record, and it is the
         // only record of that message.
         if (envelope.Kind == AcpEventKind.UserMessage && PeerMessage(slug, envelope.Text) is { } peer)
