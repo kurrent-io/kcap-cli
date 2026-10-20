@@ -99,6 +99,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     IDisposable? _snapshots;
     DaemonInfoDto? _latestDaemon;
     string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
+    bool _mismatchWaitsForIdle; // under _lock: the last report was held back by running agents
     int  _latestActiveAgents;
     bool _latestResumes;
     int  _reloadClaim;   // 0 free, 1 claimed; Interlocked only
@@ -174,6 +175,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _snapshots    = _client.Snapshots.Subscribe(snap => {
             _latestActiveAgents = snap.Daemon.ActiveAgents;
             Volatile.Write(ref _latestDaemon, snap.Daemon);
+            bool idleNow;
+            lock (_lock) idleNow = _mismatchWaitsForIdle && snap.Daemon.ActiveAgents == 0;
+            if (idleNow) _ = CheckAttachedIdentityAsync();
         });
         _ = CacheVersionAsync(); // never faults
     }
@@ -575,7 +579,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// The ONE accept path for a unit rewrite this controller offers, so a future dialog can never
     /// grow a second `MutationVerb.Replace` call site. A consent that outlived an attach transition
     /// is discarded: the evidence the dialog disclosed may no longer hold.
-    async Task ConfirmAndReplaceAsync(LifecyclePrompt prompt, CancellationToken ct) {
+    /// <param name="requireIdle">Refuse an accepted consent if agents started while the prompt was open:
+    /// snapshots do not move the attach generation, so the stale-consent check cannot see them.</param>
+    async Task ConfirmAndReplaceAsync(LifecyclePrompt prompt, CancellationToken ct, bool requireIdle = false) {
         if (RequireAppRestart()) return;
         var gen0     = CurrentGeneration(); // captured immediately before ConfirmAsync (stale-consent check below)
         var accepted = await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false);
@@ -583,6 +589,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (CurrentGeneration() != gen0) {
             _surface.Status("The daemon changed while the prompt was open — canceled, nothing changed.");
+            return;
+        }
+
+        if (requireIdle && _latestActiveAgents > 0) {
+            _surface.Status("Agents started on the daemon while the prompt was open — canceled, nothing changed.");
             return;
         }
 
@@ -821,9 +832,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
             var mismatch = AttachedIdentity.Mismatch(daemon, _client.DaemonName, _canonicalServer, expectedProfile);
+            var busy     = daemon.ActiveAgents > 0;
             lock (_lock) {
-                if (mismatch == _reportedMismatch) return;
-                _reportedMismatch = mismatch;
+                // The same mismatch is reported again only when the agents that held back its offer have finished.
+                if (mismatch == _reportedMismatch && !(_mismatchWaitsForIdle && !busy)) return;
+                _reportedMismatch     = mismatch;
+                _mismatchWaitsForIdle = false;
             }
             if (mismatch is null) return;
 
@@ -831,17 +845,23 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
                 return;
             }
-            if (daemon.ActiveAgents > 0) {
+            if (busy) {
+                lock (_lock) _mismatchWaitsForIdle = true;
                 var agents = daemon.ActiveAgents == 1 ? "its running agent finishes" : $"its {daemon.ActiveAgents} running agents finish";
                 _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
                 return;
             }
 
             _surface.Attention(mismatch);
-            var terminalPath = await _probe.TerminalPathAsync(_lifetime.Token).ConfigureAwait(false);
-            await ConfirmAndReplaceAsync(
-                new LifecyclePrompt(LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure), _lifetime.Token)
-                .ConfigureAwait(false);
+            // Under the gate like every other repair, so it neither races the reconciliation's own offers
+            // nor escapes the shutdown barrier.
+            if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
+            try {
+                if (await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
+                    await OfferRepairAsync(snap, _lifetime.Token, requireIdle: true).ConfigureAwait(false);
+            } finally {
+                _gate.Release();
+            }
         } catch (OperationCanceledException) {
             // shutdown
         } catch (Exception ex) {
@@ -850,7 +870,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// The Start button's one dialog: a manual daemon holds the name, and replacing it is the user's call.
-    async Task OfferRepairAsync(ServiceSnapshot snap, CancellationToken ct) {
+    async Task OfferRepairAsync(ServiceSnapshot snap, CancellationToken ct, bool requireIdle = false) {
         var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
         if (missing is not null) {
             _surface.Status(missing);
@@ -860,7 +880,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         var terminalPath = await _probe.TerminalPathAsync(ct).ConfigureAwait(false);
         var prompt = new LifecyclePrompt(LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure);
 
-        await ConfirmAndReplaceAsync(prompt, ct).ConfigureAwait(false);
+        await ConfirmAndReplaceAsync(prompt, ct, requireIdle).ConfigureAwait(false);
     }
 
     /// App shutdown awaits this: completes once no mutation child is in flight. Does not itself

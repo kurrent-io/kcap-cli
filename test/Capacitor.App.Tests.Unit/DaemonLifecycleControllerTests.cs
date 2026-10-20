@@ -1513,6 +1513,7 @@ public class DaemonLifecycleControllerTests {
     public async Task A_daemon_serving_another_identity_is_reported_and_offered_a_replace(string server, string profile, string message) {
         await using var h = new Harness();
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
         h.Start();
 
         h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server, profile));
@@ -1525,18 +1526,43 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Lane.Requests.Single().Profile).IsEqualTo("default");
     }
 
-    /// A busy daemon is reported but not offered a replace, which would end its agents.
+    /// A busy daemon is reported but not offered a replace, which would end its agents; once they finish,
+    /// without a reconnect, the offer follows.
     [Test]
-    public async Task A_busy_foreign_daemon_is_reported_without_an_offer() {
+    public async Task A_busy_foreign_daemon_is_offered_a_replace_once_its_agents_finish() {
         await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
         h.Start();
 
         h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 2));
         h.PushConnected();
 
-        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
-        await Assert.That(h.Surface.AttentionMessages.Single()).EndsWith("The app offers to replace it once its 2 running agents finish.");
+        const string held = "The app offers to replace it once its 2 running agents finish.";
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Any(m => m.EndsWith(held, StringComparison.Ordinal)), what: "the report");
         await Assert.That(h.Surface.Prompts).IsEmpty();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 0));
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace once idle");
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+    }
+
+    /// Agents that start while the prompt is open cancel the replace it was answered for.
+    [Test]
+    public async Task Agents_starting_while_the_prompt_is_open_cancel_the_replace() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Surface.ConfirmBehavior = (_, _) => {
+            h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 1));
+            return Task.FromResult(true);
+        };
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.StatusMessages.Any(m => m.StartsWith("Agents started", StringComparison.Ordinal)), what: "the cancel");
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
 
