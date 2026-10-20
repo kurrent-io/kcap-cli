@@ -54,6 +54,36 @@ public partial class LaunchdStartStopTests {
         }
     }
 
+    /// <summary>A linked LaunchAgents directory is reached through its target's parents, so the world-write
+    /// check that runs before the job is unloaded has to ascend those, not the link's own.</summary>
+    [Test]
+    [ParallelLimiter<SubprocessLimit>]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Install_refuses_a_linked_unit_folder_under_a_world_writable_target_before_unloading_the_job() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
+
+        var agents = LaunchdUnit.AgentsDir(Home);
+        var shared = Home.PathTo("shared");
+        var target = Path.Combine(shared, "real", "LaunchAgents");
+        Directory.CreateDirectory(target);
+        Directory.CreateDirectory(Path.GetDirectoryName(agents)!);
+        Directory.CreateSymbolicLink(agents, target);
+        var mode = File.GetUnixFileMode(shared);
+        File.SetUnixFileMode(shared, mode | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        try {
+            List<string[]> calls = [];
+            var mgr = new LaunchdServiceManager(Home, TimeProvider.System,
+                runProcess: (_, args) => { calls.Add(args); return (0, "", ""); },
+                runBounded: (_, args, _) => { calls.Add(args); return (0, "", "", false); });
+
+            await Assert.That(() => mgr.Install(new ServiceSpec("test", "/bin/true", "/tmp/test.log", new Dictionary<string, string>(), []), startNow: true, out _))
+                .Throws<InvalidOperationException>();
+            await Assert.That(calls).IsEmpty().Because("nothing was unloaded");
+        } finally {
+            File.SetUnixFileMode(shared, mode);
+        }
+    }
+
     // ── Stop ──
 
     [Test]

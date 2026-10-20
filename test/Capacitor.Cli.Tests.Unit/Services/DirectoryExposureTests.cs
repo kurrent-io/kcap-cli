@@ -98,7 +98,7 @@ public class DirectoryExposureTests {
             Directory.CreateSymbolicLink(link, real);
             GroupWritable(shared);
 
-            var found = DirectoryExposure.GrantingWrite(Path.Combine(link, "unit"), UnixFileMode.GroupWrite);
+            var found = DirectoryExposure.GrantingWrite(Tmp.PathTo("link", "unit"), UnixFileMode.GroupWrite);
 
             await Assert.That(found).Contains(Tmp.GetResolvedPath("shared"))
                 .Because("the link's lexical parent is the temp root, which grants nothing");
@@ -149,13 +149,34 @@ public class DirectoryExposureTests {
 
         Tmp.CreateDir("mine", "unit");
         var holder = Tmp.CreateDir("alice").Path;
-        File.CreateSymbolicLink(Path.Combine(holder, "link"), Tmp.GetResolvedPath("mine"));
+        File.CreateSymbolicLink(Tmp.PathTo("alice", "link"), Tmp.GetResolvedPath("mine"));
         const uint Self = 1001, Alice = 1002;
 
-        var found = DirectoryExposure.ForeignOwned(Path.Combine(holder, "link", "unit"),
+        var found = DirectoryExposure.ForeignOwned(Tmp.PathTo("alice", "link", "unit"),
             d => d == holder ? Alice : Self, Self);
 
         await Assert.That(found.Select(f => f.Directory)).Contains(holder);
+    }
+
+    /// <summary>A link cannot be repointed in place, so its own owner matters only where it may also unlink
+    /// it: a sticky directory. Elsewhere the directory holding it decides, and that is checked on its own.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_links_own_owner_is_reported_only_inside_a_sticky_directory(bool sticky) {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX symlinks");
+
+        Tmp.CreateDir("mine", "unit");
+        var holder = Tmp.CreateDir("holder").Path;
+        var link = Tmp.PathTo("holder", "link");
+        File.CreateSymbolicLink(link, Tmp.GetResolvedPath("mine"));
+        if (sticky) File.SetUnixFileMode(holder, File.GetUnixFileMode(holder) | UnixFileMode.StickyBit);
+        const uint Self = 1001, Alice = 1002;
+
+        var found = DirectoryExposure.ForeignOwned(Tmp.PathTo("holder", "link", "unit"), d => d == link ? Alice : Self, Self);
+
+        await Assert.That(found.Select(f => f.Directory).Contains(link)).IsEqualTo(sticky);
     }
 
     /// <summary>A link reached through another link is held by a directory neither the given path nor the
@@ -167,7 +188,7 @@ public class DirectoryExposureTests {
 
         Tmp.CreateDir("safe", "final", "unit");
         var holder = Tmp.CreateDir("foreign", "holder").Path;
-        File.CreateSymbolicLink(Path.Combine(holder, "next"), Tmp.GetResolvedPath("safe", "final"));
+        File.CreateSymbolicLink(Tmp.PathTo("foreign", "holder", "next"), Tmp.GetResolvedPath("safe", "final"));
         File.CreateSymbolicLink(Tmp.PathTo("safe", "entry"), holder);
         var resolvedHolder = Tmp.GetResolvedPath("foreign", "holder");
         const uint Self = 1001, Other = 1002;
@@ -187,8 +208,8 @@ public class DirectoryExposureTests {
 
         Tmp.CreateDir("safe", "final", "unit");
         var holder = Tmp.CreateDir("foreign", "holder").Path;
-        File.CreateSymbolicLink(Path.Combine(holder, "next"), Tmp.GetResolvedPath("safe", "final"));
-        File.CreateSymbolicLink(Tmp.PathTo("safe", "entry"), Path.Combine(holder, "next"));
+        File.CreateSymbolicLink(Tmp.PathTo("foreign", "holder", "next"), Tmp.GetResolvedPath("safe", "final"));
+        File.CreateSymbolicLink(Tmp.PathTo("safe", "entry"), Tmp.PathTo("foreign", "holder", "next"));
         var resolvedHolder = Tmp.GetResolvedPath("foreign", "holder");
         const uint Self = 1001, Other = 1002;
 

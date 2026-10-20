@@ -185,10 +185,13 @@ static class ServiceFiles {
     /// world-writable directory on the way to someone's home is produced by no umask and is never
     /// deliberate. The group-write case is reported by <c>kcap daemon doctor</c>, which can advise where
     /// this cannot safely block.</para></summary>
-    static void RequireNoWorldWritableAncestor(string directory) {
-        // The unit directory itself is included and costs nothing: RequireNoSharedWrite has already
-        // stripped its world-write bit or thrown, so it cannot be the offender found here.
-        if (DirectoryExposure.GrantingWrite(directory, UnixFileMode.OtherWrite) is not [var offender, ..]) return;
+    static void RequireNoWorldWritableAncestor(string directory, bool exceptItself = false) {
+        // The unit directory itself is included and costs nothing after RequireNoSharedWrite, which has
+        // stripped its world-write bit or thrown. Before that runs, it is excluded by its lexical and its
+        // physical path alike, while its target's parents are still walked.
+        string[] itself = exceptItself ? [Path.GetFullPath(directory), DirectoryExposure.Physical(directory)] : [];
+        if (DirectoryExposure.GrantingWrite(directory, UnixFileMode.OtherWrite).FirstOrDefault(d => !itself.Contains(d))
+            is not { } offender) return;
 
         throw new InvalidOperationException(
             $"Refusing to write a service unit below a world-writable directory: {offender}. Any local "
@@ -201,7 +204,7 @@ static class ServiceFiles {
     /// the writer repairs that one rather than refusing it.</summary>
     public static void RequireSafeAncestors(string unitPath) {
         if (Path.GetDirectoryName(unitPath) is not { Length: > 0 } directory) return;
-        if (Path.GetDirectoryName(directory) is { Length: > 0 } parent) RequireNoWorldWritableAncestor(parent);
+        RequireNoWorldWritableAncestor(directory, exceptItself: true);
         RequireNoForeignOwnedAncestor(directory);
     }
 

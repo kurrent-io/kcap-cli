@@ -68,11 +68,32 @@ static class DirectoryExposure {
         var found = new List<(string, uint)>();
 
         foreach (var d in Ancestors(directory)) {
+            if (IsLinkOutsideStickyDirectory(d)) continue;
             if (ownerOf(d) is { } owner && owner != 0 && owner != self) found.Add((d, owner));
         }
 
         return found;
     }
+
+    /// <summary>A link cannot be repointed in place, only unlinked and recreated, which its owner may do
+    /// without write on its directory only when that directory is sticky. Elsewhere the link's own owner
+    /// holds no power over the path, and <c>stat</c> would report it rather than its target's.</summary>
+    static bool IsLinkOutsideStickyDirectory(string path) {
+        if (OperatingSystem.IsWindows()) return false;
+
+        try {
+            if (new FileInfo(path).LinkTarget is null) return false;
+
+            return Path.GetDirectoryName(path) is not { } holder
+                || !File.GetUnixFileMode(holder).HasFlag(UnixFileMode.StickyBit);
+        } catch (Exception) {
+            return false;
+        }
+    }
+
+    /// <summary>The directory the kernel reaches for <paramref name="directory"/>, every symlinked component
+    /// replaced by its target.</summary>
+    public static string Physical(string directory) => Resolve(Path.GetFullPath(directory), depth: 0, []);
 
     static bool Grants(UnixFileMode mode, UnixFileMode writeBits, UnixFileMode write, UnixFileMode execute) =>
         writeBits.HasFlag(write) && mode.HasFlag(write) && mode.HasFlag(execute);
