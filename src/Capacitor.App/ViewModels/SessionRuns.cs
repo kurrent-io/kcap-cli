@@ -148,7 +148,7 @@ public sealed class SessionRuns(TimeProvider time) {
         // An agent already placed by its own call stays there: a guess never moves it.
         if (_byAgent.ContainsKey(identified.AgentId) || _rows.Any(r => r.AgentId == identified.AgentId)) return;
         if (!_earlyUnpaired.Contains(identified.AgentId)) {
-            _candidates ??= UnnamedRunning().ToList();
+            if (_earlyUnpaired.Count == 0) _candidates = UnnamedRunning().ToList();
             if (_earlyUnpaired.Count == MaxEarly) _earlyUnpaired.RemoveAt(0);
             _earlyUnpaired.Add(identified.AgentId);
         }
