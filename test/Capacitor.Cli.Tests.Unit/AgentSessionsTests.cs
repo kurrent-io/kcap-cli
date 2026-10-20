@@ -94,14 +94,43 @@ public class AgentSessionsTests {
     /// so its end can be sent where the session lives.</summary>
     [Test]
     public async Task A_reaped_claim_returns_where_its_session_was_recorded() {
-        Sessions.Claim(Agent, SessionId.Parse("traced")!, "claude", "https://kcap.example");
-        var live = ProcessStartToken.ForCurrent()!;
-        File.WriteAllText(Note(Agent), $"traced\n{live[..live.IndexOf(':')]}:another-boot:1");
+        DeadNote(Shell, "traced");
+        File.WriteAllText(Note(Shell) + ".origin", "lx:another-boot:1\nclaude\nhttps://kcap.example");
 
         var exited = Sessions.ReapExited();
 
         await Assert.That(exited).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("traced")!, "claude", "https://kcap.example") });
-        await Assert.That(File.Exists(Note(Agent) + ".origin")).IsFalse();
+        await Assert.That(File.Exists(Note(Shell) + ".origin")).IsFalse();
+    }
+
+    /// <summary>A claim writes its origin beside the note, bound to the claim's own start token.</summary>
+    [Test]
+    public async Task A_claim_writes_its_origin_under_its_own_token() {
+        Sessions.Claim(Agent, Session, "claude", "https://kcap.example");
+
+        await Assert.That(File.ReadAllText(Note(Agent) + ".origin"))
+            .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example");
+    }
+
+    /// <summary>A resumed session runs under a new process before the old claim is reaped; ending it then
+    /// would close a running session.</summary>
+    [Test]
+    public async Task A_session_another_live_process_claims_is_not_returned() {
+        Sessions.Claim(Agent, SessionId.Parse("resumed")!, "claude", "https://kcap.example");
+        DeadNote(Shell, "resumed");
+
+        await Assert.That(Sessions.ReapExited()).IsEmpty();
+    }
+
+    /// <summary>A reused pid's new claim writes its own origin; the reaped claim must not take it.</summary>
+    [Test]
+    public async Task An_origin_from_another_claim_of_the_pid_is_not_used_or_deleted() {
+        DeadNote(Shell, "old");
+        var origin = Note(Shell) + ".origin";
+        File.WriteAllText(origin, "lx:new-boot:2\nclaude\nhttps://new.example");
+
+        await Assert.That(Sessions.ReapExited()).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("old")!, null, null) });
+        await Assert.That(File.Exists(origin)).IsTrue();
     }
 
     [Test]

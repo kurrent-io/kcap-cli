@@ -38,7 +38,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
             if (File.Exists(note) && File.ReadAllText(note) == text) {
-                WriteOrigin(agentPid, vendor, server);
+                WriteOrigin(agentPid, token, vendor, server);
                 return;
             }
 
@@ -48,7 +48,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var temp = $"{note}.{Environment.ProcessId}";
             File.WriteAllText(temp, text);
             File.Move(temp, note, overwrite: true);
-            WriteOrigin(agentPid, vendor, server);
+            WriteOrigin(agentPid, token, vendor, server);
         } catch { }
     }
 
@@ -94,13 +94,15 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
                     if (SessionId.Parse(session) is { } exited) {
                         RecordExit(exited);
-                        var (vendor, server) = ReadOrigin(pid);
-                        gone.Add(new ExitedSession(exited, vendor, server));
+                        var (vendor, server) = ReadOrigin(pid, token);
+                        // A session resumed under another process is running again: no end for it.
+                        if (LiveClaimant(exited) is null) gone.Add(new ExitedSession(exited, vendor, server));
                     }
+
+                    DeleteOrigin(pid, token);
                 }
 
                 File.Delete(Note(pid));
-                if (File.Exists(Origin(pid))) File.Delete(Origin(pid));
             } catch { }
         }
 
@@ -201,7 +203,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     // a pid, so Claimants passes over it.
     string Origin(int pid) => config.Path("agent-sessions", $"{pid.ToString(CultureInfo.InvariantCulture)}.origin");
 
-    void WriteOrigin(int pid, string? vendor, string? server) {
+    // Carries the claim's start token, so an origin written by a later holder of a reused pid is never
+    // read as, or deleted for, the claim that was reaped.
+    void WriteOrigin(int pid, string token, string? vendor, string? server) {
         var origin = Origin(pid);
         if (vendor is null && server is null) {
             if (File.Exists(origin)) File.Delete(origin);
@@ -210,13 +214,19 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
         Directory.CreateDirectory(Path.GetDirectoryName(origin)!);
         var temp = $"{origin}.{Environment.ProcessId}";
-        File.WriteAllText(temp, $"{vendor}\n{server}");
+        File.WriteAllText(temp, $"{token}\n{vendor}\n{server}");
         File.Move(temp, origin, overwrite: true);
     }
 
-    (string? Vendor, string? Server) ReadOrigin(int pid) {
+    void DeleteOrigin(int pid, string token) {
         try {
-            return File.ReadAllText(Origin(pid)).Split('\n') is [var vendor, var server]
+            if (File.ReadAllText(Origin(pid)).Split('\n') is [var owner, _, _] && owner == token) File.Delete(Origin(pid));
+        } catch { }
+    }
+
+    (string? Vendor, string? Server) ReadOrigin(int pid, string token) {
+        try {
+            return File.ReadAllText(Origin(pid)).Split('\n') is [var owner, var vendor, var server] && owner == token
                 ? (vendor.Length > 0 ? vendor : null, server.Length > 0 ? server : null)
                 : (null, null);
         } catch {
