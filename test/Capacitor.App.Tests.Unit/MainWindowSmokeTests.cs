@@ -1715,9 +1715,8 @@ public class MainWindowSmokeTests {
             new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
     }
 
-    /// A dot belongs BETWEEN two fragments, never dangling: the count drops out the moment the
-    /// attach does (the service keeps its snapshot, so name and version stay), and its separator
-    /// has to leave with it.
+    /// Name, then the agent count, then the version. The count's dot leaves with it when the
+    /// attach drops; the snapshot stays, so the name and version remain with nothing between them.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
@@ -1748,9 +1747,9 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "1 of 5 agents", "1.2.3" }, CollectionOrdering.Matching);
         await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "1.2.3" }, CollectionOrdering.Matching);
     }
 
     /// A queued daemon update is the version's own status: warning paint on the semver, the
