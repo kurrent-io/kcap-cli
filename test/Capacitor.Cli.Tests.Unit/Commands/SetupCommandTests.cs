@@ -1733,9 +1733,9 @@ public class SetupCommandTests {
         await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
     }
 
-    // A run that never mentions a plan must not start a time-limited trial nobody chose.
+    // Null records that no plan was named, which is what lets provisioning ask for Team when Free is closed.
     [Test]
-    public async Task ParseRequestedWorkspace_defaults_to_the_free_plan() {
+    public async Task ParseRequestedWorkspace_leaves_an_unnamed_plan_unset() {
         await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsNull();
     }
 

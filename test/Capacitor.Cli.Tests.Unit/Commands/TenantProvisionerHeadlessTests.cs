@@ -330,7 +330,6 @@ public class TenantProvisionerHeadlessTests {
         await Assert.That(capture.GetCapturedError()).DoesNotContain("is taken");
     }
 
-    // A Team trial already refused is not offered again when Free turns out to be closed too.
     [Test]
     public async Task A_closed_free_plan_after_a_refused_trial_offers_only_the_local_edition() {
         using var capture = ConsoleOutput.StartErrorCapture();
