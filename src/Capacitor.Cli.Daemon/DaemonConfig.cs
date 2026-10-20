@@ -96,6 +96,9 @@ public class DaemonConfig {
 
     ProfileContext? _profiles;
 
+    /// <summary>The profile name, or null where no <see cref="ProfileContext"/> was passed in.</summary>
+    public string? ProfileNameOrNull => _profiles?.Name;
+
     /// <summary>Why <see cref="ServerUrl"/> may not be sent to, as resolved at boot; null when it may, or when nothing
     /// was resolved.</summary>
     public string? DestinationRefusal => _profiles is null ? null : LocalDestination.Refusal(ServerUrl, _profiles.Resolution.Endpoint);

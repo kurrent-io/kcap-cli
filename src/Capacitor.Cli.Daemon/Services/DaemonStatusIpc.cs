@@ -69,7 +69,9 @@ internal sealed class DaemonStatusIpc(
             new DaemonInfoDto(
                 config.Name, DaemonRunner.ResolveDaemonVersion(), config.ServerUrl,
                 ConnectionText(connection.HubState), config.MaxConcurrentAgents, active,
-                Environment.ProcessId, config.InstanceId, config.SupportedVendors, config.VendorModels),
+                Environment.ProcessId, config.InstanceId, config.SupportedVendors, config.VendorModels,
+                Credential: connection.HubState == HubConnectionState.Connected ? null : connection.CredentialHealth.Problem,
+                Profile: config.ProfileNameOrNull),
             agents,
             orchestrator.SnapshotPendingForStatus(),
             orchestrator.BusyForStatus());

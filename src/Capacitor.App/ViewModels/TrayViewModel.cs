@@ -353,10 +353,29 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return string.Join(", ", parts);
     }
 
+    // kcap login signs in whichever profile it resolves, so the variable that names one goes first.
+    // Quoted for the shell and scoped to the one command: the user's own shell keeps whatever profile
+    // it had. PowerShell has no per-command environment, so the login runs in a child PowerShell.
+    internal static string LoginHint(string profile) => LoginHint(profile, OperatingSystem.IsWindows());
+
+    internal static string LoginHint(string profile, bool windows) {
+        if (!windows) return $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
+
+        var inner = $"$env:KCAP_PROFILE='{PowerShellQuoted(profile)}'; kcap login";
+        return $"in PowerShell, run powershell -NoProfile -Command '{PowerShellQuoted(inner)}'";
+    }
+
+    // PowerShell ends a single-quoted string at any of these, not only at ', and each is escaped by doubling.
+    static string PowerShellQuoted(string text) =>
+        string.Concat(text.Select(c => c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B' ? $"{c}{c}" : c.ToString()));
+
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
     // share the neutral fallback; reconnecting and disconnected get their own copy.
     static string AttentionBody(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Connected && snap is not null) {
+            if (snap.Daemon is { Credential: not null } daemon && daemon.Connection != "connected")
+                return daemon.Profile is { Length: > 0 } profile ? $"signed out of {profile}: {LoginHint(profile)}" : "signed out";
+
             return snap.Daemon.Connection switch {
                 "reconnecting" => "reconnecting to server",
                 "disconnected" => "disconnected from server",
