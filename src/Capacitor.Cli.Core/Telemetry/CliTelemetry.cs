@@ -251,6 +251,15 @@ public sealed class CliTelemetry {
         } catch { }
     }
 
+    bool StillEnabled() {
+        if (!Enabled) return false;
+        if (_config is null || TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(_config)).Enabled) return true;
+
+        DiscardAndDisable();
+
+        return false;
+    }
+
     /// <summary>
     /// Tears telemetry down in THIS process the instant the persisted flag flips to false.
     /// Program.cs starts the facade before any command handler runs, so by the time
@@ -261,15 +270,6 @@ public sealed class CliTelemetry {
     /// <see cref="TelemetryState.SetEnabled"/> persists the "off" (which already clears the
     /// on-disk id — this drops the queue it was minted for).
     /// </summary>
-    bool StillEnabled() {
-        if (!Enabled) return false;
-        if (_config is null || TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(_config)).Enabled) return true;
-
-        DiscardAndDisable();
-
-        return false;
-    }
-
     public void DiscardAndDisable() {
         try {
             _sink.Discard();

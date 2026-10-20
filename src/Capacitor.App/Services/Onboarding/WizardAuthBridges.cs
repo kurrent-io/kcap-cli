@@ -124,10 +124,16 @@ public static class WizardSignInOperation {
             _ => new AuthResult.Failed("No connection was chosen.")
         };
 
-    static AuthResult Recorded(AuthResult result, SetupFunnel? funnel) {
+    /// A paste outcome as the CLI's funnel counts one: only a real sign-in completes and only a refused one
+    /// fails. A server that could not be reached, or that needs no sign-in, records nothing.
+    internal static AuthResult Recorded(AuthResult result, SetupFunnel? funnel) {
         switch (result) {
-            case AuthResult.Committed committed: funnel?.SigninCompleted(committed.Provider); break;
-            case AuthResult.Failed:              funnel?.SigninFailed("paste_signin_failed"); break;
+            case AuthResult.Committed { Provider: not AuthProvider.None } committed:
+                funnel?.SigninCompleted(committed.Provider);
+                break;
+            case AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }:
+                funnel?.SigninFailed("signin_denied");
+                break;
         }
 
         return result;
