@@ -37,7 +37,7 @@ public class MarkdownLinkKeyboardTests {
         Dispatcher.UIThread.RunJobs();
     }
 
-    static string? Url(MarkdownView view) => view.KeyboardLink?.NavigateUri?.ToString();
+    static string? Url(MarkdownView view) => view.KeyboardLinkUrl;
 
     [Test]
     public Task Tab_walks_the_links_in_order_then_leaves_and_enter_or_space_opens_the_current_one() => RunOnUiAsync(async () => {
@@ -57,7 +57,7 @@ public class MarkdownLinkKeyboardTests {
             await Assert.That(string.Join(",", opened)).IsEqualTo("https://example.com/a,https://example.com/b");
 
             Press(window, PhysicalKey.Tab);
-            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNull();
             await Assert.That(AdornerLayer.GetAdorner(block)).IsNull();
             await Assert.That(after.IsFocused).IsTrue().Because("past the last link, Tab moves on");
         } finally { window.Close(); }
@@ -96,7 +96,7 @@ public class MarkdownLinkKeyboardTests {
             Dispatcher.UIThread.RunJobs();
             Press(window, PhysicalKey.Enter);
 
-            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNull();
             await Assert.That(opened).IsEmpty();
             await Assert.That(ran).IsEquivalentTo(new[] { "! kcap agent ls" });
         } finally { window.Close(); }
@@ -125,12 +125,12 @@ public class MarkdownLinkKeyboardTests {
         var (window, view, _, _, _) = Show();
         try {
             Press(window, PhysicalKey.Tab);
-            await Assert.That(view.KeyboardLink).IsNotNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNotNull();
 
             view.Flavor = MarkdownFlavor.GitHub;
             Dispatcher.UIThread.RunJobs();
 
-            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNull();
         } finally { window.Close(); }
     });
 
@@ -141,7 +141,7 @@ public class MarkdownLinkKeyboardTests {
             Press(window, PhysicalKey.Tab);
             view.Text = "Now [third](https://example.com/c).";
             Dispatcher.UIThread.RunJobs();
-            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNull();
 
             Press(window, PhysicalKey.Tab);
             await Assert.That(Url(view)).IsEqualTo("https://example.com/c");
@@ -155,13 +155,35 @@ public class MarkdownLinkKeyboardTests {
             var text = MarkdownViewHarness.Paragraphs(view).First();
             MarkdownViewHarness.ClickAt(window, text, 0); // on "See", not a link
             Press(window, PhysicalKey.Tab);
-            await Assert.That(view.KeyboardLink).IsNotNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNotNull();
 
             MarkdownViewHarness.ClickAt(window, text, 0);
             Press(window, PhysicalKey.Enter);
 
-            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNull();
             await Assert.That(opened).IsEmpty();
+        } finally { window.Close(); }
+    });
+
+    /// A linked image renders as an image control rather than a span, and is a keyboard stop like a link.
+    [Test]
+    public Task A_linked_image_is_a_stop_and_opens_its_target() => RunOnUiAsync(async () => {
+        var opened = new List<string>();
+        var before = new Button { Content = "before" };
+        var view = new MarkdownView {
+            Text = "[![badge](https://h/b.png)](https://outer.example)", Flavor = MarkdownFlavor.GitHub,
+            OpenLink = ReactiveCommand.Create<string>(opened.Add), Width = 400,
+        };
+        var window = new Window { Content = new StackPanel { Children = { before, view } }, Width = 500, Height = 300 };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            before.Focus();
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(Url(view)).IsEqualTo("https://outer.example");
+
+            Press(window, PhysicalKey.Enter);
+            await Assert.That(opened).IsEquivalentTo(new[] { "https://outer.example" });
         } finally { window.Close(); }
     });
 
@@ -173,7 +195,7 @@ public class MarkdownLinkKeyboardTests {
             Dispatcher.UIThread.RunJobs();
             Press(window, PhysicalKey.Enter);
 
-            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(view.KeyboardLinkUrl).IsNull();
             await Assert.That(opened).IsEmpty();
         } finally { window.Close(); }
     });

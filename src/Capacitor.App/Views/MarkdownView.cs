@@ -8,7 +8,6 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia;
-using MarkView.Avalonia.Rendering.Inlines;
 using MarkView.Avalonia.SyntaxHighlighting;
 
 namespace Capacitor.App.Views;
@@ -109,7 +108,7 @@ public sealed class MarkdownView : ContentControl {
         }
     }
 
-    internal MarkdownHyperlink? KeyboardLink => _linkKeys.Current;
+    internal string? KeyboardLinkUrl => _linkKeys.CurrentUrl;
 
     public string? Text {
         get => GetValue(TextProperty);

@@ -4,13 +4,14 @@ using Avalonia.Media;
 
 namespace Capacitor.App.Views;
 
-/// The keyboard focus mark on a link inside a text block. The link's bounds are read on every render,
-/// and the block's layout passes trigger one, so a re-wrap moves the mark with the text.
+/// The keyboard focus mark on a link: its text bounds inside a text block, or a linked image's own bounds.
+/// They are read on every render, and the host's layout passes trigger one, so a re-wrap moves the mark
+/// with the text.
 sealed class LinkFocusRing : Control {
-    readonly TextBlock _block;
+    readonly Control _block;
     readonly Func<IReadOnlyList<Rect>> _rects;
 
-    public LinkFocusRing(TextBlock block, Func<IReadOnlyList<Rect>> rects) {
+    public LinkFocusRing(Control block, Func<IReadOnlyList<Rect>> rects) {
         _block = block;
         _rects = rects;
         IsHitTestVisible = false;

@@ -18,7 +18,12 @@ namespace Capacitor.App.Views;
 sealed class MarkdownLinkKeys {
     readonly MarkdownViewer _viewer;
     readonly Func<ICommand?> _openLink;
-    (TextBlock Block, MarkdownHyperlink Link)? _current;
+    Stop? _current;
+
+    /// One keyboard stop: a hyperlink span in its text block, or a linked image, which has no span.
+    sealed record Stop(Control Host, MarkdownHyperlink? Span, string Url) {
+        public bool IsSame(Stop other) => Span is not null ? ReferenceEquals(Span, other.Span) : ReferenceEquals(Host, other.Host);
+    }
 
     MarkdownLinkKeys(MarkdownViewer viewer, Func<ICommand?> openLink) {
         _viewer = viewer;
@@ -35,12 +40,12 @@ sealed class MarkdownLinkKeys {
         return keys;
     }
 
-    /// The link the keyboard is on, for a test to read.
-    internal MarkdownHyperlink? Current => _current?.Link;
+    /// The address of the link the keyboard is on, for a test to read.
+    internal string? CurrentUrl => _current?.Url;
 
     /// A re-render replaces every span, so the one held no longer exists.
     public void Clear() {
-        if (_current is { } current) AdornerLayer.SetAdorner(current.Block, null);
+        if (_current is { } current) AdornerLayer.SetAdorner(current.Host, null);
         _current = null;
     }
 
@@ -70,7 +75,7 @@ sealed class MarkdownLinkKeys {
         switch (e.Key) {
             case Key.Tab when (e.KeyModifiers & ~KeyModifiers.Shift) == KeyModifiers.None:
                 var links = Links();
-                var at = links.FindIndex(l => ReferenceEquals(l.Link, current.Link));
+                var at = links.FindIndex(current.IsSame);
                 var next = at < 0 ? -1 : at + (e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? -1 : 1);
                 if (next < 0 || next >= links.Count) {
                     Clear();
@@ -80,25 +85,32 @@ sealed class MarkdownLinkKeys {
                 e.Handled = true;
                 break;
             case Key.Enter or Key.Space when e.KeyModifiers == KeyModifiers.None:
-                var url = current.Link.NavigateUri?.ToString();
-                if (url is not null && _openLink() is { } open && open.CanExecute(url)) open.Execute(url);
+                if (_openLink() is { } open && open.CanExecute(current.Url)) open.Execute(current.Url);
                 e.Handled = true;
                 break;
         }
     }
 
-    void Select((TextBlock Block, MarkdownHyperlink Link) link) {
+    void Select(Stop stop) {
         Clear();
-        _current = link;
-        AdornerLayer.SetAdorner(link.Block, new LinkFocusRing(link.Block, () => LinkRects(link.Block, link.Link)));
-        if (LinkRects(link.Block, link.Link) is [var first, ..]) link.Block.BringIntoView(first.Inflate(4));
+        _current = stop;
+        AdornerLayer.SetAdorner(stop.Host, new LinkFocusRing(stop.Host, () => Rects(stop)));
+        if (Rects(stop) is [var first, ..]) stop.Host.BringIntoView(first.Inflate(4));
     }
 
-    /// A link with no text has nowhere to draw its mark, so the keyboard passes over it.
-    List<(TextBlock Block, MarkdownHyperlink Link)> Links() =>
-        [.. _viewer.GetVisualDescendants().OfType<TextBlock>()
-            .Where(b => b.Inlines is not null)
-            .SelectMany(b => Spans(b.Inlines!).Where(link => Length(link.Inlines) > 0).Select(link => (b, link)))];
+    static IReadOnlyList<Rect> Rects(Stop stop) =>
+        stop.Span is { } span && stop.Host is TextBlock block ? LinkRects(block, span) : [new Rect(stop.Host.Bounds.Size)];
+
+    /// In tree order: the hyperlinks of each text block, and each image that links somewhere. A link with
+    /// no text has nowhere to draw its mark, so the keyboard passes over it.
+    List<Stop> Links() =>
+        [.. _viewer.GetVisualDescendants().SelectMany(visual => visual switch {
+            TextBlock { Inlines: { } inlines } block => Spans(inlines)
+                .Where(link => link.NavigateUri is not null && Length(link.Inlines) > 0)
+                .Select(link => new Stop(block, link, link.NavigateUri!.ToString())),
+            MarkdownImage { Target: { } target } image => [new Stop(image, null, target)],
+            _ => [],
+        })];
 
     static IEnumerable<MarkdownHyperlink> Spans(InlineCollection inlines) {
         foreach (var inline in inlines) {
