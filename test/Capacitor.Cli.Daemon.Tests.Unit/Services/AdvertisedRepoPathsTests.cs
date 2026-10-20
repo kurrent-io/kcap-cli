@@ -46,6 +46,27 @@ public class AdvertisedRepoPathsTests {
         await Assert.That(string.Join("|", advertised)).IsEqualTo($"{a}|/persisted|/literal/worktree");
     }
 
+    /// The allowlist authorizes only what is under the prefix, so a worktree there whose main
+    /// repository lives elsewhere is advertised as itself, not as that main repository.
+    [Test]
+    public async Task A_worktree_whose_main_repository_is_outside_the_prefix_stays_itself() {
+        var main = Repo("elsewhere", "main");
+        var worktree = Tmp.CreateDir("repos", "wt").Path;
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {Path.Combine(main, ".git", "worktrees", "wt")}\n");
+        Directory.CreateDirectory(Path.Combine(main, ".git", "worktrees", "wt"));
+        File.WriteAllText(Path.Combine(main, ".git", "worktrees", "wt", "commondir"), "../..\n");
+
+        var advertised = AdvertisedRepoPaths.Merge([], [Tmp.GetResolvedPath("repos") + "/*"]);
+
+        await Assert.That(advertised).IsEquivalentTo(new[] { Tmp.GetResolvedPath("repos", "wt") });
+    }
+
+    [Test]
+    public async Task A_literal_root_keeps_its_separator() {
+        var root = Path.GetPathRoot(Tmp.Path)!;
+        await Assert.That(AdvertisedRepoPaths.Merge([], [root])).IsEquivalentTo(new[] { root });
+    }
+
     [Test]
     public async Task No_allowlist_advertises_the_persisted_paths_alone() =>
         await Assert.That(AdvertisedRepoPaths.Merge(["/a", "/b"], [])).IsEquivalentTo(new[] { "/a", "/b" });

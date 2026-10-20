@@ -16,6 +16,10 @@ static class AdvertisedRepoPaths {
     /// every registration.</summary>
     const int WildcardLimit = 500;
 
+    /// <summary>A bound on the directories one prefix's search reads, so a prefix over a large tree with
+    /// few repositories cannot hold up a registration either.</summary>
+    const int VisitLimit = 5000;
+
     /// <summary>Persisted paths first, in their own order, then the allowlist's: a literal entry as
     /// written, since it authorizes exactly that path, and a wildcard entry as the repositories under it,
     /// each collapsed to its main repository like a persisted one.</summary>
@@ -28,37 +32,50 @@ static class AdvertisedRepoPaths {
 
         foreach (var entry in allowed) {
             if (entry.Replace('\\', '/').EndsWith("/*", StringComparison.Ordinal))
-                merged.AddRange(RepositoriesUnder(entry[..^2]).Where(seen.Add));
-            else if (entry.TrimEnd('/', '\\') is { Length: > 0 } literal && seen.Add(literal))
+                merged.AddRange(RepositoriesUnder(entry[..^1]).Where(seen.Add));
+            else if (Path.TrimEndingDirectorySeparator(entry) is { Length: > 0 } literal && seen.Add(literal))
                 merged.Add(literal);
         }
 
         return [.. merged];
     }
 
-    /// <summary>The prefix itself when it is a repository, else the repositories below it, in name order.</summary>
+    /// <summary>The prefix itself when it is a repository, else the repositories below it, in name order.
+    /// A linked worktree whose main repository lies outside the prefix is advertised as itself: the
+    /// allowlist authorizes only what is under the prefix.</summary>
     internal static IEnumerable<string> RepositoriesUnder(string prefix) {
-        var root = prefix.TrimEnd('/', '\\');
+        // Trimmed but never past a filesystem root: "/" and "C:\" stay roots.
+        var root = Path.TrimEndingDirectorySeparator(prefix);
         if (root.Length == 0 || !Directory.Exists(root)) return [];
-        if (IsRepository(root)) return [GitRepository.ResolveMainRepoRoot(root)];
+        if (IsRepository(root)) return [Advertise(root, root)];
 
         var found = new List<string>();
+        var visits = 0;
         Walk(root, 1);
         return found.Distinct(StringComparer.Ordinal);
 
         void Walk(string directory, int depth) {
             foreach (var child in Children(directory)) {
-                if (found.Count >= WildcardLimit) return;
-                if (IsRepository(child)) found.Add(GitRepository.ResolveMainRepoRoot(child));
+                if (found.Count >= WildcardLimit || ++visits > VisitLimit) return;
+                if (IsRepository(child)) found.Add(Advertise(child, root));
                 else if (depth < WildcardDepth) Walk(child, depth + 1);
             }
         }
+    }
+
+    static string Advertise(string repository, string root) {
+        var main = GitRepository.ResolveMainRepoRoot(repository);
+        var under = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+        return main.StartsWith(under, RepoPathStore.PathComparison) || string.Equals(main, root, RepoPathStore.PathComparison)
+            ? main
+            : repository;
     }
 
     static IEnumerable<string> Children(string directory) {
         try {
             return Directory.EnumerateDirectories(directory)
                 .Where(d => !Path.GetFileName(d).StartsWith('.'))
+                .Take(VisitLimit)
                 .Order(StringComparer.Ordinal)
                 .ToList();
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
