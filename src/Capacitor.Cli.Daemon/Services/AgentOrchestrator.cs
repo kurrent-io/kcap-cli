@@ -281,9 +281,10 @@ internal record AgentInstance(
     /// </summary>
     public string PendingEndReason { get; set; } = "agent_exited";
 
-    /// <summary>Why this daemon stopped the agent on its own, where the stop otherwise reads as a person's
-    /// (<c>agent_stopped</c>). Reported to a flow driver only; the session's end reason is unchanged.</summary>
-    public string? AutoStopReason { get; set; }
+    /// <summary>Why this daemon stopped the agent, for a flow driver only: a person's stop
+    /// (<c>agent_stopped</c>) or one the daemon made itself. Kept apart from <see cref="PendingEndReason"/>,
+    /// which a park acknowledgement can reset; the session's end reason is unchanged.</summary>
+    public string? StopDetail { get; set; }
 
     /// <summary>True while a park ack is outstanding; a sweep skips an agent already parking; reset
     /// on ambiguous ack to allow retry.</summary>
@@ -2311,7 +2312,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // published: that instance only, never another the id has come to hold since.
                 if (launch.SettleAbandoned() && launch.Published is { } published
                     && ReferenceEquals(_agents.GetValueOrDefault(cmd.AgentId), published)) {
-                    published.AutoStopReason ??= "launch_abandoned";
+                    published.StopDetail ??= "launch_abandoned";
                     _ = StopAgentCoreAsync(published);
                 }
 
@@ -4275,7 +4276,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Phase B (D3): but PRESERVE a backstop reason the heartbeat already stamped
             // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
             // default, so server-side attribution can tell a TTL/idle reap from a user stop.
-            if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
+            if (agent.PendingEndReason == "agent_exited") {
+                agent.PendingEndReason = "agent_stopped";
+                agent.StopDetail ??= "agent_stopped";
+            }
 
             // Try a graceful shutdown first: send /exit so claude can fire its own
             // session-end hook (drains transcript, writes SessionEnded + summary,
@@ -5800,7 +5804,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (agent.Status                         == "Starting" &&
                     _time.GetUtcNow().UtcDateTime - agent.LastOutputAt > StartupTimeout) {
                     LogAgentStuck(agent.Id, (_time.GetUtcNow().UtcDateTime - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
-                    agent.AutoStopReason ??= "agent_startup_timeout";
+                    agent.StopDetail ??= "agent_startup_timeout";
                     _ = HandleStopAgent(agent.Id);
 
                     continue;
@@ -6025,7 +6029,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// stop or reap stamped, such as <c>agent_stopped</c>. Null for an agent that exited on its own.</summary>
     internal static string? StopReasonCode(AgentInstance agent) {
         if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict)
-            return agent.AutoStopReason ?? (agent.PendingEndReason is "agent_exited" or "" ? null : agent.PendingEndReason);
+            return agent.StopDetail ?? (agent.PendingEndReason is "agent_exited" or "" ? null : agent.PendingEndReason);
 
         var colon = verdict.Reason.IndexOf(':');
         var code  = (colon < 0 ? verdict.Reason : verdict.Reason[..colon]).Trim();
