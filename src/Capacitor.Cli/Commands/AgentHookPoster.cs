@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -261,7 +263,7 @@ internal sealed class AgentHookPoster(
         lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
         transcript.ReapOlderThan(TimeSpan.FromDays(30));
         SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
-        AgentSessions.OnThisMachine(config).Reap();
+        SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(), Url, lifecycle, time);
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,
         // and a test must be able to prove THIS one did.
@@ -290,6 +292,34 @@ internal sealed class AgentHookPoster(
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
         }
+    }
+
+    /// <summary>
+    /// Queues a SessionEnd for each session whose agent process is gone, so the app stops showing it as
+    /// live when nothing told the server (a private daemon agent, a daemon that cannot reach the server).
+    /// Only for a session recorded against the server this process posts to: one recorded elsewhere is
+    /// that server's to close, through its own sweep. The drain delivers the end like any spooled one,
+    /// and a server that already ended the session ignores it.
+    /// </summary>
+    internal static int SpoolEnds(IReadOnlyList<ExitedSession> exited, string? url, HookSpool spool, TimeProvider time) {
+        if (url is null) return 0;
+
+        var spooled = 0;
+        foreach (var session in exited) {
+            if (session is not { Vendor: { } vendor, Server: { } server } || !SameServer(server, url)) continue;
+
+            var body = new JsonObject {
+                ["session_id"] = session.Session.Value,
+                ["reason"]     = "parent_exited",
+                ["ended_at"]   = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
+            }.ToJsonString();
+            if (spool.Append(session.Session.Value, $"session-end/{vendor}", body)) spooled++;
+        }
+
+        return spooled;
+
+        static bool SameServer(string a, string b) =>
+            string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

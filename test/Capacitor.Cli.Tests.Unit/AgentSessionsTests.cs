@@ -90,6 +90,27 @@ public class AgentSessionsTests {
         await Assert.That(Sessions.Liveness(SessionId.Parse("reused")!)).IsEqualTo(SessionLiveness.Exited);
     }
 
+    /// <summary>The vendor and server a claim recorded come back with its session once the process is gone,
+    /// so its end can be sent where the session lives.</summary>
+    [Test]
+    public async Task A_reaped_claim_returns_where_its_session_was_recorded() {
+        Sessions.Claim(Agent, SessionId.Parse("traced")!, "claude", "https://kcap.example");
+        var live = ProcessStartToken.ForCurrent()!;
+        File.WriteAllText(Note(Agent), $"traced\n{live[..live.IndexOf(':')]}:another-boot:1");
+
+        var exited = Sessions.ReapExited();
+
+        await Assert.That(exited).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("traced")!, "claude", "https://kcap.example") });
+        await Assert.That(File.Exists(Note(Agent) + ".origin")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_dead_claim_without_an_origin_returns_its_session_alone() {
+        DeadNote(Shell, "bare");
+
+        await Assert.That(Sessions.ReapExited()).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("bare")!, null, null) });
+    }
+
     void UncomparableNote(string session) {
         Directory.CreateDirectory(Path.GetDirectoryName(Note(Agent))!);
         File.WriteAllText(Note(Agent), $"{session}\nlegacy-token-without-scheme");

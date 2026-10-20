@@ -26,8 +26,10 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     /// <summary>
     /// A hook firing for <paramref name="session"/> proves it is running, so any exit record for it goes.
+    /// <paramref name="vendor"/> and <paramref name="server"/> say where its end belongs once the process
+    /// is gone: <see cref="Reap"/> hands them back.
     /// </summary>
-    public void Claim(int agentPid, SessionId session) {
+    public void Claim(int agentPid, SessionId session, string? vendor = null, string? server = null) {
         try { File.Delete(ExitRecord(session)); } catch { }
 
         try {
@@ -35,7 +37,10 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
-            if (File.Exists(note) && File.ReadAllText(note) == text) return;
+            if (File.Exists(note) && File.ReadAllText(note) == text) {
+                WriteOrigin(agentPid, vendor, server);
+                return;
+            }
 
             Directory.CreateDirectory(Path.GetDirectoryName(note)!);
 
@@ -43,6 +48,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var temp = $"{note}.{Environment.ProcessId}";
             File.WriteAllText(temp, text);
             File.Move(temp, note, overwrite: true);
+            WriteOrigin(agentPid, vendor, server);
         } catch { }
     }
 
@@ -74,7 +80,11 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// daemon agent. A note whose holder cannot be compared stays, since an exit record lets another
     /// session take this one over.
     /// </summary>
-    public void Reap() {
+    public void Reap() => ReapExited();
+
+    /// <summary><see cref="Reap"/>, returning the sessions it found gone.</summary>
+    public IReadOnlyList<ExitedSession> ReapExited() {
+        var gone = new List<ExitedSession>();
         foreach (var pid in Claimants()) {
             if (Of(pid) is not null) continue;
 
@@ -82,14 +92,20 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                 if (File.ReadAllText(Note(pid)).Split('\n') is [var session, var token]) {
                     if (!HolderIsGone(pid, token)) continue;
 
-                    if (SessionId.Parse(session) is { } exited) RecordExit(exited);
+                    if (SessionId.Parse(session) is { } exited) {
+                        RecordExit(exited);
+                        var (vendor, server) = ReadOrigin(pid);
+                        gone.Add(new ExitedSession(exited, vendor, server));
+                    }
                 }
 
                 File.Delete(Note(pid));
+                if (File.Exists(Origin(pid))) File.Delete(Origin(pid));
             } catch { }
         }
 
         PruneExitRecords();
+        return gone;
     }
 
     /// <summary>
@@ -180,4 +196,31 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     string ExitRecord(SessionId session) => config.Path("agent-sessions", "exited", session.Value.ToLowerInvariant());
 
     string Note(int pid) => config.Path("agent-sessions", pid.ToString(CultureInfo.InvariantCulture));
+
+    // Beside the note rather than in it, so a reader of the two-line note is unchanged. Its name is not
+    // a pid, so Claimants passes over it.
+    string Origin(int pid) => config.Path("agent-sessions", $"{pid.ToString(CultureInfo.InvariantCulture)}.origin");
+
+    void WriteOrigin(int pid, string? vendor, string? server) {
+        var origin = Origin(pid);
+        if (vendor is null && server is null) {
+            if (File.Exists(origin)) File.Delete(origin);
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(origin)!);
+        var temp = $"{origin}.{Environment.ProcessId}";
+        File.WriteAllText(temp, $"{vendor}\n{server}");
+        File.Move(temp, origin, overwrite: true);
+    }
+
+    (string? Vendor, string? Server) ReadOrigin(int pid) {
+        try {
+            return File.ReadAllText(Origin(pid)).Split('\n') is [var vendor, var server]
+                ? (vendor.Length > 0 ? vendor : null, server.Length > 0 ? server : null)
+                : (null, null);
+        } catch {
+            return (null, null);
+        }
+    }
 }

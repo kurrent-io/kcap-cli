@@ -347,7 +347,7 @@ public sealed partial class WatcherManager(
     public void ClaimAgentProcess(string key, string vendor) {
         if (AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
          && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
-            AgentSessions.OnThisMachine(config).Claim(agentPid, session);
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session, vendor, Url);
     }
 
     public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude") {
