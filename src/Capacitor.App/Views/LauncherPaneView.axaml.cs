@@ -370,14 +370,14 @@ public partial class LauncherPaneView : UserControl {
 
     IBrush Brush(string key) => (IBrush)this.FindResource(key)!;
 
-    /// The vendor's mark at a given size: the brand path when VendorIcons carries one, the tinted
-    /// monogram otherwise (both from HostedHarnessCatalog.TileFor). UI-thread only (constructs
-    /// thread-affine Geometry/brushes).
     /// The daemon advertises only the vendors it can host, so an unavailable one is either not
     /// installed there or not hostable on its OS; it does not say which.
     internal static string? UnavailableHarnessTip(HarnessOption option) =>
         option.Available ? null : $"{option.Label} — not installed or not supported on this machine";
 
+    /// The vendor's mark at a given size: the brand path when VendorIcons carries one, the tinted
+    /// monogram otherwise (both from HostedHarnessCatalog.TileFor). UI-thread only (constructs
+    /// thread-affine Geometry/brushes).
     internal static Control BuildGlyph(string vendor, double size) {
         var (glyph, color) = HostedHarnessCatalog.TileFor(vendor);
         if (VendorIcons.For(vendor) is { } geometry)
