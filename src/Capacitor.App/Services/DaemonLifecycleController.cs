@@ -101,6 +101,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
     bool _mismatchWaitsForIdle; // under _lock: the last report was held back by running agents
     int  _latestActiveAgents;
+    // Running or starting, admitted launches included; an older daemon that sends no Busy falls back to the lists.
+    volatile bool _latestBusy;
     bool _latestResumes;
     int  _reloadClaim;   // 0 free, 1 claimed; Interlocked only
     long _sequence;      // under _lock: both outcome records and read starts
@@ -174,9 +176,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _subscription = _client.Status.Subscribe(OnAttachStatus);
         _snapshots    = _client.Snapshots.Subscribe(snap => {
             _latestActiveAgents = snap.Daemon.ActiveAgents;
+            var busy = snap.Busy ?? (snap.Daemon.ActiveAgents > 0 || snap.Pending is { Count: > 0 });
+            _latestBusy = busy;
             Volatile.Write(ref _latestDaemon, snap.Daemon);
             bool idleNow;
-            lock (_lock) idleNow = _mismatchWaitsForIdle && snap.Daemon.ActiveAgents == 0;
+            lock (_lock) idleNow = _mismatchWaitsForIdle && !busy;
             if (idleNow) _ = CheckAttachedIdentityAsync();
         });
         _ = CacheVersionAsync(); // never faults
@@ -592,11 +596,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             return;
         }
 
-        if (requireIdle && _latestActiveAgents > 0) {
+        if (requireIdle && _latestBusy) {
             _surface.Status("Agents started on the daemon while the prompt was open — canceled, nothing changed.");
             // Offered again once they finish; the flag goes first so an idle snapshot landing now still finds it.
             lock (_lock) _mismatchWaitsForIdle = true;
-            if (_latestActiveAgents == 0) _ = CheckAttachedIdentityAsync();
+            if (!_latestBusy) _ = CheckAttachedIdentityAsync();
             return;
         }
 
@@ -837,7 +841,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
             var mismatch = AttachedIdentity.Mismatch(daemon, _client.DaemonName, _canonicalServer, expectedProfile);
-            var busy     = daemon.ActiveAgents > 0;
+            var busy     = _latestBusy;
             bool reported;
             lock (_lock) {
                 reported = mismatch == _reportedMismatch;
@@ -856,13 +860,18 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             if (busy) {
                 lock (_lock) _mismatchWaitsForIdle = true;
                 // An idle snapshot landing while this read the profile found the flag unset; look again now.
-                if (_latestActiveAgents == 0) _ = CheckAttachedIdentityAsync();
-                var agents = daemon.ActiveAgents == 1 ? "its running agent finishes" : $"its {daemon.ActiveAgents} running agents finish";
+                if (!_latestBusy) _ = CheckAttachedIdentityAsync();
+                var agents = daemon.ActiveAgents switch {
+                    0 => "the agent it is starting is running and has finished",
+                    1 => "its running agent finishes",
+                    var n => $"its {n} running agents finish"
+                };
                 if (announce) _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
                 return;
             }
 
-            if (announce) _surface.Attention(mismatch);
+            // The command rides along, so a declined or failed replace still leaves the user a fix.
+            if (announce) _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
             // Under the gate like every other repair, so it neither races the reconciliation's own offers
             // nor escapes the shutdown barrier.
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;

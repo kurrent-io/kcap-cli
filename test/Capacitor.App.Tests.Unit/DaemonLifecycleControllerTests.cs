@@ -1521,7 +1521,8 @@ public class DaemonLifecycleControllerTests {
         h.PushConnected();
 
         await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace");
-        await Assert.That(h.Surface.AttentionMessages).Contains(message);
+        // The report carries the command too, so a declined or failed replace still leaves a fix.
+        await Assert.That(h.Surface.AttentionMessages.Any(m => m.StartsWith(message, StringComparison.Ordinal) && m.Contains("kcap daemon service", StringComparison.Ordinal))).IsTrue();
         await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
         await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
         await Assert.That(h.Lane.Requests.Single().Profile).IsEqualTo("default");
@@ -1595,6 +1596,24 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace once idle");
         await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+    }
+
+    /// A launch the daemon has admitted but not yet listed is work in progress: no replace is offered over it.
+    [Test]
+    public async Task A_daemon_still_starting_a_launch_is_not_offered_a_replace() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 0) with { Busy = true });
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Task.Delay(50);
+        await Assert.That(h.Surface.AttentionMessages.Any(m => m.Contains("The app offers to replace it once", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
     }
 
     /// Agents that start while the prompt is open cancel the replace it was answered for.
