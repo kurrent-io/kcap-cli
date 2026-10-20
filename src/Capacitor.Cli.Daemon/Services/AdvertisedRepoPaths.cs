@@ -16,9 +16,9 @@ static class AdvertisedRepoPaths {
     /// every registration.</summary>
     const int WildcardLimit = 500;
 
-    /// <summary>A bound on the directories one prefix's search reads, so a prefix over a large tree with
-    /// few repositories cannot hold up a registration either.</summary>
-    const int VisitLimit = 5000;
+    /// <summary>A bound on the directory entries one prefix's search reads, skipped ones included, so a
+    /// prefix over a large tree with few repositories cannot hold up a registration either.</summary>
+    const int EntryLimit = 20_000;
 
     /// <summary>Persisted paths first, in their own order, then the allowlist's: a literal entry as
     /// written, since it authorizes exactly that path, and a wildcard entry as the repositories under it,
@@ -50,13 +50,13 @@ static class AdvertisedRepoPaths {
         if (IsRepository(root)) return [Advertise(root, root)];
 
         var found = new List<string>();
-        var visits = 0;
+        var budget = EntryLimit;
         Walk(root, 1);
         return found.Distinct(StringComparer.Ordinal);
 
         void Walk(string directory, int depth) {
-            foreach (var child in Children(directory)) {
-                if (found.Count >= WildcardLimit || ++visits > VisitLimit) return;
+            foreach (var child in Children(directory, ref budget)) {
+                if (found.Count >= WildcardLimit) return;
                 if (IsRepository(child)) found.Add(Advertise(child, root));
                 else if (depth < WildcardDepth) Walk(child, depth + 1);
             }
@@ -71,16 +71,21 @@ static class AdvertisedRepoPaths {
             : repository;
     }
 
-    static IEnumerable<string> Children(string directory) {
+    /// <summary>A directory's visible children in name order, each entry read charged to the budget. One
+    /// with more entries than the budget has left contributes none, so what is advertised never depends
+    /// on the order the filesystem lists entries in.</summary>
+    static List<string> Children(string directory, ref int budget) {
+        var children = new List<string>();
         try {
-            return Directory.EnumerateDirectories(directory)
-                .Where(d => !Path.GetFileName(d).StartsWith('.'))
-                .Take(VisitLimit)
-                .Order(StringComparer.Ordinal)
-                .ToList();
+            foreach (var entry in Directory.EnumerateDirectories(directory)) {
+                if (--budget < 0) return [];
+                if (!Path.GetFileName(entry).StartsWith('.')) children.Add(entry);
+            }
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             return [];
         }
+        children.Sort(StringComparer.Ordinal);
+        return children;
     }
 
     static bool IsRepository(string directory) {
