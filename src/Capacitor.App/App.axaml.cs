@@ -83,11 +83,14 @@ public partial class App : Application {
     // two read-modify-write cycles interleave and drop an update.
     readonly AppStateStore _appState;
 
+    readonly UiScaleSetting _uiScale;
+
     public App() {
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
         _appState = new AppStateStore(_config.Path("app-state.json"));
 #pragma warning restore RS0030
+        _uiScale = UiScaleSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
@@ -751,7 +754,7 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer)),
+                localServer: localServer, uiScale: _uiScale)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -876,7 +879,7 @@ public partial class App : Application {
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
-                profiles: profilesVm);
+                profiles: profilesVm) { Appearance = new AppearanceSettingsViewModel(_uiScale) };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -1095,7 +1098,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
-        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested);
+        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested, _uiScale);
         _wizardWindow = window;
 
         // The SAME consumer function, over the wizard's own surface: outcome presentation stays
@@ -1169,8 +1172,8 @@ public partial class App : Application {
     // exits the app.
     internal static MainWindow ShowWizardWindow(
             IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null,
-            LocalInstallController? install = null, Func<bool>? shuttingDown = null) {
-        var window = new MainWindow { Onboarding = wizard };
+            LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
+        var window = new MainWindow { Onboarding = wizard, ContentScale = uiScale };
         if (appState is not null) {
             WindowSizeMemory.Restore(window, appState);
             WindowSizeMemory.Attach(window, appState);
@@ -1390,7 +1393,7 @@ public partial class App : Application {
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
-            LocalServerRecoveryViewModel? localServer = null) {
+            LocalServerRecoveryViewModel? localServer = null, UiScaleSetting? uiScale = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1445,6 +1448,7 @@ public partial class App : Application {
         var window = adopt ?? new MainWindow();
         window.DataContext = vm;
         window.Notifier = notifier;
+        window.ContentScale = uiScale;
         window.Onboarding = null;
         if (adopt is null) {
             WindowSizeMemory.Restore(window, appState);
