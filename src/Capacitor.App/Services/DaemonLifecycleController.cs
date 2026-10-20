@@ -837,6 +837,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// <param name="reoffer">An offer superseded by a reconnect: the same mismatch is offered again, not reported again.</param>
     async Task CheckAttachedIdentityAsync(bool reoffer = false) {
         try {
+            // Past the Connected fan-out, whose banner reset would otherwise wipe the report this raises.
+            await Task.Yield();
             var generation = CurrentGeneration();
             if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
@@ -899,7 +901,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         } catch (OperationCanceledException) {
             // shutdown
         } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: daemon identity check failed unexpectedly: {ex.Message}");
+            Console.Error.WriteLine($"kcap: daemon identity check failed unexpectedly: {ex}");
         }
     }
 
