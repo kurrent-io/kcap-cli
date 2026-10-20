@@ -81,6 +81,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     }
     public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab || ShowsArtefactsTab;
 
+    void PrefillComposer(string prompt) {
+        Chat.ComposerText = prompt;
+        ActiveTab = RemoteTab.Chat;
+    }
+
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
 
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
@@ -229,7 +234,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
             requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged);
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer);
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
                 .Subscribe(state => {

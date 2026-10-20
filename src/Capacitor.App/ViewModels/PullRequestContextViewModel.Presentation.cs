@@ -95,6 +95,31 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
+    /// Null until the server reports a count, which one that predates it never does.
+    public PullRequestStatus ThreadsStatus =>
+        CanDisplay && _overview?.Threads is { Availability.Status: "ready", Unresolved: { Value: { } count } unresolved }
+            ? count == 0
+                ? new("No unresolved threads", "success", "Every review thread is resolved.")
+                : new($"{count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}",
+                      "warning", "Review threads are still waiting on a reply or a fix.")
+            : new("");
+    public bool HasThreadsStatus => ThreadsStatus.Text.Length > 0;
+
+    /// What the agent is asked to do about everything that keeps an open pull request from merging, or
+    /// null when nothing does.
+    internal string? FixPrompt {
+        get {
+            if (!CanDisplay || _overview is not { Lifecycle: "open" or "draft" } overview) return null;
+            var asks = new List<string>();
+            if (overview.Mergeable == false) asks.Add("resolve the merge conflicts with the base branch");
+            if (overview.Threads is { Availability.Status: "ready", Unresolved: { Value: > 0 and var count } unresolved })
+                asks.Add($"address the {count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved review thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}");
+            if (ChecksStatus.Kind == "failure") asks.Add("fix the failing checks");
+            return asks.Count == 0 ? null : $"Get pull request {NumberLabel} ready to merge: {string.Join("; ", asks)}.";
+        }
+    }
+    public bool ShowsFix => FixPrompt is not null;
+
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);
         NotifyValue(SectionEyebrow);
@@ -118,6 +143,9 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(LifecycleStatus);
         NotifyValue(ReviewStatus);
         NotifyValue(ChecksStatus);
+        NotifyValue(ThreadsStatus);
+        NotifyValue(HasThreadsStatus);
+        NotifyValue(ShowsFix);
         NotifyValue(!ReferenceEquals(ReviewerRows, _reviewerRows), nameof(ReviewerRows));
         NotifyValue(!ReferenceEquals(CheckRows, _checkRows), nameof(CheckRows));
         NotifyValue(!ReferenceEquals(DiscussionRows, _discussionRows), nameof(DiscussionRows));

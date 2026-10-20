@@ -811,6 +811,54 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    static Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>> Outstanding(
+            Harness h, bool? mergeable, int? unresolved, string kind = "exact", string rollup = "success", string lifecycle = "open") =>
+        (subject, _) => {
+            var ready = h.Source.Overview(subject);
+            return Task.FromResult(ready with { Data = ready.Data! with {
+                Lifecycle = lifecycle, Mergeable = mergeable,
+                Checks = ready.Data.Checks! with { Rollup = rollup },
+                Threads = unresolved is null ? null : new() {
+                    Availability = new() { Status = "ready", FetchedAt = h.Time.GetUtcNow().UtcDateTime },
+                    Unresolved = new() { Value = unresolved, Kind = kind },
+                },
+            } });
+        };
+
+    /// The card counts the threads still unresolved, and offers Fix only while something keeps an open pull
+    /// request from merging; Fix hands the composer a prompt naming each of those things.
+    [Test]
+    public Task Outstanding_work_is_counted_and_fix_prompts_for_each_part() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 2, rollup: "failure"));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ThreadsStatus.Text).IsEqualTo("2 unresolved threads");
+            await Assert.That(h.Vm.ShowsFix).IsTrue();
+            await h.Vm.FixCommand.Execute();
+            await Assert.That(h.Fixes.Single()).IsEqualTo(
+                "Get pull request #2 ready to merge: resolve the merge conflicts with the base branch; address the 2 unresolved review threads; fix the failing checks.");
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
+    [Arguments(true, 0, "exact", "success", "open", "No unresolved threads", false)]
+    [Arguments(null, null, "exact", "success", "open", "", false)]
+    [Arguments(true, 100, "lower_bound", "success", "open", "100+ unresolved threads", true)]
+    [Arguments(null, 1, "exact", "success", "draft", "1 unresolved thread", true)]
+    public Task Fix_shows_only_for_an_open_pull_request_with_outstanding_work(
+            bool? mergeable, int? unresolved, string kind, string rollup, string lifecycle, string threads, bool fix) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable, unresolved, kind, rollup, lifecycle));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ThreadsStatus.Text).IsEqualTo(threads);
+            await Assert.That(h.Vm.ShowsFix).IsEqualTo(fix);
+        } finally { await h.Dispose(); }
+    });
+
     [Test]
     public Task The_title_opens_the_overview_tab_even_after_another_section() => RunOnUiAsync(async () => {
         var opened = 0;
@@ -1083,11 +1131,12 @@ public class PullRequestContextViewModelTests {
         internal PullRequestContextViewModel Vm { get; }
         internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
+        internal readonly List<string> Fixes = [];
         internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null, Action<string>? linksChanged = null) {
             Source = new(Time);
             Clock = new(Time);
             Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch,
-                linksChanged: linksChanged);
+                linksChanged: linksChanged, requestFix: Fixes.Add);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         /// Returns once the initial reads have settled, not just once the overview is admitted: a read's settle

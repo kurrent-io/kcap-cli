@@ -127,6 +127,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = WorkspaceTab.Artefacts; }
 
+    void PrefillComposer(string prompt) {
+        if (Chat is not { } chat) return;
+        chat.ComposerText = prompt;
+        ActiveTab = WorkspaceTab.Chat;
+    }
+
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
     internal void OpenCard(ToolCard card) {
         if (card.DocumentPath is { } path) {
@@ -187,7 +193,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged);
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer);
         WorkContext.PullRequests = PullRequests;
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
