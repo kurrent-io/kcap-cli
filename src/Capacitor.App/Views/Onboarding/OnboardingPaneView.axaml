@@ -129,7 +129,7 @@
                         <TextBlock Classes="frNote" TextWrapping="Wrap" VerticalAlignment="Center"
                                    Text="{Binding UsageNotice.Message, FallbackValue={x:Null}}" />
                         <Button Grid.Column="1" x:Name="UsageNoticeTurnOffButton" Classes="frSecondary" Content="Turn off"
-                                Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" VerticalAlignment="Center" />
+                                Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}" VerticalAlignment="Center" />
                         <Button Grid.Column="2" x:Name="UsageNoticeOkButton" Classes="frSecondary" Content="OK"
                                 Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}" VerticalAlignment="Center" />
                     </Grid>

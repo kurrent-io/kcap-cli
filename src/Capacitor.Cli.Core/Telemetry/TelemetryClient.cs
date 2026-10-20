@@ -30,16 +30,15 @@ public sealed class TelemetryClient(
     /// but if it fails its events are dropped rather than parked for a later run to send.
     /// </summary>
     public void Discard() {
-        CancellationTokenSource? sending;
         lock (_discardLock) {
             _discarded = true;
-            sending    = _sending;
+            // First, and inside the lock: a send registered but not yet begun then fails its token check
+            // instead of going out. The flush unregisters under this lock before disposing, so the
+            // source is live here; its callbacks never take this lock.
+            try { _sending?.Cancel(); } catch (ObjectDisposedException) { }
             lock (_queue) _queue.Clear();
             try { spool.Clear(); } catch { }
         }
-        // Outside the lock: cancelling runs the request's callbacks, which must not wait on it. The
-        // flush may have disposed it in between, which leaves nothing to cancel.
-        try { sending?.Cancel(); } catch (ObjectDisposedException) { }
     }
 
     // Under the lock, so a spill can never land after the discard cleared the spool.

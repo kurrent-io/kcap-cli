@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Linq;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Telemetry;
 using ReactiveUI.Reactive;
@@ -15,12 +16,14 @@ public sealed class UsageDataNotice : ReactiveObject {
     bool _visible;
 
     public UsageDataNotice(CliTelemetry telemetry, ConfigRoot config) {
-        _visible = telemetry.NoticeDue(config);
+        _visible   = telemetry.NoticeDue(config);
+        // An environment variable outranks the saved choice, so a Turn off here would not last.
+        CanTurnOff = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Reason is not ("KCAP_TELEMETRY" or "DO_NOT_TRACK");
         AcknowledgeCommand = ReactiveCommand.Create(() => {
             telemetry.AcknowledgeNotice(config);
             Hide();
         });
-        TurnOffCommand = ReactiveCommand.Create(() => TurnOff(telemetry, config, this));
+        TurnOffCommand = ReactiveCommand.Create(() => TurnOff(telemetry, config, this), Observable.Return(CanTurnOff));
     }
 
     public bool Visible {
@@ -29,6 +32,8 @@ public sealed class UsageDataNotice : ReactiveObject {
     }
 
     public string Message => Text;
+
+    public bool CanTurnOff { get; }
 
     public ReactiveCommand<Unit, Unit> AcknowledgeCommand { get; }
     public ReactiveCommand<Unit, Unit> TurnOffCommand { get; }

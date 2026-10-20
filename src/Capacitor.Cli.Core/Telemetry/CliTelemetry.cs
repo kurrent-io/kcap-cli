@@ -135,7 +135,9 @@ public sealed class CliTelemetry {
             // a later run. Gated to the two interactive auth commands so it never attaches to a
             // recap or an import, which have no auth run to correlate, and minted ahead of any lane
             // the command later chooses so every setup/login lane carries it.
-            if (startup.Command is "setup" or "login" || telemetry._desktop)
+            // Not for the desktop app: one key per process would be reused by every sign-in it runs,
+            // and the join's loopback hop serves one return only.
+            if (startup.Command is "setup" or "login")
                 telemetry.Join.Mint();
 
             return telemetry;
@@ -310,7 +312,9 @@ public sealed class CliTelemetry {
             if (!NoticeDue(config)) return;
 
             TelemetryState.MarkNoticeShown(config);
-            Capture("cli_first_run", new JsonObject());
+            // Sent now: the marker is already saved, so an app killed before its next flush would
+            // otherwise lose the once-per-device event for good.
+            CaptureNow("cli_first_run", new JsonObject());
         } catch { }
     }
 

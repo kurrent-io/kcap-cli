@@ -66,8 +66,10 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
     /// as the last page shown.</summary>
     public void StepShown(string step) => Emit("cli_setup_step_shown", new JsonObject { ["step"] = step });
 
-    /// <summary>The desktop wizard's daemon came up enabled, the first time it did in that run.</summary>
-    public void DaemonEnabled() => Emit("cli_setup_daemon_enabled", new JsonObject());
+    /// <summary>The desktop wizard's daemon came up enabled, the first time it did in that run;
+    /// <paramref name="alreadyRunning"/> when it was enabled before the run and setup changed nothing.</summary>
+    public void DaemonEnabled(bool alreadyRunning) =>
+        Emit("cli_setup_daemon_enabled", new JsonObject { ["already_running"] = alreadyRunning });
 
     /// <summary>The desktop wizard closed, on <paramref name="step"/>; <paramref name="finished"/> when it
     /// closed from its last page.</summary>

@@ -48,6 +48,30 @@ public class DesktopTelemetryTests {
         await Assert.That(sink.Names.Count(n => n == "cli_first_run")).IsEqualTo(1);
     }
 
+    /// <summary>The app can run several sign-ins in one process, and the join's loopback hop serves one
+    /// return only, so the app mints no join key.</summary>
+    [Test]
+    public async Task The_desktop_facade_mints_no_join_key() {
+        var (telemetry, _) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+
+        await Assert.That(telemetry.Join.Current).IsNull();
+    }
+
+    /// <summary>The marker is saved before the event is queued, so the event ships straight away rather
+    /// than waiting for a flush a killed app would never reach.</summary>
+    [Test]
+    public async Task Acknowledging_the_notice_ships_the_first_run_event_at_once() {
+        var (telemetry, sink) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+
+        telemetry.AcknowledgeNotice(Config.Root);
+
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (sink.Flushes == 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        await Assert.That(sink.Flushes).IsGreaterThan(0);
+    }
+
     [Test]
     public async Task The_console_announcement_never_runs_for_the_desktop_app() {
         var (telemetry, sink) = Start(new RecordingTelemetrySink());

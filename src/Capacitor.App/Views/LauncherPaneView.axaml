@@ -307,7 +307,7 @@
                             Foreground="{StaticResource KcapTextBrush}"
                             CornerRadius="7" Padding="14,6" />
                     <Button x:Name="UsageNoticeTurnOffButton" Classes="kcapGhost" Content="Turn off"
-                            Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}"
+                            Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}"
                             Padding="10,6" FontSize="12.5" />
                 </StackPanel>
             </StackPanel>
