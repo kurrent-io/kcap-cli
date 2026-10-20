@@ -63,6 +63,9 @@ public class AppStartupTests {
     public async Task BuildAndShowMainWindow_takes_over_the_onboarding_window() {
         var appState = AppState();
         await appState.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888 });
+        var savedState = await appState.LoadAsync();
+        // The handover uses its prepared snapshot, even if the store changes before it is applied.
+        await appState.UpdateAsync(s => s with { WindowWidth = 1600, WindowHeight = 900 });
         var (same, paneVisible, surfaceVisible, handedVm, width, height) = await AvaloniaSession.DispatchAsync(async () => {
             var (desktop, _) = FakeClassicDesktopLifetime.Create();
             var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)]);
@@ -76,7 +79,7 @@ public class AppStartupTests {
             var (actions, notifier) = NewActions(service);
             var window = AppUnderTest.BuildAndShowMainWindow(
                 service, Config.Root, appState, actions, notifier, new FakeTicker(), CancellationToken.None,
-                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: onboarding);
+                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: (onboarding, savedState));
             Dispatcher.UIThread.RunJobs();
 
             var result = (ReferenceEquals(window, onboarding), window.OnboardingPane.IsVisible,
