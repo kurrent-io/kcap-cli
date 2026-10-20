@@ -27,8 +27,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     /// <summary>
     /// A hook firing for <paramref name="session"/> proves it is running, so any exit record for it goes.
-    /// <paramref name="origin"/> says where its end belongs once the process is gone; the first claim that
-    /// names a server stands, since the session lives on the server it started on.
+    /// <paramref name="origin"/> says where its end belongs once the process is gone. What an earlier claim
+    /// recorded stands, the server above all since the session lives where it started; a later claim only
+    /// fills what is still missing.
     /// </summary>
     public void Claim(int agentPid, SessionId session, ClaimOrigin? origin = null) {
         try { File.Delete(ExitRecord(session)); } catch { }
@@ -39,9 +40,13 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
             if (File.Exists(note) && File.ReadAllText(note) == text) {
-                if (origin is not null && ReadOrigin(agentPid, token) is var known and not { Server: not null })
-                    WriteOrigin(agentPid, token, known is null ? origin : new ClaimOrigin(
-                        origin.Vendor ?? known.Vendor, origin.Server, origin.TranscriptPath ?? known.TranscriptPath, origin.Cwd ?? known.Cwd));
+                if (origin is not null) {
+                    var known  = ReadOrigin(agentPid, token);
+                    var merged = known is null ? origin : new ClaimOrigin(
+                        known.Vendor ?? origin.Vendor, known.Server ?? origin.Server,
+                        known.TranscriptPath ?? origin.TranscriptPath, known.Cwd ?? origin.Cwd);
+                    if (merged != known) WriteOrigin(agentPid, token, merged);
+                }
                 return;
             }
 

@@ -160,6 +160,16 @@ public class AgentSessionsTests {
         await Assert.That(AgentOrigin()).IsEqualTo(Here);
     }
 
+    /// <summary>A claim that knows the server but not yet the transcript or folder leaves those for a later
+    /// claim to fill, as a watcher armed after the first hook does.</summary>
+    [Test]
+    public async Task A_repeat_claim_fills_in_a_path_the_first_lacked() {
+        Sessions.Claim(Agent, Session, Here with { TranscriptPath = null, Cwd = null });
+        Sessions.Claim(Agent, Session, Here with { Server = "https://later.example" });
+
+        await Assert.That(AgentOrigin()).IsEqualTo(Here);
+    }
+
     /// <summary>A path may hold a newline on Unix; the origin still reads back whole.</summary>
     [Test]
     public async Task An_origin_with_a_newline_in_a_path_reads_back_whole() {
