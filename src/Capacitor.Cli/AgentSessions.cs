@@ -1,5 +1,6 @@
 using System.Globalization;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Continuation;
 
 namespace Capacitor.Cli;
@@ -26,8 +27,11 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     /// <summary>
     /// A hook firing for <paramref name="session"/> proves it is running, so any exit record for it goes.
+    /// <paramref name="origin"/> says where its end belongs once the process is gone. What an earlier claim
+    /// recorded stands, the server above all since the session lives where it started; a later claim only
+    /// fills what is still missing.
     /// </summary>
-    public void Claim(int agentPid, SessionId session) {
+    public void Claim(int agentPid, SessionId session, ClaimOrigin? origin = null) {
         try { File.Delete(ExitRecord(session)); } catch { }
 
         try {
@@ -35,7 +39,16 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
-            if (File.Exists(note) && File.ReadAllText(note) == text) return;
+            if (File.Exists(note) && File.ReadAllText(note) == text) {
+                if (origin is not null) {
+                    var known  = ReadOrigin(agentPid, token);
+                    var merged = known is null ? origin : new ClaimOrigin(
+                        known.Vendor ?? origin.Vendor, known.Server ?? origin.Server,
+                        known.TranscriptPath ?? origin.TranscriptPath, known.Cwd ?? origin.Cwd);
+                    if (merged != known) WriteOrigin(agentPid, token, merged);
+                }
+                return;
+            }
 
             Directory.CreateDirectory(Path.GetDirectoryName(note)!);
 
@@ -43,6 +56,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var temp = $"{note}.{Environment.ProcessId}";
             File.WriteAllText(temp, text);
             File.Move(temp, note, overwrite: true);
+            WriteOrigin(agentPid, token, origin);
         } catch { }
     }
 
@@ -74,7 +88,14 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// daemon agent. A note whose holder cannot be compared stays, since an exit record lets another
     /// session take this one over.
     /// </summary>
-    public void Reap() {
+    public void Reap() => ReapExited(currentServer: null);
+
+    /// <summary><see cref="Reap"/>, returning the sessions it found gone. An end for a session recorded
+    /// against a server other than <paramref name="currentServer"/> is set aside per session, away from
+    /// the pid a later process can reuse, and returned by a later pass on that server within the exit
+    /// retention.</summary>
+    public IReadOnlyList<ExitedSession> ReapExited(string? currentServer) {
+        var gone = new List<ExitedSession>();
         foreach (var pid in Claimants()) {
             if (Of(pid) is not null) continue;
 
@@ -82,15 +103,73 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                 if (File.ReadAllText(Note(pid)).Split('\n') is [var session, var token]) {
                     if (!HolderIsGone(pid, token)) continue;
 
-                    if (SessionId.Parse(session) is { } exited) RecordExit(exited);
+                    var origin = ReadOrigin(pid, token);
+                    if (SessionId.Parse(session) is { } exited) {
+                        RecordExit(exited);
+                        if (origin is { Server: { } server } && !SameServer(server, currentServer)) DeferEnd(exited, origin);
+                        // A session resumed under another process is running again: no end for it.
+                        else if (LiveClaimant(exited) is null) gone.Add(new ExitedSession(exited, origin));
+                    }
+
+                    DeleteOrigin(pid, token);
                 }
 
                 File.Delete(Note(pid));
             } catch { }
         }
 
+        // A session resumed and gone again since its end was deferred is already here: one end is enough.
+        foreach (var deferred in TakeDeferredEnds(currentServer))
+            if (!gone.Any(g => string.Equals(g.Session.Value, deferred.Session.Value, StringComparison.OrdinalIgnoreCase)))
+                gone.Add(deferred);
         PruneExitRecords();
+        return gone;
     }
+
+    void DeferEnd(SessionId session, ClaimOrigin origin) {
+        var path = DeferredEnd(session);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // Staged outside the folder TakeDeferredEnds lists, since a session id may itself hold a dot.
+        var staging = config.Path("agent-sessions", "deferred-ends-staging");
+        Directory.CreateDirectory(staging);
+        var temp = Path.Combine(staging, $"{Path.GetFileName(path)}.{Environment.ProcessId}");
+        File.WriteAllText(temp, Fields(session.Value, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.Move(temp, path, overwrite: true);
+    }
+
+    /// <summary>The ends set aside for <paramref name="currentServer"/>, removed as they are returned; one
+    /// older than the exit retention is dropped, and one whose session is running again is dropped too.</summary>
+    IEnumerable<ExitedSession> TakeDeferredEnds(string? currentServer) {
+        var taken = new List<ExitedSession>();
+        try {
+            foreach (var path in Directory.EnumerateFiles(config.Path("agent-sessions", "deferred-ends"))) {
+                try {
+                    var stale = _time.GetUtcNow() - File.GetLastWriteTimeUtc(path) >= ExitRetention;
+                    // Named case-folded so one session is set aside once; the id as claimed is inside.
+                    if (ReadFields(path) is not [var id, var vendor, var server, var transcript, var cwd]
+                     || SessionId.Parse(id) is not { } session) {
+                        File.Delete(path);
+                        continue;
+                    }
+                    if (!stale && !SameServer(server, currentServer)) continue;
+
+                    File.Delete(path);
+                    if (!stale && LiveClaimant(session) is null)
+                        taken.Add(new ExitedSession(session, new ClaimOrigin(NullIfEmpty(vendor), server, NullIfEmpty(transcript), NullIfEmpty(cwd))));
+                } catch { }
+            }
+        } catch { }
+        return taken;
+    }
+
+    static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
+
+    // One field per line, each escaped: a path may hold a newline, and a missing field is empty.
+    static string Fields(params string?[] fields) => string.Join('\n', fields.Select(f => Uri.EscapeDataString(f ?? "")));
+
+    static string[] ReadFields(string path) => [.. File.ReadAllText(path).Split('\n').Select(Uri.UnescapeDataString)];
+
+    internal static bool SameServer(string a, string? b) => ServerIdentity.SameServer(a, b);
 
     /// <summary>
     /// Gone when no process has the pid, or one does under a different start token (the pid was
@@ -180,4 +259,41 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     string ExitRecord(SessionId session) => config.Path("agent-sessions", "exited", session.Value.ToLowerInvariant());
 
     string Note(int pid) => config.Path("agent-sessions", pid.ToString(CultureInfo.InvariantCulture));
+
+    string DeferredEnd(SessionId session) => config.Path("agent-sessions", "deferred-ends", session.Value.ToLowerInvariant());
+
+    // Beside the note rather than in it, so a reader of the two-line note is unchanged. Its name is not
+    // a pid, so Claimants passes over it.
+    string Origin(int pid) => config.Path("agent-sessions", $"{pid.ToString(CultureInfo.InvariantCulture)}.origin");
+
+    // Carries the claim's start token, so an origin written by a later holder of a reused pid is never
+    // read as, or deleted for, the claim that was reaped.
+    void WriteOrigin(int pid, string token, ClaimOrigin? origin) {
+        var path = Origin(pid);
+        if (origin is null) {
+            if (File.Exists(path)) File.Delete(path);
+            return;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = $"{path}.{Environment.ProcessId}";
+        File.WriteAllText(temp, Fields(token, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.Move(temp, path, overwrite: true);
+    }
+
+    void DeleteOrigin(int pid, string token) {
+        try {
+            if (ReadFields(Origin(pid)) is [var owner, ..] && owner == token) File.Delete(Origin(pid));
+        } catch { }
+    }
+
+    internal ClaimOrigin? ReadOrigin(int pid, string token) {
+        try {
+            return ReadFields(Origin(pid)) is [var owner, var vendor, var server, var transcript, var cwd] && owner == token
+                ? new ClaimOrigin(NullIfEmpty(vendor), NullIfEmpty(server), NullIfEmpty(transcript), NullIfEmpty(cwd))
+                : null;
+        } catch {
+            return null;
+        }
+    }
 }
