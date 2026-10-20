@@ -4,6 +4,7 @@ namespace Capacitor.Cli.Tests.Unit.PrDetection;
 
 /// <summary>Real git answers the history probe; only gh is faked, listing one open PR whose head is
 /// the <c>feature</c> tip.</summary>
+[ParallelLimiter<SubprocessLimit>]
 public class HistoryPrDetectionTests {
     static GitRepo FeatureWithOpenPr(out string prHead) {
         var repo = GitRepo.CreateWithCommit();
