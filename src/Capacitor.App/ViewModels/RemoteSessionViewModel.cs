@@ -248,6 +248,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             artefacts: Artefacts, isRemote: true);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
+        // An open subagent belongs to the session it was opened from.
+        _sessionIds.DistinctUntilChanged().Skip(1)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => CloseSubagent()).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,

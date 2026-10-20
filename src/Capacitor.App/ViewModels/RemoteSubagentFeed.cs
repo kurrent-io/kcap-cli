@@ -50,7 +50,11 @@ internal sealed class RemoteSubagentFeed(
             for (var page = 0; page < MaxPagesPerRead; page++) {
                 var fetch = read(sessionId, agentId, _next, token).GetAwaiter().GetResult();
                 // The server admits the route once its subagent row projects, which can trail the start record.
-                if (fetch.NotFound) return new(lines.Count > 0 || !ended ? FeedStatus.Ok : FeedStatus.Missing, lines);
+                if (fetch.NotFound) {
+                    // An ended subagent the server still cannot find counts toward completion, so its polls slow down.
+                    if (ended) Settle(ended);
+                    return new(lines.Count > 0 || !ended ? FeedStatus.Ok : FeedStatus.Missing, lines);
+                }
                 if (fetch.Unauthorized) return Failed(lines, "not authorized to read this subagent");
                 if (fetch.Page is not { } dto) return Failed(lines, "could not reach the server");
                 foreach (var evt in dto.Events ?? []) {
@@ -61,8 +65,7 @@ internal sealed class RemoteSubagentFeed(
                         lines.Add(line);
                 }
                 if (dto.NextFrom is not { } nextFrom) {
-                    _readsSinceEnded = ended ? _readsSinceEnded + 1 : 0;
-                    _complete = _readsSinceEnded > 1;
+                    Settle(ended);
                     break;
                 }
                 _next = Math.Max(_next, nextFrom);
@@ -76,6 +79,11 @@ internal sealed class RemoteSubagentFeed(
         return new(FeedStatus.Ok, lines);
     }
 
+    void Settle(bool ended) {
+        _readsSinceEnded = ended ? _readsSinceEnded + 1 : 0;
+        _complete = _readsSinceEnded > 1;
+    }
+
     // A failure past a page already read keeps that page: the chat drops a failed read's lines, and the
     // next poll resumes after them.
     static FeedRead Failed(List<ProjectedLine> lines, string failure) =>
@@ -86,7 +94,10 @@ internal sealed class RemoteSubagentFeed(
         if (payload is null) return null;
         var at = CanonicalEventTime.Of(payload) ?? timestamp ?? time.GetUtcNow();
         var projected = TranscriptChat.Project(new CanonicalEvent(eventType, payload, Guid.Empty, at), _rules);
-        return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 ? null : new(projected, offset);
+        // A hidden record can still carry a run's end.
+        return projected.Envelopes.Count == 0 && projected.SubmittedInputs.Count == 0 && projected.Runs.Count == 0
+            ? null
+            : new(projected, offset);
     }
 
     public void Dispose() {

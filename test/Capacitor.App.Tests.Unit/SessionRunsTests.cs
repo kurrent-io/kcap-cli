@@ -588,17 +588,19 @@ public class SessionRunsTests {
         await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,False");
     }
 
-    /// A held id pairs once the other candidate ends, by its result or by its end signal.
+    /// A candidate that ends could have owned a held id, so the id is dropped rather than placed on the one left;
+    /// a fresh id then pairs with it.
     [Test]
     [Arguments(true)]
     [Arguments(false)]
-    public async Task A_held_id_pairs_once_the_other_candidate_ends(bool byResult) {
+    public async Task A_held_id_is_dropped_when_a_candidate_ends(bool byResult) {
         var s = new SessionRuns(Clock());
-        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Identified(null, "a2")));
-        await Assert.That(s.Rows.All(row => row.AgentId is null)).IsTrue();
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Identified(null, "a1")));
 
         s.Apply(byResult ? Result("c1", isError: true) : Signals(Finished("c1", null)));
+        await Assert.That(s.Rows[1].AgentId).IsNull();
 
+        s.Apply(Signals(Identified(null, "a2")));
         await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
     }
 

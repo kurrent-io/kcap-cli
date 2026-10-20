@@ -69,7 +69,7 @@
             <ContentControl x:Name="SubagentHost" Content="{Binding Subagent}" IsVisible="{Binding ShowsSubagentPane}">
                 <ContentControl.ContentTemplate>
                     <DataTemplate x:DataType="vm:SubagentPaneViewModel">
-                        <views:SubagentPaneView />
+                        <views:SubagentPaneView IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsSubagentPane}" />
                     </DataTemplate>
                 </ContentControl.ContentTemplate>
             </ContentControl>

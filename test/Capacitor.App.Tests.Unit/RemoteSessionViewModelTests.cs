@@ -140,6 +140,7 @@ public class RemoteSessionViewModelTests {
     }
 
     /// A subagent row opens that subagent's own events in place of the chat, read-only, and Back returns to the chat.
+    /// A pane open when the agent moves to another session closes, since its subagent belongs to the old one.
     [Test]
     public async Task A_subagent_row_opens_its_own_transcript_in_place_of_the_chat_until_back() {
         await RunOnUiAsync(async () => {
@@ -154,7 +155,8 @@ public class RemoteSessionViewModelTests {
                     Events = [Event(0, CanonicalEventTypes.AssistantTextGenerated, """{"content":"Found the chat surfaces"}""")],
                 }));
             };
-            var vm = h.Build(Harness.Row(vendor: "claude"), readSubagent: read);
+            var agentRow = Harness.Row(vendor: "claude");
+            var vm = h.Build(agentRow, readSubagent: read);
             await h.UntilAsync(vm, () => vm.WorkContext.Runs.Any(r => r.CanOpen), "subagent row named");
             var row = vm.WorkContext.Runs.Single();
 
@@ -177,6 +179,11 @@ public class RemoteSessionViewModelTests {
 
             await Assert.That(vm.Subagent).IsNull();
             await Assert.That(vm.ShowsChatPane).IsTrue();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            await Assert.That(vm.Subagent).IsNotNull();
+            h.Directory.Rows.AddOrUpdate(agentRow with { SessionId = "s2" });
+            await h.UntilAsync(vm, () => vm.Subagent is null, "pane closed on the session change");
             await vm.TeardownAsync();
         });
     }

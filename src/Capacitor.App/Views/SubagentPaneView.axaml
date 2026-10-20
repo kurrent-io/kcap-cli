@@ -24,6 +24,8 @@
                            FontSize="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
             </Grid>
         </Border>
-        <views:ChatTabView x:Name="SubagentChat" DataContext="{Binding Chat}" />
+        <!-- Hidden with the pane itself, so its chat is not announced as onscreen while another tab shows. -->
+        <views:ChatTabView x:Name="SubagentChat" DataContext="{Binding Chat}"
+                           IsVisible="{Binding $parent[views:SubagentPaneView].IsVisible}" />
     </DockPanel>
 </UserControl>

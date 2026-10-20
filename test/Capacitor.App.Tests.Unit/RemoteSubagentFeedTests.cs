@@ -98,6 +98,25 @@ public class RemoteSubagentFeedTests {
         await Assert.That((after.Status, after.Lines.Count)).IsEqualTo((FeedStatus.Ok, 0));
     }
 
+    /// An ended subagent the server still cannot find settles like one whose last page is in, so its polls slow down.
+    [Test]
+    public async Task An_ended_subagent_the_server_cannot_find_is_polled_at_the_ended_pace() {
+        var server = new Server { Missing = true };
+        var clock = new FakeTimeProvider();
+        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => false, clock, _ => { });
+
+        feed.ReadAppended();
+        clock.Advance(RemoteSubagentFeed.PollInterval);
+        feed.ReadAppended();
+        clock.Advance(RemoteSubagentFeed.PollInterval);
+        feed.ReadAppended();
+        await Assert.That(server.Requests.Count).IsEqualTo(2);
+
+        clock.Advance(RemoteSubagentFeed.EndedPollInterval);
+        feed.ReadAppended();
+        await Assert.That(server.Requests.Count).IsEqualTo(3);
+    }
+
     /// The chat drops a failed read's lines, so a failure past a page already read keeps that page and
     /// the next poll resumes after it.
     [Test]

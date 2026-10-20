@@ -159,7 +159,7 @@
             <ContentControl x:Name="SubagentHost" Content="{Binding Subagent}" IsVisible="{Binding ShowsSubagent}">
                 <ContentControl.ContentTemplate>
                     <DataTemplate x:DataType="vm:SubagentPaneViewModel">
-                        <views:SubagentPaneView />
+                        <views:SubagentPaneView IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsSubagent}" />
                     </DataTemplate>
                 </ContentControl.ContentTemplate>
             </ContentControl>

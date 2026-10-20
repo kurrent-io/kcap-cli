@@ -52,6 +52,7 @@ public sealed class SessionRuns(TimeProvider time) {
 
     public void Apply(ChatProjectionResult projection) {
         HashSet<string>? detachedHere = null;
+        var candidates = _earlyUnpaired.Count == 0 ? null : UnnamedRunning().ToList();
         foreach (var signal in projection.Runs) {
             switch (signal) {
                 case RunSignal.Started started:
@@ -78,8 +79,8 @@ public sealed class SessionRuns(TimeProvider time) {
             if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
         }
-        // An end can leave a held id one candidate.
-        PairUnpaired();
+        // A candidate that ends could have been the held ids' own, so they can no longer be placed on whoever is left.
+        if (candidates?.Any(row => row.IsEnded) == true) _earlyUnpaired.Clear();
         Refresh();
     }
 
@@ -153,9 +154,12 @@ public sealed class SessionRuns(TimeProvider time) {
     /// One nameless id meets one running unnamed subagent: with more of either, the order says nothing.
     void PairUnpaired() {
         if (_earlyUnpaired.Count != 1) return;
-        var unnamed = _rows.Where(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false }).Take(2).ToList();
+        var unnamed = UnnamedRunning().Take(2).ToList();
         if (unnamed.Count == 1) Name(unnamed[0], _earlyUnpaired[0]);
     }
+
+    IEnumerable<RunRow> UnnamedRunning() =>
+        _rows.Where(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false });
 
     /// The call's own id outranks an earlier guess, and the agent's end then finds this row.
     void Name(RunRow row, string agentId) {

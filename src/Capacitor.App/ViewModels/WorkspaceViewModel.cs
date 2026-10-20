@@ -207,6 +207,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         WorkContext.RunOpened += OpenSubagent;
         _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
+        // An open subagent belongs to the transcript it was opened from.
+        presence.Select(p => p.Dto?.TranscriptPath).Where(path => path is not null).DistinctUntilChanged().Skip(1)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => CloseSubagent()).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
             linksChanged: pullRequestLinksChanged);
