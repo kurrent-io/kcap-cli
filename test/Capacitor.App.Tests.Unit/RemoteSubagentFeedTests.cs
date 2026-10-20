@@ -73,14 +73,29 @@ public class RemoteSubagentFeedTests {
 
     /// The server admits the route once its subagent row projects, which can trail the start record: a running
     /// subagent not there yet is still being waited for, an ended one is missing.
+    /// A poll inside the interval repeats the last verdict rather than an empty success, which the chat
+    /// would read as the refusal lifting.
     [Test]
-    [Arguments(true, FeedStatus.Ok)]
-    [Arguments(false, FeedStatus.Missing)]
-    public async Task A_subagent_the_server_has_not_written_yet(bool running, FeedStatus status) {
-        var server = new Server { Missing = true };
-        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => running, new FakeTimeProvider(), _ => { });
+    [Arguments(true, false, FeedStatus.Ok)]
+    [Arguments(false, false, FeedStatus.Missing)]
+    [Arguments(true, true, FeedStatus.Failed)]
+    public async Task A_verdict_stands_until_the_next_fetch(bool running, bool fails, FeedStatus status) {
+        var server = new Server { Missing = !fails, FailRequest = fails ? 1 : null };
+        var clock = new FakeTimeProvider();
+        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => running, clock, _ => { });
 
-        await Assert.That(feed.ReadAppended().Status).IsEqualTo(status);
+        var first = feed.ReadAppended();
+        clock.Advance(RemoteSubagentFeed.PollInterval / 2);
+        var throttled = feed.ReadAppended();
+
+        await Assert.That((first.Status, throttled.Status, throttled.Failure, server.Requests.Count)).IsEqualTo((status, status, first.Failure, 1));
+        server.Missing = false;
+        server.Events.Add(Text(0, "a"));
+        clock.Advance(RemoteSubagentFeed.PollInterval);
+        await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("a");
+        clock.Advance(RemoteSubagentFeed.PollInterval / 2);
+        var after = feed.ReadAppended();
+        await Assert.That((after.Status, after.Lines.Count)).IsEqualTo((FeedStatus.Ok, 0));
     }
 
     /// The chat drops a failed read's lines, so a failure past a page already read keeps that page and

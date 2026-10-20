@@ -588,6 +588,20 @@ public class SessionRunsTests {
         await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,False");
     }
 
+    /// A held id pairs once the other candidate ends, by its result or by its end signal.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_held_id_pairs_once_the_other_candidate_ends(bool byResult) {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Identified(null, "a2")));
+        await Assert.That(s.Rows.All(row => row.AgentId is null)).IsTrue();
+
+        s.Apply(byResult ? Result("c1", isError: true) : Signals(Finished("c1", null)));
+
+        await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
+    }
+
     /// The call's own id outranks a paired guess, and the agent's end then finds the right row.
     [Test]
     public async Task An_id_by_call_replaces_a_paired_guess_and_its_end_follows() {

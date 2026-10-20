@@ -86,11 +86,11 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
         }
     }
 
-    /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's
-    /// row. The meta flag is not consulted: a hidden row still ends its subagent.
+    /// A sidechain event is a subagent's own record: its runs are not the parent's rows, but are its own
+    /// view's. The meta flag is not consulted: a hidden row still ends its subagent.
     public IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
+        if (!_ownTranscript && SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return [];
 
         switch (raw.Kind) {
             case AcpEventKind.ToolCall when raw.ToolName is "Agent" or "Task" && raw.ToolCallId is { Length: > 0 } callId: {

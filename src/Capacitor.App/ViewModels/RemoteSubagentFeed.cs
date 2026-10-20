@@ -24,6 +24,9 @@ internal sealed class RemoteSubagentFeed(
     /// the parent hears it ended, so one more read follows before the feed stops.
     int _readsSinceEnded;
     bool _complete;
+    /// A refusal stands until the next fetch: the chat clears it on any other read, so a poll the
+    /// interval skips repeats it.
+    FeedRead _standing = new(FeedStatus.Ok, []);
 
     public long? CurrentOffset => _position;
 
@@ -32,8 +35,14 @@ internal sealed class RemoteSubagentFeed(
         try { token = _lifetime.Token; } catch (ObjectDisposedException) { return new(FeedStatus.Ok, []); }
         if (token.IsCancellationRequested) return new(FeedStatus.Ok, []);
         var now = time.GetUtcNow();
-        if (_fetchedAt is { } last && now - last < (_complete ? EndedPollInterval : PollInterval)) return new(FeedStatus.Ok, []);
+        if (_fetchedAt is { } last && now - last < (_complete ? EndedPollInterval : PollInterval)) return _standing;
         _fetchedAt = now;
+        var read = Fetch(token);
+        _standing = read.Status is FeedStatus.Missing or FeedStatus.Failed ? read : new(FeedStatus.Ok, []);
+        return read;
+    }
+
+    FeedRead Fetch(CancellationToken token) {
         // Read before fetching: a subagent that ended before this fetch began is complete once it lands.
         var ended = !running();
         var lines = new List<ProjectedLine>();

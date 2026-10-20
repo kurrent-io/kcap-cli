@@ -78,6 +78,8 @@ public sealed class SessionRuns(TimeProvider time) {
             if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
         }
+        // An end can leave a held id one candidate.
+        PairUnpaired();
         Refresh();
     }
 
