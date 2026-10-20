@@ -868,6 +868,7 @@ public class PullRequestContextViewModelTests {
     public async Task Fix_keeps_an_unsent_draft_ahead_of_its_prompt() {
         await Assert.That(PullRequestContextViewModel.WithFixPrompt("  ", "Fix it.")).IsEqualTo("Fix it.");
         await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n\nFix it.", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
     }
 
     [Test]

@@ -119,13 +119,15 @@ public sealed partial class PullRequestContextViewModel {
             return asks.Count == 0 ? null : $"Get pull request {NumberLabel} ready to merge: {string.Join("; ", asks)}.";
         }
     }
-    /// The draft the user has not sent stays, with the prompt after it.
+    /// The draft the user has not sent stays, with the prompt after it; a draft already holding the prompt is left as is.
     internal static string WithFixPrompt(string draft, string prompt) =>
-        string.IsNullOrWhiteSpace(draft) ? prompt : draft.TrimEnd() + "\n\n" + prompt;
+        string.IsNullOrWhiteSpace(draft) ? prompt
+        : draft.Contains(prompt, StringComparison.Ordinal) ? draft
+        : draft.TrimEnd() + "\n\n" + prompt;
 
     public bool ShowsFix => FixPrompt is not null && _canRequestFix();
 
-    /// The host calls this when whether its composer can send changes.
+    /// Call when the host's composer gains or loses the ability to send, so <see cref="ShowsFix"/> is read again.
     internal void FixAvailabilityChanged() => NotifyValue(ShowsFix);
 
     void NotifyPresentation() {
