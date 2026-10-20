@@ -8,10 +8,9 @@ namespace Capacitor.Cli.Services;
 /// account that can write <c>~/.config</c> can swap the whole <c>systemd/user</c> directory for one of its
 /// own. The mode of the unit and of its immediate directory says nothing about that.</para>
 ///
-/// <para><b>Mode bits only.</b> Ownership is not consulted, so a directory owned by another unprivileged
-/// account is reported safe while its owner can still rename what it holds — <c>0755</c> owned by someone
-/// else, or a sticky directory whose owner is not us. Reading an owner needs a <c>stat</c> this runtime
-/// does not expose. Treat a clean result as "no mode bit grants it", never as "no other account can".</para></summary>
+/// <para>Mode bits are half of it: a directory's owner can rename its entries whatever the bits say. So
+/// <see cref="ForeignOwned(string)"/> reports the ancestors owned by another account, and
+/// <see cref="GrantingWrite"/> the ones whose bits let another class write.</para></summary>
 static class DirectoryExposure {
     /// <summary>The directories from <paramref name="directory"/> up to the filesystem root that let a
     /// class named in <paramref name="writeBits"/> replace their entries, nearest first. Empty means no
@@ -22,10 +21,10 @@ static class DirectoryExposure {
     /// execute bit, so a <c>drwxrw-rw-</c> ancestor — writable by everyone, traversable by no one — is not
     /// reported, and an install beneath it is not blocked.</para>
     ///
-    /// <para>A sticky directory never counts: that bit restricts rename and unlink to an entry's own owner,
-    /// which is what makes <c>/tmp</c> at <c>1777</c> safe to hold a file nobody else may replace. The
-    /// exemption is mode-deep like the rest — a sticky directory's own owner retains that power, so a
-    /// foreign-owned one is exempted here although it should not be.</para>
+    /// <para>A sticky directory never counts: that bit restricts rename and unlink to an entry's own owner
+    /// and the directory's owner, which is what makes root's <c>/tmp</c> at <c>1777</c> safe to hold a file
+    /// nobody else may replace. A sticky directory owned by another account is
+    /// <see cref="ForeignOwned(string)"/>'s to report.</para>
     ///
     /// <para>Symlinks are resolved component by component first. <see cref="Path.GetFullPath(string)"/> is
     /// lexical, so ascending from an unresolved path walks the link's parents rather than the target's: with
@@ -49,6 +48,27 @@ static class DirectoryExposure {
             if (Grants(mode, writeBits, UnixFileMode.GroupWrite, UnixFileMode.GroupExecute)
              || Grants(mode, writeBits, UnixFileMode.OtherWrite, UnixFileMode.OtherExecute))
                 found.Add(d);
+        }
+
+        return found;
+    }
+
+    /// <summary>The directories from <paramref name="directory"/> up to the filesystem root owned by an
+    /// account other than root and this process's effective user, nearest first, each with its owner. Such
+    /// an owner can rename what the directory holds whatever its mode. Root is exempt: it owns <c>/</c> and
+    /// the home roots everywhere, and can replace anything regardless.
+    ///
+    /// <para>A directory whose owner cannot be read is skipped, as an unreadable mode is above: the mode
+    /// check still applies to it.</para></summary>
+    public static IReadOnlyList<(string Directory, uint Owner)> ForeignOwned(string directory) =>
+        OperatingSystem.IsWindows() ? [] : ForeignOwned(directory, FileOwner.Of, FileOwner.Effective);
+
+    internal static IReadOnlyList<(string Directory, uint Owner)> ForeignOwned(
+            string directory, Func<string, uint?> ownerOf, uint self) {
+        var found = new List<(string, uint)>();
+
+        for (var d = Physical(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!) {
+            if (ownerOf(d) is { } owner && owner != 0 && owner != self) found.Add((d, owner));
         }
 
         return found;

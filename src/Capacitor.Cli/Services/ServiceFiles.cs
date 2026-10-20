@@ -43,6 +43,7 @@ static class ServiceFiles {
             else CreateDirectory(directory);
             RequireNoSharedWrite(directory, tightenDirectory);
             RequireNoWorldWritableAncestor(directory);
+            RequireNoForeignOwnedAncestor(directory);
         }
 
         // Full GUID: the staging name must not be guessable by a local process racing to pre-create it,
@@ -193,6 +194,18 @@ static class ServiceFiles {
             $"Refusing to write a service unit below a world-writable directory: {offender}. Any local "
           + "account can rename the unit directory out from under it and choose what the daemon runs. "
           + $"Remove that write bit with `chmod o-w {offender}` and re-run the install.");
+    }
+
+    /// <summary>Refuses when a directory on the path to the unit is owned by another account, which can
+    /// rename the unit directory away whatever the modes say. Root-owned directories pass: every path
+    /// starts under them.</summary>
+    static void RequireNoForeignOwnedAncestor(string directory) {
+        if (DirectoryExposure.ForeignOwned(directory) is not [var (offender, owner), ..]) return;
+
+        throw new InvalidOperationException(
+            $"Refusing to write a service unit below a directory owned by another account: {offender} "
+          + $"(uid {owner}). Its owner can rename the unit directory out from under it and choose what the "
+          + "daemon runs. Install from a home directory whose path you or root own.");
     }
 
     static void RequireOwnerOnlyPath(string path) {

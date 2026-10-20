@@ -116,6 +116,44 @@ public class DirectoryExposureTests {
         await Assert.That(DirectoryExposure.GrantingWrite("/", UnixFileMode.OtherWrite)).IsEmpty();
     }
 
+    /// <summary>An owner renames a directory's entries whatever its mode, so another account's directory
+    /// on the path is reported even when its bits grant nothing, and even when it is sticky. Root and this
+    /// user are not, and an owner that cannot be read is no finding.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Reports_ancestors_owned_by_another_account_but_not_by_root_or_us() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX paths");
+
+        var leaf  = Tmp.CreateDir("alice", "bob-home", "unit").Path;
+        var alice = Tmp.GetResolvedPath("alice");
+        var bob   = Tmp.GetResolvedPath("alice", "bob-home");
+        const uint Self = 1001, Alice = 1002;
+        File.SetUnixFileMode(alice, OwnerOnly | UnixFileMode.StickyBit);
+        try {
+            var found = DirectoryExposure.ForeignOwned(leaf, d =>
+                d == alice ? Alice : d == bob ? Self : d == "/" ? 0u : d.StartsWith(alice, StringComparison.Ordinal) ? Self : null,
+                Self);
+
+            await Assert.That(found).IsEquivalentTo(new[] { (alice, Alice) });
+        } finally {
+            Restore(alice);
+        }
+    }
+
+    /// <summary>The owner read is the system's own stat, so it must agree with the kernel on each target:
+    /// a directory this process made is its own, and the root is root's.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Reads_this_process_as_the_owner_of_its_own_directory_and_root_of_the_root() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX owners");
+
+        await Assert.That(FileOwner.Of(Tmp.CreateDir("mine").Path)).IsEqualTo(FileOwner.Effective);
+        await Assert.That(FileOwner.Of("/")).IsEqualTo(0u);
+        await Assert.That(FileOwner.Of(Tmp.PathTo("absent"))).IsNull();
+        await Assert.That(DirectoryExposure.ForeignOwned(Tmp.CreateDir("clean", "unit").Path)).IsEmpty()
+            .Because("a temp directory's path is owned by this user and root");
+    }
+
     [UnsupportedOSPlatform("windows")]
     static void GroupWritable(string directory) =>
         File.SetUnixFileMode(directory,
