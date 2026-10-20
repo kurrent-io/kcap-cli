@@ -43,7 +43,8 @@ public static class TelemetryState {
         }
     }
 
-    public static bool? PersistedEnabled(ConfigRoot config) => Read(config).Enabled;
+    /// <summary>The saved choice; false when the file cannot be read, since it may hold an opt-out.</summary>
+    public static bool? PersistedEnabled(ConfigRoot config) => TryRead(config) is { } state ? state.Enabled : false;
 
     /// <summary>
     /// Persists the enable flag. Disabling also deletes the device id file (see

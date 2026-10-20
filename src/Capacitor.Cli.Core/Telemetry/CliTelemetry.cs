@@ -315,7 +315,7 @@ public sealed class CliTelemetry {
         try {
             // The desktop app's stderr reaches no one; it shows the notice on screen instead.
             if (!Enabled || _command == "mcp-server" || _desktop) return;
-            if (TelemetryState.Read(config).NoticeShown) return;
+            if (TelemetryState.TryRead(config) is not { NoticeShown: false }) return;
 
             Console.Error.WriteLine(
                 "kcap collects pseudonymous usage data — command and flag names only, never argument values,");
@@ -333,7 +333,7 @@ public sealed class CliTelemetry {
     /// <summary>Whether the desktop app still owes this device the one-time disclosure.</summary>
     public bool NoticeDue(ConfigRoot config) {
         try {
-            return Enabled && !TelemetryState.Read(config).NoticeShown;
+            return Enabled && TelemetryState.TryRead(config) is { NoticeShown: false };
         } catch {
             return false;
         }

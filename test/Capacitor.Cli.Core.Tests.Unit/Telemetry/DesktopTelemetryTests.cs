@@ -140,8 +140,8 @@ public class DesktopTelemetryTests {
         await Assert.That(sink.Events.Select(e => e.Name).ToList()).IsEquivalentTo(new List<string> { "readable" });
     }
 
-    /// <summary>The once-per-device event goes only with the marker that says it went; an unsaved marker shows
-    /// the notice again, which would otherwise send it twice.</summary>
+    /// <summary>The once-per-device event goes only with the marker that says it went. A file that cannot be read
+    /// may hold an opt-out, so it shows no notice either, rather than one on every launch.</summary>
     [Test]
     public async Task An_acknowledgement_that_cannot_be_saved_sends_no_first_run() {
         var (telemetry, sink) = Start(new RecordingTelemetrySink());
@@ -151,7 +151,7 @@ public class DesktopTelemetryTests {
         telemetry.AcknowledgeNotice(Config.Root);
 
         await Assert.That(sink.Names).DoesNotContain("cli_first_run");
-        await Assert.That(telemetry.NoticeDue(Config.Root)).IsTrue();
+        await Assert.That(telemetry.NoticeDue(Config.Root)).IsFalse();
     }
 
     [Test]

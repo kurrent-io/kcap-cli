@@ -44,6 +44,14 @@ public class TelemetryStateTests {
         await Assert.That(TelemetryState.MarkNoticeShown(Config.Root)).IsFalse();
     }
 
+    /// A choice that cannot be read may be an opt-out, so it reads as one wherever the saved choice is asked for.
+    [Test]
+    public async Task An_unreadable_file_reads_as_opted_out() {
+        await File.WriteAllTextAsync(Config.Root.Path("telemetry.json"), "{not json");
+
+        await Assert.That(TelemetryState.PersistedEnabled(Config.Root) == false).IsTrue();
+    }
+
     /// Writing the marker over a file it cannot read would erase an opt-out held there.
     [Test]
     public async Task The_notice_marker_never_writes_over_an_unreadable_file() {
