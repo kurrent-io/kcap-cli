@@ -8,8 +8,7 @@ public class AdvertisedRepoPathsTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     string Repo(params string[] parts) {
-        var dir = Tmp.CreateDir(parts).Path;
-        Directory.CreateDirectory(Path.Combine(dir, ".git"));
+        Tmp.CreateDir([.. parts, ".git"]);
         return Tmp.GetResolvedPath(parts);
     }
 
@@ -41,19 +40,18 @@ public class AdvertisedRepoPathsTests {
         var a = Repo("repos", "a");
         var prefix = Tmp.GetResolvedPath("repos");
 
-        var advertised = AdvertisedRepoPaths.Merge([a, "/persisted"], ["/literal/worktree/", prefix + "/*", "/persisted"]);
+        var advertised = AdvertisedRepoPaths.Merge([a, "/persisted"], ["/literal/worktree", prefix + "/*", "/persisted"]);
 
         await Assert.That(string.Join("|", advertised)).IsEqualTo($"{a}|/persisted|/literal/worktree");
     }
 
-    /// The allowlist authorizes only what is under the prefix, so a worktree there whose main
-    /// repository lives elsewhere is advertised as itself, not as that main repository.
+    /// A linked worktree is advertised as found, so a launch chosen from the list lands in that checkout.
     [Test]
-    public async Task A_worktree_whose_main_repository_is_outside_the_prefix_stays_itself() {
+    public async Task A_worktree_under_the_prefix_is_advertised_as_found() {
         var main = Repo("elsewhere", "main");
         var worktree = Tmp.CreateDir("repos", "wt").Path;
         File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {Path.Combine(main, ".git", "worktrees", "wt")}\n");
-        Directory.CreateDirectory(Path.Combine(main, ".git", "worktrees", "wt"));
+        Tmp.CreateDir("elsewhere", "main", ".git", "worktrees", "wt");
         File.WriteAllText(Path.Combine(main, ".git", "worktrees", "wt", "commondir"), "../..\n");
 
         var advertised = AdvertisedRepoPaths.Merge([], [Tmp.GetResolvedPath("repos") + "/*"]);
@@ -61,11 +59,13 @@ public class AdvertisedRepoPathsTests {
         await Assert.That(advertised).IsEquivalentTo(new[] { Tmp.GetResolvedPath("repos", "wt") });
     }
 
+    /// The allowlist matches a literal entry as that exact string, separators included.
     [Test]
-    public async Task A_literal_root_keeps_its_separator() {
-        var root = Path.GetPathRoot(Tmp.Path)!;
-        await Assert.That(AdvertisedRepoPaths.Merge([], [root])).IsEquivalentTo(new[] { root });
-    }
+    [Arguments("/literal/worktree/")]
+    [Arguments("/")]
+    [Arguments("C:\\repos\\")]
+    public async Task A_literal_entry_is_advertised_exactly_as_written(string entry) =>
+        await Assert.That(AdvertisedRepoPaths.Merge([], [entry])).IsEquivalentTo(new[] { entry });
 
     [Test]
     public async Task No_allowlist_advertises_the_persisted_paths_alone() =>
