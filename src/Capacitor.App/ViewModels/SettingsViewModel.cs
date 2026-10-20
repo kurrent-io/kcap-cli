@@ -164,7 +164,6 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ProfilesSettingsViewModel? Profiles { get; }
 
-    /// Null hides the Appearance tab.
     public AppearanceSettingsViewModel? Appearance { get; init; }
 
     /// What the OS calls the app that holds its notification switches.
