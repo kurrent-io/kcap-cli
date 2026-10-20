@@ -753,7 +753,8 @@ public partial class App : Application {
                 tenantName: profiles?.Resolution?.ProfileName, agentsWithPending: agentsWithPending,
                 agentsAwaitingAnswer: permissions.AgentsAwaitingAnswer, agentsRunningCommands: commands.Running,
                 requestSignIn: requestSignIn,
-                lifecycleAttention: lifecycleAttention, pullRequestSummaries: pullRequestTones.Summaries,
+                lifecycleAttention: lifecycleAttention, identityReport: lifecycle.IdentityReport,
+                pullRequestSummaries: pullRequestTones.Summaries,
                 directory: directory, remoteAgents: remoteAgents, lane: serverLane,
                 viewerId: viewerId, localMachineId: machineId, restartPending: restartPending.Pending,
                 // A row present on both lanes is the local one: the local socket is the richer
@@ -1400,7 +1401,7 @@ public partial class App : Application {
             Func<string, WorkspaceViewModel>? workspaceFactory = null, string? tenantName = null,
             IObservable<IReadOnlySet<string>>? agentsWithPending = null,
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null, Action? requestSignIn = null,
-            IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? lifecycleAttention = null, IObservable<string?>? identityReport = null,
             IObservable<IReadOnlyDictionary<string, int>>? agentsRunningCommands = null,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>>? pullRequestSummaries = null,
             IAgentDirectory? directory = null, IRemoteAgentsService? remoteAgents = null,
@@ -1461,7 +1462,7 @@ public partial class App : Application {
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
-            rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention,
+            rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention, identityReport: identityReport,
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,

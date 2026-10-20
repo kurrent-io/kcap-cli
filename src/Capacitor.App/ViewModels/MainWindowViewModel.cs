@@ -322,6 +322,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? identityReport = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
@@ -552,8 +553,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
+            // A connect clears the progress lines back to the standing identity report, whichever of the two the
+            // main thread happens to see first.
+            string? identity = null;
+            identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(report => {
+                    identity = report;
+                    if (report is not null) StartMessage = report;
+                })
+                .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = null)
+                .Subscribe(_ => StartMessage = identity)
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while

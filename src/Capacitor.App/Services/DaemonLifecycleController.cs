@@ -101,6 +101,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
     bool _mismatchWaitsForIdle; // under _lock: the last report was held back by running agents
     int  _latestActiveAgents;
+    readonly BehaviorSubject<string?> _identityReport = new(null);
+
+    /// The standing report about the attached daemon's identity, null while it matches. A state, not an event:
+    /// a banner that resets on connect returns to it rather than losing it to however the two are ordered.
+    public IObservable<string?> IdentityReport => _identityReport;
     // Running or starting, admitted launches included; an older daemon that sends no Busy falls back to the lists.
     volatile bool _latestBusy;
     bool _latestResumes;
@@ -837,8 +842,6 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// <param name="reoffer">An offer superseded by a reconnect: the same mismatch is offered again, not reported again.</param>
     async Task CheckAttachedIdentityAsync(bool reoffer = false) {
         try {
-            // Past the Connected fan-out, whose banner reset would otherwise wipe the report this raises.
-            await Task.Yield();
             var generation = CurrentGeneration();
             if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
@@ -852,11 +855,14 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _reportedMismatch     = mismatch;
                 _mismatchWaitsForIdle = false;
             }
-            if (mismatch is null) return;
+            if (mismatch is null) {
+                _identityReport.OnNext(null);
+                return;
+            }
             var announce = !(reoffer && reported);
 
             if (expectedProfile is null || _autoActionsPermanentlyClosed || !AttachedIdentity.SupportsVerifiedReplace) {
-                if (announce) _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
+                if (announce) Report($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
                 return;
             }
             if (busy) {
@@ -868,12 +874,12 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                     1 => "its running agent finishes",
                     var n => $"its {n} running agents finish"
                 };
-                if (announce) _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
+                if (announce) Report($"{mismatch} The app offers to replace it once {agents}.");
                 return;
             }
 
             // The command rides along, so a declined or failed replace still leaves the user a fix.
-            if (announce) _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
+            if (announce) Report($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
             // Under the gate like every other repair, so it neither races the reconciliation's own offers
             // nor escapes the shutdown barrier.
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
@@ -903,6 +909,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         } catch (Exception ex) {
             Console.Error.WriteLine($"kcap: daemon identity check failed unexpectedly: {ex}");
         }
+    }
+
+    void Report(string message) {
+        _identityReport.OnNext(message);
+        _surface.Attention(message);
     }
 
     /// The Start button's one dialog: a manual daemon holds the name, and replacing it is the user's call.
