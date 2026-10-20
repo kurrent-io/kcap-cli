@@ -62,7 +62,6 @@ public class ApplicationsMoverTests {
 
     [Test]
     public async Task Rebrand_migrates_the_legacy_install_to_kcap_app() {
-        if (!OperatingSystem.IsMacOS()) return;
         var apps = Tmp.CreateDir("Applications");
         var installed = Tmp.PathTo("Applications/Kurrent Capacitor.app");
         CompleteBundle(installed);
@@ -71,7 +70,7 @@ public class ApplicationsMoverTests {
         var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")),
-            MovePromote, apps, ApplicationsMover.SwapAtomic);
+            MovePromote, apps);
 
         await Assert.That(mover.Inspect(source).Action).IsEqualTo(ApplicationsInstallAction.Update);
         var outcome = await mover.MoveAsync(source, CancellationToken.None);
