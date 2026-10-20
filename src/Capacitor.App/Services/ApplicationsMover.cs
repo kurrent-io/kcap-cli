@@ -33,7 +33,7 @@ public sealed partial class ApplicationsMover(
         var home = Path.GetDirectoryName(source);
         if (Path.GetFileName(source) == "kcap.app" && home is not null
                 && existing.Contains(home) && ReadVersion(source) is not null
-                && existing.All(directory => ReadVersion(Path.Combine(directory, "Kurrent Capacitor.app")) is null))
+                && ReadVersion(Path.Combine(home, "Kurrent Capacitor.app")) is null)
             return [home];
         if (existing.Length > 0) return existing;
         return [Path.GetDirectoryName(source) == userApplicationsDir ? userApplicationsDir : systemApplicationsDir];

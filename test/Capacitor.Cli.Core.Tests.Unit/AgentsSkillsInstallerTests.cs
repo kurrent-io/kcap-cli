@@ -22,11 +22,13 @@ public class AgentsSkillsInstallerTests {
             .Where(d => File.Exists(Path.Combine(d, "SKILL.md")))
             .Select(Path.GetFileName)
             .OfType<string>()
+            // Retired paths may remain as explicit compatibility redirects for shared web links.
+            .Except(AgentsSkillsInstaller.RetiredSourceNames)
             .ToArray();
 
         await Assert.That(AgentsSkillsInstaller.SourceNames)
                     .IsEquivalentTo(shipped)
-                    .Because("every skill under kcap/skills/ must be listed in AgentsSkillsInstaller.SourceNames, "
+                    .Because("every non-retired skill under kcap/skills/ must be listed in AgentsSkillsInstaller.SourceNames, "
                            + "or it ships to users and reaches no agent. Add it there, and to help-plugin.txt.");
     }
 

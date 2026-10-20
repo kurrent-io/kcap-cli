@@ -183,7 +183,31 @@ public class ApplicationsMoverTests {
         await Assert.That(ApplicationsMover.ApplicationDirectories(Tmp.PathTo("Downloads/kcap.app"), user, system).Count).IsEqualTo(2);
 
         CompleteBundle(Path.Combine(other, "Kurrent Capacitor.app"));
+        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Single()).IsEqualTo(home);
+        CompleteBundle(Path.Combine(home, "Kurrent Capacitor.app"));
         await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Migrating_one_of_two_legacy_copies_does_not_prompt_again_on_ordinary_launch(bool perUser) {
+        var system = Tmp.CreateDir("SystemApplications");
+        var user = Tmp.CreateDir("UserApplications");
+        var selected = perUser ? user : system;
+        var other = perUser ? system : user;
+        var source = Tmp.PathTo("Downloads/kcap.app");
+        CompleteBundle(source, "1.1.0");
+        CompleteBundle(Path.Combine(system, "Kurrent Capacitor.app"));
+        CompleteBundle(Path.Combine(user, "Kurrent Capacitor.app"));
+        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
+        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")), MovePromote, selected);
+        var outcome = await mover.MoveAsync(source, CancellationToken.None);
+        await Assert.That(outcome.Moved).IsTrue();
+        await Assert.That(Directory.Exists(Path.Combine(other, "Kurrent Capacitor.app"))).IsTrue();
+        await Assert.That(ApplicationsMover.ApplicationDirectories(outcome.InstalledPath!, user, system).Single()).IsEqualTo(selected);
+        await Assert.That(App.ShouldPromptToInstall(perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
+            outcome.InstalledPath!, mover.Inspect(outcome.InstalledPath!))).IsFalse();
     }
 
     [Test]

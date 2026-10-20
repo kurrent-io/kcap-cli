@@ -229,7 +229,14 @@ internal sealed partial class ApplicationReferences(IProcessRunner runner, UserH
                 new RunOptions(Timeout: TimeSpan.FromMinutes(2)), ct);
             if (result.ExitCode != 0 || result.TimedOut || new FileInfo(path).LinkTarget != replacement)
                 throw new IOException("The terminal link could not be migrated. Administrator approval may be required.");
-        } finally { if (new FileInfo(staging).LinkTarget is not null) File.Delete(staging); }
+        } finally { CleanupLink(staging, File.Delete); }
+    }
+
+    internal static void CleanupLink(string staging, Action<string> delete) {
+        try { if (new FileInfo(staging).LinkTarget is not null) delete(staging); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Console.Error.WriteLine($"kcap: could not remove temporary terminal link {staging}: {ex.Message}");
+        }
     }
 
     public ValueTask DisposeAsync() {

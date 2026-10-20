@@ -293,6 +293,9 @@ public partial class App : Application {
     async Task StartAsync(IClassicDesktopStyleApplicationLifetime desktop) {
         try {
             if (RunInstallLocationGuard(desktop)) return; // the guard window owns the rest of this run
+            if (OperatingSystem.IsMacOS())
+                await new ApplicationIntegrationRefresh(_config, new ProcessRunner(_time))
+                    .RunPendingAsync(InstallLocation.BundleRoot(Environment.ProcessPath), _shutdown.Token);
             _updater = CreateUpdater();
             if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.UpdateRelaunch)) return; // the process is being replaced
 
@@ -402,7 +405,10 @@ public partial class App : Application {
             swap: ApplicationsMover.SwapAtomic, isRunning: InstalledAppRunning,
             quitRunning: QuitInstalledAppAsync,
             migrateReferences: () => new ApplicationReferences(runner, _userHome, _daemonStore, _time),
-            activate: launcher.OpenAsync, userApplicationsDir: userApps);
+            activate: async (target, ct) => {
+                new ApplicationIntegrationRefresh(_config, runner).Schedule(target);
+                return await launcher.OpenAsync(target, ct);
+            }, userApplicationsDir: userApps);
         var mover = Mover(directories[0]);
         var plan = mover.Inspect(root!);
         if (directories.Count == 1 && !ShouldPromptToInstall(kind, root!, plan)) return false;

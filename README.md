@@ -111,7 +111,7 @@ Updates arrive through the app: it checks a few times a day, downloads in the ba
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
 
-**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. Existing installations stay in their Applications folder and migrate from `Kurrent Capacitor.app` to `kcap.app`. The migration updates owned terminal links and background-service paths, preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. If valid installations exist in both Applications folders, or another app occupies the destination, choose a destination first. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed migration restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
+**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. Existing installations stay in their Applications folder and migrate from `Kurrent Capacitor.app` to `kcap.app`. The migration updates owned terminal links and background-service paths, then refreshes previously installed agent integrations with the bundled CLI to repair MCP commands, git hooks, and the Claude marketplace path. A failed integration refresh is reported and retried on the next launch. It preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. An installer that finds valid installations in both Applications folders, or another app occupying the destination, asks for a destination first. Opening an installed `kcap.app` keeps that copy when its own folder needs no migration, even if a legacy copy remains in the other folder. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed migration restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
 
 ### Desktop app on Windows
 
@@ -132,7 +132,8 @@ agent skill tree), and the Muse recording skill is `kcap-recording`. Refreshing
 agent skills replaces the former `kcap-connect-capacitor` installation. Muse
 setup replaces the old skill names and reuses existing scheduled tasks while
 keeping their data and consent in place. Existing integration matchers continue
-to recognize legacy names.
+to recognize legacy names. Previously shared `connect-capacitor/SKILL.md` links
+remain available as redirects to `connect-kcap`.
 
 ## What it records
 

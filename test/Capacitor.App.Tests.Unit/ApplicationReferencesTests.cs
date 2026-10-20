@@ -158,6 +158,15 @@ public class ApplicationReferencesTests {
     }
 
     [Test]
+    public async Task Temporary_link_cleanup_does_not_hide_the_original_failure() {
+        if (OperatingSystem.IsWindows()) return;
+        var staging = Path.Combine(Tmp.CreateDir("bin"), "kcap.migrating-test");
+        File.CreateSymbolicLink(staging, Tmp.PathTo("missing/kcap"));
+        ApplicationReferences.CleanupLink(staging, _ => throw new UnauthorizedAccessException("protected directory"));
+        await Assert.That(new FileInfo(staging).LinkTarget).IsNotNull();
+    }
+
+    [Test]
     public async Task Foreign_terminal_links_are_left_untouched() {
         if (OperatingSystem.IsWindows()) return;
         var paths = Setup();
