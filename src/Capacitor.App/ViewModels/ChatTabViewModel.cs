@@ -1296,8 +1296,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
 
         _planActivity?.Apply(read.Lines.Select(line => line.Projection));
-        _runs.ApplyAll(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
+        var restored = new List<ChatProjectionResult>(read.Lines.Count);
         foreach (var (line, offset) in read.Lines) {
             var projected = line.RestoreSubmittedInputs(text => {
                 if (!Tracked.Any(q => !q.IsForeign && !q.Acknowledged && q.Matches(text, _inputGeneration, offset))
@@ -1305,6 +1305,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _literalInputHistory.Add((offset, text));
                 return true;
             }, text => _literalInputHistory.Contains((offset, text)));
+            restored.Add(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
                 if (TakeSupersededEcho(text, offset)) continue;
@@ -1390,6 +1391,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
             }
         }
+        _runs.ApplyAll(restored);
         if (fresh.Count > 0) _items.AddRange(fresh);
         RefreshQueue();
         Reconcile();
