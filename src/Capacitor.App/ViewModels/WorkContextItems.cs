@@ -33,6 +33,7 @@ public sealed class WorkContextLinkViewModel {
     /// Server kind/provider/value when projected from a work-item link; empty for legacy PR cards.
     public string  Identity { get; }
     public bool    CanOpen  { get; }
+    public string  AccessibleName => Title.Length == 0 ? Key : $"{Key}: {Title}";
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     public WorkContextLinkViewModel(string eyebrow, string key, string title, string? url, IUrlOpener opener, string identity = "") {

@@ -128,7 +128,8 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:HistoryWindowOption">
-                                <RadioButton Classes="frSegment" GroupName="HistoryWindow" IsChecked="{Binding IsSelected, Mode=TwoWay}">
+                                <RadioButton Classes="frSegment" GroupName="HistoryWindow" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                             AutomationProperties.Name="{Binding Label}">
                                     <StackPanel Spacing="2">
                                         <TextBlock Classes="frLabel" FontSize="12.5" Text="{Binding Label}" />
                                         <TextBlock Classes="frSignal" Text="{Binding CountLabel}"

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Reactive.Linq;
 using System.Windows.Input;
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Data.Converters;
 using Avalonia.Input;
@@ -142,10 +143,12 @@ public partial class LauncherPaneView : UserControl {
         }
 
         var repoPath = option.RepoPath;
-        return ChoiceButton(grid, () => {
+        var row = ChoiceButton(grid, () => {
             flyout.Hide();
             _ = SelectRepositoryObservedAsync(vm, repoPath);
         });
+        AutomationProperties.SetName(row, title.Text);
+        return row;
     }
 
     // ChoiceButton's click is sync; keep flyout-close immediate and observe the async load so a
@@ -207,6 +210,7 @@ public partial class LauncherPaneView : UserControl {
             _ = SelectMachineObservedAsync(vm, daemonName, isLocal);
         });
         row.IsEnabled = option.Connected;
+        AutomationProperties.SetName(row, option.DaemonName);
         return row;
     }
 
@@ -333,7 +337,9 @@ public partial class LauncherPaneView : UserControl {
         var check = SelectionCheck(selected);
         Grid.SetColumn(check, 1);
         body.Children.Add(check);
-        return ChoiceButton(body, pick);
+        var row = ChoiceButton(body, pick);
+        AutomationProperties.SetName(row, label);
+        return row;
     }
 
     AppIcon SelectionCheck(bool selected) => new() {
@@ -477,6 +483,7 @@ public partial class LauncherPaneView : UserControl {
                 CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 7),
             };
             row.Classes.Add("kcapGhost");
+            AutomationProperties.SetName(row, $"{label}, {vendorLabel}");
             row.Click += (_, _) => pick();
             return row;
         }
@@ -545,6 +552,7 @@ public partial class LauncherPaneView : UserControl {
                 tile.Classes.Add(active ? "kcapChip" : "kcapGhost");
                 ToolTip.SetTip(tile, UnavailableHarnessTip(option) ?? $"{option.Label} — {HostedHarnessCatalog.DescriptionFor(option)}");
                 ToolTip.SetShowOnDisabled(tile, true);
+                AutomationProperties.SetName(tile, option.Label);
                 tile.Click += (_, _) => {
                     currentTab = vendor;
                     RebuildTabs();

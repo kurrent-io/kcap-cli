@@ -102,12 +102,14 @@
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Record, Mode=TwoWay}"
-                                                      ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}" />
+                                                      ToolTip.Tip="{Binding Label, StringFormat='Record {0} sessions'}"
+                                                      AutomationProperties.Name="{Binding Label, StringFormat='Record {0} sessions'}" />
                                             <CheckBox Grid.Row="0" Grid.Column="3" x:Name="ToolsCheckBox" Classes="frCheck"
                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
                                                       IsEnabled="{Binding $parent[UserControl].((vm:HarnessesStepViewModel)DataContext).ChoicesEditable}"
                                                       IsChecked="{Binding Tools, Mode=TwoWay}" IsVisible="{Binding !ToolsBundled}"
-                                                      ToolTip.Tip="{Binding Label, StringFormat='Give {0} Capacitor tools'}" />
+                                                      ToolTip.Tip="{Binding Label, StringFormat='Give {0} Capacitor tools'}"
+                                                      AutomationProperties.Name="{Binding Label, StringFormat='Give {0} Capacitor tools'}" />
                                             <TextBlock Grid.Row="0" Grid.Column="3" Text="BUNDLED" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                        FontFamily="{StaticResource FrMonoFont}" FontSize="9" LetterSpacing="0.6"
                                                        Foreground="{StaticResource FrDimBrush}" IsVisible="{Binding ToolsBundled}" />

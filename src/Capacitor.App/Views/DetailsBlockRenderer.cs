@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
@@ -33,6 +34,7 @@ sealed class DetailsBlockRenderer(DetailsState state, Action<int, bool> toggle) 
         row.Children.Add(label);
 
         var header = new ToggleButton { Content = row, IsChecked = expanded, Tag = obj.Ordinal };
+        AutomationProperties.SetName(header, label.Inlines?.Text);
         header.Classes.Add("markdown-details-summary");
         header.Click += (_, _) => toggle(obj.Ordinal, header.IsChecked == true);
 
