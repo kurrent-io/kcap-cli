@@ -8,9 +8,11 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// A flush that fails for any reason spills to the spool instead of retrying inline — the
 /// caller is on a user's command path and must not wait on a broken network.
 /// </summary>
+/// <param name="consent">Asked just before a send starts, for a process that outlives an opt-out saved by another:
+/// false withdraws the send and discards as <see cref="Discard"/> does. Null for a process that never needs it.</param>
 public sealed class TelemetryClient(
         HttpMessageHandler handler, TelemetrySpool spool, string token, string endpoint,
-        TimeProvider timeProvider) : ITelemetrySink {
+        TimeProvider timeProvider, Func<bool>? consent = null) : ITelemetrySink {
     readonly List<TelemetryEvent> _queue = [];
     readonly Lock                 _flushLock = new();
     Task<bool>                    _lastFlush = Task.FromResult(true);
@@ -124,9 +126,15 @@ public sealed class TelemetryClient(
 
             // Re-checked after the drain and build, under the lock Discard takes: an opt-out before this
             // point starts no send, and one after it cancels the send in flight.
+            var withdrawn = consent?.Invoke() == false;
             lock (_discardLock) {
                 if (_discarded) return false;
-                _sending = cts;
+                if (!withdrawn) _sending = cts;
+            }
+
+            if (withdrawn) {
+                Discard();
+                return false;
             }
 
             HttpResponseMessage response;

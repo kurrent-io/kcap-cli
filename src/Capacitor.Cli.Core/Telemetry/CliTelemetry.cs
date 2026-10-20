@@ -91,7 +91,10 @@ public sealed class CliTelemetry {
     /// </summary>
     public static CliTelemetry Start(TelemetryStartup startup, ConfigRoot config, TimeProvider time) =>
         Start(startup, config, time,
-            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time));
+            () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time,
+                consent: startup.Source == TelemetryStartup.DesktopSource ? () => SavedConsent(config) : null));
+
+    static bool SavedConsent(ConfigRoot config) => TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled;
 
     /// <param name="sink">
     /// Invoked only when the facade comes up live, so a run that is opted out builds no HTTP
@@ -253,7 +256,7 @@ public sealed class CliTelemetry {
 
     bool StillEnabled() {
         if (!Enabled) return false;
-        if (_config is null || TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(_config)).Enabled) return true;
+        if (_config is null || SavedConsent(_config)) return true;
 
         DiscardAndDisable();
 

@@ -296,6 +296,24 @@ public class TelemetryClientTests {
         await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
     }
 
+    /// <summary>An opt-out saved by another process between the capture and the send stops the send and drops
+    /// what it would have carried.</summary>
+    [Test]
+    public async Task A_send_whose_consent_was_withdrawn_does_not_start() {
+        var handler = new StubHandler(HttpStatusCode.OK);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool   = new TelemetrySpool(spoolPath);
+        var consent = true;
+        var client  = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System, () => consent);
+        client.Enqueue(Event("captured_with_consent"));
+
+        consent = false;
+
+        await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsFalse();
+        await Assert.That(handler.Calls).IsEqualTo(0);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
     sealed class GatedHandler(HttpStatusCode status) : HttpMessageHandler {
         public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
