@@ -59,7 +59,11 @@ sealed class WindowsScheduledTaskServiceManager(
     }
 
     public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) {
-        var (code, _, _) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        var (code, _, err) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        if (code != 0 && !ConfirmedAbsent(serviceId))
+            throw new InvalidOperationException(
+                $"Could not read the state of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
+
         var wrapper = WrapperOf(serviceId, taskExists: code == 0);
         return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
     }
