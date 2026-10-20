@@ -88,6 +88,17 @@ internal sealed class LocalSetupArgsTests {
         await Assert.That(parsed).IsEqualTo(new LocalSetupArgs(Json: true, SingleUser: true, Yes: true, NoPrompt: true));
     }
 
+    /// <summary>Without --no-prompt, --json is the desktop app's install-only run and keeps refusing these.</summary>
+    [Test]
+    public async Task Json_with_no_prompt_runs_every_step_and_keeps_their_flags() {
+        var (parsed, error) = LocalSetupArgs.Parse(
+            ["setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--default-visibility", "private", "--skip-import"],
+            kcapUrlEnv: null);
+
+        await Assert.That(error).IsNull();
+        await Assert.That(parsed).IsEqualTo(new LocalSetupArgs(Json: true, SingleUser: true, Yes: true, NoPrompt: true, WholeRun: true));
+    }
+
     [Test]
     public async Task The_terminal_arm_keeps_the_later_steps_flags() {
         var (parsed, error) = LocalSetupArgs.Parse(

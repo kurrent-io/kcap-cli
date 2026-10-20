@@ -20,6 +20,9 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 public sealed class ChosenServerHttp(
         ConfigRoot config, ProfileContext profiles, ProfileOverrides env, MachineAuth machine, LocalRoot localRoot) {
+    /// <summary>The machine credential every client built here authenticates with when it is set.</summary>
+    public MachineAuth Machine => machine;
+
     public ServiceProvider For(string serverUrl, ProfileContext? chosen = null) {
         var basis   = chosen ?? profiles;
         var context = new ProfileContext(basis.Resolution.Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), basis.Snapshot);

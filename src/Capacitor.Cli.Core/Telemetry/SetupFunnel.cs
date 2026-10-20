@@ -35,7 +35,8 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
             ["no_prompt"]            = noPrompt,
         });
 
-    /// <summary>The app wizard's first screen came up; the denominator for the edition branch.</summary>
+    /// <summary>The edition choice came up, as the app wizard's first screen or in a bare interactive
+    /// <c>kcap setup</c>; the denominator for the edition branch.</summary>
     public void EditionOffered() => Emit("cli_setup_edition_offered", new JsonObject());
 
     /// <summary>
