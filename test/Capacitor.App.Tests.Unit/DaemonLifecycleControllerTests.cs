@@ -1631,7 +1631,8 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
         await Assert.That(h.Surface.AttentionMessages.Single())
-            .Contains($"--name daemon-a --profile {(urlOverride ? "PROFILE" : "default")}");
+            .Contains($"--name daemon-a --profile {(urlOverride ? "<profile>" : "default")}");
+        await Assert.That(h.Surface.AttentionMessages.Single().Contains("with <profile> replaced", StringComparison.Ordinal)).IsEqualTo(urlOverride);
         await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.Lane.Requests).IsEmpty();
     }

@@ -552,11 +552,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var foreignServer = daemon.Snapshots.Select(s => ForeignDaemonServer(s.Daemon.ServerUrl, appServerUrl))
             .StartWith((string?)null).DistinctUntilChanged();
         // A daemon serving another server is connected to the wrong one: it cannot launch for this app.
-        var availability = daemon.Status.CombineLatest(
-            daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""), foreignServer,
-            (status, connection, foreign) => AvailabilityFor(status, connection) is LaunchAvailability.Ready && foreign is not null
-                ? LaunchAvailability.ServerDisconnected
-                : AvailabilityFor(status, connection));
+        var daemonAvailability = daemon.Status.CombineLatest(
+            daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""), AvailabilityFor);
+        var availability = daemonAvailability.CombineLatest(foreignServer,
+            (local, foreign) => local is LaunchAvailability.Ready && foreign is not null ? LaunchAvailability.ServerDisconnected : local);
         availability.Subscribe(a => _currentAvailability = a).DisposeWith(_disposables);
         daemon.Snapshots.Select(s => s.Daemon.SupportedVendors)
             .Subscribe(v => _currentLocalVendors = v)
@@ -698,7 +697,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
 
-        availability
+        // The daemon catching up ends the wait whichever server it serves.
+        daemonAvailability
             .Where(a => a is LaunchAvailability.Ready or LaunchAvailability.DaemonUnavailable)
             .Subscribe(_ => _awaitingServerAfterSignIn.OnNext(false))
             .DisposeWith(_disposables);

@@ -51,11 +51,12 @@ internal static class AttachedIdentity {
     internal static string ManualRepair(string daemonName, string? profile, bool windows, bool verifiedReplace) {
         var serviceId = DaemonStore.Sanitize(daemonName);
         var name      = string.IsNullOrWhiteSpace(daemonName) || daemonName.TrimStart().StartsWith('-') ? serviceId : Quote(daemonName, windows);
-        var target    = $"--name {name} --profile {(profile is null ? "PROFILE" : Quote(profile, windows))}";
+        var target    = $"--name {name} --profile {(profile is null ? "<profile>" : Quote(profile, windows))}";
         var commands  = verifiedReplace
             ? $"`kcap daemon service install --replace --verify {target}`"
             : $"`kcap daemon service uninstall --name {serviceId}`, then `kcap daemon service install {target}`";
-        return $"To fix it, run {commands} in {(windows ? "PowerShell" : "a shell")} where KCAP_URL is unset, then restart the app.";
+        var placeholder = profile is null ? ", with <profile> replaced by the profile this app should use," : "";
+        return $"To fix it, run {commands}{placeholder} in {(windows ? "PowerShell" : "a shell")} where KCAP_URL is unset, then restart the app.";
     }
 
     // Quoted only when the value needs it.

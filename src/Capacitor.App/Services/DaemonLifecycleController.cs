@@ -594,8 +594,9 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (requireIdle && _latestActiveAgents > 0) {
             _surface.Status("Agents started on the daemon while the prompt was open — canceled, nothing changed.");
-            // Offered again once they finish.
+            // Offered again once they finish; the flag goes first so an idle snapshot landing now still finds it.
             lock (_lock) _mismatchWaitsForIdle = true;
+            if (_latestActiveAgents == 0) _ = CheckAttachedIdentityAsync();
             return;
         }
 
@@ -876,13 +877,15 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             // A reconnect while this waited was suppressed as already reported: offer it again on the attach now
             // current. Detached, the next attach reports afresh.
             if (superseded) {
-                bool attached;
-                // One lock for both, so an attach landing between them cannot be suppressed by the mismatch about to clear.
+                bool offerAgain;
+                // One lock for all of it, so an attach landing between them cannot be suppressed by the mismatch about
+                // to clear. A reconnect whose own check recorded a different mismatch has made its own offer.
                 lock (_lock) {
-                    attached = _lastObserved.State == AttachState.Connected;
+                    var attached = _lastObserved.State == AttachState.Connected;
+                    offerAgain = attached && _reportedMismatch == mismatch;
                     if (!attached && _reportedMismatch == mismatch) _reportedMismatch = null;
                 }
-                if (attached) _ = CheckAttachedIdentityAsync(reoffer: true);
+                if (offerAgain) _ = CheckAttachedIdentityAsync(reoffer: true);
             }
         } catch (OperationCanceledException) {
             // shutdown
