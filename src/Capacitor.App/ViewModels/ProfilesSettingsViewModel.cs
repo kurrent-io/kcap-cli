@@ -17,7 +17,7 @@ public sealed class ProfilesSettingsViewModel : ReactiveObject {
         var start = $"Remove profile {name}? Its saved sign-in is deleted too.";
         return daemonProfile is null
             ? start + " If the local daemon runs on this profile, it stays signed out until you sign in to it again." + server
-            : string.Equals(name, daemonProfile, StringComparison.OrdinalIgnoreCase)
+            : string.Equals(name, daemonProfile, StringComparison.Ordinal)
                 ? start + " The local daemon runs on this profile, so it stays signed out until you sign in to it again or install it on another profile." + server
                 : start + server;
     }

@@ -790,7 +790,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             AttachStatus status, DaemonInfoDto? daemon, string? appProfile) =>
         status.State == AttachState.Connected && daemon is { Credential: not null } && daemon.Connection != "connected"
             ? (true, appProfile is not null
-                     && (daemon.Profile is null || string.Equals(daemon.Profile, appProfile, StringComparison.OrdinalIgnoreCase)))
+                     && (daemon.Profile is null || string.Equals(daemon.Profile, appProfile, StringComparison.Ordinal)))
             : (false, false);
 
     // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub

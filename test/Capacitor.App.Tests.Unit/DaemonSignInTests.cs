@@ -13,7 +13,7 @@ public class DaemonSignInTests {
 
     [Test]
     [Arguments("reconnecting", "signed_out", "work", "work", true, true)]
-    [Arguments("reconnecting", "rejected", "work", "WORK", true, true)]
+    [Arguments("reconnecting", "rejected", "work", "WORK", true, false)]  // profile names are case-sensitive keys
     [Arguments("reconnecting", "signed_out", "old", "work", true, false)]
     [Arguments("reconnecting", "signed_out", null, "work", true, true)]
     [Arguments("reconnecting", "signed_out", "work", null, true, false)]
@@ -61,14 +61,15 @@ public class DaemonSignInTests {
 
     [Test]
     [Arguments("work", "work", "The local daemon runs on this profile")]
-    [Arguments("work", "WORK", "The local daemon runs on this profile")]
     [Arguments("work", null, "If the local daemon runs on this profile")]
     public async Task Removing_the_daemons_profile_or_an_unknown_one_warns_of_the_sign_out(string name, string? daemonProfile, string warning) =>
         await Assert.That(ProfilesSettingsViewModel.RemovePrompt(name, daemonProfile)).Contains(warning);
 
     [Test]
-    public async Task Removing_another_profile_says_nothing_about_the_daemon() =>
-        await Assert.That(ProfilesSettingsViewModel.RemovePrompt("work", "other")).DoesNotContain("daemon");
+    [Arguments("other")]
+    [Arguments("WORK")]
+    public async Task Removing_another_profile_says_nothing_about_the_daemon(string daemonProfile) =>
+        await Assert.That(ProfilesSettingsViewModel.RemovePrompt("work", daemonProfile)).DoesNotContain("daemon");
 
     [Test]
     [Arguments(false, false, false, HomeViewModel.DaemonSignedOutNotice)]
