@@ -49,9 +49,13 @@ public static class TelemetryState {
     /// <see cref="TelemetryDeviceId.GetOrCreate"/> call, which is more private than resurrecting the
     /// discarded one.
     /// </summary>
-    public static void SetEnabled(bool enabled, ConfigRoot config) {
+    /// <returns>Whether the file now holds the choice: every write failure is swallowed, so a caller that
+    /// must not report an unsaved choice as saved reads it here.</returns>
+    public static bool SetEnabled(bool enabled, ConfigRoot config) {
         Mutate(config, state => state with { Enabled = enabled });
         if (!enabled) TelemetryDeviceId.Delete(config);
+
+        return PersistedEnabled(config) == enabled;
     }
 
     public static void MarkNoticeShown(ConfigRoot config) =>

@@ -1000,7 +1000,8 @@ public partial class App : Application {
             _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
             _foreignHttp.GetRequiredService<WorkOSClient>(),
             profile, serverUrl,
-            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints),
+            // A re-auth is not setup, so none of its sign-in reaches the setup funnel.
+            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), CliTelemetry.Disabled(_time), _endpoints),
             new ConsentFlipClaims(_config),
             _appState,
             new ShellUrlOpener(),

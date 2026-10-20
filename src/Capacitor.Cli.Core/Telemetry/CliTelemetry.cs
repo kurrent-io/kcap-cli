@@ -33,6 +33,10 @@ public sealed class CliTelemetry {
     readonly bool           _debug;
     readonly bool           _desktop;
 
+    /// <summary>Set for the desktop app only, which outlives the commands run beside it: an opt-out a
+    /// command saves must stop it too, so it re-reads the saved choice before it queues or ships.</summary>
+    readonly ConfigRoot?    _config;
+
     /// <summary>
     /// Guards <see cref="_shared"/>, which is written after construction as well as during it: the
     /// loopback browser's background wait merges the returned web identity whenever the browser
@@ -48,8 +52,9 @@ public sealed class CliTelemetry {
 
     CliTelemetry(
             ITelemetrySink sink, string command, bool enabled, string? deviceId, string? orgGroup,
-            bool debug, string signupUrl, JsonObject shared, TimeProvider time, bool desktop = false) {
-        _desktop  = desktop;
+            bool debug, string signupUrl, JsonObject shared, TimeProvider time, ConfigRoot? desktopConfig = null) {
+        _desktop  = desktopConfig is not null;
+        _config   = desktopConfig;
         _sink     = sink;
         _time     = time;
         _command  = command;
@@ -128,7 +133,7 @@ public sealed class CliTelemetry {
                     ["has_server"]    = startup.ServerUrl is not null,
                 },
                 time,
-                desktop: startup.Source == TelemetryStartup.DesktopSource);
+                desktopConfig: startup.Source == TelemetryStartup.DesktopSource ? config : null);
 
             // Minted here rather than in Announce so the key is in the shared bag before ANY event
             // can be captured — cli_first_run included, which is once per device and unrepairable by
@@ -149,7 +154,7 @@ public sealed class CliTelemetry {
     /// <summary>Queue an event for the exit flush.</summary>
     public void Capture(string name, JsonObject properties) {
         try {
-            if (!Enabled) return;
+            if (!StillEnabled()) return;
 
             lock (_sharedGate)
                 foreach (var (key, value) in _shared)
@@ -240,7 +245,7 @@ public sealed class CliTelemetry {
 
     public async Task FlushAndClose() {
         try {
-            if (!Enabled || _deviceId is null) return;
+            if (!StillEnabled() || _deviceId is null) return;
 
             await _sink.FlushAsync(_deviceId, _orgGroup, FlushBudget);
         } catch { }
@@ -256,6 +261,15 @@ public sealed class CliTelemetry {
     /// <see cref="TelemetryState.SetEnabled"/> persists the "off" (which already clears the
     /// on-disk id — this drops the queue it was minted for).
     /// </summary>
+    bool StillEnabled() {
+        if (!Enabled) return false;
+        if (_config is null || TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(_config)).Enabled) return true;
+
+        DiscardAndDisable();
+
+        return false;
+    }
+
     public void DiscardAndDisable() {
         try {
             _sink.Discard();

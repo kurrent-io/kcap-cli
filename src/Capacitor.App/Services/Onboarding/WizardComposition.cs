@@ -107,7 +107,8 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, null, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition);
+            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition,
+            spec.Telemetry.Funnel);
 
     /// The ONE façade a wizard run signs in through, with the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.

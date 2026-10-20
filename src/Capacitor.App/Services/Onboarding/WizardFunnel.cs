@@ -16,7 +16,6 @@ static class WizardFunnel {
         void Closed() => funnel.WizardClosed(Name(wizard.Current.Id), wizard.Current.Id == WizardStepId.Done);
 
         wizard.CloseRequested += Closed;
-        // Completes itself on the first enable.
         daemon.Where(d => d.Satisfied).Take(1).Subscribe(d => funnel.DaemonEnabled(d.AlreadyRunning));
 
         return new CompositeDisposable(

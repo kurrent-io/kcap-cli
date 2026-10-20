@@ -249,8 +249,7 @@
                                                Text="{Binding Privacy.Hint, FallbackValue={x:Null}}"
                                                IsVisible="{Binding Privacy.Hint, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
                                 </StackPanel>
-                                <ToggleSwitch Grid.Column="1" x:Name="UsageDataSwitch" VerticalAlignment="Center"
-                                              OnContent="" OffContent=""
+                                <ToggleSwitch Grid.Column="1" x:Name="UsageDataSwitch" Classes="kcapSwitch" VerticalAlignment="Center"
                                               AutomationProperties.Name="Send usage data"
                                               IsEnabled="{Binding Privacy.CanChange, FallbackValue=False}"
                                               IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />

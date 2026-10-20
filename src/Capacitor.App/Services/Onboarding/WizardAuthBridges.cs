@@ -113,15 +113,25 @@ public sealed class WizardBridges {
 /// carries <see cref="OnboardingGate"/> to Complete.
 /// </summary>
 public static class WizardSignInOperation {
+    /// <param name="funnel">Where a paste sign-in's outcome is recorded; discovery records its own.</param>
     public static Func<ConnectIntent, CancellationToken, Task<AuthResult>> For(
-            OnboardingFacade facade, string profile, CommitPrecondition? precondition = null) =>
+            OnboardingFacade facade, string profile, CommitPrecondition? precondition = null, SetupFunnel? funnel = null) =>
         async (intent, ct) => intent switch {
-            ConnectIntent.Paste paste => await facade.LoginAsync(
-                ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true, precondition: precondition),
+            ConnectIntent.Paste paste => Recorded(await facade.LoginAsync(
+                ResolveServer(paste.ServerInput), forceDevice: false, profile, ct, adoptServer: true, precondition: precondition), funnel),
             ConnectIntent.Discover discover =>
                 await facade.DiscoverAsync(AuthProvider.WorkOS, discover.ForceDevice, ct, discover.ConfirmPick),
             _ => new AuthResult.Failed("No connection was chosen.")
         };
+
+    static AuthResult Recorded(AuthResult result, SetupFunnel? funnel) {
+        switch (result) {
+            case AuthResult.Committed committed: funnel?.SigninCompleted(committed.Provider); break;
+            case AuthResult.Failed:              funnel?.SigninFailed("paste_signin_failed"); break;
+        }
+
+        return result;
+    }
 
     /// <summary>
     /// Origin first, then slug expansion: a pasted page URL must lose its path before

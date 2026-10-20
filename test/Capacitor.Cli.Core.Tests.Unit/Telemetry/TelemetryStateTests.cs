@@ -26,6 +26,16 @@ public class TelemetryStateTests {
     }
 
     [Test]
+    public async Task Set_enabled_reports_a_choice_it_could_not_save() {
+        await Assert.That(TelemetryState.SetEnabled(true, Config.Root)).IsTrue();
+
+        File.Delete(Config.Root.Path("telemetry.json"));
+        Directory.CreateDirectory(Config.Root.Path("telemetry.json"));
+
+        await Assert.That(TelemetryState.SetEnabled(false, Config.Root)).IsFalse();
+    }
+
+    [Test]
     public async Task Notice_shown_marker_persists() {
         await Assert.That(TelemetryState.Read(Config.Root).NoticeShown).IsFalse();
         TelemetryState.MarkNoticeShown(Config.Root);

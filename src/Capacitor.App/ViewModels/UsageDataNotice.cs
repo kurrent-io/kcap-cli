@@ -13,7 +13,11 @@ public sealed class UsageDataNotice : ReactiveObject {
         "kcap collects pseudonymous usage data: which screens and features you use and how setup goes, never "
       + "file paths, prompts or transcript content. It can be associated with your workspace and its creator.";
 
-    bool _visible;
+    public const string NotSaved =
+        "Usage data is off until the app quits, but the choice couldn't be saved, so it starts again the next time the app opens.";
+
+    bool   _visible;
+    string _message = Text;
 
     public UsageDataNotice(CliTelemetry telemetry, ConfigRoot config) {
         _visible   = telemetry.NoticeDue(config);
@@ -23,7 +27,7 @@ public sealed class UsageDataNotice : ReactiveObject {
             telemetry.AcknowledgeNotice(config);
             Hide();
         });
-        TurnOffCommand = ReactiveCommand.Create(() => TurnOff(telemetry, config, this), Observable.Return(CanTurnOff));
+        TurnOffCommand = ReactiveCommand.Create(() => { TurnOff(telemetry, config, this); }, Observable.Return(CanTurnOff));
     }
 
     public bool Visible {
@@ -31,20 +35,33 @@ public sealed class UsageDataNotice : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _visible, value);
     }
 
-    public string Message => Text;
+    public string Message {
+        get => _message;
+        private set => this.RaiseAndSetIfChanged(ref _message, value);
+    }
 
     public bool CanTurnOff { get; }
 
     public ReactiveCommand<Unit, Unit> AcknowledgeCommand { get; }
     public ReactiveCommand<Unit, Unit> TurnOffCommand { get; }
 
+    /// Raised whenever usage data is turned off, from here or from Settings, so an open Settings switch follows.
+    public event Action? TurnedOff;
+
     public void Hide() => Visible = false;
 
-    /// Persists the opt-out every kcap process reads, and drops what this process has queued, which the
-    /// persisted flag alone would not stop.
-    internal static void TurnOff(CliTelemetry telemetry, ConfigRoot config, UsageDataNotice notice) {
-        TelemetryState.SetEnabled(false, config);
+    /// Stops this process first, whose queue the saved flag alone would not stop, then saves the opt-out
+    /// every kcap process reads. An unsaved one keeps the notice up, saying so.
+    /// <returns>Whether the opt-out was saved.</returns>
+    internal static bool TurnOff(CliTelemetry telemetry, ConfigRoot config, UsageDataNotice notice) {
         telemetry.DiscardAndDisable();
-        notice.Hide();
+        var saved = TelemetryState.SetEnabled(false, config);
+
+        if (saved) notice.Hide();
+        else notice.Message = NotSaved;
+
+        notice.TurnedOff?.Invoke();
+
+        return saved;
     }
 }

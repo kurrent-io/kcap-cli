@@ -59,4 +59,55 @@ public class UsageDataSettingsTests {
         await Assert.That(TelemetryState.PersistedEnabled(Config.Root) == true).IsTrue();
         await Assert.That(privacy.Hint).IsEqualTo(PrivacySettingsViewModel.TakesEffectOnRelaunch);
     }
+
+    [Test]
+    public async Task Turning_it_off_from_the_notice_moves_an_open_settings_switch() {
+        var probe   = Desktop();
+        var notice  = new UsageDataNotice(probe.Telemetry, Config.Root);
+        using var privacy = new PrivacySettingsViewModel(probe.Telemetry, Config.Root, notice);
+        var changed = new List<string?>();
+        privacy.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        await notice.TurnOffCommand.Execute().ToTask();
+
+        await Assert.That(privacy.SendUsageData).IsFalse();
+        await Assert.That(changed).Contains(nameof(PrivacySettingsViewModel.SendUsageData));
+    }
+
+    /// <summary>A choice that cannot be written to disk still stops this process, and both surfaces say the
+    /// next launch will send again rather than hiding as though it had been saved.</summary>
+    [Test]
+    public async Task An_opt_out_that_cannot_be_saved_stops_this_process_and_says_so() {
+        var probe   = Desktop();
+        var notice  = new UsageDataNotice(probe.Telemetry, Config.Root);
+        using var privacy = new PrivacySettingsViewModel(probe.Telemetry, Config.Root, notice);
+        Unwritable();
+
+        privacy.SendUsageData = false;
+
+        await Assert.That(probe.Telemetry.Enabled).IsFalse();
+        await Assert.That(privacy.Hint).IsEqualTo(UsageDataNotice.NotSaved);
+        await Assert.That(notice.Visible).IsTrue();
+        await Assert.That(notice.Message).IsEqualTo(UsageDataNotice.NotSaved);
+    }
+
+    [Test]
+    public async Task Turning_it_on_when_that_cannot_be_saved_leaves_the_switch_off() {
+        var probe   = Desktop();
+        var notice  = new UsageDataNotice(probe.Telemetry, Config.Root);
+        using var privacy = new PrivacySettingsViewModel(probe.Telemetry, Config.Root, notice);
+        privacy.SendUsageData = false;
+        Unwritable();
+
+        privacy.SendUsageData = true;
+
+        await Assert.That(privacy.SendUsageData).IsFalse();
+        await Assert.That(privacy.Hint).IsEqualTo(PrivacySettingsViewModel.CouldNotSave);
+    }
+
+    void Unwritable() {
+        var path = Config.Root.Path("telemetry.json");
+        if (File.Exists(path)) File.Delete(path);
+        Directory.CreateDirectory(path);
+    }
 }

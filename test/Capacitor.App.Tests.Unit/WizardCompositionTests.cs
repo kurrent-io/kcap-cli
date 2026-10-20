@@ -10,6 +10,7 @@ using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Telemetry;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core;
 
@@ -268,6 +269,26 @@ public class WizardSignInOperationPreconditionTests {
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(File.Exists(Config.PathTo("tokens", $"{ProfileName}.json"))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_failed_paste_sign_in_reaches_the_funnel() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig {
+                ActiveProfile = ProfileName,
+                Profiles      = new() { [ProfileName] = new Profile { ServerUrl = ServerUrl } }
+            });
+        var probe = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), Config.Root);
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, probe.Telemetry);
+
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"GitHubApp","github_client_id":"cid"}""");
+        var operation = WizardSignInOperation.For(
+            AuthFixtures.NewFacade(Config.Root, new RecordingAuthProgress(), handler), ProfileName,
+            new CommitPrecondition.ExpectServer("https://elsewhere.example"), probe.Funnel);
+
+        await operation(new ConnectIntent.Paste(ServerUrl), CancellationToken.None);
+
+        await Assert.That(probe.Names).Contains("cli_setup_signin_failed");
     }
 }
 

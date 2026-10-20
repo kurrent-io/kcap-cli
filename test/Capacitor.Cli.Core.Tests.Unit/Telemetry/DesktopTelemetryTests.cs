@@ -72,6 +72,23 @@ public class DesktopTelemetryTests {
         await Assert.That(sink.Flushes).IsGreaterThan(0);
     }
 
+    /// <summary>The app outlives the commands run beside it, so `kcap config set telemetry off` stops it
+    /// sending what it queued before the opt-out as well as anything after.</summary>
+    [Test]
+    public async Task An_opt_out_saved_while_the_app_runs_stops_it_sending() {
+        var (telemetry, sink) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+        telemetry.Capture("before", new JsonObject());
+
+        TelemetryState.SetEnabled(false, Config.Root);
+        telemetry.Capture("after", new JsonObject());
+        await telemetry.FlushAndClose();
+
+        await Assert.That(sink.Events).IsEmpty();
+        await Assert.That(sink.Flushes).IsEqualTo(0);
+        await Assert.That(telemetry.Enabled).IsFalse();
+    }
+
     [Test]
     public async Task The_console_announcement_never_runs_for_the_desktop_app() {
         var (telemetry, sink) = Start(new RecordingTelemetrySink());

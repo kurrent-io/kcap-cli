@@ -414,6 +414,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         _lifetime.Cancel();
         _subscriptions.Dispose();
         Appearance?.Dispose();
+        Privacy?.Dispose();
         _lifetime.Dispose();
     }
 }
