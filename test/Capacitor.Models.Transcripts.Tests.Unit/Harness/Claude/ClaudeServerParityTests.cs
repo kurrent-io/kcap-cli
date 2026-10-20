@@ -130,4 +130,26 @@ public class ClaudeServerParityTests {
         await Assert.That(slug.Fields[ClaudeCodeExtension.IsHandback].BoolValue).IsTrue();
         await Assert.That(slug.Fields[ClaudeCodeExtension.OriginKind].StringValue).IsEqualTo("peer");
     }
+
+    /// <summary>A queued command's own fields describe who wrote it, as the server reads them from the
+    /// attachment rather than the line around it.</summary>
+    [Test]
+    public async Task A_queued_prompt_carries_the_attachments_own_origin_fields() {
+        var e = E("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"go","isMeta":true,"isCompactSummary":true,"promptSource":"queue","turnPosition":{"promptIndex":4},"origin":{"kind":"human","handback":true}}}""");
+
+        var slug = SchemaExtensions.Slug(e[0].Payload, ClaudeCodeExtension.Slug)!;
+        await Assert.That(slug.Fields[ClaudeCodeExtension.IsMeta].BoolValue).IsTrue();
+        await Assert.That(slug.Fields[ClaudeCodeExtension.IsCompactSummary].BoolValue).IsTrue();
+        await Assert.That(slug.Fields[ClaudeCodeExtension.PromptSource].StringValue).IsEqualTo("queue");
+        await Assert.That(slug.Fields[ClaudeCodeExtension.PromptIndex].NumberValue).IsEqualTo(4d);
+        await Assert.That(slug.Fields[ClaudeCodeExtension.IsHandback].BoolValue).IsTrue();
+    }
+
+    [Test]
+    public async Task A_task_notification_with_a_content_array_is_a_user_message() {
+        var e = E("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":[{"type":"text","text":"<task-notification>done</task-notification>"}]}}""");
+
+        await Assert.That(((UserMessageReceived)e[0].Payload).Content).IsEqualTo("<task-notification>done</task-notification>");
+        await Assert.That(SchemaExtensions.Slug(e[0].Payload, ClaudeCodeExtension.Slug)!.Fields[ClaudeCodeExtension.OriginKind].StringValue).IsEqualTo("task-notification");
+    }
 }

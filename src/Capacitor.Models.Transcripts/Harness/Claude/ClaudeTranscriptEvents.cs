@@ -203,8 +203,8 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         if (root.Obj("attachment") is not { } attachment || attachment.Str("type") != "queued_command") return null;
         switch (attachment.Str("commandMode")) {
             case "task-notification":
-                return attachment.Prop("prompt") is { ValueKind: JsonValueKind.String } notification && notification.GetString() is { Length: > 0 }
-                    ? (notification, "task-notification", "task-notification") : null;
+                return attachment.Prop("prompt") is { ValueKind: JsonValueKind.String or JsonValueKind.Array } notification
+                    ? (notification, "task-notification", attachment.Obj("origin")?.Str("kind") ?? "task-notification") : null;
             case "prompt":
                 return attachment.Prop("prompt") is { ValueKind: JsonValueKind.String or JsonValueKind.Array } prompt
                     ? (prompt, "prompt", attachment.Obj("origin")?.Str("kind")) : null;
@@ -219,10 +219,13 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             : Joined(Content(queued.Prompt, record));
         if (text.Length == 0 && attachments.Count == 0) return [];
 
-        var emitter = new Emitter(record);
+        // Who wrote a queued command is recorded on the attachment itself, as the server reads it.
+        var attachment = root.Obj("attachment")!.Value;
+        var origin     = OriginOf(attachment) with { IsQueued = true, CommandMode = queued.Mode };
+        var emitter    = new Emitter(record);
         emitter.Add(0, UserMessage(text, record),
-            ClaudeCodeExtension.Flags(record.IsSidechain, root.Bool("isMeta") == true, queued.OriginKind,
-                origin: new ClaudeCodeExtension.Origin(false, null, null, IsQueued: true, CommandMode: queued.Mode)),
+            ClaudeCodeExtension.Flags(record.IsSidechain, root.Bool("isMeta") == true || attachment.Bool("isMeta") == true, queued.OriginKind,
+                isCompactSummary: attachment.Bool("isCompactSummary") == true, origin: origin),
             attachments);
         return emitter.Events;
 
