@@ -575,9 +575,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                         _statusNotifier.Pulse();
                     }
 
+                    // A connected hub has accepted the bearer, whatever registration then makes of it.
+                    if (HubState == HubConnectionState.Connected) CredentialHealth.ObserveConnected();
+
                     await RegisterDaemonAsync();
                     _connectedTimestamp = _time.GetTimestamp();
-                    CredentialHealth.ObserveConnected();
                     LogConnected(_config.Name);
                     _statusNotifier.Pulse();
 
