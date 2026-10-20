@@ -82,7 +82,6 @@
         </Style>
         <Style Selector="Border.avatar > Panel > TextBlock">
             <Setter Property="FontSize" Value="12" />
-            <Setter Property="LineHeight" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
             <Setter Property="HorizontalAlignment" Value="Center" />
@@ -219,7 +218,7 @@
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                 <!-- The pulse is the row's own: it stops when the session ends, and the
                      ring stays so the task still reads as started. -->
-                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                <Panel Width="12" Height="16" VerticalAlignment="Top">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
                     <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
                             HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
@@ -236,7 +235,7 @@
         </DataTemplate>
         <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                <Panel Width="12" Height="16" VerticalAlignment="Top">
                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
                 </Panel>
                 <StackPanel Grid.Column="1" Spacing="2">
@@ -347,7 +346,7 @@
                                         <TextBlock Text="PARTS" Classes="eyebrow" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding PartsHeader}" Classes="sectionMeta" />
-                                            <Panel Classes="chevronBox" Width="12" Height="12">
+                                            <Panel Width="12" Height="12">
                                                 <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron"
                                                                IsVisible="{Binding PartsExpanded}" />
                                                 <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron"
@@ -367,7 +366,7 @@
                                             <DataTemplate x:DataType="vm:WorkContextPartViewModel">
                                                 <StackPanel Orientation="Horizontal" Spacing="9" ToolTip.Tip="{Binding MarkTip}">
                                                     <!-- Settled is green (outcome). This session is purple like IN FLIGHT — location, not done. -->
-                                                    <Panel Width="12" Height="16" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
+                                                    <Panel Width="12" Height="16" VerticalAlignment="Center">
                                                         <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Center"
                                                                        VerticalAlignment="Center" IsVisible="{Binding !IsSettled}"
                                                                        Foreground="{StaticResource KcapBorderBrush}" />
@@ -375,7 +374,7 @@
                                                                        VerticalAlignment="Center" IsVisible="{Binding IsThisSession}"
                                                                        Foreground="{StaticResource KcapPurpleBrush}" />
                                                         <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
-                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding IsThisSession}" />
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" IsVisible="{Binding IsThisSession}" />
                                                         <views:AppIcon Kind="CircleCheck" Size="12" HorizontalAlignment="Center"
                                                                        VerticalAlignment="Center" IsVisible="{Binding IsSettled}"
                                                                        Foreground="{StaticResource KcapSuccessBrush}" />
@@ -413,7 +412,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="WhoCountText" Text="{Binding WhoCountText}" Classes="sectionMeta"
                                            IsVisible="{Binding WhoCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                <Panel Width="12" Height="12">
                                     <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding PeopleExpanded}" />
                                     <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !PeopleExpanded}" />
                                 </Panel>
@@ -535,7 +534,7 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="IssueKey" Text="{Binding IssueSectionMeta}" Classes="sectionMeta"
                                            IsVisible="{Binding IssueSectionMeta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                                <Panel Classes="chevronBox" Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
+                                <Panel Width="12" Height="12" IsVisible="{Binding IssuesOverflows}">
                                     <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding IssuesExpanded}" />
                                     <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !IssuesExpanded}" />
                                 </Panel>
@@ -596,8 +595,7 @@
                                         </MultiBinding>
                                     </TextBlock.IsVisible>
                                 </TextBlock>
-                                <!-- ItemsControl clips by default, and the marks' nudge lifts them past its top. -->
-                                <ItemsControl x:Name="PlanCounts" ItemsSource="{Binding Plan.Counts}" VerticalAlignment="Center" ClipToBounds="False">
+                                <ItemsControl x:Name="PlanCounts" ItemsSource="{Binding Plan.Counts}" VerticalAlignment="Center">
                                     <ItemsControl.IsVisible>
                                         <MultiBinding Converter="{x:Static BoolConverters.And}">
                                             <Binding Path="!Plan.IsExpanded" />
@@ -612,7 +610,7 @@
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:PlanTaskCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
-                                                <Panel Width="12" Height="12" VerticalAlignment="Center" RenderTransform="translateY(-1.5px)">
+                                                <Panel Width="12" Height="12" VerticalAlignment="Center">
                                                     <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource PlanMark}" VerticalAlignment="Center" />
                                                     <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapPurpleBrush}"
                                                             HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
@@ -623,7 +621,7 @@
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                <Panel Width="12" Height="12">
                                     <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding Plan.IsExpanded}" />
                                     <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !Plan.IsExpanded}" />
                                 </Panel>
@@ -672,9 +670,8 @@
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                                 <TextBlock x:Name="SubagentsHeaderText" Text="{Binding RunsHeader}" Classes="sectionMeta"
                                            IsVisible="{Binding RunsExpanded}" />
-                                <!-- ItemsControl clips by default, and the marks' nudge lifts them past its top. -->
                                 <ItemsControl x:Name="SubagentsSummary" ItemsSource="{Binding RunCounts}" VerticalAlignment="Center"
-                                              ClipToBounds="False" IsVisible="{Binding !RunsExpanded}">
+                                              IsVisible="{Binding !RunsExpanded}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate>
                                             <StackPanel Orientation="Horizontal" Spacing="10" />
@@ -684,13 +681,13 @@
                                         <DataTemplate x:DataType="vm:RunCount">
                                             <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
                                                 <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center"
-                                                                RenderTransform="translateY(-1.5px)" />
+                                                                />
                                                 <TextBlock Text="{Binding Count}" Classes="sectionMeta" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
-                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                <Panel Width="12" Height="12">
                                     <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding RunsExpanded}" />
                                     <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !RunsExpanded}" />
                                 </Panel>
@@ -728,7 +725,7 @@
                     <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />
-                            <Panel Classes="chevronBox" Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
+                            <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
                                 <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding SessionExpanded}" />
                                 <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !SessionExpanded}" />
                             </Panel>

@@ -80,11 +80,6 @@
         <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailLocalStackRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
         </Style>
-        <!-- Centred on the 11px line, the glyph lands a pixel under the word. The same
-             translateY(-1px) lifts an icon that sits beside a label. -->
-        <Style Selector="Panel.glyph, Border.vendorMark">
-            <Setter Property="RenderTransform" Value="translateY(-1px)" />
-        </Style>
         <!-- Status, machine, and age share an 11px line; the logo and glyph sit in that line. -->
         <Style Selector="Border.railChip">
             <Setter Property="VerticalAlignment" Value="Center" />
@@ -325,7 +320,7 @@
                                                     <views:AgentStatusMark Classes="railRepoStatus" DataContext="{Binding HeaderStatus}" ToolTip.Tip="{x:Null}" />
                                                 </Border>
                                                 <TextBlock Text="{Binding CountText}" Classes="sectionMeta" />
-                                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                                <Panel Width="12" Height="12">
                                                     <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron"
                                                                    IsVisible="{Binding IsExpanded}" />
                                                     <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron"

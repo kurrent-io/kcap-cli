@@ -17,7 +17,7 @@
     <Style Selector="TextBlock.frHeadline">
         <Setter Property="FontSize" Value="30" />
         <Setter Property="FontWeight" Value="Bold" />
-        <Setter Property="LineHeight" Value="34" />
+        <Setter Property="LineHeight" Value="37" />
         <Setter Property="LetterSpacing" Value="-0.75" />
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />

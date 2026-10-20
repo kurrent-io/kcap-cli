@@ -1,4 +1,5 @@
 using Avalonia;
+using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Platform;
 using Capacitor.App.Platform.Windows;
@@ -52,6 +53,8 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp() =>
         Host.ConfigureAvalonia(AppBuilder.Configure<App>()
             .UsePlatformDetect()
+            .WithInterFont()
+            .With(new FontManagerOptions { DefaultFamilyName = "fonts:Inter#Inter" })
             .UseReactiveUI(_ => { })
             .LogToTrace());
 }
