@@ -220,6 +220,47 @@ public class ProcessHelpersTests {
         await Assert.That(ProcessHelpers.ParseExecPath(buf)).IsEqualTo("/Users/alexey/.local/bin/claude");
     }
 
+    /// The kernel pads the exec path with NULs before argv; the arguments are read past that padding.
+    [Test]
+    public async Task ParseArgs_reads_the_arguments_after_the_exec_path_and_its_padding() {
+        var plain  = ProcArgs2.Of(3, "/opt/homebrew/bin/node", "node", "/usr/local/bin/gemini", "--resume");
+        var padded = ProcArgs2.Of(3, "/opt/homebrew/bin/node\0\0\0", "node", "/usr/local/bin/gemini", "--resume");
+
+        await Assert.That(ProcessHelpers.ParseArgs(plain)).IsEquivalentTo(["node", "/usr/local/bin/gemini", "--resume"]);
+        await Assert.That(ProcessHelpers.ParseArgs(padded)).IsEquivalentTo(["node", "/usr/local/bin/gemini", "--resume"]);
+        await Assert.That(ProcessHelpers.ParseArgs(new byte[] { 1, 0, 0, 0 })).IsEmpty();
+    }
+
+    /// Gemini CLI runs as node with no title, so only its script names it: the shim the shebang hands over,
+    /// or the entry point inside its package. Another runtime's script, or node alone, names nothing.
+    [Test]
+    [Arguments(new[] { "node", "/usr/local/bin/gemini", "--yolo" }, "gemini")]
+    [Arguments(new[] { "/usr/bin/node", "--no-warnings", "/usr/lib/node_modules/@google/gemini-cli/dist/index.js" }, "gemini-cli")]
+    [Arguments(new[] { "C:\\Program Files\\nodejs\\node.exe", "C:\\npm\\node_modules\\@google\\gemini-cli\\dist\\index.js" }, "gemini-cli")]
+    [Arguments(new[] { "/usr/bin/python3", "/usr/local/bin/gemini" }, null)]
+    [Arguments(new[] { "node" }, null)]
+    public async Task A_script_run_by_node_names_its_agent(string[] argv, string? expected) {
+        var names = ProcessHelpers.ScriptNameCandidates(argv).ToList();
+
+        if (expected is null) await Assert.That(names).IsEmpty();
+        else {
+            await Assert.That(names).Contains(expected);
+            await Assert.That(ProcessHelpers.ResolveCodingAgentPid(42, "gemini", pid => pid == 42 ? (1, names) : null)).IsEqualTo(42);
+        }
+    }
+
+    [Test]
+    public async Task SplitWindowsCommandLine_follows_the_runtime_quoting_rules() {
+        await Assert.That(ProcessHelpers.SplitWindowsCommandLine(
+                """
+                "C:\Program Files\nodejs\node.exe" "C:\Users\a b\gemini.js" --yolo
+                """))
+            .IsEquivalentTo(["C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\a b\\gemini.js", "--yolo"]);
+        await Assert.That(ProcessHelpers.SplitWindowsCommandLine("""a\\\"b c\\\\"d e" """))
+            .IsEquivalentTo(["a\\\"b", "c\\\\d e"]);
+        await Assert.That(ProcessHelpers.SplitWindowsCommandLine(null)).IsEmpty();
+    }
+
     [Test]
     public async Task ParseExecPath_returns_null_for_a_buffer_too_short_for_a_path() {
         // Just the 4-byte argc with no path, and a buffer shorter than argc itself.
