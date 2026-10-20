@@ -96,7 +96,7 @@ internal sealed class DaemonHeartbeatLoop(
                 logger.LogWarning("Heartbeat: server does not recognise this connection (cause=slot_displaced) — re-registering daemon");
                 await SafeReRegisterAsync();
             } else if (await SafeCredentialChangedAsync(ct)) {
-                logger.LogWarning("Heartbeat: the stored sign-in names another account (cause=credential_changed) — reconnecting so the hub signs in as it");
+                logger.LogWarning("Heartbeat: the stored sign-in no longer matches the one the hub negotiated (cause=credential_changed) — reconnecting");
                 await SafeForceReconnectAsync();
             }
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
@@ -144,9 +144,17 @@ internal sealed class DaemonHeartbeatLoop(
 
     async Task<bool> SafeCredentialChangedAsync(CancellationToken ct) {
         try {
-            return await port.CredentialChangedAsync(ct);
+            // Bounded like the ping: a stalled token-store read must not stop the loop probing the hub.
+            using var cap = new CancellationTokenSource(pingDeadline, time);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
+
+            return await port.CredentialChangedAsync(cts.Token).WaitAsync(cts.Token);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
+        } catch (OperationCanceledException) {
+            logger.LogWarning("Heartbeat: reading the stored sign-in exceeded {DeadlineMs:F0} ms — leaving the hub connected", pingDeadline.TotalMilliseconds);
+
+            return false;
         } catch (Exception ex) {
             // An unreadable token store says nothing about who the hub is signed in as.
             logger.LogWarning(ex, "Heartbeat: could not read the stored sign-in — leaving the hub connected");

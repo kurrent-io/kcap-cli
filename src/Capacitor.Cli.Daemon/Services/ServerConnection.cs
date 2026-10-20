@@ -848,8 +848,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
         Volatile.Read(ref _negotiatedAs) is { } negotiated
-     && HubIdentity.Of(await Credentials.ResolveAsync(ct)) is { } current
-     && current != negotiated;
+     && HubIdentity.Changed(negotiated, await Credentials.ResolveAsync(ct));
 
     // Once per change of reason, so a hub retrying every 30 s does not repeat it.
     void LogHubSignInUnavailable(CredentialState state) {

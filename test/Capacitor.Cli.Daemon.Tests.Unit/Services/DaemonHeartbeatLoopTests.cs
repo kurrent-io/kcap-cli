@@ -320,4 +320,15 @@ public class DaemonHeartbeatLoopTests {
         await Assert.That(port.ReRegisterCalls).IsEqualTo(1);
         await Assert.That(checks).IsEqualTo(0);
     }
+
+    /// <summary>The credential check shares the ping's deadline, so a stalled token-store read cannot hold
+    /// up the heartbeat; it reads as no change.</summary>
+    [Test]
+    public async Task A_stalled_credential_check_times_out_without_reconnecting() {
+        var port = new FakePort { CredentialChangedHandler = () => new TaskCompletionSource<bool>().Task };
+
+        await CreateLoop(port, TimeSpan.FromMilliseconds(200)).TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+    }
 }
