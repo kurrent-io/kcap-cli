@@ -25,6 +25,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public WizardLifecycleSurface? Surface { get; }
 
     int _index;
+    readonly bool[] _visited;
 
     IWizardStep? _current;
     public IWizardStep Current {
@@ -43,8 +44,19 @@ public sealed class OnboardingViewModel : ReactiveObject {
         }
     }
 
-    public string Eyebrow =>
-        $"STEP {_index + 1} OF {Steps.Count} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+    /// Counts the pages this run shows: a page it passes through is not a step, unless it was already shown
+    /// before it began passing through.
+    public string Eyebrow {
+        get {
+            var (position, total) = (0, 0);
+            for (var i = 0; i < Steps.Count; i++) {
+                if (!_visited[i] && Steps[i].PassThrough) continue;
+                total++;
+                if (i <= _index) position++;
+            }
+            return $"STEP {position} OF {total} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+        }
+    }
 
     public string NextLabel => Current.NextLabel ?? (_index == Steps.Count - 1 ? "Get started" : "Next");
     public string SkipLabel => Current.SkipLabel;
@@ -110,7 +122,10 @@ public sealed class OnboardingViewModel : ReactiveObject {
         Steps = applicable;
         if (Steps.Count == 0) throw new ArgumentException("at least one applicable step is required", nameof(steps));
 
-        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : 0;
+        _visited = new bool[Steps.Count];
+        // A run starts on the first page that offers a choice.
+        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : FirstShownFrom(0);
+        _visited[_index] = true;
         Current = Steps[_index];
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
@@ -162,10 +177,11 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
+        // A choice on this page, such as the edition, can change which later pages pass through.
+        this.RaisePropertyChanged(nameof(Eyebrow));
         switch (e.PropertyName) {
             case nameof(IWizardStep.NextLabel): this.RaisePropertyChanged(nameof(NextLabel)); break;
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
-            case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
             case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
                 or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip)
                 or nameof(IWizardStep.BackVisible):
@@ -181,6 +197,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void RestateActions() {
+        this.RaisePropertyChanged(nameof(Eyebrow));
         this.RaisePropertyChanged(nameof(CanGoNext));
         this.RaisePropertyChanged(nameof(CanGoSkip));
         this.RaisePropertyChanged(nameof(NextVisible));
@@ -271,6 +288,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     // Caller holds the Navigating gate and the leaving step has already released it.
     async Task MoveToAsync(int index) {
         _index = index;
+        _visited[index] = true;
         Current = Steps[_index];
         await SafeEnterAsync(Current);
     }

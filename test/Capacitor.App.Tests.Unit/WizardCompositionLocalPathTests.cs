@@ -104,22 +104,24 @@ public class WizardCompositionLocalPathTests {
         harness.Identity = ("default", LocalSetupScript.ServerUrl, "daemon-a");
         harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(NotInstalled());
 
-        var (start, backVisible, afterBack, signInShown, installs, setups) = await AvaloniaSession.DispatchAsync(async () => {
+        var (start, eyebrow, backVisible, afterBack, signInShown, installs, setups) = await AvaloniaSession.DispatchAsync(async () => {
             var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
             await graph.ViewModel.PendingEnterForTesting;
             var start = graph.ViewModel.Current.Id;
+            var eyebrow = graph.ViewModel.Eyebrow;
             var backVisible = graph.ViewModel.BackVisible;
 
             await graph.ViewModel.BackCommand.Execute().ToTask();
             await WizardFixtures.WaitUntilAsync(
                 () => harness.Lane.Requests.Count == 1, what: "composition to enable the daemon");
 
-            return (start, backVisible, graph.ViewModel.Current.Id,
+            return (start, eyebrow, backVisible, graph.ViewModel.Current.Id,
                 !graph.Steps.OfType<SignInStepViewModel>().Single().PassThrough,
                 harness.Lane.Requests.Count(r => r.Verb == MutationVerb.Install), harness.Cli.SetupLocalCallCount);
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(start).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(eyebrow).StartsWith("STEP 1 OF 3 ·");
         await Assert.That(backVisible).IsFalse();
         await Assert.That(afterBack).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(signInShown).IsFalse();
@@ -191,24 +193,30 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(afterBack).IsEqualTo(WizardStepId.Edition);
     }
 
+    /// A workspace signed in at start is this run's: setup opens on harnesses as its first step, with no way back
+    /// to a finished sign-in or an edition it cannot change.
     [Test]
-    public async Task Cloud_forced_setup_is_unchanged() {
+    public async Task Cloud_forced_setup_starts_at_harnesses_as_step_one() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
-        var (start, canFinishLater, afterBack, install) = await AvaloniaSession.DispatchAsync(async () => {
+        var (start, eyebrow, backVisible, canFinishLater, afterBack, install) = await AvaloniaSession.DispatchAsync(async () => {
             var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
             await graph.ViewModel.PendingEnterForTesting;
             var start = graph.ViewModel.Current.Id;
+            var eyebrow = graph.ViewModel.Eyebrow;
+            var backVisible = graph.ViewModel.BackVisible;
             var canFinishLater = await graph.ViewModel.FinishLaterCommand.CanExecute.FirstAsync();
 
             await graph.ViewModel.BackCommand.Execute().ToTask();
 
-            return (start, canFinishLater, graph.ViewModel.Current.Id, graph.Steps.OfType<InstallStepViewModel>().Single());
+            return (start, eyebrow, backVisible, canFinishLater, graph.ViewModel.Current.Id, graph.Steps.OfType<InstallStepViewModel>().Single());
         });
 
         await Assert.That(start).IsEqualTo(WizardStepId.Harnesses);
+        await Assert.That(eyebrow).StartsWith("STEP 1 OF 3 ·");
+        await Assert.That(backVisible).IsFalse();
         await Assert.That(canFinishLater).IsTrue();
-        await Assert.That(afterBack).IsEqualTo(WizardStepId.SignIn);
+        await Assert.That(afterBack).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(install.PassThrough).IsTrue();
         await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(0);
     }

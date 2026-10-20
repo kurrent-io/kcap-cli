@@ -166,13 +166,17 @@ internal static class WizardComposition {
         void OnSettling(LocalSetupSnapshot snapshot) => durable.OnNext(snapshot);
         install.Settling += OnSettling;
 
+        var committedLocalAtStart = CommittedLocal();
+        // A workspace already signed in at start is this run's: setup neither moves it to the other edition
+        // nor signs it in again.
+        var signedInAtStart = options.AlreadyAuthenticated && !committedLocalAtStart;
         var edition = new EditionStepViewModel(
             options.Bridges.Telemetry.Funnel,
             () => {
                 RefreshDurable();
                 return LocalUnavailableReason(options.LocalEditionSupported, options.Root, root);
             },
-            locked: () => Installed() || Pending() || CommittedLocal());
+            locked: () => signedInAtStart || Installed() || Pending() || CommittedLocal());
         bool OnLocalPath() => edition.Choice == EditionChoice.Local || Pending() || CommittedLocal();
         var installStep = new InstallStepViewModel(
             install,
@@ -185,9 +189,8 @@ internal static class WizardComposition {
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time,
-            passThrough: OnLocalPath, signingUp: () => edition.Choice == EditionChoice.Cloud);
-        var committedLocalAtStart = CommittedLocal();
-        if (options.AlreadyAuthenticated && !committedLocalAtStart) signIn.RestoreCommitted();
+            passThrough: () => signedInAtStart || OnLocalPath(), signingUp: () => edition.Choice == EditionChoice.Cloud);
+        if (signedInAtStart) signIn.RestoreCommitted();
         var pathFix  = options.ShimApplicable && options.ShimInstaller is { } installer
             ? new PathFixViewModel(installer, options.AppState, options.ShimTarget, OnLocalPath)
             : null;
@@ -253,15 +256,12 @@ internal static class WizardComposition {
         }, options.UrlOpener);
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
 
-        var startAt = Pending() ? WizardStepId.Install
-            : options.AlreadyAuthenticated || committedLocalAtStart ? WizardStepId.Harnesses
-            : (WizardStepId?)null;
         var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
             .Merge(durable.Select(_ => Unit.Default))
             .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
         var wizard = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
+            steps, options.ShutdownToken, options.Surface, canFinishLater: canFinishLater, restate: durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
