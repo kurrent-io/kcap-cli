@@ -84,8 +84,9 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         ApplyCaptionInset();
     }
 
+    // A closed window has no platform window to ask a screen about.
     void RefreshMinimumSize() {
-        if (_scale != UiScale.Default) ApplyMinimumSize();
+        if (_scale != UiScale.Default && PlatformImpl is not null) ApplyMinimumSize();
     }
 
     // Bounded by the screen the window is on.
@@ -105,9 +106,18 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         // A move, a display scaling change and a resized work area each change what the screen offers.
         PositionChanged += (_, _) => RefreshMinimumSize();
         ScalingChanged += (_, _) => RefreshMinimumSize();
-        Opened += (_, _) => { if (Screens is { } screens) screens.Changed += (_, _) => RefreshMinimumSize(); };
-        // Hide-to-tray never closes the window, so only a real close lets the setting go.
-        Closed += (_, _) => _contentScaleSubscription?.Dispose();
+        Screens? watchedScreens = null;
+        void OnScreensChanged(object? sender, EventArgs e) => RefreshMinimumSize();
+        Opened += (_, _) => {
+            if (watchedScreens is not null || Screens is not { } screens) return;
+            watchedScreens = screens;
+            screens.Changed += OnScreensChanged;
+        };
+        // Hide-to-tray never closes the window, so only a real close lets the setting and the screens go.
+        Closed += (_, _) => {
+            _contentScaleSubscription?.Dispose();
+            if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
+        };
         BindRefreshShortcuts();
         BindSettingsShortcut();
         KeepContentClearOfCaptionButtons();
