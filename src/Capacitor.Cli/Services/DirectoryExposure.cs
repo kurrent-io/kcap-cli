@@ -109,7 +109,9 @@ static class DirectoryExposure {
             // A cycle or a dangling link throws rather than resolving; the lexical component stands in,
             // and its own mode read then decides.
             try {
-                if (Directory.ResolveLinkTarget(current, returnFinalTarget: true) is { } target) {
+                // One hop at a time: a link to a link is met again inside its target's own walk, so the
+                // directory holding every link in a chain is recorded.
+                if (Directory.ResolveLinkTarget(current, returnFinalTarget: false) is { } target) {
                     holders.Add(Path.GetDirectoryName(current)!);
                     current = Resolve(target.FullName, depth + 1, holders);
                 }

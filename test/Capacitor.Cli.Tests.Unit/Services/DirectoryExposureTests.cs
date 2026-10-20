@@ -178,6 +178,26 @@ public class DirectoryExposureTests {
         await Assert.That(found.Select(f => f.Directory)).Contains(resolvedHolder);
     }
 
+    /// <summary>A link pointing straight at another link: the second one's directory is on neither the
+    /// given path nor the resolved one.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task A_foreign_owner_of_a_directory_holding_a_chained_link_is_reported() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX symlinks");
+
+        Tmp.CreateDir("safe", "final", "unit");
+        var holder = Tmp.CreateDir("foreign", "holder").Path;
+        File.CreateSymbolicLink(Path.Combine(holder, "next"), Tmp.GetResolvedPath("safe", "final"));
+        File.CreateSymbolicLink(Tmp.PathTo("safe", "entry"), Path.Combine(holder, "next"));
+        var resolvedHolder = Tmp.GetResolvedPath("foreign", "holder");
+        const uint Self = 1001, Other = 1002;
+
+        var found = DirectoryExposure.ForeignOwned(Tmp.PathTo("safe", "entry", "unit"),
+            d => d == resolvedHolder ? Other : Self, Self);
+
+        await Assert.That(found.Select(f => f.Directory)).Contains(resolvedHolder);
+    }
+
     /// <summary>The owner read is the system's own stat, so it must agree with the kernel on each target:
     /// a directory this process made is its own, and the root is root's.</summary>
     [Test]
