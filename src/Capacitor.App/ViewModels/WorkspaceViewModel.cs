@@ -193,7 +193,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: () => Chat is { IsReadOnlyParticipant: false });
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: () => Chat is { ShowsComposer: true });
         WorkContext.PullRequests = PullRequests;
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
@@ -284,6 +284,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ShowTerminal = () => ActiveTab = WorkspaceTab.Terminal,
                     InputSending = inputSending,
                 };
+                if (PullRequests is { } fixHost)
+                    Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
             })
             .DisposeWith(_disposables);
 

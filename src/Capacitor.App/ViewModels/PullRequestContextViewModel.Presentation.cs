@@ -125,6 +125,9 @@ public sealed partial class PullRequestContextViewModel {
 
     public bool ShowsFix => FixPrompt is not null && _canRequestFix();
 
+    /// The host calls this when whether its composer can send changes.
+    internal void FixAvailabilityChanged() => NotifyValue(ShowsFix);
+
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);
         NotifyValue(SectionEyebrow);

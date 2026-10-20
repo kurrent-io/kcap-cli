@@ -86,7 +86,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         ActiveTab = RemoteTab.Chat;
     }
 
-    bool CanPrefillComposer() => !Chat.IsReadOnlyParticipant;
+    bool CanPrefillComposer() => Chat.ShowsComposer;
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
 
@@ -260,6 +260,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard, drafts: drafts) { InputSending = inputSending };
+        if (PullRequests is { } fixHost)
+            Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
             : null;

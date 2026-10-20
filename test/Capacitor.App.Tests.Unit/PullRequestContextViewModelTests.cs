@@ -842,14 +842,22 @@ public class PullRequestContextViewModelTests {
         } finally { await h.Dispose(); }
     });
 
-    /// A viewer who cannot send gets no Fix: its prompt would land in a composer that refuses it.
+    /// Fix follows whether the composer can send, such as a session ending under it: the prompt would
+    /// otherwise land in a composer that is hidden or refuses it.
     [Test]
-    public Task Fix_is_hidden_from_a_viewer_who_cannot_send() => RunOnUiAsync(async () => {
-        var h = new Harness { CanFix = false };
+    public Task Fix_is_hidden_once_the_composer_cannot_send() => RunOnUiAsync(async () => {
+        var h = new Harness();
         try {
             h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 1));
             h.Push(); await h.Show();
+            await Assert.That(h.Vm.ShowsFix).IsTrue();
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
 
+            h.CanFix = false;
+            h.Vm.FixAvailabilityChanged();
+
+            await Assert.That(raised).Contains(nameof(PullRequestContextViewModel.ShowsFix));
             await Assert.That(h.Vm.ShowsFix).IsFalse();
             await h.Vm.FixCommand.Execute();
             await Assert.That(h.Fixes).IsEmpty();
