@@ -231,22 +231,33 @@ public class ProcessHelpersTests {
         await Assert.That(ProcessHelpers.ParseArgs(new byte[] { 1, 0, 0, 0 })).IsEmpty();
     }
 
+    /// An empty argument is still one argument, so the count stops before the environment that follows.
+    [Test]
+    public async Task ParseArgs_counts_an_empty_argument_and_stops_before_the_environment() {
+        var buffer = ProcArgs2.Of(2, "/usr/bin/node", "node", "").Concat("gemini\0"u8.ToArray()).ToArray();
+
+        await Assert.That(ProcessHelpers.ParseArgs(buffer)).IsEquivalentTo(["node", ""]);
+    }
+
     /// Gemini CLI runs as node with no title, so only its script names it: the shim the shebang hands over,
-    /// or the entry point inside its package. Another runtime's script, or node alone, names nothing.
+    /// or the entry point inside its package. Neither another runtime's script, an option's value nor inline
+    /// code is taken for that script.
     [Test]
     [Arguments(new[] { "node", "/usr/local/bin/gemini", "--yolo" }, "gemini")]
     [Arguments(new[] { "/usr/bin/node", "--no-warnings", "/usr/lib/node_modules/@google/gemini-cli/dist/index.js" }, "gemini-cli")]
     [Arguments(new[] { "C:\\Program Files\\nodejs\\node.exe", "C:\\npm\\node_modules\\@google\\gemini-cli\\dist\\index.js" }, "gemini-cli")]
     [Arguments(new[] { "/usr/bin/python3", "/usr/local/bin/gemini" }, null)]
     [Arguments(new[] { "node" }, null)]
+    [Arguments(new[] { "node", "--require", "/tmp/gemini.js", "/tmp/commit.js" }, null)]
+    [Arguments(new[] { "node", "-e", "/usr/local/bin/gemini" }, null)]
+    [Arguments(new[] { "node", "--no-warnings", "--", "/usr/local/bin/gemini" }, "gemini")]
+    [Arguments(new[] { "bun", "run", "/usr/local/bin/gemini" }, "gemini")]
     public async Task A_script_run_by_node_names_its_agent(string[] argv, string? expected) {
         var names = ProcessHelpers.ScriptNameCandidates(argv).ToList();
 
-        if (expected is null) await Assert.That(names).IsEmpty();
-        else {
-            await Assert.That(names).Contains(expected);
-            await Assert.That(ProcessHelpers.ResolveCodingAgentPid(42, "gemini", pid => pid == 42 ? (1, names) : null)).IsEqualTo(42);
-        }
+        if (expected is not null) await Assert.That(names).Contains(expected);
+        await Assert.That(ProcessHelpers.ResolveCodingAgentPid(42, "gemini", pid => pid == 42 ? (1, names) : null))
+            .IsEqualTo(expected is null ? null : 42);
     }
 
     [Test]
@@ -256,8 +267,10 @@ public class ProcessHelpersTests {
                 "C:\Program Files\nodejs\node.exe" "C:\Users\a b\gemini.js" --yolo
                 """))
             .IsEquivalentTo(["C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\a b\\gemini.js", "--yolo"]);
-        await Assert.That(ProcessHelpers.SplitWindowsCommandLine("""a\\\"b c\\\\"d e" """))
-            .IsEquivalentTo(["a\\\"b", "c\\\\d e"]);
+        await Assert.That(ProcessHelpers.SplitWindowsCommandLine("""node a\\\"b c\\\\"d e" "ge""mini.js" """))
+            .IsEquivalentTo(["node", "a\\\"b", "c\\\\d e", "ge\"mini.js"]);
+        await Assert.That(ProcessHelpers.SplitWindowsCommandLine("\"C:\\node\\\" x.js"))
+            .IsEquivalentTo(["C:\\node\\", "x.js"]);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine(null)).IsEmpty();
     }
 

@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -736,8 +737,11 @@ static partial class ProcessHelpers {
         var buffer = new byte[needed];
         fixed (byte* b = buffer) {
             if (NtQueryCommandLine(handle, ProcessCommandLineInformation, b, needed, out _) != 0) return null;
-            var text = (UnicodeString*)b;
-            return text->Buffer == 0 || text->Length == 0 ? null : new string((char*)text->Buffer, 0, text->Length / 2);
+            var text  = (UnicodeString*)b;
+            var start = (byte*)text->Buffer;
+            // The string is expected to follow its header in this allocation; anything else is not read.
+            if (text->Length == 0 || start < b + sizeof(UnicodeString) || start + text->Length > b + needed) return null;
+            return new string((char*)start, 0, text->Length / 2);
         }
     }
 
@@ -859,16 +863,17 @@ static partial class ProcessHelpers {
         var nul  = rest.IndexOf((byte)0);
         if (nul < 0) return [];
 
-        rest = rest[nul..];
+        // Only the padding after the exec path is skipped: past it each NUL ends one argument, an empty one
+        // included, so counting never runs on into the environment.
+        var first = rest[nul..].IndexOfAnyExcept((byte)0);
+        if (first < 0) return [];
+        rest = rest[(nul + first)..];
         var args = new List<string>(Math.Clamp(argc, 0, 16));
-        while (args.Count < argc) {
-            var start = rest.IndexOfAnyExcept((byte)0);
-            if (start < 0) break;
-            rest = rest[start..];
+        while (args.Count < argc && !rest.IsEmpty) {
             var end = rest.IndexOf((byte)0);
             args.Add(Encoding.UTF8.GetString(end >= 0 ? rest[..end] : rest));
             if (end < 0) break;
-            rest = rest[end..];
+            rest = rest[(end + 1)..];
         }
         return args;
     }
@@ -880,7 +885,7 @@ static partial class ProcessHelpers {
     /// </summary>
     internal static IEnumerable<string> ScriptNameCandidates(IReadOnlyList<string> argv) {
         if (argv.Count < 2 || !IsScriptRuntime(argv[0])) yield break;
-        if (argv.Skip(1).FirstOrDefault(arg => !arg.StartsWith('-')) is not { } script) yield break;
+        if (ScriptArgument(argv) is not { } script) yield break;
 
         foreach (var candidate in ExecutableNameCandidates(script)) yield return candidate;
 
@@ -891,6 +896,28 @@ static partial class ProcessHelpers {
         yield return parts[at + 1].StartsWith('@') && at + 2 < parts.Length ? parts[at + 2] : parts[at + 1];
     }
 
+    /// The runtime's options that take their value as the next argument, so that value is not the script.
+    static readonly FrozenSet<string> ValueOptions = new[] {
+        "-r", "--require", "--import", "--loader", "--experimental-loader", "-C", "--conditions", "--input-type",
+        "--inspect-port", "--debug-port", "--title", "--env-file", "--env-file-if-exists", "--watch-path",
+        "--redirect-warnings", "--openssl-config", "--icu-data-dir", "--diagnostic-dir", "--report-dir",
+        "--report-directory", "--report-filename", "--heapsnapshot-signal", "--secure-heap", "--secure-heap-min",
+        "--cwd", "--config", "--preload"
+    }.ToFrozenSet(StringComparer.Ordinal);
+
+    /// The script the runtime runs, or null when it runs code given inline or on stdin.
+    static string? ScriptArgument(IReadOnlyList<string> argv) {
+        for (var i = 1; i < argv.Count; i++) {
+            var arg = argv[i];
+            if (arg is "--") return i + 1 < argv.Count ? argv[i + 1] : null;
+            if (arg is "-" or "-e" or "--eval" or "-p" or "--print") return null;
+            if (ValueOptions.Contains(arg)) { i++; continue; }
+            if (arg.StartsWith('-') || (i == 1 && arg == "run")) continue;
+            return arg;
+        }
+        return null;
+    }
+
     static bool IsScriptRuntime(string argv0) {
         var name = Path.GetFileNameWithoutExtension(argv0.Replace('\\', '/').Split('/')[^1]);
         return name.Equals("node", StringComparison.OrdinalIgnoreCase) || name.Equals("nodejs", StringComparison.OrdinalIgnoreCase)
@@ -898,17 +925,29 @@ static partial class ProcessHelpers {
     }
 
     /// <summary>
-    /// A Windows command line split as the C runtime splits it: whitespace separates arguments outside
-    /// quotes; before a quote, 2n backslashes are n and the quote toggles quoting, 2n+1 are n and a literal quote.
+    /// A Windows command line split as the C runtime splits it. The program name runs to the closing quote
+    /// or the first whitespace, with no escapes. After it, whitespace separates arguments outside quotes;
+    /// before a quote, 2n backslashes are n and the quote toggles quoting, 2n+1 are n and a literal quote;
+    /// and <c>""</c> inside quotes is one literal quote.
     /// </summary>
     internal static IReadOnlyList<string> SplitWindowsCommandLine(string? commandLine) {
         var args = new List<string>();
         if (string.IsNullOrEmpty(commandLine)) return args;
 
+        var program = 0;
+        if (commandLine[0] == '"') {
+            var close = commandLine.IndexOf('"', 1);
+            args.Add(close < 0 ? commandLine[1..] : commandLine[1..close]);
+            program = close < 0 ? commandLine.Length : close + 1;
+        } else {
+            while (program < commandLine.Length && !char.IsWhiteSpace(commandLine[program])) program++;
+            args.Add(commandLine[..program]);
+        }
+
         var current  = new StringBuilder();
         var quoted   = false;
         var inArg    = false;
-        for (var i = 0; i < commandLine.Length; i++) {
+        for (var i = program; i < commandLine.Length; i++) {
             var c = commandLine[i];
             if (c == '\\') {
                 var run = 0;
@@ -923,8 +962,13 @@ static partial class ProcessHelpers {
                 }
                 inArg = true;
             } else if (c == '"') {
-                quoted = !quoted;
-                inArg  = true;
+                if (quoted && i + 1 < commandLine.Length && commandLine[i + 1] == '"') {
+                    current.Append('"');
+                    i++;
+                } else {
+                    quoted = !quoted;
+                }
+                inArg = true;
             } else if (char.IsWhiteSpace(c) && !quoted) {
                 if (inArg) { args.Add(current.ToString()); current.Clear(); inArg = false; }
             } else {
