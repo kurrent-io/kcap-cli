@@ -6012,10 +6012,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    /// <summary>The code of the runtime's own termination verdict — the part before any colon, since
-    /// some verdicts append free text the server must not echo to a driver. Null when nothing reaped it.</summary>
+    /// <summary>Why this daemon ended the agent, for a flow driver to read beside its stop code: the code of the
+    /// runtime's own termination verdict — the part before any colon, since some verdicts append free text the
+    /// server must not echo to a driver — else the end reason a stop or reap stamped, such as
+    /// <c>agent_stopped</c>. Null for an agent that exited on its own.</summary>
     internal static string? StopReasonCode(AgentInstance agent) {
-        if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict) return null;
+        if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict)
+            return agent.PendingEndReason is "agent_exited" or "" ? null : agent.PendingEndReason;
 
         var colon = verdict.Reason.IndexOf(':');
         var code  = (colon < 0 ? verdict.Reason : verdict.Reason[..colon]).Trim();
