@@ -48,8 +48,8 @@ sealed partial class LocalServerLaunchdService(
     }
 
     public void Install(LocalServerUnit unit) {
-        unit.PrepareLogDirectory();
         _requireSafeAncestors(LocalServerLaunchdUnit.PlistPath(home, unit));
+        unit.PrepareLogDirectory();
 
         // launchd keeps the definition it loaded, so a rewritten plist takes effect only through a reload.
         switch (Probe(unit)) {

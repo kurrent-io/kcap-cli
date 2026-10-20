@@ -43,8 +43,13 @@ sealed partial class LaunchdServiceManager(
 
     public string UnitDirectory => LaunchdUnit.AgentsDir(home);
 
-    public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
-        [new GeneratedFile(LaunchdUnit.PlistPath(home, spec.ServiceId), LaunchdUnit.Plist(spec))];
+    /// <summary>Refuses an unsafe unit location here as well: a verified install generates first, before it
+    /// retires, clears or replaces anything.</summary>
+    public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) {
+        var path = LaunchdUnit.PlistPath(home, spec.ServiceId);
+        _requireSafeAncestors(path);
+        return [new GeneratedFile(path, LaunchdUnit.Plist(spec))];
+    }
 
     public IReadOnlyList<string> ListInstalled() {
         var dir = LaunchdUnit.AgentsDir(home);

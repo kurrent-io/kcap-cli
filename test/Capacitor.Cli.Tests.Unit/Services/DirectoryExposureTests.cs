@@ -140,6 +140,24 @@ public class DirectoryExposureTests {
         }
     }
 
+    /// <summary>Whoever owns the directory holding a symlink on the path can repoint it, so that directory
+    /// is checked as well as the ones the link leads to.</summary>
+    [Test]
+    [UnsupportedOSPlatform("windows")]
+    public async Task A_foreign_owner_of_a_directory_holding_a_link_on_the_path_is_reported() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX symlinks");
+
+        Tmp.CreateDir("mine", "unit");
+        var holder = Tmp.CreateDir("alice").Path;
+        File.CreateSymbolicLink(Path.Combine(holder, "link"), Tmp.GetResolvedPath("mine"));
+        const uint Self = 1001, Alice = 1002;
+
+        var found = DirectoryExposure.ForeignOwned(Path.Combine(holder, "link", "unit"),
+            d => d == holder ? Alice : Self, Self);
+
+        await Assert.That(found.Select(f => f.Directory)).Contains(holder);
+    }
+
     /// <summary>The owner read is the system's own stat, so it must agree with the kernel on each target:
     /// a directory this process made is its own, and the root is root's.</summary>
     [Test]

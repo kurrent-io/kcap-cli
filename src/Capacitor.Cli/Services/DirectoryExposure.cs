@@ -38,7 +38,7 @@ static class DirectoryExposure {
 
         var found = new List<string>();
 
-        for (var d = Physical(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!) {
+        foreach (var d in Ancestors(directory)) {
             UnixFileMode mode;
 
             try { mode = File.GetUnixFileMode(d); } catch (Exception) { continue; }
@@ -67,7 +67,7 @@ static class DirectoryExposure {
             string directory, Func<string, uint?> ownerOf, uint self) {
         var found = new List<(string, uint)>();
 
-        for (var d = Physical(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!) {
+        foreach (var d in Ancestors(directory)) {
             if (ownerOf(d) is { } owner && owner != 0 && owner != self) found.Add((d, owner));
         }
 
@@ -76,6 +76,17 @@ static class DirectoryExposure {
 
     static bool Grants(UnixFileMode mode, UnixFileMode writeBits, UnixFileMode write, UnixFileMode execute) =>
         writeBits.HasFlag(write) && mode.HasFlag(write) && mode.HasFlag(execute);
+
+    /// <summary>The directories the kernel walks to reach <paramref name="directory"/>, nearest first, then
+    /// the ones holding the path's symlinks: whoever can rename a link can point the path elsewhere, so the
+    /// directories that hold the links count as much as the ones they lead to.</summary>
+    static IEnumerable<string> Ancestors(string directory) {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (var d = Physical(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!)
+            if (seen.Add(d)) yield return d;
+        for (var d = Path.GetFullPath(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!)
+            if (seen.Add(d)) yield return d;
+    }
 
     /// <summary>The path with every symlinked component replaced by its target, so the walk ascends the
     /// directories the kernel will, not the ones the string suggests.</summary>

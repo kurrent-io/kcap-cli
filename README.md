@@ -1142,7 +1142,7 @@ kcap daemon stop --yes              # stop all running daemons unattended (other
 kcap daemon restart --name laptop              # restart now, stopping its agents and resuming them on the new daemon; refuses while an eval, a launch or a flow round is in progress
 kcap daemon restart --name laptop --when-idle  # queue the restart until the daemon hosts no agents at all and no eval or launch is in progress
 kcap daemon restart --name laptop --force      # restart without waiting for a flow round (a participant mid-round is parked or ended); an eval or a launch still holds it
-kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory (group-writable directories, and on macOS/Linux directories owned by an account other than you or root)
+kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory (on macOS/Linux: group-writable directories, and directories owned by an account other than you or root)
 kcap daemon doctor --clean          # also remove a stale entry's pid/marker files, dropping it from the list (held entries are never touched; the inert lock file is left in place)
 ```
 

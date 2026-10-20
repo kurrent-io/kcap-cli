@@ -185,14 +185,6 @@ static class ServiceFiles {
     /// world-writable directory on the way to someone's home is produced by no umask and is never
     /// deliberate. The group-write case is reported by <c>kcap daemon doctor</c>, which can advise where
     /// this cannot safely block.</para></summary>
-    /// <summary>The ancestor checks <see cref="WriteOwnerOnly"/> makes, run on their own so an install
-    /// can refuse before it unloads the unit it would replace.</summary>
-    public static void RequireSafeAncestors(string unitPath) {
-        if (Path.GetDirectoryName(unitPath) is not { Length: > 0 } directory) return;
-        RequireNoWorldWritableAncestor(directory);
-        RequireNoForeignOwnedAncestor(directory);
-    }
-
     static void RequireNoWorldWritableAncestor(string directory) {
         // The unit directory itself is included and costs nothing: RequireNoSharedWrite has already
         // stripped its world-write bit or thrown, so it cannot be the offender found here.
@@ -204,6 +196,15 @@ static class ServiceFiles {
           + $"Remove that write bit with `chmod o-w {offender}` and re-run the install.");
     }
 
+    /// <summary>The ancestor checks <see cref="WriteOwnerOnly"/> makes, run on their own so an install can
+    /// refuse before it touches the unit it would replace. The unit directory's own mode is left out:
+    /// the writer repairs that one rather than refusing it.</summary>
+    public static void RequireSafeAncestors(string unitPath) {
+        if (Path.GetDirectoryName(unitPath) is not { Length: > 0 } directory) return;
+        if (Path.GetDirectoryName(directory) is { Length: > 0 } parent) RequireNoWorldWritableAncestor(parent);
+        RequireNoForeignOwnedAncestor(directory);
+    }
+
     /// <summary>Refuses when a directory on the path to the unit is owned by another account, which can
     /// rename the unit directory away whatever the modes say. Root-owned directories pass: every path
     /// starts under them. One directory whose owner cannot be read is left to the mode check, but a system
@@ -213,7 +214,7 @@ static class ServiceFiles {
         if (!FileOwner.Available)
             throw new InvalidOperationException(
                 "Refusing to write a service unit without checking who owns the directories above it: no working "
-              + "`stat` command was found in /usr/bin or /bin. Install coreutils and re-run the install.");
+              + "`stat` command was found in /usr/bin, /bin or /run/current-system/sw/bin. Install coreutils and re-run the install.");
 
         if (DirectoryExposure.ForeignOwned(directory) is not [var (offender, owner), ..]) return;
 
