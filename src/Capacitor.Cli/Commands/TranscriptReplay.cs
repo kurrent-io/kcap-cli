@@ -23,7 +23,7 @@ internal static class TranscriptReplay {
             await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var       reader = new StreamReader(stream);
 
-            for (var lineNumber = 0; lineNumber < upToLine; lineNumber++) {
+            for (var lineNumber = 0; lineNumber < upToLine && !Array.TrueForAll(done, finished => finished); lineNumber++) {
                 if (await reader.ReadLineAsync(ct) is not { } line) break;
 
                 for (var i = 0; i < consumers.Count; i++) {

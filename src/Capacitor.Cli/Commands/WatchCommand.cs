@@ -942,7 +942,7 @@ partial class WatchCommand(
                     state.LastCoverageCheck = time.GetUtcNow();
                 }
 
-                if (state.SecondaryRoots is not null && time.GetUtcNow() - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
+                if (SecondaryProbeDue(state, time.GetUtcNow())) {
                     await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
                     state.LastSecondaryProbe = time.GetUtcNow();
                 }
@@ -1784,6 +1784,13 @@ partial class WatchCommand(
             if (isChildWatcher) state.CodexSubagentTurn.Observe(line);
             return false;
         });
+
+    /// <summary>
+    /// The first probe waits for a root rather than spending its minute on none, since a short session can
+    /// end before the next one and the final probe is skipped below the transcript threshold.
+    /// </summary>
+    internal static bool SecondaryProbeDue(WatchState state, DateTimeOffset now) =>
+        state.SecondaryRoots is { Roots.Count: > 0 } && now - state.LastSecondaryProbe > TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// A checkout mutated before the restart, which a resumed watcher's drain never shows its roots.
@@ -2659,7 +2666,7 @@ partial class WatchCommand(
             // (task_complete vs renewed activity) so the polling loop can post a live
             // subagent-stop once the child is done + idle. Raw lines here too, in the other
             // direction: a redacted response_item reads as no activity, so a re-engaged child
-            // would be reported stopped while working. Matches CodexWatcherStateReplay.
+            // would be reported stopped while working. The resume replay must fold raw lines too.
             if (vendor == "codex" && agentId is not null) {
                 foreach (var line in drainRead.Lines) {
                     state.CodexSubagentTurn.Observe(line);

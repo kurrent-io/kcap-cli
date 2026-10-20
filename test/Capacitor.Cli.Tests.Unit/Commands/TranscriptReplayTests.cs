@@ -29,19 +29,29 @@ public class TranscriptReplayTests {
     }
 
     [Test]
-    public async Task A_missing_transcript_or_a_cancelled_start_reads_nothing() {
+    public async Task A_missing_transcript_is_skipped_with_a_log_line() {
+        using var tmp = new TempDir();
+        List<string> seen = [], logged = [];
+
+        await TranscriptReplay.ReplayAsync(tmp.PathTo("missing.jsonl"), 5, [Recording(seen, windowOnly: false)], CancellationToken.None, logged.Add);
+
+        await Assert.That(seen).IsEmpty();
+        await Assert.That(logged).HasSingleItem();
+        await Assert.That(logged[0]).StartsWith("Transcript replay before the resume cursor skipped");
+    }
+
+    [Test]
+    public async Task A_cancelled_start_reads_nothing_and_logs_nothing() {
         using var tmp = new TempDir();
         var path = tmp.CreateFile("t.jsonl", ["line 0"]);
         using var cancelled = new CancellationTokenSource();
         await cancelled.CancelAsync();
-        List<string> seen = [];
-        var logged = new List<string>();
+        List<string> seen = [], logged = [];
 
-        await TranscriptReplay.ReplayAsync(tmp.PathTo("missing.jsonl"), 5, [Recording(seen, windowOnly: false)], CancellationToken.None, logged.Add);
         await TranscriptReplay.ReplayAsync(path, 1, [Recording(seen, windowOnly: false)], cancelled.Token, logged.Add);
 
         await Assert.That(seen).IsEmpty();
-        await Assert.That(logged.Count).IsEqualTo(1);
+        await Assert.That(logged).IsEmpty();
     }
 
     /// A checkout the agent mutated before a restart is seeded from the lines the resumed drain skips.
