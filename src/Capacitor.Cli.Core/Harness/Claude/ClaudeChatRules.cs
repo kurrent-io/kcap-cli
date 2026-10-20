@@ -99,9 +99,13 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             case AcpEventKind.ToolResult when raw.ToolCallId is { Length: > 0 } callId && ToolUseResult(slug) is { } result: {
                 if (SchemaExtensions.Text(result, "backgroundTaskId") is { Length: > 0 } backgroundId)
                     return [new RunSignal.Detached(callId, backgroundId)];
-                if (SchemaExtensions.Text(result, "status") == "async_launched"
-                    && (SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id")) is { Length: > 0 } agentId)
-                    return [new RunSignal.Detached(callId, agentId)];
+                var resultAgentId = SchemaExtensions.Text(result, "agentId") ?? SchemaExtensions.Text(result, "agent_id");
+                switch (SchemaExtensions.Text(result, "status")) {
+                    case "async_launched" when resultAgentId is { Length: > 0 }:
+                        return [new RunSignal.Detached(callId, resultAgentId)];
+                    case "completed" when resultAgentId is { Length: > 0 }:
+                        return [new RunSignal.Identified(callId, resultAgentId)];
+                }
                 // The message gate keeps a TaskGet or TaskOutput probe, which carries the same
                 // task_id, from ending a running row.
                 if (SchemaExtensions.Text(result, "task_type") is "local_agent" or "local_bash"

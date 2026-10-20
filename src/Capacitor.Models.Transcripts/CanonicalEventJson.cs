@@ -18,6 +18,7 @@ public static class CanonicalEventJson {
                 CanonicalEventTypes.AssistantToolCallsGenerated => Parser.Parse<AssistantToolCallsGenerated>(json),
                 CanonicalEventTypes.ToolResultReceived          => Parser.Parse<ToolResultReceived>(json),
                 CanonicalEventTypes.SubagentCompleted           => Parser.Parse<SubagentCompleted>(json),
+                CanonicalEventTypes.SubagentStarted             => Parser.Parse<SubagentStarted>(json),
                 _ => null,
             };
         } catch (InvalidJsonException) {

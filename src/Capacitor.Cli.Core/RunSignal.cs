@@ -12,6 +12,10 @@ public abstract record RunSignal {
     /// on.
     public sealed record Detached(string CallId, string AgentId) : RunSignal;
 
+    /// The subagent's id, which its own transcript is filed under. A null call id names the oldest
+    /// subagent still unnamed: the source knows the agent but not the call that started it.
+    public sealed record Identified(string? CallId, string AgentId) : RunSignal;
+
     /// The run ended outside its tool result. At least one key is set. A null outcome means the
     /// source knows only that it ended.
     public sealed record Finished(string? CallId, string? AgentId, RunOutcome? Outcome, DateTimeOffset At) : RunSignal;

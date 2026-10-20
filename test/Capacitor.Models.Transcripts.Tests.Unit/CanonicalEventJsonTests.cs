@@ -31,6 +31,13 @@ public class CanonicalEventJsonTests {
     }
 
     [Test]
+    public async Task ReadsTheServersSubagentStart() {
+        var started = CanonicalEventJson.TryParse(CanonicalEventTypes.SubagentStarted, """{"agent_id":"a9f262478e032f427","agent_type":"Explore"}""");
+        await Assert.That(started).IsTypeOf<SubagentStarted>();
+        await Assert.That(((SubagentStarted)started!).AgentId).IsEqualTo("a9f262478e032f427");
+    }
+
+    [Test]
     public async Task UnknownTypesAndMalformedPayloadsReadAsNull() {
         await Assert.That(CanonicalEventJson.TryParse("InterruptIssued", """{"request_id":"r1"}""")).IsNull();
         await Assert.That(CanonicalEventJson.TryParse(CanonicalEventTypes.SessionStarted, """{}""")).IsNull();

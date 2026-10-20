@@ -59,6 +59,9 @@ public sealed class SessionRuns(TimeProvider time) {
                 case RunSignal.Finished finished:
                     Finish(finished);
                     break;
+                case RunSignal.Identified identified:
+                    Identify(identified);
+                    break;
             }
         }
         foreach (var envelope in projection.Envelopes) {
@@ -107,7 +110,20 @@ public sealed class SessionRuns(TimeProvider time) {
         }
         if (row.IsEnded) return;
         row.MarkBackground();
+        row.Identify(detached.AgentId);
         _byAgent[detached.AgentId] = row;
+    }
+
+    /// Names the subagent a call started, from a source that reads it outside the projected lines.
+    public void Identify(string callId, string agentId) => Identify(new RunSignal.Identified(callId, agentId));
+
+    void Identify(RunSignal.Identified identified) {
+        var row = identified.CallId is { } callId
+            ? _byCall.GetValueOrDefault(callId)
+            : _rows.FirstOrDefault(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false });
+        if (row is not { Kind: RunKind.Agent }) return;
+        row.Identify(identified.AgentId);
+        _byAgent.TryAdd(identified.AgentId, row);
     }
 
     /// A known call id decides alone and never falls through to the agent id: a repeated

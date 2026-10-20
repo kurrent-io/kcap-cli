@@ -348,9 +348,17 @@ public class ClaudeChatRulesTests {
         await Assert.That(detached.CallId).IsEqualTo("toolu_A");
         await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
 
-        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs).IsEmpty();
         await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"async_launched"}}""").Runs).IsEmpty();
         await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]}}""").Runs).IsEmpty();
+    }
+
+    /// A foreground subagent's result names the agent that ran, which is how its row learns the id its
+    /// transcript is filed under.
+    [Test]
+    public async Task A_completed_foreground_result_identifies_its_agent() {
+        var identified = (RunSignal.Identified)R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs.Single();
+        await Assert.That(identified.CallId).IsEqualTo("toolu_A");
+        await Assert.That(identified.AgentId).IsEqualTo("a9f262478e032f427");
     }
 
     /// Runs twice: identified by origin_kind as the local leaf writes it, and by text alone as the

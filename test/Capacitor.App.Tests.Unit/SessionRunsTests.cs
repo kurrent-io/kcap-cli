@@ -29,6 +29,8 @@ public class SessionRunsTests {
 
     static RunRow Only(SessionRuns s) => s.Rows.Single();
 
+    static RunSignal.Identified Identified(string? callId, string agentId) => new(callId, agentId);
+
     static RunSignal.Started Shell(string callId, DateTimeOffset? at = null) =>
         new(callId, "Run the full suite", "dotnet test", at ?? T0, RunKind.Shell, Provisional: true);
 
@@ -569,5 +571,39 @@ public class SessionRunsTests {
         await Assert.That(s.RunningCount).IsEqualTo(1);
         await Assert.That(s.RunningCommandCount).IsEqualTo(0);
         await Assert.That(changes).IsEqualTo(1);
+    }
+
+    /// Every way a subagent row learns its agent id: the launch acknowledgement, the result, an id
+    /// read by call, and a start with no call paired to the oldest unnamed subagent.
+    [Test]
+    public async Task A_subagent_row_learns_its_agent_id_and_only_then_opens() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Started("c3", T0.AddSeconds(2)), Shell("c4")));
+        s.Apply(Signals(Detached("c4", "b4")));
+        await Assert.That(s.Rows.All(row => !row.CanOpen)).IsTrue();
+
+        s.Apply(Signals(Identified(null, "a1")));
+        s.Apply(Signals(Identified(null, "a2")));
+        s.Apply(Signals(Identified("c3", "a3")));
+
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.AgentId ?? "-"))).IsEqualTo("a1,a2,a3,-");
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,True,False");
+    }
+
+    [Test]
+    public async Task A_launch_acknowledgement_names_a_background_subagent() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Detached("c1", "a1")));
+        await Assert.That(Only(s).AgentId).IsEqualTo("a1");
+        await Assert.That(Only(s).CanOpen).IsTrue();
+    }
+
+    [Test]
+    public async Task An_id_read_by_call_names_that_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2")));
+        s.Identify("c2", "a2");
+        await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
+        await Assert.That(s.Rows[0].AgentId).IsNull();
     }
 }

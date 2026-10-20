@@ -7,6 +7,7 @@ namespace Capacitor.App.ViewModels;
 /// State is what it presents, which reads Stopped for a still-running row once the session is over.
 public sealed class RunRow : ReactiveObject {
     bool _isBackground;
+    string? _agentId;
     bool _outcomeUnknown;
     RunState _state = RunState.Running;
     string _stateText = "";
@@ -30,6 +31,23 @@ public sealed class RunRow : ReactiveObject {
     public bool IsEnded => Outcome != RunState.Running;
 
     public bool IsBackground { get => _isBackground; private set => this.RaiseAndSetIfChanged(ref _isBackground, value); }
+
+    /// The subagent's id, which its own transcript is filed under; null for a command, or until it is known.
+    public string? AgentId {
+        get => _agentId;
+        private set {
+            if (_agentId == value) return;
+            this.RaiseAndSetIfChanged(ref _agentId, value);
+            this.RaisePropertyChanged(nameof(CanOpen));
+        }
+    }
+
+    /// Whether the subagent's own transcript can be opened from this row.
+    public bool CanOpen => Kind == RunKind.Agent && AgentId is not null;
+
+    internal void Identify(string agentId) {
+        if (Kind == RunKind.Agent) AgentId = agentId;
+    }
 
     public RunState State {
         get => _state;
