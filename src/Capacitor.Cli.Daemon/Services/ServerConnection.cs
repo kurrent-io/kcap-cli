@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -20,11 +19,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly DaemonConfig              _config;
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate                = new();
-    // The identity the first provider call of a connect attempt returned, and the one a connection was
-    // established with. A later call in the same attempt (a long-polling poll or 401 retry) authenticates
-    // nothing the connection's principal follows, so only the first is kept, and only an established
-    // connection commits it. Boxed so a first call that found no bearer still claims the slot.
-    StrongBox<HubIdentity?>?           _pendingAs;
+    // The first identity a provider call returned since the connect began, and the one a connection was
+    // established with. A later call (a long-polling poll or 401 retry) authenticates nothing the
+    // connection's principal follows, so only the first is kept, and only an established connection
+    // commits it. A call with no bearer claims nothing: automatic reconnect retries without a reset, and
+    // an early failed attempt must not hide the identity a later one succeeds with.
+    HubIdentity?                       _pendingAs;
     HubIdentity?                       _negotiatedAs;
     string?                            _lastUnavailable;
     readonly PendingPermissionRegistry _pendingPermissions  = new();
@@ -268,7 +268,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     options.AccessTokenProvider = async () => {
                         var state = await credentials.ResolveAsync(default);
                         CredentialHealth.Observe(state);
-                        Interlocked.CompareExchange(ref _pendingAs, new StrongBox<HubIdentity?>(HubIdentity.Of(state)), null);
+                        if (HubIdentity.Of(state) is { } identity) Interlocked.CompareExchange(ref _pendingAs, identity, null);
                         if (state.Bearer is null) LogHubSignInUnavailable(state);
                         else Volatile.Write(ref _lastUnavailable, null);
                         return state.Bearer;
@@ -860,7 +860,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         Volatile.Read(ref _negotiatedAs) is { } negotiated
      && HubIdentity.Changed(negotiated, await Credentials.ResolveAsync(ct));
 
-    void CommitNegotiatedIdentity() => Volatile.Write(ref _negotiatedAs, Volatile.Read(ref _pendingAs)?.Value);
+    void CommitNegotiatedIdentity() => Volatile.Write(ref _negotiatedAs, Volatile.Read(ref _pendingAs));
 
     // Once per change of reason, so a hub retrying every 30 s does not repeat it. A server that takes
     // no sign-in sends no bearer by design.
