@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using TUnit.Core.Enums;
 using Capacitor.App.Platform.Linux;
 
@@ -22,12 +23,15 @@ public class LinuxSingleInstanceLockTests {
     /// A holder that never listens stands in for a suspended copy; ending it releases its lock.
     [Test, RunOn(OS.Linux)]
     public async Task A_holder_that_never_answers_is_ended_and_its_lock_taken() {
-        var first = Acquire(TimeSpan.Zero)!;
+        var held = new FileStream(Tmp.PathTo("kcap-app.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        using var silent = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        silent.Bind(new UnixDomainSocketEndPoint(Tmp.PathTo("kcap-app.sock")));
+        silent.Listen();
         int? ended = null;
 
         using var second = LinuxSingleInstanceLock.Acquire(Tmp.Path, TimeSpan.Zero, TimeProvider.System, pid => {
             ended = pid;
-            first.Dispose();
+            held.Dispose();
         });
 
         await Assert.That(ended).IsEqualTo(Environment.ProcessId);
