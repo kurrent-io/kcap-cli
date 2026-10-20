@@ -876,13 +876,13 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             // A reconnect while this waited was suppressed as already reported: offer it again on the attach now
             // current. Detached, the next attach reports afresh.
             if (superseded) {
-                if (IsCurrentlyAttached()) {
-                    _ = CheckAttachedIdentityAsync(reoffer: true);
-                } else {
-                    lock (_lock) {
-                        if (_reportedMismatch == mismatch) _reportedMismatch = null;
-                    }
+                bool attached;
+                // One lock for both, so an attach landing between them cannot be suppressed by the mismatch about to clear.
+                lock (_lock) {
+                    attached = _lastObserved.State == AttachState.Connected;
+                    if (!attached && _reportedMismatch == mismatch) _reportedMismatch = null;
                 }
+                if (attached) _ = CheckAttachedIdentityAsync(reoffer: true);
             }
         } catch (OperationCanceledException) {
             // shutdown
