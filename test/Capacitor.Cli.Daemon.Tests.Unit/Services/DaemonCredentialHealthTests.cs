@@ -22,6 +22,19 @@ public class DaemonCredentialHealthTests {
         await Assert.That(health.Problem).IsEqualTo(problem);
     }
 
+    /// <summary>An unusable server URL is a config problem, not a credential one, so an earlier
+    /// signed-out verdict no longer describes the daemon.</summary>
+    [Test]
+    [Arguments(AuthStatus.Ok)]
+    [Arguments(AuthStatus.NoAuthRequired)]
+    [Arguments(AuthStatus.UnusableServerUrl)]
+    public async Task A_resolve_that_blames_no_credential_clears_signed_out(AuthStatus status) {
+        var health = new DaemonCredentialHealth(() => { });
+        health.Observe(State(AuthStatus.Expired));
+        health.Observe(State(status));
+        await Assert.That(health.Problem).IsNull();
+    }
+
     [Test]
     public async Task A_usable_resolve_clears_signed_out_but_only_a_connection_clears_a_rejection() {
         var changes = 0;

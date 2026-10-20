@@ -25,7 +25,8 @@ sealed class DaemonCredentialHealth(Action changed) {
             case AuthStatus.NotAuthenticated or AuthStatus.Expired or AuthStatus.WrongServer:
                 Set(SignedOut);
                 break;
-            case AuthStatus.Ok or AuthStatus.NoAuthRequired:
+            // An unusable server URL is config's to fix, so it leaves no credential verdict standing.
+            case AuthStatus.Ok or AuthStatus.NoAuthRequired or AuthStatus.UnusableServerUrl:
                 // Compared and cleared in one step, so a rejection recorded meanwhile stands.
                 if (Interlocked.CompareExchange(ref _problem, null, SignedOut) == SignedOut) changed();
                 break;
