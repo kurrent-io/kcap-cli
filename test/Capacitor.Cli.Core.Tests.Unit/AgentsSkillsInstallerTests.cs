@@ -231,7 +231,7 @@ public class AgentsSkillsInstallerTests {
         tmp.CreateFile($"skills/kcap-{name}/SKILL.md", "stale");
 
         await Assert.That(AgentsSkillsInstaller.Install(RepoTree.SkillsSource(), target)).IsTrue();
-        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-" + name))).IsFalse();
+        await Assert.That(Directory.Exists(tmp.PathTo("skills", $"kcap-{name}"))).IsFalse();
         await Assert.That(AgentsSkillsInstaller.HasSkill(target, "connect-kcap")).IsTrue();
     }
 
@@ -245,7 +245,7 @@ public class AgentsSkillsInstallerTests {
 
         AgentsSkillsInstaller.Remove(target);
 
-        await Assert.That(Directory.Exists(Path.Combine(target, "kcap-" + name))).IsFalse();
+        await Assert.That(Directory.Exists(tmp.PathTo("skills", $"kcap-{name}"))).IsFalse();
     }
 
     [Test]

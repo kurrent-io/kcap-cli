@@ -293,9 +293,6 @@ public partial class App : Application {
     async Task StartAsync(IClassicDesktopStyleApplicationLifetime desktop) {
         try {
             if (RunInstallLocationGuard(desktop)) return; // the guard window owns the rest of this run
-            if (OperatingSystem.IsMacOS())
-                await new ApplicationIntegrationRefresh(_config, new ProcessRunner(_time))
-                    .RunPendingAsync(InstallLocation.BundleRoot(Environment.ProcessPath), _shutdown.Token);
             _updater = CreateUpdater();
             if (UpdateCoordinator.TryApplyPendingAtStartup(_updater, Program.UpdateRelaunch)) return; // the process is being replaced
 
@@ -321,6 +318,15 @@ public partial class App : Application {
                 () => ResolveAndEvaluateGateAsync(_config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, _shutdown.Token),
                 (current, currentProfiles, laneQuiesced) => BuildDaemonGraph(desktop, lane, channel, current, currentProfiles, laneQuiesced),
                 () => LocalSetupState.Pending(_localRoot), _shutdown.Token, () => LocalSetupCannotRetry(_localInstall));
+
+            // Integration repair must not delay the main window or prevent access to the app.
+            if (OperatingSystem.IsMacOS() && !_shutdown.IsCancellationRequested) {
+                // Let Loaded attach the notification overlay before an immediate repair failure.
+                await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+                var warning = await new ApplicationIntegrationRefresh(_config, new ProcessRunner(_time))
+                    .RunPendingAsync(InstallLocation.BundleRoot(Environment.ProcessPath), _shutdown.Token);
+                if (warning is not null) _coordinator?.Window?.Notifier?.Notify(warning);
+            }
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
             // A quit landing mid-startup (gate evaluation, the wizard's PATH probe, the post-wizard
             // re-resolve) is not a startup failure: the shutdown path already owns teardown, and an

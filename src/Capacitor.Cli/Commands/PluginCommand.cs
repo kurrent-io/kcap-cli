@@ -407,15 +407,22 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                  || CodexHooksInstaller.StartsWithByteOrderMark(hooksPath)) {
                     if (InstallCodexHooks(hooksPath))
                         await env.Stdout.WriteLineAsync($"Codex hooks refreshed ({scope}: {hooksPath})");
-                    else
+                    else {
+                        _refreshFailed = true;
                         await env.Stderr.WriteLineAsync(
                             $"Warning: could not refresh Codex hooks ({hooksPath}); continuing with MCP registration.");
+                    }
                 }
 
             }
 
-            if (defaultInstalled || CodexConfigToml.HasMcpInstallRecord(codex.ConfigToml))
-                await RegisterCodexMcpServersAsync();
+            try {
+                if (defaultInstalled || CodexConfigToml.HasMcpInstallRecord(codex.ConfigToml))
+                    await RegisterCodexMcpServersAsync();
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) {
+                _refreshFailed = true;
+                await env.Stderr.WriteLineAsync($"Warning: could not refresh Codex MCP servers in {codex.ConfigToml}: {ex.Message}");
+            }
 
             if (scope == "user")
                 await WireUserAccountsAsync(HarnessId.Codex, codex.Home, adoptDefault: defaultInstalled, refreshOnly: true, enableNetwork: false);
@@ -1037,6 +1044,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stderr.WriteLineAsync("Could not write the Pi extension file.");
                 extensionFailed = true;
             } else {
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh the Pi extension ({extensionPath}); continuing with MCP + instructions.");
             }
@@ -1083,6 +1091,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                     : $"Pi MCP extension installed ({mcpExtensionPath})"
             );
         } else {
+            _refreshFailed = true;
             await env.Stderr.WriteLineAsync(
                 $"Warning: could not write the Pi MCP extension ({mcpExtensionPath}).");
         }
@@ -1103,6 +1112,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Pi instructions installed ({pi.AgentsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {pi.AgentsMd} to install Pi instructions.");
                 break;
@@ -1203,6 +1213,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             } else {
                 // Refresh: the plugin write failed, but MCP + instructions live in separate files and
                 // are independent + idempotent — warn and still heal them below rather than bail.
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh the OpenCode plugin ({pluginPath}); continuing with MCP + instructions.");
             }
@@ -1264,6 +1275,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"OpenCode instructions installed ({opencode.AgentsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {opencode.AgentsMd} to install OpenCode instructions.");
                 break;
@@ -1359,6 +1371,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stderr.WriteLineAsync($"Could not install Antigravity hooks at {hooksPath}.");
                 freshHookFailure = true;  // don't bail — the independent MCP/instructions/skills still install
             } else {
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Antigravity hooks ({hooksPath}); continuing with MCP + instructions + skills.");
             }
@@ -1414,6 +1427,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Antigravity instructions installed ({agy.InstructionsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {agy.InstructionsMd} to install Antigravity instructions.");
                 break;
@@ -1598,6 +1612,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             } else {
                 // Refresh: the hook write failed, but MCP + instructions live in separate files and
                 // are independent + idempotent — warn and still heal them below rather than bail.
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Copilot hooks ({hooksPath}); continuing with MCP + instructions.");
             }
@@ -1660,6 +1675,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Copilot instructions installed ({copilot.InstructionsMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {copilot.InstructionsMd} to install Copilot instructions.");
                 break;
@@ -1862,6 +1878,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
 
         // A fresh agent-clone failure is still an error exit (capture won't work without it), but the
         // independent MCP file + skills were still written above.
+        _refreshFailed |= hooksFailed;
         return hooksFailed && !refreshOnly ? 1 : 0;
     }
 
@@ -1910,6 +1927,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                   + "Move it aside and re-run: kcap plugin install --kiro");
                 break;
             case KiroCrewHookInstaller.Outcome.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync($"Warning: could not write the Kiro Crew hook to {crew.SpawnHookScript}.");
                 break;
         }
@@ -2278,6 +2296,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             } else {
                 // Refresh: the hook write failed, but instructions live in a separate file and MCP is
                 // independent + idempotent — warn and still heal them below rather than bail.
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Gemini hooks ({settingsPath}); continuing with MCP + instructions.");
             }
@@ -2341,6 +2360,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 await env.Stdout.WriteLineAsync($"Gemini instructions installed ({gemini.GeminiMd}).");
                 break;
             case AgentInstructionsWriter.Change.Failed:
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not update {gemini.GeminiMd} to install Gemini instructions.");
                 break;
@@ -2416,6 +2436,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         if (!GrokHooksInstaller.Install(hooksPath)) {
+            _refreshFailed = true;
             await env.Stderr.WriteLineAsync($"Could not write Grok hooks to {hooksPath}.");
             return refreshOnly ? 0 : 1;
         }
@@ -2474,6 +2495,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                   + "Fix or remove it, then re-run.");
                 freshHookFailure = true;
             } else {
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Vibe hooks ({hooksPath}); continuing with MCP registration.");
             }
@@ -2542,6 +2564,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                   + "Fix or remove it, then re-run.");
                 freshHookFailure = true;
             } else {
+                _refreshFailed = true;
                 await env.Stderr.WriteLineAsync(
                     $"Warning: could not refresh Muse hooks for every event in {settingsPath}; skipping MCP registration.");
                 hooksIncomplete = true;
@@ -2549,9 +2572,11 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         }
 
         if (!toolsOnly && MuseHooksInstaller.IsWired(settingsPath)
-            && !MuseHookRoots.Persist(env.Home, env.Harnesses.Of<MuseHarness>().Paths))
+            && !MuseHookRoots.Persist(env.Home, env.Harnesses.Of<MuseHarness>().Paths)) {
+            _refreshFailed = true;
             await env.Stderr.WriteLineAsync(
                 $"Warning: could not write {MuseHookRoots.PathFor(env.Home)}; Muse hooks may look for sessions outside this shell's XDG roots.");
+        }
 
         // Hooks and MCP share settings.json: a file the hooks could not be merged into is not written to here either.
         if (!freshHookFailure && !hooksIncomplete && !args.Contains("--skip-muse-mcp"))

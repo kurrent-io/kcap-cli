@@ -147,6 +147,9 @@ this VM do: spawn the command with its args, speak JSON-RPC 2.0 over
 newline-delimited stdin/stdout, send `initialize` (protocol version
 `2024-11-05`, then `notifications/initialized`), then `tools/list` or
 `tools/call`, with a 60-second timeout and the result printed as JSON.
+For tool calls, accept `-` as the third argument and read the JSON arguments
+from stdin with `json.load(sys.stdin)`. Start the MCP server with an argv list
+and `shell=False`; never interpolate JSON values into a shell command.
 
 `connector.yaml` — if another custom connector already exists here, copy its
 field names; these are the servers, commands and args:
@@ -189,7 +192,9 @@ servers:
 # kcap
 
 Six stdio MCP servers over the team's kcap workspace. Call a tool with
-`python3 mcp_call.py <server> <tool> '<json-args>'`; list tools with
+`python3 mcp_call.py <server> <tool> - < args.json`, where `args.json` contains
+the JSON arguments. Pass JSON through stdin rather than shell quoting it.
+List tools with
 `python3 mcp_call.py <server> tools/list`.
 
 | Server | Use it for |
@@ -212,7 +217,9 @@ Verify with a real call (keyword queries, one to three terms):
 ```bash
 cd ~/workspace/custom-connectors/custom.kcap
 python3 mcp_call.py kcap-sessions tools/list | head -c 600
-python3 mcp_call.py kcap-sessions search_sessions '{"query":"setup","repo":"all"}' | head -c 1200
+python3 mcp_call.py kcap-sessions search_sessions - <<'KCAP_ARGS' | head -c 1200
+{"query":"setup","repo":"all"}
+KCAP_ARGS
 ```
 
 A hit list with `hit_kind`, `session_id` and `title` fields means the connector
@@ -243,7 +250,8 @@ metadata:
 
 kcap's tools are the `kcap` custom connector
 (`~/workspace/custom-connectors/custom.kcap/`): `python3 mcp_call.py <server>
-<tool> '<json>'`. Read `CONNECTOR.md` there for the servers and tools.
+<tool> - < args.json`. The arguments file contains JSON; do not embed its
+contents in a shell command. Read `CONNECTOR.md` there for the servers and tools.
 
 ## Operating rules
 

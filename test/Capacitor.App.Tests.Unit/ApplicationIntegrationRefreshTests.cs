@@ -18,22 +18,44 @@ public class ApplicationIntegrationRefreshTests {
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task Failed_or_timed_out_repair_is_retried_on_the_next_launch(bool timedOut) {
+    [Arguments("exit")]
+    [Arguments("timeout")]
+    [Arguments("exception")]
+    public async Task Failed_repair_reports_a_warning_and_retries_on_the_next_launch(string failure) {
         var config = new ConfigRoot(Tmp.CreateDir("config"));
         var target = Tmp.PathTo("Applications/kcap.app");
         var fail = true;
-        var runner = new Runner((_, _) => fail ? new ProcessResult(1, "", "write failed", timedOut) : new ProcessResult(0, "", "", false));
+        var runner = new Runner((_, _) => {
+            if (fail && failure == "exception") throw new IOException("write failed");
+            return fail ? new ProcessResult(1, "", "write failed", failure == "timeout") : new ProcessResult(0, "", "", false);
+        });
         var refresh = new ApplicationIntegrationRefresh(config, runner);
         refresh.Schedule(target);
-        await Assert.That(async () => await refresh.RunPendingAsync(target, CancellationToken.None)).Throws<IOException>();
+        var warning = await refresh.RunPendingAsync(target, CancellationToken.None);
+        await Assert.That(warning).IsNotNull();
+        await Assert.That(warning!).Contains("retry");
         await Assert.That(File.Exists(config.Path(ApplicationIntegrationRefresh.FileName))).IsTrue();
         fail = false;
-        await refresh.RunPendingAsync(target, CancellationToken.None);
+        await Assert.That(await refresh.RunPendingAsync(target, CancellationToken.None)).IsNull();
         await refresh.RunPendingAsync(target, CancellationToken.None);
         await Assert.That(runner.Calls).IsEqualTo(2);
         await Assert.That(File.Exists(config.Path(ApplicationIntegrationRefresh.FileName))).IsFalse();
+    }
+
+    [Test]
+    public async Task Cancelled_repair_propagates_and_keeps_the_retry_marker() {
+        var config = new ConfigRoot(Tmp.CreateDir("config"));
+        var target = Tmp.PathTo("Applications/kcap.app");
+        using var cancellation = new CancellationTokenSource();
+        var runner = new Runner((_, _) => {
+            cancellation.Cancel();
+            return new ProcessResult(0, "", "", false);
+        });
+        var refresh = new ApplicationIntegrationRefresh(config, runner);
+        refresh.Schedule(target);
+
+        await Assert.That(async () => await refresh.RunPendingAsync(target, cancellation.Token)).Throws<OperationCanceledException>();
+        await Assert.That(File.Exists(config.Path(ApplicationIntegrationRefresh.FileName))).IsTrue();
     }
 
     [Test]

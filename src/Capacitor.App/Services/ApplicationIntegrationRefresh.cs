@@ -20,18 +20,24 @@ internal sealed class ApplicationIntegrationRefresh(ConfigRoot config, IProcessR
         } finally { if (File.Exists(staging)) File.Delete(staging); }
     }
 
-    public async Task RunPendingAsync(string? bundleRoot, CancellationToken ct) {
-        if (bundleRoot is null || !File.Exists(config.Path(FileName))) return;
-        using var guard = config.AcquireLock(FileName);
-        var pending = config.Path(FileName);
-        if (!File.Exists(pending) || File.ReadAllText(pending) != Path.GetFullPath(bundleRoot)) return;
-        var cli = Path.Combine(bundleRoot, "Contents", "MacOS", "kcap");
-        var result = await runner.RunAsync(cli, ["refresh", "--app-migration"],
-            new RunOptions(EnvOverlay: new Dictionary<string, string> { [ConfigRoot.ConfigDirEnvVar] = config.Directory },
-                Timeout: TimeSpan.FromMinutes(3), CancelMode: CancelMode.KillTree), ct);
-        if (result.TimedOut || result.ExitCode != 0)
-            throw new IOException("kcap is installed, but its agent integrations could not be refreshed. Reopen kcap to retry. "
-                + (result.TimedOut ? "The refresh timed out." : result.Stderr.Trim()));
-        File.Delete(pending);
+    public async Task<string?> RunPendingAsync(string? bundleRoot, CancellationToken ct) {
+        try {
+            if (bundleRoot is null || !File.Exists(config.Path(FileName))) return null;
+            using var guard = config.AcquireLock(FileName);
+            var pending = config.Path(FileName);
+            if (!File.Exists(pending) || File.ReadAllText(pending) != Path.GetFullPath(bundleRoot)) return null;
+            var cli = Path.Combine(bundleRoot, "Contents", "MacOS", "kcap");
+            var result = await runner.RunAsync(cli, ["refresh", "--app-migration"],
+                new RunOptions(EnvOverlay: new Dictionary<string, string> { [ConfigRoot.ConfigDirEnvVar] = config.Directory },
+                    Timeout: TimeSpan.FromMinutes(3), CancelMode: CancelMode.KillTree), ct);
+            ct.ThrowIfCancellationRequested();
+            if (result.TimedOut || result.ExitCode != 0)
+                throw new IOException(result.TimedOut ? "The integration refresh timed out." : result.Stderr.Trim());
+            File.Delete(pending);
+            return null;
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            Console.Error.WriteLine($"kcap: integration refresh failed: {ex}");
+            return "Some agent integrations could not be refreshed. kcap will retry the next time it opens.";
+        }
     }
 }
