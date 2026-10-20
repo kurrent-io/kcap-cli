@@ -1,3 +1,5 @@
+using System.Reflection;
+using Avalonia;
 using Capacitor.App.Services;
 
 namespace Capacitor.App.Tests.Unit;
@@ -19,6 +21,19 @@ public class PatchedAvaloniaNativeTests {
         var differs = !patchedBytes.AsSpan().SequenceEqual(stockBytes);
         await Assert.That(universalMachO).IsTrue();
         await Assert.That(differs).IsTrue();
+    }
+
+    /// The binary's vtables match one Avalonia.Native; a package bump without a rebuild would
+    /// otherwise pass every other check, since stale patched bytes still differ from the new stock.
+    [Test]
+    public async Task The_library_was_built_from_the_Avalonia_version_the_app_loads() {
+        if (!OperatingSystem.IsMacOS()) return;
+        var stamp = (await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "libAvaloniaNative.patched.version"))).Trim();
+        var informational = typeof(AvaloniaNativePlatformOptions).Assembly
+            .GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false)
+            .OfType<AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+        var loaded = informational.Split('+')[0];
+        await Assert.That(stamp).IsEqualTo(loaded);
     }
 
     [Test]

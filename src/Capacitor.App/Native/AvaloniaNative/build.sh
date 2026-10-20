@@ -22,5 +22,7 @@ dotnet build "$src/native/Avalonia.Native/Avalonia.Native.macOS.proj" -t:Generat
 xcodebuild -project "$src/native/Avalonia.Native/src/OSX/Avalonia.Native.OSX.xcodeproj" -configuration Release \
   CONFIGURATION_BUILD_DIR="$out" ONLY_ACTIVE_ARCH=NO ARCHS="arm64 x86_64" MACOSX_DEPLOYMENT_TARGET=12.0 -quiet
 cp "$out/libAvalonia.Native.OSX.dylib" "$here/libAvaloniaNative.patched.dylib"
+# PatchedAvaloniaNativeTests holds this to the Avalonia.Native assembly the app loads.
+printf '%s\n' "$tag" > "$here/libAvaloniaNative.patched.version"
 file "$here/libAvaloniaNative.patched.dylib"
 shasum -a 256 "$here/libAvaloniaNative.patched.dylib"

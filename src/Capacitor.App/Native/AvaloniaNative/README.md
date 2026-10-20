@@ -11,6 +11,8 @@ retired chat tab and PR reader. The upstream rewrite that makes the fix unnecess
 (AvaloniaUI/Avalonia#22519) ships in 12.2 and is not backported, so this directory goes away with
 the move to Avalonia 12.2.
 
-Rebuild after every Avalonia version bump: `./build.sh`, then commit the new binary. The script
-clones the tag, applies the patch, generates the MicroCom header and runs `xcodebuild`; the
-resulting file is universal (arm64 and x86_64) and is signed with the rest of the bundle at release.
+Rebuild after every Avalonia version bump: `./build.sh`, then commit the new binary and the
+version stamp beside it, which `PatchedAvaloniaNativeTests` holds to the Avalonia.Native assembly
+the app loads. The script clones the tag, applies the patch, generates the MicroCom header and runs
+`xcodebuild`; the resulting file is universal (arm64 and x86_64) and is signed with the rest of the
+bundle at release.
