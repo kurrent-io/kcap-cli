@@ -90,11 +90,11 @@ sealed class CaptureServerConnection() : ServerConnection(
 
     /// <summary>Completed the instant AgentRegisteredAsync is entered — lets a test hold
     /// re-registration inside that await and publish a verdict there (finding 1 refinement).</summary>
-    public TaskCompletionSource? AgentRegisteredEntered { get; init; }
+    public TaskCompletionSource? AgentRegisteredEntered { get; set; }
 
     /// <summary>When set, AgentRegisteredAsync awaits this before returning — holding the
     /// re-registration open across the AgentRegistered await.</summary>
-    public TaskCompletionSource? AgentRegisteredGate { get; init; }
+    public TaskCompletionSource? AgentRegisteredGate { get; set; }
 
     /// <summary>When set, every non-failure AgentStatusChanged send checks this runtime's verdict
     /// AT SEND TIME (via the lock-synchronised ReadVerdict); if a launch-window verdict is already
@@ -119,7 +119,10 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>The start title echoed on each registration, in call order.</summary>
     public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
 
-    public override async Task AgentRegisteredAsync(
+    /// <summary>The server's answer per agent id; accepted when unset or null.</summary>
+    public Func<string, AgentRegisteredResponse?>? RegistrationResponse { get; set; }
+
+    public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
         string? runtimeTransport = null, AgentStartTitle? title = null) {
@@ -135,6 +138,8 @@ sealed class CaptureServerConnection() : ServerConnection(
 
         if (AgentRegisteredCallCount <= AgentRegisteredFailTimes)
             throw new InvalidOperationException("transient re-register failure");
+
+        return RegistrationResponse?.Invoke(agentId) ?? AgentRegisteredResponse.Accepted;
     }
 
     // ── Option B task 4: ACP bind/forward capture ────────────────────────────────────
@@ -427,6 +432,13 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>Signals each ExplicitReviewerModelResolvedAsync call (1-based count) so a test can
     /// await the fire-and-forget report deterministically instead of racing Task.Delay.</summary>
     public Channel<int> ExplicitReviewerModelReportSignal { get; } = Channel.CreateUnbounded<int>();
+
+    public List<string> CommandReports { get; } = [];
+
+    public override Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        lock (CommandReports) CommandReports.Add(agentId);
+        return Task.CompletedTask;
+    }
 
     public override Task ReportAgentResolvedModelAsync(string agentId, string model) {
         lock (ReportAgentResolvedModelCalls) ReportAgentResolvedModelCalls.Add((agentId, model));
