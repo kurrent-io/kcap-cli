@@ -1300,23 +1300,25 @@ public class HomeViewModelTests {
     /// A daemon attached by name that serves another server says so, and offers no sign-in, which could
     /// not move it, whatever the app's own lane is doing.
     [Test]
-    [Arguments(ServerLaneState.Connecting)]
-    [Arguments(ServerLaneState.Connected)]
+    [Arguments(ServerLaneState.Connecting, "reconnecting")]
+    [Arguments(ServerLaneState.Connected, "reconnecting")]
+    [Arguments(ServerLaneState.Connected, "connected")]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_daemon_serving_another_server_says_so_instead_of_asking_for_sign_in(ServerLaneState laneState) {
+    public async Task A_daemon_serving_another_server_says_so_instead_of_asking_for_sign_in(ServerLaneState laneState, string connection) {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var daemon = new FakeDaemonClientService();
             var lane = new FakeServerLane();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
                 laneStatus: lane.Status, appServerUrl: "https://kurrent.kcap.ai");
-            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://norton.kcap.ai:443", connection: "reconnecting"));
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://norton.kcap.ai:443", connection: connection));
             daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             lane.StatusSubject.OnNext(new ServerLaneStatus(laneState));
 
             await Assert.That(vm.ConnectionNotice)
                 .IsEqualTo("This machine's daemon is running for norton.kcap.ai, not kurrent.kcap.ai, so it cannot run agents here.");
             await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
         });
     }
 

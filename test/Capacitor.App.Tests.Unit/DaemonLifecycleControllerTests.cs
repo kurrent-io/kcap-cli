@@ -1581,7 +1581,7 @@ public class DaemonLifecycleControllerTests {
 
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
         await Assert.That(h.Surface.AttentionMessages.Single())
-            .Contains($"kcap daemon service install --replace --verify --name daemon-a --profile {(urlOverride ? "<profile>" : "default")}");
+            .Contains($"--name daemon-a --profile {(urlOverride ? "PROFILE" : "default")}");
         await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
@@ -1605,6 +1605,31 @@ public class DaemonLifecycleControllerTests {
         h.PushConnected();
         await Task.Delay(50);
         await Assert.That(h.Surface.AttentionMessages.Count).IsEqualTo(1);
+    }
+
+    /// The command offered by hand names the daemon and profile as a shell would read them, and asks for the
+    /// verified replace only where the platform supports it.
+    [Test]
+    [Arguments("daemon-a", "default", "--name daemon-a --profile default")]
+    [Arguments("my laptop", "it's mine", "--name 'my laptop' --profile 'it'\\''s mine'")]
+    public async Task The_manual_repair_command_quotes_what_a_shell_would_split(string name, string profile, string expected) {
+        if (OperatingSystem.IsWindows()) return;
+        var command = AttachedIdentity.ManualRepair(name, profile);
+
+        await Assert.That(command).Contains(expected);
+        await Assert.That(command.Contains("--replace --verify", StringComparison.Ordinal)).IsEqualTo(OperatingSystem.IsMacOS());
+    }
+
+    /// A configured name the socket reduces to the daemon's own is the same daemon, and two servers on one host
+    /// are told apart in full.
+    [Test]
+    public async Task Names_compare_as_the_socket_does_and_servers_on_one_host_read_in_full() {
+        var sameName = FakeDaemonClientService.Snap(daemon: "my-laptop", serverUrl: "https://kcap.example.com:443").Daemon;
+        await Assert.That(AttachedIdentity.Mismatch(sameName, "My Laptop", "https://kcap.example.com:443", null)).IsNull();
+
+        var otherPort = FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: "https://kcap.example.com:8443").Daemon;
+        await Assert.That(AttachedIdentity.Mismatch(otherPort, "daemon-a", "https://kcap.example.com:443", null))
+            .IsEqualTo("Daemon daemon-a is running for https://kcap.example.com:8443, not https://kcap.example.com:443.");
     }
 
     sealed class FakeMutationLane {

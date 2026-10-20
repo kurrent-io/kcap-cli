@@ -80,11 +80,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
     /// A daemon attached by name that serves another server: signing in again cannot move it.
-    internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) =>
-        $"This machine's daemon is running for {ServerLabel(daemonServer)}, not {ServerLabel(appServer)}, so it cannot run agents here.";
-
-    static string ServerLabel(string server) =>
-        Uri.TryCreate(server, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : server;
+    internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
+        var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
+        return $"This machine's daemon is running for {daemonLabel}, not {appLabel}, so it cannot run agents here.";
+    }
 
     /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
     internal static string? ForeignDaemonServer(string? daemonServer, string? appServer) =>
@@ -550,8 +549,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // The word is seeded with "" (no snapshot yet): AvailabilityFor only reads it once the
         // attach state is Connected, by which point DaemonClientService's snapshot-before-Connected
         // ordering guarantees a real value is there (MainWindowViewModel's identical seam comment).
+        var foreignServer = daemon.Snapshots.Select(s => ForeignDaemonServer(s.Daemon.ServerUrl, appServerUrl))
+            .StartWith((string?)null).DistinctUntilChanged();
+        // A daemon serving another server is connected to the wrong one: it cannot launch for this app.
         var availability = daemon.Status.CombineLatest(
-            daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""), AvailabilityFor);
+            daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""), foreignServer,
+            (status, connection, foreign) => AvailabilityFor(status, connection) is LaunchAvailability.Ready && foreign is not null
+                ? LaunchAvailability.ServerDisconnected
+                : AvailabilityFor(status, connection));
         availability.Subscribe(a => _currentAvailability = a).DisposeWith(_disposables);
         daemon.Snapshots.Select(s => s.Daemon.SupportedVendors)
             .Subscribe(v => _currentLocalVendors = v)
@@ -577,9 +582,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DistinctUntilChanged();
         var signInRequired = _signInRequired.CombineLatest(laneSignedOut, (expired, lane) => expired || lane);
         SignInExpired = signInRequired;
-
-        var foreignServer = daemon.Snapshots.Select(s => ForeignDaemonServer(s.Daemon.ServerUrl, appServerUrl))
-            .StartWith((string?)null).DistinctUntilChanged();
 
         // IPC attaches by daemon name, so an existing local daemon can target another server.
         var selectedServerLane = _laneStatus.CombineLatest(

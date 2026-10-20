@@ -594,6 +594,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         if (requireIdle && _latestActiveAgents > 0) {
             _surface.Status("Agents started on the daemon while the prompt was open — canceled, nothing changed.");
+            // Offered again once they finish.
+            lock (_lock) _mismatchWaitsForIdle = true;
             return;
         }
 
@@ -829,6 +831,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// cannot move the daemon out from under the app.
     async Task CheckAttachedIdentityAsync() {
         try {
+            var generation = CurrentGeneration();
             if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
             var mismatch = AttachedIdentity.Mismatch(daemon, _client.DaemonName, _canonicalServer, expectedProfile);
@@ -847,6 +850,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             }
             if (busy) {
                 lock (_lock) _mismatchWaitsForIdle = true;
+                // An idle snapshot landing while this read the profile found the flag unset; look again now.
+                if (_latestActiveAgents == 0) _ = CheckAttachedIdentityAsync();
                 var agents = daemon.ActiveAgents == 1 ? "its running agent finishes" : $"its {daemon.ActiveAgents} running agents finish";
                 _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
                 return;
@@ -857,6 +862,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             // nor escapes the shutdown barrier.
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
             try {
+                // An attach that changed while this was prepared has its own check.
+                if (CurrentGeneration() != generation) return;
                 if (await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
                     await OfferRepairAsync(snap, _lifetime.Token, requireIdle: true).ConfigureAwait(false);
             } finally {
