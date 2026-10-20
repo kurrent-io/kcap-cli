@@ -767,22 +767,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     // change afterwards.
     RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot, _time).Fingerprint();
 
-    async Task<string[]> MergeRepoPathsAsync() {
-        var persisted = await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync();
-
-        if (_config.AllowedRepoPaths.Length == 0)
-            return persisted;
-
-        // Union: persisted paths first (sorted by last_used desc), then config-only paths
-        var comparer = RepoPathStore.PathComparison == StringComparison.Ordinal
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
-        var seen = new HashSet<string>(persisted, comparer);
-        var merged = new List<string>(persisted);
-        merged.AddRange(_config.AllowedRepoPaths.Select(p => p.TrimEnd('/', '*')).Where(seen.Add));
-
-        return [..merged];
-    }
+    async Task<string[]> MergeRepoPathsAsync() =>
+        AdvertisedRepoPaths.Merge(await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync(), _config.AllowedRepoPaths);
 
     /// <summary>
     /// Auto-reconnect started: the transport is no longer Connected and the
