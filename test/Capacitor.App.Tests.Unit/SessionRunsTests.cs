@@ -48,6 +48,20 @@ public class SessionRunsTests {
     }
 
     [Test]
+    public async Task A_batch_that_starts_and_finishes_a_command_never_reports_it_running() {
+        var s = new SessionRuns(Clock());
+        var seen = new List<int>();
+        s.Changed += () => seen.Add(s.RunningCommandCount);
+        s.ApplyAll([
+            Signals(Shell("c1")),
+            Mixed([new AcpEventEnvelope(Kind: AcpEventKind.ToolResult, ToolCallId: "c1")], Detached("c1", "b1")),
+            Signals(Finished("c1", "b1")),
+        ]);
+        await Assert.That(seen).IsEquivalentTo([0]);
+        await Assert.That(Only(s).State).IsEqualTo(RunState.Done);
+    }
+
+    [Test]
     public async Task A_background_shell_runs_from_its_detach_until_its_notification() {
         var s = new SessionRuns(Clock());
         s.Apply(Signals(Shell("c1")));

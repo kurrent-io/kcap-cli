@@ -1292,9 +1292,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
 
         _planActivity?.Apply(read.Lines.Select(line => line.Projection));
+        _runs.ApplyAll(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
         foreach (var (projected, offset) in read.Lines) {
-            _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
                 if (TakeSupersededEcho(text, offset)) continue;

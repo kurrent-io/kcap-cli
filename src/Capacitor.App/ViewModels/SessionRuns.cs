@@ -45,7 +45,16 @@ public sealed class SessionRuns(TimeProvider time) {
         }
     }
 
-    public void Apply(ChatProjectionResult projection) {
+    public void Apply(ChatProjectionResult projection) => ApplyAll([projection]);
+
+    /// One refresh per batch: a replayed command that started and finished inside it must never
+    /// surface as running, or every surface counting commands flickers when a session opens.
+    public void ApplyAll(IEnumerable<ChatProjectionResult> projections) {
+        foreach (var projection in projections) Fold(projection);
+        Refresh();
+    }
+
+    void Fold(ChatProjectionResult projection) {
         HashSet<string>? detachedHere = null;
         foreach (var signal in projection.Runs) {
             switch (signal) {
@@ -70,7 +79,6 @@ public sealed class SessionRuns(TimeProvider time) {
             if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
         }
-        Refresh();
     }
 
     public void Clear() {
