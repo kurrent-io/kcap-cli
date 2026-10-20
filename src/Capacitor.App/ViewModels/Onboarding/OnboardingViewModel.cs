@@ -51,6 +51,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
+    public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible
+        || ShowLifecycleStatus || ShowLifecycleAttention;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -131,9 +133,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
         if (surface is not null) {
             surface.WhenAnyValue(x => x.StatusText)
-                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleStatus)));
+                .Subscribe(_ => {
+                    this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
+                    this.RaisePropertyChanged(nameof(FooterVisible));
+                });
             surface.WhenAnyValue(x => x.AttentionText)
-                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleAttention)));
+                .Subscribe(_ => {
+                    this.RaisePropertyChanged(nameof(ShowLifecycleAttention));
+                    this.RaisePropertyChanged(nameof(FooterVisible));
+                });
         }
 
         PendingEnterForTesting = SafeEnterAsync(Current);
@@ -174,6 +182,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
             case nameof(SignInStepViewModel.TenantPickerVisible)
                 or nameof(SignInStepViewModel.TenantChoicePending):
                 this.RaisePropertyChanged(nameof(TenantActionsVisible));
+                this.RaisePropertyChanged(nameof(FooterVisible));
                 this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
                 this.RaisePropertyChanged(nameof(CancelTenantCommand));
                 break;
@@ -186,6 +195,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(FooterVisible));
         this.RaisePropertyChanged(nameof(NextIsPrimary));
         this.RaisePropertyChanged(nameof(NextIsSecondary));
         this.RaisePropertyChanged(nameof(ShowLifecycleStatus));

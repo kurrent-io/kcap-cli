@@ -1146,7 +1146,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
-        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested, _uiScale);
+        var window = ShowWizardWindow(desktop, graph.ViewModel, graph.Install, () => _shutdown.IsCancellationRequested, _uiScale);
         _wizardWindow = window;
 
         // The SAME consumer function, over the wizard's own surface: outcome presentation stays
@@ -1219,13 +1219,12 @@ public partial class App : Application {
     // closing the window mid-onboarding abandons it and hands over to the normal graph, it never
     // exits the app.
     internal static MainWindow ShowWizardWindow(
-            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null,
+            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard,
             LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
-        var window = new MainWindow { Onboarding = wizard, ContentScale = uiScale };
-        if (appState is not null) {
-            WindowSizeMemory.Restore(window, appState);
-            WindowSizeMemory.Attach(window, appState);
-        }
+        var window = new MainWindow {
+            Onboarding = wizard, ContentScale = uiScale,
+            Width = 760, Height = 760, WindowStartupLocation = WindowStartupLocation.CenterScreen,
+        };
 
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
@@ -1513,10 +1512,8 @@ public partial class App : Application {
         window.Notifier = notifier;
         window.ContentScale = uiScale;
         window.Onboarding = null;
-        if (adopt is null) {
-            WindowSizeMemory.Restore(window, appState);
-            WindowSizeMemory.Attach(window, appState);
-        }
+        WindowSizeMemory.Restore(window, appState);
+        WindowSizeMemory.Attach(window, appState);
         window.Show();
         return window;
     }

@@ -16,12 +16,11 @@
                 </Border>
                 <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
                         AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}">
-                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                        <app:AppIcon Kind="Laptop" Size="16" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <StackPanel Grid.Column="1" Spacing="4">
-                            <TextBlock Classes="onboardingLabel" Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
-                            <TextBlock Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
-                        </StackPanel>
+                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                        <app:AppIcon Kind="Laptop" Size="20" />
+                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                   Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
                     </Grid>
                 </Button>
                 <Border Classes="onboardingCallout" IsVisible="{Binding LocalUnavailableVisible}">
@@ -31,12 +30,11 @@
 
                 <Button x:Name="CloudEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseCloudCommand}"
                         AutomationProperties.Name="{x:Static vm:EditionStepViewModel.CloudTitle}">
-                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
-                        <app:AppIcon Kind="Users" Size="16" VerticalAlignment="Top" Margin="0,1,0,0" />
-                        <StackPanel Grid.Column="1" Spacing="4">
-                            <TextBlock Classes="onboardingLabel" Text="{x:Static vm:EditionStepViewModel.CloudTitle}" />
-                            <TextBlock Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.CloudDetail}" />
-                        </StackPanel>
+                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                        <app:AppIcon Kind="Users" Size="20" />
+                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                   Text="{x:Static vm:EditionStepViewModel.CloudTitle}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.CloudDetail}" />
                     </Grid>
                 </Button>
 
@@ -102,7 +100,7 @@
                 <ContentControl x:Name="StepContent" Content="{Binding Current}" HorizontalAlignment="Stretch" />
             </StackPanel>
         </ScrollViewer>
-        <Border Grid.Row="1" Background="{StaticResource OnboardingCanvasBrush}"
+        <Border x:Name="StepFooter" Grid.Row="1" IsVisible="{Binding FooterVisible}" Background="{StaticResource OnboardingCanvasBrush}"
                 BorderBrush="{StaticResource OnboardingDividerBrush}" BorderThickness="0,1,0,0">
                 <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="10">
                     <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">

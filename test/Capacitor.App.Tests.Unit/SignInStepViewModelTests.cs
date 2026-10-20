@@ -935,7 +935,7 @@ public class SignInStepViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_pane_renders_sign_in_with_the_work_account_first() {
-        var (workAccount, urlBox, urlBoxShown, statusShown) = await AvaloniaSession.DispatchAsync(async () => {
+        var (workAccount, urlBox, urlBoxShown, statusShown, editionFooter, signInFooter) = await AvaloniaSession.DispatchAsync(async () => {
             using var h = new Harness();
             var edition = new EditionStepViewModel(CliTelemetry.Disabled(TimeProvider.System).Funnel, () => null);
             var vm = new OnboardingViewModel([edition, h.Vm]);
@@ -944,6 +944,8 @@ public class SignInStepViewModelTests {
             var window = new MainWindow { Onboarding = vm };
             window.Show();
             Dispatcher.UIThread.RunJobs();
+            var footer = window.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "StepFooter");
+            var footerOnEdition = footer.IsVisible;
 
             await edition.SignInCommand.Execute().ToTask(); // Edition -> Sign in
             await vm.PendingAdvanceForTesting;
@@ -958,7 +960,7 @@ public class SignInStepViewModelTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (button, box, shown, statusVisible);
+            return (button, box, shown, statusVisible, footerOnEdition, footer.IsVisible);
         });
 
         await Assert.That(workAccount).IsNotNull();
@@ -966,6 +968,8 @@ public class SignInStepViewModelTests {
         await Assert.That(urlBox!.Classes.Contains("onboardingField")).IsTrue();
         await Assert.That(urlBoxShown).IsFalse(); // behind "I have a workspace URL"
         await Assert.That(statusShown).IsFalse(); // the ready line only restates the button
+        await Assert.That(editionFooter).IsFalse();
+        await Assert.That(signInFooter).IsTrue();
     }
 
     [Test]
