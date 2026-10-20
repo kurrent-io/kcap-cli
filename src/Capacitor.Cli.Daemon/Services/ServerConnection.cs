@@ -919,7 +919,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
             try {
-                return await InvokeAgentRegisteredAckedRawAsync(registration) ?? AgentRegisteredResponse.Accepted;
+                return await InvokeAgentRegisteredAckedRawAsync(registration)
+                    ?? throw new InvalidOperationException($"The server answered the registration of agent {agentId} with no outcome");
             } catch (Exception ex) when (IsUnknownHubMethod(ex)) {
                 Volatile.Write(ref _registrationAckMissingOn, connection);
             }

@@ -90,11 +90,11 @@ sealed class CaptureServerConnection() : ServerConnection(
 
     /// <summary>Completed the instant AgentRegisteredAsync is entered — lets a test hold
     /// re-registration inside that await and publish a verdict there (finding 1 refinement).</summary>
-    public TaskCompletionSource? AgentRegisteredEntered { get; init; }
+    public TaskCompletionSource? AgentRegisteredEntered { get; set; }
 
     /// <summary>When set, AgentRegisteredAsync awaits this before returning — holding the
     /// re-registration open across the AgentRegistered await.</summary>
-    public TaskCompletionSource? AgentRegisteredGate { get; init; }
+    public TaskCompletionSource? AgentRegisteredGate { get; set; }
 
     /// <summary>When set, every non-failure AgentStatusChanged send checks this runtime's verdict
     /// AT SEND TIME (via the lock-synchronised ReadVerdict); if a launch-window verdict is already

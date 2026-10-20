@@ -96,6 +96,15 @@ public class ServerConnectionAgentRegisteredTests {
         await Assert.That(conn.LegacyCalls.Count).IsEqualTo(2);
     }
 
+    /// <summary>A reply with no outcome proves nothing either way, so it is a failure rather than an acceptance.</summary>
+    [Test]
+    public async Task A_reply_without_an_outcome_fails_rather_than_reading_as_accepted() {
+        var conn = new TestServerConnection { Acked = _ => Task.FromResult<AgentRegisteredResponse?>(null) };
+
+        await Assert.That(async () => await Register(conn)).Throws<InvalidOperationException>();
+        await Assert.That(conn.LegacyCalls).IsEmpty();
+    }
+
     /// <summary>Any other hub failure is no proof the method is missing, so it surfaces to the caller's retry.</summary>
     [Test]
     public async Task Another_hub_failure_propagates_without_the_legacy_call() {

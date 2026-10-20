@@ -105,9 +105,37 @@ public class AgentOrchestratorVendorTests {
         });
 
         await server.ReRegisterAgentsHook!();
+        await server.ReRegisterAgentsHook!();
+        await orch.CleanupAgentForTest("agent-refused");
 
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
         await Assert.That(server.StatusChangedCalls).IsEmpty();
+        await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+    }
+
+    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.</summary>
+    [Test]
+    public async Task A_refused_launch_keeps_running_and_sends_nothing_more_for_its_id() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var server = new CaptureServerConnection { RegistrationResponse = _ => new AgentRegisteredResponse(false, "launch_refused") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "refused-launch", Prompt: "hi", Model: "opus", Effort: null,
+            RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "claude"));
+
+        var agent = orch.GetAgentForTest("refused-launch");
+        await Assert.That(agent).IsNotNull();
+        await Assert.That(agent!.IsServerSilent).IsTrue();
+
+        await orch.CleanupAgentForTest("refused-launch");
+
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
+        await Assert.That(server.StatusChangedCalls).IsEmpty();
+        await Assert.That(server.RunEvents.Any(e => e.AgentId == "refused-launch")).IsFalse();
+        await Assert.That(server.LaunchFailedCalls).IsEmpty();
+        await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
     }
 
     // A PTY codex runtime reports "pty" on AgentRegistered — the transport rides the runtime TYPE,

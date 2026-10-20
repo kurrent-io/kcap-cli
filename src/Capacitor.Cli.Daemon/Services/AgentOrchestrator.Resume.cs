@@ -875,8 +875,10 @@ internal partial class AgentOrchestrator {
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
-        // The server holds no live entry under this id, so the resume goes on under a new one.
-        if (resume.RefusedRegistration is not null) return (RegistrationRefusedReason, null);
+        // The server holds no live entry under this id, so the resume goes on under a new one, unless a stop
+        // came first: it gave up the worktree, and the teardown has removed it.
+        if (resume.RefusedRegistration is not null)
+            return resume.Agent?.StopRequested == true ? (StoppedDuringResume, null) : (RegistrationRefusedReason, null);
 
         if (outcome.Kind == CommandOutcomeKind.LaunchRejected)
             return (outcome.RejectReason == CommandRejectedReason.DaemonCapacity ? "daemon_capacity" : "launch_rejected", null);

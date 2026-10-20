@@ -259,6 +259,35 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(f.Orch.ResumeLedger!.TryRead(successor)!.State).IsEqualTo(ResumeState.Running);
     }
 
+    /// <summary>A stop that lands while the registration is still unanswered gives up the worktree, so the
+    /// refusal that follows must not start a successor in it.</summary>
+    [Test]
+    public async Task A_stop_while_a_refused_registration_is_pending_starts_no_successor() {
+        var f = Build(resumeSupported: true);
+        await using var _ = f.Orch;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Server.AgentRegisteredEntered = entered;
+        f.Server.AgentRegisteredGate    = gate;
+        f.Server.RegistrationResponse   = _ => new AgentRegisteredResponse(false, "recorded_failure");
+        Entry(f, vendorSession: "vendor-session-1");
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.WaitBoundedAsync(entered.Task, "the resumed registration");
+
+        var stop = f.Orch.HandleStopAgent(OldAgent);
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest(OldAgent) is not { StopRequested: false });
+        gate.SetResult();
+
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await WaitHarness.WaitBoundedAsync(stop, "the stop");
+
+        await Assert.That(f.Factory.Starts.Count).IsEqualTo(1);
+        await Assert.That(f.Orch.GetAgentForTest(OldAgent)).IsNull();
+        await Assert.That(f.Server.ShutdownReports.Any(r => r.Reason.StartsWith("resume_failed", StringComparison.Ordinal))).IsFalse();
+    }
+
     [Test]
     public async Task A_private_entry_skips_the_superseded_report_but_still_runs_the_takeover() {
         ServeOldSession();
