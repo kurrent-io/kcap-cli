@@ -2619,13 +2619,13 @@ sealed class SetupCommand(
             return (null, null);
         }
 
-        var tier = !tierGiven ? WorkspaceTier.Free : tierText?.Trim().ToLowerInvariant() switch {
+        var tier = !tierGiven ? null : tierText?.Trim().ToLowerInvariant() switch {
             "team" => WorkspaceTier.Team,
             "free" => WorkspaceTier.Free,
             _      => (WorkspaceTier?)null
         };
 
-        if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
+        if (tierGiven && tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 
         // Present-but-empty is rejected rather than read as absent: a script whose $ORG expanded to
         // nothing still asked for a workspace.
@@ -2653,7 +2653,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value, code?.Trim()), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier, code?.Trim()), null);
     }
 
     static readonly string[] DiscoverFlags =

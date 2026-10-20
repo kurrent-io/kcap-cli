@@ -46,7 +46,7 @@ public static class PullRequestWire {
                 if (field.Value.IsString && field.Value.GetString() == "unknown" && !number.IsNull) return false;
             }
             if (field.Name == "counts" && field.Value.IsObject && !field.Value.EnumerateObject().All(x => ValidJson(x.Value))) return false;
-            if (field.Name is "data" or "items" or "checks" or "reviews" or "conversation" or "availability" or "root_comment"
+            if (field.Name is "data" or "items" or "checks" or "reviews" or "conversation" or "threads" or "unresolved" or "availability" or "root_comment"
                 or "published" or "approved" or "changes_requested" or "outstanding_users" or "outstanding_teams" or "count" or "total" or "excluded_by_filter"
                 && !ValidJson(field.Value)) return false;
         }

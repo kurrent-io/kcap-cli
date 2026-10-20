@@ -791,7 +791,8 @@ public class WorkspaceViewModelTests {
     const string ShellLaunchLine = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
 
     /// The rail reads a session's running commands from here; the subagent beside it is left
-    /// out, since the daemon already counts that one. The header reads them too, so a finished
+    /// out, since the daemon already counts that one. A closed workspace hands its feed and runs on, so the
+    /// count carries on without the transcript being read again. The header reads them too, so a finished
     /// turn with a command still running is Working there as well.
     [Test]
     [Arguments("command")]
@@ -806,9 +807,9 @@ public class WorkspaceViewModelTests {
             var lane = new FakeServerLane();
             using var access = new SessionAccessService(lane, time);
             BackgroundCommandMonitor? monitor = null;
-            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+            using var commands = new BackgroundCommandActivity((key, report, ended, handoff) =>
                 monitor = new BackgroundCommandMonitor(key, report, ended, daemon, directory, access,
-                    (_, _) => Task.FromResult(new SessionDetailFetch(null)), lane, time));
+                    (_, _) => Task.FromResult(new SessionDetailFetch(null)), lane, time, handoff));
             IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
             using var subscription = commands.Running.Subscribe(running => latest = running);
             var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time, commands: commands);
@@ -826,6 +827,9 @@ public class WorkspaceViewModelTests {
             await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
             selected.OnNext("another-agent");
+            // Blanked in place, same length: a monitor that carries on from the chat's feed reads none of it,
+            // and one that read the transcript again from the start would find no command running.
+            File.WriteAllText(path, new string(' ', (int)new FileInfo(path).Length - 1) + "\n");
             await vm.TeardownAsync();
             await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);

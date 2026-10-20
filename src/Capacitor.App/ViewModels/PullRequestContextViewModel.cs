@@ -133,11 +133,16 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public ReactiveCommand<Unit, Unit> SignInCommand { get; }
     public ReactiveCommand<Unit, Unit> LinkGitHubCommand { get; }
     public ReactiveCommand<Unit, Unit> InstallToolCommand { get; }
+    /// Puts <see cref="FixPrompt"/> in the session's composer for the user to send.
+    public ReactiveCommand<Unit, Unit> FixCommand { get; }
+    /// Whether this viewer's composer can take Fix's prompt: a read-only participant's cannot send it.
+    readonly Func<bool> _canRequestFix;
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
         Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null,
-        Action<string>? linksChanged = null) {
+        Action<string>? linksChanged = null, Action<string>? requestFix = null, Func<bool>? canRequestFix = null) {
         _source = source;
+        _canRequestFix = canRequestFix ?? (() => requestFix is not null);
         _linksChanged = linksChanged;
         _readBranch = readBranch ?? GitRepository.CurrentBranch;
         _hasCustomBranchReader = readBranch is not null;
@@ -165,6 +170,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         LinkGitHubCommand = ReactiveCommand.Create(() => linkGitHub?.Invoke());
         InstallToolCommand = ReactiveCommand.Create(() => LinkPolicy.Open(_opener, _readerNote?.InstallUrl));
         _subscriptions.Add(InstallToolCommand);
+        FixCommand = ReactiveCommand.Create(() => { if (ShowsFix && FixPrompt is { } prompt) requestFix?.Invoke(prompt); });
+        _subscriptions.Add(FixCommand);
         _subscriptions.Add(RefreshCommand); _subscriptions.Add(OpenReaderCommand); _subscriptions.Add(ShowSectionCommand);
         _subscriptions.Add(LoadMoreCommand); _subscriptions.Add(ReloadEarlierCommand); _subscriptions.Add(ExpandThreadCommand);
         _subscriptions.Add(OpenRowCommand); _subscriptions.Add(OpenGitHubCommand); _subscriptions.Add(OpenBodyLinkCommand);

@@ -142,6 +142,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = WorkspaceTab.Artefacts; }
 
+    void PrefillComposer(string prompt) {
+        if (Chat is not { } chat) return;
+        chat.ComposerText = PullRequestContextViewModel.WithFixPrompt(chat.ComposerText, prompt);
+        ActiveTab = WorkspaceTab.Chat;
+    }
+
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
     internal void OpenCard(ToolCard card) {
         if (card.DocumentPath is { } path) {
@@ -192,7 +198,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
 
         var runs = _runs = new SessionRuns(time);
-        commands?.Track($"local:{agentId}", runs).DisposeWith(_disposables);
+        commands?.Track($"local:{agentId}", runs, () => Chat?.ReleaseFeed()).DisposeWith(_disposables);
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;
@@ -213,7 +219,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Subscribe(_ => CloseSubagent()).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged);
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: () => Chat is { ShowsComposer: true });
         WorkContext.PullRequests = PullRequests;
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
@@ -304,6 +310,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ShowTerminal = () => ActiveTab = WorkspaceTab.Terminal,
                     InputSending = inputSending,
                 };
+                if (PullRequests is { } fixHost)
+                    Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
             })
             .DisposeWith(_disposables);
 

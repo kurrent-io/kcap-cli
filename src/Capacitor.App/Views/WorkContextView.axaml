@@ -140,6 +140,10 @@
             <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="13" />
         </Style>
+        <Style Selector="Button.toggle:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
         <Style Selector="Button.toggle.openable">
             <Setter Property="Cursor" Value="Hand" />
         </Style>
@@ -238,8 +242,9 @@
             </Grid>
         </DataTemplate>
         <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
-            <!-- Only a subagent whose id is known opens; any other row reads the same, and its click does nothing. -->
-            <Button x:Name="RunRowButton" Classes="toggle" Classes.openable="{Binding CanOpen}"
+            <!-- Only a subagent whose id is known opens. Any other row is disabled, so it is neither a tab stop nor
+                 announced as actionable, but it reads the same. -->
+            <Button x:Name="RunRowButton" Classes="toggle" Classes.openable="{Binding CanOpen}" IsEnabled="{Binding CanOpen}"
                     Command="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).OpenRunCommand}"
                     CommandParameter="{Binding}" AutomationProperties.Name="{Binding Name}">
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
@@ -251,10 +256,10 @@
                             <views:AppIcon x:Name="ShellGlyph" Kind="Terminal" Size="12" Margin="0,0,5,0"
                                            Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
                             <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" ToolTip.ShowOnDisabled="True" />
                         </Grid>
                         <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
+                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}" ToolTip.ShowOnDisabled="True"
                                    IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
                     </StackPanel>

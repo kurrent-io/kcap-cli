@@ -85,6 +85,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     }
     public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab || ShowsArtefactsTab;
 
+    void PrefillComposer(string prompt) {
+        Chat.ComposerText = PullRequestContextViewModel.WithFixPrompt(Chat.ComposerText, prompt);
+        ActiveTab = RemoteTab.Chat;
+    }
+
+    bool CanPrefillComposer() => Chat.ShowsComposer;
+
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
 
     /// A chat card's Open: a declared document selects in the tab, a page goes to the browser.
@@ -256,7 +263,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
             requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged);
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: CanPrefillComposer);
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
                 .Subscribe(state => {
@@ -280,6 +287,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard, drafts: drafts) { InputSending = inputSending };
+        if (PullRequests is { } fixHost)
+            Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
             : null;
