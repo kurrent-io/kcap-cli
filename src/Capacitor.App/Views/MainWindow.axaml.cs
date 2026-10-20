@@ -84,7 +84,11 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         ApplyCaptionInset();
     }
 
-    // Bounded by the screen the window is on, so a move to a smaller one recomputes it.
+    void RefreshMinimumSize() {
+        if (_scale != UiScale.Default) ApplyMinimumSize();
+    }
+
+    // Bounded by the screen the window is on.
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
@@ -98,7 +102,10 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     public MainWindow() {
         InitializeComponent();
         KeyBindings.AddRange(ZoomShortcut.For(this));
-        PositionChanged += (_, _) => { if (_scale != UiScale.Default) ApplyMinimumSize(); };
+        // A move, a display scaling change and a resized work area each change what the screen offers.
+        PositionChanged += (_, _) => RefreshMinimumSize();
+        ScalingChanged += (_, _) => RefreshMinimumSize();
+        Opened += (_, _) => { if (Screens is { } screens) screens.Changed += (_, _) => RefreshMinimumSize(); };
         // Hide-to-tray never closes the window, so only a real close lets the setting go.
         Closed += (_, _) => _contentScaleSubscription?.Dispose();
         BindRefreshShortcuts();

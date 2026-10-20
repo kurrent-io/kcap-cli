@@ -155,10 +155,11 @@
                         </ContentControl>
                     </Panel>
                 </Grid>
-
-                <!-- Onboarding covers the rail and launcher until it hands over; see Onboarding. -->
-                <onboarding:OnboardingPaneView x:Name="OnboardingPane" DataContext="{x:Null}" IsVisible="False" />
             </Panel>
         </LayoutTransformControl>
+
+        <!-- Unscaled like the strip above: the pane draws its own title-bar drag area. -->
+        <!-- Onboarding covers the rail and launcher until it hands over; see Onboarding. -->
+        <onboarding:OnboardingPaneView x:Name="OnboardingPane" DataContext="{x:Null}" IsVisible="False" />
     </Panel>
 </rxui:ReactiveWindow>
