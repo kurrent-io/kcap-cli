@@ -78,6 +78,48 @@ public class MarkdownLinkKeyboardTests {
         } finally { window.Close(); }
     });
 
+    /// A code block's action is a focusable child of the viewer; tabbing onto it must leave its keys alone.
+    [Test]
+    public Task A_focused_child_control_keeps_its_own_keys() => RunOnUiAsync(async () => {
+        var opened = new List<string>();
+        var ran = new List<string>();
+        var view = new MarkdownView {
+            Text = "[first](https://example.com/a)\n\n```bash\n! kcap agent ls\n```",
+            OpenLink = ReactiveCommand.Create<string>(opened.Add), RunCode = ReactiveCommand.Create<string>(ran.Add), Width = 400,
+        };
+        var window = new Window { Content = view, Width = 500, Height = 300 };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            var run = MarkdownViewHarness.All<Button>(view).Single(b => b.Classes.Contains("markdown-code-run"));
+            run.Focus(NavigationMethod.Tab);
+            Dispatcher.UIThread.RunJobs();
+            Press(window, PhysicalKey.Enter);
+
+            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(opened).IsEmpty();
+            await Assert.That(ran).IsEquivalentTo(new[] { "! kcap agent ls" });
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task The_ring_follows_the_link_when_its_text_rewraps() => RunOnUiAsync(async () => {
+        var (window, view, _, _, _) = Show();
+        try {
+            Press(window, PhysicalKey.Tab);
+            Press(window, PhysicalKey.Tab);
+            var block = MarkdownViewHarness.AllLinks(view).First().Block;
+            var ring = (LinkFocusRing)AdornerLayer.GetAdorner(block)!;
+            var wide = ring.Rects[0];
+
+            view.Width = 120;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(ring.Rects[0]).IsNotEqualTo(wide).Because("the narrower block wraps the second link");
+        } finally { window.Close(); }
+    });
+
     [Test]
     public Task A_pointer_focus_selects_no_link_and_enter_opens_nothing() => RunOnUiAsync(async () => {
         var (window, view, _, _, opened) = Show();

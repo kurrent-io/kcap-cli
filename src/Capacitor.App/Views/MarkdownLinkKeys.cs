@@ -44,7 +44,8 @@ sealed class MarkdownLinkKeys {
 
     void OnGotFocus(FocusChangedEventArgs e) {
         Clear();
-        if (e.NavigationMethod != NavigationMethod.Tab) return;
+        // Routed: a focusable descendant, such as a code block's action, raises it here too.
+        if (!ReferenceEquals(e.Source, _viewer) || e.NavigationMethod != NavigationMethod.Tab) return;
 
         var links = Links();
         if (links.Count == 0) return;
@@ -52,7 +53,7 @@ sealed class MarkdownLinkKeys {
     }
 
     void OnKeyDown(KeyEventArgs e) {
-        if (_current is not { } current) return;
+        if (_current is not { } current || !ReferenceEquals(e.Source, _viewer)) return;
 
         switch (e.Key) {
             case Key.Tab when (e.KeyModifiers & ~KeyModifiers.Shift) == KeyModifiers.None:
@@ -77,9 +78,8 @@ sealed class MarkdownLinkKeys {
     void Select((TextBlock Block, MarkdownHyperlink Link) link) {
         Clear();
         _current = link;
-        var rects = LinkRects(link.Block, link.Link);
-        AdornerLayer.SetAdorner(link.Block, new LinkFocusRing(rects));
-        if (rects.Count > 0) link.Block.BringIntoView(rects[0].Inflate(4));
+        AdornerLayer.SetAdorner(link.Block, new LinkFocusRing(link.Block, () => LinkRects(link.Block, link.Link)));
+        if (LinkRects(link.Block, link.Link) is [var first, ..]) link.Block.BringIntoView(first.Inflate(4));
     }
 
     List<(TextBlock Block, MarkdownHyperlink Link)> Links() =>
