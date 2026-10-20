@@ -698,8 +698,8 @@ public class MainWindowViewModelTests {
             if (!reportFirst) identity.OnNext(report);
             await Assert.That(vm.StartMessage).IsEqualTo(report);
 
+            // Withdrawn after the connect that restored it, as a replace's own reconnect does: the banner clears.
             identity.OnNext(null);
-            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             await Assert.That(vm.StartMessage).IsNull();
         });
     }

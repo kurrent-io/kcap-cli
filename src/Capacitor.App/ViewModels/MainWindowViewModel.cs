@@ -558,8 +558,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             string? identity = null;
             identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(report => {
+                    var shown = identity;
                     identity = report;
                     if (report is not null) StartMessage = report;
+                    else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
                 })
                 .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)

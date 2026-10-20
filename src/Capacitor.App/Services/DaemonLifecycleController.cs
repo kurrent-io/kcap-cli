@@ -847,6 +847,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
             var mismatch = AttachedIdentity.Mismatch(daemon, _client.DaemonName, _canonicalServer, expectedProfile);
             var busy     = _latestBusy;
+            // Withdrawn on every match, ahead of the de-duplication below, so no path leaves a stale report standing.
+            if (mismatch is null) _identityReport.OnNext(null);
             bool reported;
             lock (_lock) {
                 reported = mismatch == _reportedMismatch;
@@ -855,10 +857,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 _reportedMismatch     = mismatch;
                 _mismatchWaitsForIdle = false;
             }
-            if (mismatch is null) {
-                _identityReport.OnNext(null);
-                return;
-            }
+            if (mismatch is null) return;
             var announce = !(reoffer && reported);
 
             if (expectedProfile is null || _autoActionsPermanentlyClosed || !AttachedIdentity.SupportsVerifiedReplace) {
