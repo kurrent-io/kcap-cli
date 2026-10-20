@@ -45,9 +45,10 @@ internal static class GitHubPrDetector {
     /// found by commit, it survives a branch pushed under another name with no upstream, and a
     /// local commit not yet pushed. Only open PRs qualify, and only commits off every remote's
     /// default branch: a merged PR's head, or an open PR from the default branch into another, sits
-    /// in the history of every checkout cut from it. Commits another local branch holds are skipped
-    /// too: a branch cut from a sibling's tip, such as a worktree, is not the sibling's PR. A nearest
-    /// commit heading two PRs links neither.
+    /// in the history of every checkout cut from it. Only commits made on this branch count: the walk
+    /// stops at the branch's creation point from its reflog, so a branch cut from a PR's tip, such as
+    /// an agent worktree, is not that PR, while the branch it was cut from keeps it. With no reflog
+    /// it links nothing. A nearest commit heading two PRs links neither.
     /// </summary>
     public static async Task<PrInfo?> DetectForHistoryAsync(
             string host, string owner, string repo, string? branch, string cwd, Func<TimeSpan> remaining, CommandRunner run) {
@@ -57,13 +58,13 @@ internal static class GitHubPrDetector {
         var cap = remaining();
         if (cap <= TimeSpan.Zero) return null;
 
-        var historyTask = run("git", $"rev-list -n {HistoryDepth} HEAD --not --remotes=*/HEAD --exclude=refs/heads/{branch} --branches", cwd, cap);
         var prsTask = run("gh",
             $"pr list --repo {host}/{owner}/{repo} --author @me --state open --limit 100 --json {Fields},headRefOid,isCrossRepository",
             cwd, cap);
-        await Task.WhenAll(historyTask, prsTask);
+        var history = await HistorySinceCreatedAsync(branch, cwd, remaining, run);
+        var prs     = await prsTask;
 
-        if (historyTask.Result is not { } history || prsTask.Result is not { } prs) return null;
+        if (history is null || prs is null) return null;
 
         // A null value marks a head shared by several PRs.
         var heads = new Dictionary<string, PrInfo?>(StringComparer.OrdinalIgnoreCase);
@@ -89,6 +90,21 @@ internal static class GitHubPrDetector {
         }
 
         return null;
+    }
+
+    static async Task<string?> HistorySinceCreatedAsync(string branch, string cwd, Func<TimeSpan> remaining, CommandRunner run) {
+        var cap = remaining();
+        if (cap <= TimeSpan.Zero) return null;
+
+        var reflog  = await run("git", $"reflog show --format=%H refs/heads/{branch}", cwd, cap);
+        var created = reflog?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+        if (created is not { Length: 40 or 64 } || !created.All(char.IsAsciiHexDigit)) return null;
+
+        cap = remaining();
+
+        return cap > TimeSpan.Zero
+            ? await run("git", $"rev-list -n {HistoryDepth} HEAD --not --remotes=*/HEAD {created}", cwd, cap)
+            : null;
     }
 
     static (PrInfo Pr, JsonObject Json)? Parse(string? json) {

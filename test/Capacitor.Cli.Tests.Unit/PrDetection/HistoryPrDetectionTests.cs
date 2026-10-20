@@ -34,10 +34,29 @@ public class HistoryPrDetectionTests {
         await Assert.That((await Detect(repo, "feature", prHead))!.Number).IsEqualTo(9);
     }
 
+    /// <summary>The agent worktree the daemon cuts from the PR branch: the agent links nothing, and
+    /// the PR branch keeps its link though another branch now holds its head.</summary>
     [Test]
-    public async Task A_branch_cut_from_a_sibling_tip_is_not_the_sibling_pr() {
+    public async Task A_branch_cut_from_a_pr_branch_tip_is_not_that_pr() {
         using var repo = FeatureWithOpenPr(out var prHead);
         repo.Checkout("agent", create: true);
+
+        await Assert.That(await Detect(repo, "agent", prHead)).IsNull();
+
+        repo.Checkout("feature");
+        await Assert.That((await Detect(repo, "feature", prHead))!.Number).IsEqualTo(9);
+    }
+
+    /// <summary>No local branch holds the PR head, as when the daemon fetches a base into its own
+    /// ref: only the branch's creation point tells the two apart.</summary>
+    [Test]
+    public async Task A_branch_cut_from_a_fetched_pr_head_is_not_that_pr() {
+        using var repo = FeatureWithOpenPr(out var prHead);
+        repo.Do("update-ref", "refs/kcap/review/agent", prHead);
+        repo.Checkout("main");
+        repo.Do("branch", "-D", "feature");
+        repo.Do("switch", "-q", "-c", "agent", "refs/kcap/review/agent");
+        repo.Do("commit", "-q", "--allow-empty", "-m", "agent work");
 
         await Assert.That(await Detect(repo, "agent", prHead)).IsNull();
     }

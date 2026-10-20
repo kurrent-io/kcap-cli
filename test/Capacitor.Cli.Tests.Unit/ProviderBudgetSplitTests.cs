@@ -111,7 +111,8 @@ public class ProviderBudgetSplitTests {
     [Test]
     public async Task Falls_back_to_the_history_lookup_when_no_name_matches() {
         CommandRunner run = (cmd, args, _, _) => Task.FromResult<string?>((cmd, args) switch {
-            ("git", "rev-list -n 100 HEAD --not --remotes=*/HEAD --exclude=refs/heads/capacitor/agent-x --branches") => "local\npushed",
+            ("git", "reflog show --format=%H refs/heads/capacitor/agent-x") => "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ("git", "rev-list -n 100 HEAD --not --remotes=*/HEAD bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") => "local\npushed",
             ("gh", _) when args.StartsWith("pr list ", StringComparison.Ordinal)
                 => """[{"number":1500,"headRefName":"fix/renamed","headRefOid":"pushed","isCrossRepository":false}]""",
             _ => null

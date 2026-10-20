@@ -114,10 +114,12 @@ public class GitHubPrDetectorTests {
 
     const string History = "local1\nabc123\nolder\n";
 
-    static CommandRunner HistoryRunner(string? prs, string? history = History, List<string>? calls = null) =>
+    const string Created = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    static CommandRunner HistoryRunner(string? prs, string? history = History, List<string>? calls = null, string? reflog = $"tip\n{Created}\n") =>
         (cmd, args, _, _) => {
             calls?.Add($"{cmd} {args}");
-            return Task.FromResult(cmd == "git" ? history : prs);
+            return Task.FromResult(cmd != "git" ? prs : args.StartsWith("reflog ", StringComparison.Ordinal) ? reflog : history);
         };
 
     static Task<PrInfo?> DetectForHistory(CommandRunner run, string repo = "widget") =>
@@ -136,7 +138,8 @@ public class GitHubPrDetectorTests {
 
         await Assert.That(pr!.Number).IsEqualTo(9);
         await Assert.That(pr.HeadRef).IsEqualTo("fix/renamed");
-        await Assert.That(calls).Contains("git rev-list -n 100 HEAD --not --remotes=*/HEAD --exclude=refs/heads/local-name --branches");
+        await Assert.That(calls).Contains("git reflog show --format=%H refs/heads/local-name");
+        await Assert.That(calls).Contains($"git rev-list -n 100 HEAD --not --remotes=*/HEAD {Created}");
         await Assert.That(calls).Contains(
             "gh pr list --repo github.com/acme/widget --author @me --state open --limit 100 --json number,title,url,headRefName,headRefOid,isCrossRepository");
     }
@@ -177,6 +180,15 @@ public class GitHubPrDetectorTests {
     [Test]
     public async Task History_lookup_needs_the_history() {
         var run = HistoryRunner("""[{"number":9,"headRefOid":"abc123","isCrossRepository":false}]""", history: null);
+        await Assert.That(await DetectForHistory(run)).IsNull();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("not-a-sha\n")]
+    public async Task History_lookup_needs_the_branch_creation_point(string? reflog) {
+        var run = HistoryRunner("""[{"number":9,"headRefOid":"abc123","isCrossRepository":false}]""", reflog: reflog);
         await Assert.That(await DetectForHistory(run)).IsNull();
     }
 
