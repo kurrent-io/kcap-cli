@@ -168,25 +168,32 @@ public class AgentOrchestratorVendorTests {
     }
 
     // A reconnect re-announces each agent with no launch on the server to read its vendor from, so
-    // the registration carries it.
+    // every registration carries it — the first one and each re-announcement alike.
     [Test]
-    public async Task ReRegister_reports_the_agents_vendor() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Registration_reports_the_agents_vendor(bool reconnect) {
         using var worktree = new TempDir();
         string worktreePath = worktree.CreateDir("worktree");
         var server = new CaptureServerConnection();
 
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
-        orch.RegisterAgentForTest(new AgentInstance(
+        var agent = new AgentInstance(
             "agent-claude", null, "", null, worktreePath, "claude",
             new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
         ) {
             ActivityClock = new AgentActivityClock(TimeProvider.System),
             CreatedAt     = DateTime.UtcNow,
             LastOutputAt  = DateTime.UtcNow
-        });
+        };
 
-        await server.ReRegisterAgentsHook!();
+        if (reconnect) {
+            orch.RegisterAgentForTest(agent);
+            await server.ReRegisterAgentsHook!();
+        } else {
+            await orch.RegisterAgentForTestAsync(agent);
+        }
 
         await Assert.That(server.AgentRegisteredVendors.Single()).IsEqualTo(("agent-claude", (string?)"claude"));
     }
