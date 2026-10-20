@@ -1,3 +1,4 @@
+using TUnit.Assertions.Enums;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -226,8 +227,8 @@ public class ProcessHelpersTests {
         var plain  = ProcArgs2.Of(3, "/opt/homebrew/bin/node", "node", "/usr/local/bin/gemini", "--resume");
         var padded = ProcArgs2.Of(3, "/opt/homebrew/bin/node\0\0\0", "node", "/usr/local/bin/gemini", "--resume");
 
-        await Assert.That(ProcessHelpers.ParseArgs(plain)).IsEquivalentTo(["node", "/usr/local/bin/gemini", "--resume"]);
-        await Assert.That(ProcessHelpers.ParseArgs(padded)).IsEquivalentTo(["node", "/usr/local/bin/gemini", "--resume"]);
+        await Assert.That(ProcessHelpers.ParseArgs(plain)).IsEquivalentTo(["node", "/usr/local/bin/gemini", "--resume"], CollectionOrdering.Matching);
+        await Assert.That(ProcessHelpers.ParseArgs(padded)).IsEquivalentTo(["node", "/usr/local/bin/gemini", "--resume"], CollectionOrdering.Matching);
         await Assert.That(ProcessHelpers.ParseArgs(new byte[] { 1, 0, 0, 0 })).IsEmpty();
     }
 
@@ -236,7 +237,7 @@ public class ProcessHelpersTests {
     public async Task ParseArgs_counts_an_empty_argument_and_stops_before_the_environment() {
         var buffer = ProcArgs2.Of(2, "/usr/bin/node", "node", "").Concat("gemini\0"u8.ToArray()).ToArray();
 
-        await Assert.That(ProcessHelpers.ParseArgs(buffer)).IsEquivalentTo(["node", ""]);
+        await Assert.That(ProcessHelpers.ParseArgs(buffer)).IsEquivalentTo(["node", ""], CollectionOrdering.Matching);
     }
 
     /// Gemini CLI runs as node with no title, so only its script names it: the shim the shebang hands over,
@@ -272,11 +273,11 @@ public class ProcessHelpersTests {
                 """))
             .IsEquivalentTo(["C:\\Program Files\\nodejs\\node.exe", "C:\\Users\\a b\\gemini.js", "--yolo"]);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine("""node a\\\"b c\\\\"d e" "ge""mini.js" """))
-            .IsEquivalentTo(["node", "a\\\"b", "c\\\\d e", "ge\"mini.js"]);
+            .IsEquivalentTo(["node", "a\\\"b", "c\\\\d e", "ge\"mini.js"], CollectionOrdering.Matching);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine("\"C:\\node\\\" x.js"))
-            .IsEquivalentTo(["C:\\node\\", "x.js"]);
+            .IsEquivalentTo(["C:\\node\\", "x.js"], CollectionOrdering.Matching);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine("C:\\\"Program Files\"\\node.exe a\u00a0b"))
-            .IsEquivalentTo(["C:\\Program Files\\node.exe", "a\u00a0b"]);
+            .IsEquivalentTo(["C:\\Program Files\\node.exe", "a\u00a0b"], CollectionOrdering.Matching);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine(null)).IsEmpty();
     }
 
