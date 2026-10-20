@@ -135,6 +135,37 @@ public class MarkdownLinkKeyboardTests {
     });
 
     [Test]
+    public Task Tab_after_the_text_changes_starts_on_the_new_links() => RunOnUiAsync(async () => {
+        var (window, view, _, _, _) = Show();
+        try {
+            Press(window, PhysicalKey.Tab);
+            view.Text = "Now [third](https://example.com/c).";
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(view.KeyboardLink).IsNull();
+
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(Url(view)).IsEqualTo("https://example.com/c");
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task A_press_inside_the_viewer_drops_the_keyboard_link() => RunOnUiAsync(async () => {
+        var (window, view, _, _, opened) = Show();
+        try {
+            var text = MarkdownViewHarness.Paragraphs(view).First();
+            MarkdownViewHarness.ClickAt(window, text, 0); // on "See", not a link
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(view.KeyboardLink).IsNotNull();
+
+            MarkdownViewHarness.ClickAt(window, text, 0);
+            Press(window, PhysicalKey.Enter);
+
+            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(opened).IsEmpty();
+        } finally { window.Close(); }
+    });
+
+    [Test]
     public Task A_pointer_focus_selects_no_link_and_enter_opens_nothing() => RunOnUiAsync(async () => {
         var (window, view, _, _, opened) = Show();
         try {

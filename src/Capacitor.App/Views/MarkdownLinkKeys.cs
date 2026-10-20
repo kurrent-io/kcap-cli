@@ -30,6 +30,8 @@ sealed class MarkdownLinkKeys {
         viewer.GotFocus += (_, e) => keys.OnGotFocus(e);
         viewer.LostFocus += (_, _) => keys.Clear();
         viewer.AddHandler(InputElement.KeyDownEvent, (_, e) => keys.OnKeyDown(e), RoutingStrategies.Tunnel);
+        // A press is the pointer taking over: Enter must not then open a link chosen before it.
+        viewer.AddHandler(InputElement.PointerPressedEvent, (_, _) => keys.Clear(), RoutingStrategies.Tunnel, handledEventsToo: true);
         return keys;
     }
 
@@ -53,7 +55,17 @@ sealed class MarkdownLinkKeys {
     }
 
     void OnKeyDown(KeyEventArgs e) {
-        if (_current is not { } current || !ReferenceEquals(e.Source, _viewer)) return;
+        if (!ReferenceEquals(e.Source, _viewer)) return;
+
+        if (_current is not { } current) {
+            // The viewer kept focus while its links were replaced, or a press cleared the link:
+            // Tab starts on the new links rather than leaving past them.
+            if (e.Key == Key.Tab && (e.KeyModifiers & ~KeyModifiers.Shift) == KeyModifiers.None && Links() is { Count: > 0 } fresh) {
+                Select(e.KeyModifiers.HasFlag(KeyModifiers.Shift) ? fresh[^1] : fresh[0]);
+                e.Handled = true;
+            }
+            return;
+        }
 
         switch (e.Key) {
             case Key.Tab when (e.KeyModifiers & ~KeyModifiers.Shift) == KeyModifiers.None:
