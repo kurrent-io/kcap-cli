@@ -32,11 +32,8 @@ sealed class DaemonCredentialHealth(Action changed) {
         }
     }
 
-    /// <summary>Counted only while the hub is down: a refusal on a connected hub's side channel is
-    /// not why it cannot connect, and nothing would clear it before a later, unrelated outage.</summary>
-    public void ObserveRejection(bool hubConnected) {
-        if (!hubConnected) Set(Rejected);
-    }
+    /// <summary>A refusal of the hub's own negotiate or socket; the caller reports no other lane's.</summary>
+    public void ObserveRejection() => Set(Rejected);
 
     public void ObserveConnected() => Set(null);
 

@@ -233,22 +233,25 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
         CredentialHealth = new DaemonCredentialHealth(_statusNotifier.Pulse);
-        void ReportRejection(string report) {
-            logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
-            CredentialHealth.ObserveRejection(HubState == HubConnectionState.Connected);
+        void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+        // Only the hub's own negotiate and socket say why the hub cannot connect; an event post's
+        // refusal is logged alone, whatever the hub is doing when it returns.
+        void ReportHubRejection(string report) {
+            ReportRejection(report);
+            CredentialHealth.ObserveRejection();
         }
 
         // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
         // to anything.
         var refusal = config.DestinationRefusal;
         // It follows redirects itself, so it can check each hop; the handler under it follows none.
-        DelegatingHandler Guarded(HttpMessageHandler inner) =>
+        DelegatingHandler Guarded(HttpMessageHandler inner, Action<string> report) =>
             new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal, followRedirects: true) {
-                InnerHandler = new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = NoRedirects(inner) },
+                InnerHandler = new BearerRejectionReportHandler(time, report) { InnerHandler = NoRedirects(inner) },
             };
 
         _eventQueue = new(
-            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler())));
+            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler(), ReportRejection)));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
@@ -259,13 +262,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                         CredentialHealth.Observe(state);
                         return state.Bearer;
                     };
-                    options.HttpMessageHandlerFactory = Guarded;
+                    options.HttpMessageHandlerFactory = inner => Guarded(inner, ReportHubRejection);
                     HttpClientExtensions.AddObservationHeaders(options.Headers, config.UpdateCheckOff);
                     options.WebSocketFactory = (context, ct) => {
                         LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
 
                         return BearerRejectionReportHandler.ConnectWebSocketAsync(
-                            context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                            context.Uri, context.Options.AccessTokenProvider, time, ReportHubRejection, ct);
                     };
                 }
             )

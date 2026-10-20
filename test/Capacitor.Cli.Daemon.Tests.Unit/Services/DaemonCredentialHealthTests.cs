@@ -32,7 +32,7 @@ public class DaemonCredentialHealthTests {
         health.Observe(State(AuthStatus.Ok));
         await Assert.That(health.Problem).IsNull();
 
-        health.ObserveRejection(hubConnected: false);
+        health.ObserveRejection();
         health.Observe(State(AuthStatus.Ok));
         await Assert.That(health.Problem).IsEqualTo(DaemonCredentialHealth.Rejected)
             .Because("the server refused that very token; a fresh read of it proves nothing");
@@ -40,14 +40,5 @@ public class DaemonCredentialHealthTests {
         health.ObserveConnected();
         await Assert.That(health.Problem).IsNull();
         await Assert.That(changes).IsEqualTo(4).Because("only real changes pulse the status stream");
-    }
-
-    /// A refusal while the hub is connected came from a side channel; nothing would clear it before a
-    /// later outage that has nothing to do with it.
-    [Test]
-    public async Task A_rejection_on_a_connected_hub_is_not_recorded() {
-        var health = new DaemonCredentialHealth(() => { });
-        health.ObserveRejection(hubConnected: true);
-        await Assert.That(health.Problem).IsNull();
     }
 }
