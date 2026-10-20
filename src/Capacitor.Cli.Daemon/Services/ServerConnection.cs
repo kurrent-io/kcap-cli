@@ -19,6 +19,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly DaemonConfig              _config;
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate                = new();
+    HubIdentity?                       _negotiatedAs;
+    int                                _lastUnavailable     = -1;
     readonly PendingPermissionRegistry _pendingPermissions  = new();
     readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
     readonly AgentRunEventQueue        _eventQueue;
@@ -260,6 +262,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     options.AccessTokenProvider = async () => {
                         var state = await credentials.ResolveAsync(default);
                         CredentialHealth.Observe(state);
+                        Volatile.Write(ref _negotiatedAs, HubIdentity.Of(state));
+                        if (state.Bearer is null) LogHubSignInUnavailable(state);
+                        else Volatile.Write(ref _lastUnavailable, -1);
                         return state.Bearer;
                     };
                     options.HttpMessageHandlerFactory = inner => Guarded(inner, ReportHubRejection);
@@ -840,6 +845,21 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// connection as a daemon (slot displaced or never registered).
     /// </summary>
     public Task ReRegisterAsync() => RegisterDaemonAsync();
+
+    public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
+        Volatile.Read(ref _negotiatedAs) is { } negotiated
+     && HubIdentity.Of(await Credentials.ResolveAsync(ct)) is { } current
+     && current != negotiated;
+
+    // Once per change of reason, so a hub retrying every 30 s does not repeat it.
+    void LogHubSignInUnavailable(CredentialState state) {
+        if (Interlocked.Exchange(ref _lastUnavailable, (int)state.Status) == (int)state.Status) return;
+
+        if (state.Status == AuthStatus.WrongServer)
+            LogHubTokenFromAnotherServer(_config.ServerUrl, state.Resolution?.IssuedServerUrl ?? "unknown");
+        else
+            LogHubNoSignIn(state.Status, _config.ServerUrl);
+    }
 
     /// <summary>
     /// Stops the underlying hub. <see cref="OnClosed"/> fires and calls
@@ -1698,6 +1718,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Daemon name '{Name}' is already in use by another live daemon on this account. Server rejected DaemonConnect: {Reason}")]
     partial void LogNameInUse(string name, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon is configured for {ServerUrl}, but its profile's token was issued by {IssuedBy}. Run `kcap login` for {ServerUrl}, or reinstall the daemon on the profile that holds it.")]
+    partial void LogHubTokenFromAnotherServer(string serverUrl, string issuedBy);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon has no usable sign-in for {ServerUrl} ({Status}). Run `kcap login` for that server.")]
+    partial void LogHubNoSignIn(AuthStatus status, string serverUrl);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connecting to {Url}...")]
     partial void LogConnecting(string url);

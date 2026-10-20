@@ -49,6 +49,11 @@ public class DaemonHeartbeatLoopTests {
 
             return ForceReconnectHandler is null ? Task.CompletedTask : ForceReconnectHandler();
         }
+
+        public Func<Task<bool>>? CredentialChangedHandler { get; set; }
+
+        public Task<bool> CredentialChangedAsync(CancellationToken ct) =>
+            CredentialChangedHandler is null ? Task.FromResult(false) : CredentialChangedHandler();
     }
 
     static DaemonHeartbeatLoop CreateLoop(FakePort port, TimeSpan? deadline = null)
@@ -278,5 +283,41 @@ public class DaemonHeartbeatLoopTests {
 
         await Assert.That(port.ReRegisterCalls).IsEqualTo(0);
         await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+    }
+
+    /// <summary>A live hub keeps the identity it negotiated with, so a sign-in as another account is only
+    /// picked up by reconnecting; a check that cannot answer leaves the connection alone.</summary>
+    [Test]
+    [Arguments(true, 1)]
+    [Arguments(false, 0)]
+    public async Task A_sign_in_as_another_account_reconnects_the_hub(bool changed, int reconnects) {
+        var port = new FakePort { CredentialChangedHandler = () => Task.FromResult(changed) };
+
+        await CreateLoop(port).TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(reconnects);
+    }
+
+    [Test]
+    public async Task A_credential_check_that_throws_leaves_the_hub_connected() {
+        var port = new FakePort { CredentialChangedHandler = () => throw new IOException("token store locked") };
+
+        await CreateLoop(port).TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_displaced_slot_is_re_registered_before_any_credential_check() {
+        var checks = 0;
+        var port = new FakePort {
+            PingHandler              = _ => Task.FromResult(false),
+            CredentialChangedHandler = () => { checks++; return Task.FromResult(true); },
+        };
+
+        await CreateLoop(port).TickAsync(CancellationToken.None);
+
+        await Assert.That(port.ReRegisterCalls).IsEqualTo(1);
+        await Assert.That(checks).IsEqualTo(0);
     }
 }
