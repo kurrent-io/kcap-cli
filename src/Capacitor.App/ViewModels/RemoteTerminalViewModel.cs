@@ -17,8 +17,8 @@ public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended, Ref
 /// agent's PTY for everyone. Every access establishment subscribes again onto a fresh surface, so
 /// a replay never stacks on scrollback. Subscribing waits for the pane's first showing, so a
 /// workspace kept on its Chat tab costs the server no replay or stream, and for access to stand. A
-/// server that refuses the terminal says so, and the pane reads Refused; an older one refuses in
-/// silence, which leaves an empty pane that only looks like "no output yet".
+/// server that refuses the terminal says so, and the pane reads Refused; a server that does not
+/// report refusals leaves an empty pane that only looks like "no output yet".
 public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
     const int MaxCols = 500, MaxRows = 200;
