@@ -28,11 +28,24 @@ public class AdvertisedRepoPathsTests {
         await Assert.That(advertised).DoesNotContain(prefix).Because("the prefix is not a repository");
     }
 
+    /// The allowlist reads either separator before the star, so the search must too.
     [Test]
-    public async Task A_wildcard_over_a_repository_advertises_that_repository() {
+    [Arguments("/*")]
+    [Arguments("\\*")]
+    public async Task A_wildcard_over_a_repository_advertises_that_repository(string star) {
         var repo = Repo("solo");
 
-        await Assert.That(AdvertisedRepoPaths.Merge([], [repo + "/*"])).IsEquivalentTo(new[] { repo });
+        await Assert.That(AdvertisedRepoPaths.Merge([], [repo + star])).IsEquivalentTo(new[] { repo });
+    }
+
+    /// Files are read by the same listing as directories, so they spend the same budget.
+    [Test]
+    public async Task A_directory_listing_more_entries_than_the_budget_advertises_nothing_files_included() {
+        Repo("big", "a");
+        var big = Tmp.GetResolvedPath("big");
+        for (var i = 0; i < 20_000; i++) File.Create(Path.Combine(big, $"f{i}")).Dispose();
+
+        await Assert.That(AdvertisedRepoPaths.Merge([], [big + "/*"])).IsEmpty();
     }
 
     [Test]

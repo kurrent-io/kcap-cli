@@ -30,8 +30,9 @@ static class AdvertisedRepoPaths {
         var merged = new List<string>(persisted);
 
         foreach (var entry in allowed) {
+            // The allowlist takes either separator before the star; the search takes this platform's.
             if (entry.Replace('\\', '/').EndsWith("/*", StringComparison.Ordinal))
-                merged.AddRange(RepositoriesUnder(entry[..^1]).Where(seen.Add));
+                merged.AddRange(RepositoriesUnder(entry[..^2] + Path.DirectorySeparatorChar).Where(seen.Add));
             else if (entry.Length > 0 && seen.Add(entry))
                 merged.Add(entry);
         }
@@ -62,15 +63,15 @@ static class AdvertisedRepoPaths {
         }
     }
 
-    /// <summary>A directory's visible children in name order, each entry read charged to the budget. One
-    /// with more entries than the budget has left contributes none, so what is advertised never depends
-    /// on the order the filesystem lists entries in.</summary>
+    /// <summary>A directory's visible child directories in name order, every entry read charged to the
+    /// budget, files included. One with more entries than the budget has left contributes none, so what
+    /// is advertised never depends on the order the filesystem lists entries in.</summary>
     static List<string> Children(string directory, ref int budget) {
         var children = new List<string>();
         try {
-            foreach (var entry in Directory.EnumerateDirectories(directory)) {
+            foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos()) {
                 if (--budget < 0) return [];
-                if (!Path.GetFileName(entry).StartsWith('.')) children.Add(entry);
+                if (entry is DirectoryInfo && !entry.Name.StartsWith('.')) children.Add(entry.FullName);
             }
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             return [];
