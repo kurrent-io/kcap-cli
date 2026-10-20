@@ -354,10 +354,16 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     }
 
     // kcap login signs in whichever profile it resolves, so the variable that names one goes first.
-    // Quoted for the shell, and scoped to the one command, so the variable does not outlive the login.
-    internal static string LoginHint(string profile) => OperatingSystem.IsWindows()
-        ? $"run $env:KCAP_PROFILE='{profile.Replace("'", "''")}'; kcap login; Remove-Item Env:KCAP_PROFILE"
-        : $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
+    // Quoted for the shell and scoped to the one command: the user's own shell keeps whatever profile
+    // it had. PowerShell has no per-command environment, so the login runs in a child PowerShell.
+    internal static string LoginHint(string profile) => LoginHint(profile, OperatingSystem.IsWindows());
+
+    internal static string LoginHint(string profile, bool windows) {
+        if (!windows) return $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
+
+        var inner = $"$env:KCAP_PROFILE='{profile.Replace("'", "''")}'; kcap login";
+        return $"run powershell -NoProfile -Command '{inner.Replace("'", "''")}'";
+    }
 
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
     // share the neutral fallback; reconnecting and disconnected get their own copy.

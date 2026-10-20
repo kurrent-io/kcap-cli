@@ -81,7 +81,9 @@ public class DaemonSignInTests {
             .IsEqualTo(notice);
 
     [Test]
-    public async Task The_posix_login_hint_quotes_the_profile() =>
-        await Assert.That(OperatingSystem.IsWindows() ? "" : TrayViewModel.LoginHint("it's work"))
-            .IsEqualTo(OperatingSystem.IsWindows() ? "" : "run KCAP_PROFILE='it'\\''s work' kcap login");
+    [Arguments(false, "it's work", "run KCAP_PROFILE='it'\\''s work' kcap login")]
+    [Arguments(true, "work", "run powershell -NoProfile -Command '$env:KCAP_PROFILE=''work''; kcap login'")]
+    [Arguments(true, "it's", "run powershell -NoProfile -Command '$env:KCAP_PROFILE=''it''''s''; kcap login'")]
+    public async Task The_login_hint_quotes_the_profile_and_leaves_the_shell_untouched(bool windows, string profile, string hint) =>
+        await Assert.That(TrayViewModel.LoginHint(profile, windows)).IsEqualTo(hint);
 }
