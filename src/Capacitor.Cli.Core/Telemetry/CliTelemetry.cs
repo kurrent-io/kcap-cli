@@ -354,7 +354,7 @@ public sealed class CliTelemetry {
         return redacted.ToJsonString();
     }
 
-    static TelemetrySpool Spool(ConfigRoot config) => new(config.Path("telemetry-spool.jsonl"));
+    static TelemetrySpool Spool(ConfigRoot config) => TelemetrySpool.For(config);
 
     static string Version() =>
         typeof(CliTelemetry).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()

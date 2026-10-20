@@ -32,12 +32,12 @@ public static class TelemetryState {
     /// <summary>The saved state, defaults when nothing is saved, or null when a saved file cannot be read:
     /// for a caller that must not mistake an opt-out it cannot read for no choice at all.</summary>
     public static TelemetryStateFile? TryRead(ConfigRoot config) {
-        var path = StatePath(config);
-        if (!File.Exists(path)) return default(TelemetryStateFile);
-
+        // Read outright rather than asked whether it exists, which answers false for a file it cannot see.
         try {
-            var json = File.ReadAllText(path);
+            var json = File.ReadAllText(StatePath(config));
             return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.TelemetryStateFile);
+        } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
+            return default(TelemetryStateFile);
         } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
             return null;
         }
@@ -57,14 +57,26 @@ public static class TelemetryState {
     /// not report an unsaved choice as saved reads it here.</returns>
     public static bool SetEnabled(bool enabled, ConfigRoot config) {
         var saved = Mutate(config, state => state with { Enabled = enabled });
-        if (!enabled) TelemetryDeviceId.Delete(config);
+        if (!enabled) {
+            TelemetryDeviceId.Delete(config);
+            // Events another process spooled before the opt-out would otherwise go out after a later opt-in.
+            TelemetrySpool.For(config).Clear();
+        }
 
         return saved;
     }
 
-    /// <returns>Whether the marker was written.</returns>
-    public static bool MarkNoticeShown(ConfigRoot config) =>
-        Mutate(config, state => state with { NoticeShown = true });
+    /// <returns>Whether this call set the marker: false when it was already set, so of processes racing
+    /// past the notice only one sees true.</returns>
+    public static bool MarkNoticeShown(ConfigRoot config) {
+        var set = false;
+        var saved = Mutate(config, state => {
+            if (state.NoticeShown) return null;
+            set = true;
+            return state with { NoticeShown = true };
+        });
+        return saved && set;
+    }
 
     /// <summary>
     /// Acquires a cross-process lock, reads current state, applies the mutation, and writes
