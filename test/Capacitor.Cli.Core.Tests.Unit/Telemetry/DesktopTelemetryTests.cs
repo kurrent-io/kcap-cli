@@ -122,6 +122,24 @@ public class DesktopTelemetryTests {
         await Assert.That(telemetry.Enabled).IsFalse();
     }
 
+    /// <summary>A device id that cannot be read just now is not a replaced one: nothing is sent on it, but the app
+    /// keeps sending once it reads again.</summary>
+    [Test]
+    public async Task An_unreadable_device_id_sends_nothing_until_it_reads_again() {
+        var (telemetry, sink) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+        var path = Config.Root.Path("telemetry-device.json");
+        var saved = await File.ReadAllTextAsync(path);
+
+        await File.WriteAllTextAsync(path, "{not json");
+        telemetry.Capture("unreadable", new JsonObject());
+        await Assert.That(telemetry.Enabled).IsTrue();
+
+        await File.WriteAllTextAsync(path, saved);
+        telemetry.Capture("readable", new JsonObject());
+        await Assert.That(sink.Events.Select(e => e.Name).ToList()).IsEquivalentTo(new List<string> { "readable" });
+    }
+
     /// <summary>The once-per-device event goes only with the marker that says it went; an unsaved marker shows
     /// the notice again, which would otherwise send it twice.</summary>
     [Test]

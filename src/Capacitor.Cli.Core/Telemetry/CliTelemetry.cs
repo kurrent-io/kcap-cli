@@ -265,15 +265,19 @@ public sealed class CliTelemetry {
         if (_config is null) return true;
 
         switch (SavedConsent(_config)) {
-            // The id this process sends under is gone or replaced only if an opt-out came between; sending on
-            // would link the two sides of it.
-            case true when !_deviceIdSaved || TelemetryDeviceId.ReadPersisted(_config) == _deviceId:
-                return true;
-            case null:  return false;
-            default:
+            case null:
+                return false;
+            case false:
                 DiscardAndDisable();
                 return false;
         }
+        if (!_deviceIdSaved) return true;
+        // The id this process sends under is gone or replaced only if an opt-out came between; sending on would
+        // link the two sides of it. An id that cannot be read just now sends nothing, as an unreadable choice does.
+        if (!TelemetryDeviceId.TryReadPersisted(_config, out var saved)) return false;
+        if (saved == _deviceId) return true;
+        DiscardAndDisable();
+        return false;
     }
 
     /// <summary>
