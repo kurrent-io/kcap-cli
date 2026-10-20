@@ -45,16 +45,19 @@ internal static class GitHubPrDetector {
     /// found by commit, it survives a branch pushed under another name with no upstream, and a
     /// local commit not yet pushed. Only open PRs qualify, and only commits off every remote's
     /// default branch: a merged PR's head, or an open PR from the default branch into another, sits
-    /// in the history of every checkout cut from it. A nearest commit heading two PRs links neither.
+    /// in the history of every checkout cut from it. Commits another local branch holds are skipped
+    /// too: a branch cut from a sibling's tip, such as a worktree, is not the sibling's PR. A nearest
+    /// commit heading two PRs links neither.
     /// </summary>
     public static async Task<PrInfo?> DetectForHistoryAsync(
-            string host, string owner, string repo, string cwd, Func<TimeSpan> remaining, CommandRunner run) {
-        if (!CommandArgument.IsPlain(host) || !CommandArgument.IsPlain(owner) || !CommandArgument.IsPlain(repo)) return null;
+            string host, string owner, string repo, string? branch, string cwd, Func<TimeSpan> remaining, CommandRunner run) {
+        if (!CommandArgument.IsPlain(host) || !CommandArgument.IsPlain(owner) || !CommandArgument.IsPlain(repo)
+         || !CommandArgument.IsPlain(branch)) return null;
 
         var cap = remaining();
         if (cap <= TimeSpan.Zero) return null;
 
-        var historyTask = run("git", $"rev-list -n {HistoryDepth} HEAD --not --remotes=*/HEAD", cwd, cap);
+        var historyTask = run("git", $"rev-list -n {HistoryDepth} HEAD --not --remotes=*/HEAD --exclude=refs/heads/{branch} --branches", cwd, cap);
         var prsTask = run("gh",
             $"pr list --repo {host}/{owner}/{repo} --author @me --state open --limit 100 --json {Fields},headRefOid,isCrossRepository",
             cwd, cap);
