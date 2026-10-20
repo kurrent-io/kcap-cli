@@ -204,8 +204,8 @@ static class ServiceFiles {
         if (OperatingSystem.IsWindows()) return;
         if (!FileOwner.Available)
             throw new InvalidOperationException(
-                "Refusing to write a service unit without checking who owns the directories above it: no `stat` "
-              + "command was found in /usr/bin, /bin or PATH. Install coreutils and re-run the install.");
+                "Refusing to write a service unit without checking who owns the directories above it: no working "
+              + "`stat` command was found in /usr/bin or /bin. Install coreutils and re-run the install.");
 
         if (DirectoryExposure.ForeignOwned(directory) is not [var (offender, owner), ..]) return;
 

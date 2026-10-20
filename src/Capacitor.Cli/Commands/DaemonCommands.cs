@@ -1075,7 +1075,7 @@ public sealed class DaemonCommands(
     internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
         if (!OperatingSystem.IsWindows() && !FileOwner.Available)
             await output.WriteLineAsync(
-                "\n  ⚠ could not check who owns the directories on the path to the unit directory: no `stat` found");
+                "\n  ⚠ could not check who owns the directories on the path to the unit directory: no working `stat` found");
         else if (DirectoryExposure.ForeignOwned(unitDirectory) is { Count: > 0 } foreign) {
             await output.WriteLineAsync("\n  ⚠ owned by another account on the path to the unit directory:");
 
