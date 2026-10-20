@@ -627,12 +627,7 @@ public record EvalRetrospective {
     public List<string> Suggestions { get; init; } = [];
 }
 
-// Cross-eval memory — DEV-1434 / DEV-1438. Judges may optionally emit a
-// retain_fact when they spot a cross-cutting pattern; the CLI POSTs it to
-// the session-scoped endpoint and the server derives repo scope from the
-// session (facts live on JudgeFacts-repo-{repoHash}-{category} streams).
-// Facts accumulated on the same repo by any team member are fetched at
-// eval startup and injected into each judge's prompt as "known patterns".
+// A judge's retain_fact, posted to the session's judge-facts endpoint; the server derives the repo scope.
 record JudgeFactPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -659,35 +654,8 @@ record JudgeFactPayload {
     public string? EvidenceScopeToken { get; init; }
 }
 
-public record JudgeFact {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("fact_hash")]
-    public string? FactHash { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("retainer_github_id")]
-    public long? RetainerGitHubId { get; init; }
-
-    [JsonPropertyName("source_session_id")]
-    public required string SourceSessionId { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-
-    [JsonPropertyName("retained_at")]
-    public required DateTimeOffset RetainedAt { get; init; }
-}
-
-// Snapshot of a judge fact at eval time. Sent in the facts_used field of
-// SessionEvalCompletedPayload so the server can persist which facts were
-// in scope when the eval ran, even if the live judge_facts pool is later
-// modified (muted, deleted, replaced).
+// The element type of facts_used. Judges are given no retained facts, so the CLI always sends the list
+// empty; the server still reads it on the evals that carried some.
 public record EvalFactSnapshotPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -1072,7 +1040,6 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveV2))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV2))]
 [JsonSerializable(typeof(JudgeFactPayload))]
-[JsonSerializable(typeof(List<JudgeFact>))]
 [JsonSerializable(typeof(EvalFactSnapshotPayload))]
 [JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
 [JsonSerializable(typeof(EvalCatalogDto))]
