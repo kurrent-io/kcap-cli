@@ -125,10 +125,11 @@ public static class WizardSignInOperation {
         };
 
     /// A paste outcome as the CLI's funnel counts one: only a real sign-in completes and only a refused one
-    /// fails. A server that could not be reached, or that needs no sign-in, records nothing.
+    /// fails. A server that could not be reached, that needs no sign-in, or whose credential could not be
+    /// saved records nothing: the wizard does not count that last one as signed in either.
     internal static AuthResult Recorded(AuthResult result, SetupFunnel? funnel) {
         switch (result) {
-            case AuthResult.Committed { Provider: not AuthProvider.None } committed:
+            case AuthResult.Committed { Provider: not AuthProvider.None, CredentialSaved: true } committed:
                 funnel?.SigninCompleted(committed.Provider);
                 break;
             case AuthResult.Failed { Reason: AuthFailureReason.SigninDenied }:

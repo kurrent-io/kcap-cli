@@ -278,6 +278,7 @@ public class WizardSignInOperationPreconditionTests {
     [Arguments("denied", "cli_setup_signin_failed")]
     [Arguments("unreachable", "")]
     [Arguments("other", "")]
+    [Arguments("unsaved", "")]
     [Arguments("cancelled", "")]
     public async Task A_paste_outcome_reaches_the_funnel_as_the_cli_counts_it(string outcome, string expected) {
         var probe = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), Config.Root);
@@ -285,6 +286,7 @@ public class WizardSignInOperationPreconditionTests {
         AuthResult result = outcome switch {
             "committed"      => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", []),
             "committed-none" => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.None, null, []),
+            "unsaved"        => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", [], CredentialSaved: false),
             "denied"         => new AuthResult.Failed("denied", AuthFailureReason.SigninDenied),
             "unreachable"    => new AuthResult.Failed("unreachable", AuthFailureReason.Unreachable),
             "other"          => new AuthResult.Failed("other"),
