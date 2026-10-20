@@ -919,7 +919,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
         var registration = new AgentRegistered(
             agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-            vendor, title?.Text, title?.Derived ?? false);
+            title?.Text, title?.Derived ?? false, vendor);
         var connection = CurrentConnectionId ?? "";
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
