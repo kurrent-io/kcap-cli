@@ -203,15 +203,19 @@
                                                Text="{Binding Appearance.ShortcutHint, FallbackValue={x:Null}}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <Button x:Name="TextSmallerButton" Classes="kcapChip" Content="A−"
+                                    <Button x:Name="TextSmallerButton" Classes="kcapChip"
                                             Command="{Binding Appearance.SmallerCommand, FallbackValue={x:Null}}"
-                                            AutomationProperties.Name="Smaller text" />
+                                            AutomationProperties.Name="Smaller text" ToolTip.Tip="Smaller text">
+                                        <views:AppIcon Kind="AArrowDown" Size="16" />
+                                    </Button>
                                     <TextBlock x:Name="TextSizeText" Text="{Binding Appearance.ScaleLabel, FallbackValue={x:Null}}"
                                                MinWidth="44" TextAlignment="Center" FontSize="13" FontWeight="SemiBold"
                                                Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
-                                    <Button x:Name="TextLargerButton" Classes="kcapChip" Content="A+"
+                                    <Button x:Name="TextLargerButton" Classes="kcapChip"
                                             Command="{Binding Appearance.LargerCommand, FallbackValue={x:Null}}"
-                                            AutomationProperties.Name="Larger text" />
+                                            AutomationProperties.Name="Larger text" ToolTip.Tip="Larger text">
+                                        <views:AppIcon Kind="AArrowUp" Size="16" />
+                                    </Button>
                                     <Button x:Name="TextResetButton" Classes="kcapGhost" Content="Reset"
                                             Command="{Binding Appearance.ResetCommand, FallbackValue={x:Null}}" />
                                 </StackPanel>

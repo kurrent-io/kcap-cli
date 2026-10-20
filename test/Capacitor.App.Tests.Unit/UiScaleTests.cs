@@ -11,6 +11,8 @@ public class UiScaleTests {
     [Arguments(9.0, 1.5)]
     [Arguments(1.13, 1.1)]
     [Arguments(1.16, 1.2)]
+    [Arguments(0.95, 1.0)]
+    [Arguments(1.05, 1.1)]
     public async Task Normalize_falls_back_clamps_and_snaps_to_a_step(double? stored, double expected) =>
         await Assert.That(UiScale.Normalize(stored)).IsEqualTo(expected);
 
@@ -22,6 +24,16 @@ public class UiScaleTests {
         await Assert.That(UiScale.Larger(from)).IsEqualTo(larger);
         await Assert.That(UiScale.Smaller(from)).IsEqualTo(smaller);
     }
+
+    [Test]
+    [Arguments(1.0, null, 1200.0)]
+    [Arguments(0.8, null, 1200.0)]
+    [Arguments(1.5, null, 1800.0)]
+    [Arguments(1.5, 1470.0, 1470.0)]
+    [Arguments(1.5, 900.0, 1200.0)]
+    public async Task Minimum_grows_with_the_scale_up_to_the_screen_and_never_below_the_unscaled_one(
+            double scale, double? available, double expected) =>
+        await Assert.That(UiScale.Minimum(1200, scale, available)).IsEqualTo(expected);
 
     [Test]
     [Arguments(1.0, "100%")]

@@ -70,9 +70,25 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             _contentScaleSubscription?.Dispose();
             _contentScaleSubscription = value?.Changes
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(scale => ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale));
+                .Subscribe(ApplyScale);
         }
     }
+
+    double _scale = UiScale.Default;
+    double _captionTop;
+
+    void ApplyScale(double scale) {
+        _scale = scale;
+        ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
+        var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
+        var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
+        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, scale, available?.Width);
+        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, scale, available?.Height);
+        ApplyCaptionInset();
+    }
+
+    // The inset is in window units and the pane sits inside the scale, so it is divided back out.
+    void ApplyCaptionInset() => ContentPane.Margin = new Thickness(0, _captionTop / _scale, 0, 0);
 
     public MainWindow() {
         InitializeComponent();
@@ -152,7 +168,10 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void KeepContentClearOfCaptionButtons() {
         if (!OperatingSystem.IsWindows()) return;
         this.GetObservable(WindowDecorationMarginProperty)
-            .Subscribe(margin => ContentPane.Margin = new Thickness(0, margin.Top, 0, 0));
+            .Subscribe(margin => {
+                _captionTop = margin.Top;
+                ApplyCaptionInset();
+            });
     }
 
     // F11 is the Windows convention for full screen; Win+Up and Win+Down already maximize and
