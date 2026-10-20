@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
@@ -24,6 +25,33 @@ public partial class LaunchdStartStopTests {
         var path = LaunchdUnit.PlistPath(Home, "test");
         File.WriteAllText(path, "<plist/>");
         return path;
+    }
+
+    /// <summary>An install that refuses the unit's path must refuse before bootout: unloading first would
+    /// leave the old job stopped with nothing installed in its place.</summary>
+    [Test]
+    [ParallelLimiter<SubprocessLimit>]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Install_refuses_an_unsafe_path_before_unloading_the_job() {
+        Skip.When(OperatingSystem.IsWindows(), "POSIX file modes");
+
+        var agents = LaunchdUnit.AgentsDir(Home);
+        var parent = Path.GetDirectoryName(agents)!;
+        Directory.CreateDirectory(agents);
+        var mode = File.GetUnixFileMode(parent);
+        File.SetUnixFileMode(parent, mode | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+        try {
+            List<string[]> calls = [];
+            var mgr = new LaunchdServiceManager(Home, TimeProvider.System,
+                runProcess: (_, args) => { calls.Add(args); return (0, "", ""); },
+                runBounded: (_, args, _) => { calls.Add(args); return (0, "", "", false); });
+
+            await Assert.That(() => mgr.Install(new ServiceSpec("test", "/bin/true", "/tmp/test.log", new Dictionary<string, string>(), []), startNow: true, out _))
+                .Throws<InvalidOperationException>();
+            await Assert.That(calls).IsEmpty().Because("nothing was unloaded");
+        } finally {
+            File.SetUnixFileMode(parent, mode);
+        }
     }
 
     // ── Stop ──

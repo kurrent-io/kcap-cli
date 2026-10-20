@@ -185,6 +185,14 @@ static class ServiceFiles {
     /// world-writable directory on the way to someone's home is produced by no umask and is never
     /// deliberate. The group-write case is reported by <c>kcap daemon doctor</c>, which can advise where
     /// this cannot safely block.</para></summary>
+    /// <summary>The ancestor checks <see cref="WriteOwnerOnly"/> makes, run on their own so an install
+    /// can refuse before it unloads the unit it would replace.</summary>
+    public static void RequireSafeAncestors(string unitPath) {
+        if (Path.GetDirectoryName(unitPath) is not { Length: > 0 } directory) return;
+        RequireNoWorldWritableAncestor(directory);
+        RequireNoForeignOwnedAncestor(directory);
+    }
+
     static void RequireNoWorldWritableAncestor(string directory) {
         // The unit directory itself is included and costs nothing: RequireNoSharedWrite has already
         // stripped its world-write bit or thrown, so it cannot be the offender found here.

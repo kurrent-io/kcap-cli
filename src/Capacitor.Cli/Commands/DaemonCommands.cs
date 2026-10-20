@@ -1065,8 +1065,8 @@ public sealed class DaemonCommands(
         await ReportUnitDirectoryExposure(Console.Out, manager.UnitDirectory);
     }
 
-    /// <summary>Reports directories on the path to the unit directory owned by another account, and those
-    /// their group can write.
+    /// <summary>Reports the directories on the path to the unit directory that another account owns, and
+    /// the ones their group can write.
     ///
     /// <para>Advisory, not a failure: whether this matters depends on who else is in that group, which the
     /// bits do not say — umask 002 against a user-private group produces it for a group of one, and that is
