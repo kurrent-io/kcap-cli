@@ -68,7 +68,7 @@ Windows (PowerShell):
 irm https://www.kurrent.io/install.ps1 | iex
 ```
 
-The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). On macOS and Windows the [desktop app](#desktop-app) is the easier way in; `kcap setup` is for the terminal, and for scripts — see [Unattended setup](#unattended-setup) for both editions' recipes. Setup asks whether you want Capacitor locally on this Mac or for your team in the cloud (sign-up opens in your browser), signs you in, finds your workspace, offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
+The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). On macOS and Windows the [desktop app](#desktop-app) is the easier way in; `kcap setup` is for the terminal, and for scripts — see [Unattended setup](#unattended-setup) for both editions' recipes. Setup asks whether you want kcap locally on this Mac or for your team in the cloud (sign-up opens in your browser), signs you in, finds your workspace, offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
 
 ### 2. Start a new agent session
 
@@ -391,11 +391,11 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 
 | Question | Flag | `--no-prompt` |
 |---|---|---|
-| How do you want to run Capacitor? | `<tenant>`, `--server-url`, `--local`, `--org`/`--slug` | required |
+| How do you want to run kcap? | `<tenant>`, `--server-url`, `--local`, `--org`/`--slug` | required |
 | Re-run setup on a configured machine? | — | yes |
 | Workspace to create (name, slug, plan, invite) | `--org`, `--slug`, `--tier`, `--invite-code` | — |
 | This machine has one user (local) | `--single-user` | required |
-| Install Capacitor local (local) | `--yes` | required, except to reuse an installation |
+| Install kcap local (local) | `--yes` | required, except to reuse an installation |
 | Ollama for search by meaning (local) | `--embedding-model <model>`, `--no-embeddings` | required while Ollama runs and nothing is recorded |
 | Default session visibility | `--default-visibility` | `org_public`; `private` with `--local` |
 | Install kcap for the detected agents? | `--skip-harnesses`, `--skip-<agent>-hooks` and friends | yes |

@@ -160,6 +160,44 @@ public class ApplicationsMoverTests {
     }
 
     [Test]
+    [Arguments(false, "1.1.0")]
+    [Arguments(false, "2.0.0")]
+    [Arguments(true, "1.1.0")]
+    [Arguments(true, "2.0.0")]
+    public async Task Opening_a_canonical_install_keeps_its_folder_when_both_copies_are_canonical(bool perUser, string alternateVersion) {
+        var system = Tmp.CreateDir("SystemApplications");
+        var user = Tmp.CreateDir("UserApplications");
+        var home = perUser ? user : system;
+        var other = perUser ? system : user;
+        var source = Path.Combine(home, "kcap.app");
+        CompleteBundle(source, "1.1.0");
+        CompleteBundle(Path.Combine(other, "kcap.app"), alternateVersion);
+
+        var selected = ApplicationsMover.ApplicationDirectories(source, user, system).Single();
+        var mover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, selected);
+
+        await Assert.That(selected).IsEqualTo(home);
+        await Assert.That(App.ShouldPromptToInstall(
+            perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
+            source, mover.Inspect(source))).IsFalse();
+        await Assert.That(ApplicationsMover.ApplicationDirectories(Tmp.PathTo("Downloads/kcap.app"), user, system).Count).IsEqualTo(2);
+
+        CompleteBundle(Path.Combine(other, "Kurrent Capacitor.app"));
+        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Opening_a_canonical_install_does_not_bypass_an_unrelated_destination() {
+        var system = Tmp.CreateDir("SystemApplications");
+        var user = Tmp.CreateDir("UserApplications");
+        var source = Path.Combine(user, "kcap.app");
+        CompleteBundle(source, "1.1.0");
+        CompleteBundle(Path.Combine(system, "kcap.app"), "1.0.0", "another.application");
+
+        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
+    }
+
+    [Test]
     public async Task A_dragged_older_copy_redirects_to_a_newer_install_in_the_other_Applications_folder() {
         var plan = new ApplicationsInstallPlan(ApplicationsInstallAction.OpenInstalled, "/Applications/kcap.app", "2.0.0", "2.0.0");
         await Assert.That(App.ShouldPromptToInstall(InstallLocationKind.UserApplications, "/Users/example/Applications/kcap.app", plan)).IsTrue();
