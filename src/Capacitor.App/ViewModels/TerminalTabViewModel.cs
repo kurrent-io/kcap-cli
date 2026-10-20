@@ -88,8 +88,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     int _resolveState;
     IDisposable? _agentsSub;
     IDisposable? _statusSub;
-    // Whether an attach can ask the daemon which runtime it reached. A restart reconnects through
-    // states that carry no capabilities, so the last daemon to report any stands in for its successor.
+    // Whether the daemon the status stream is connected to now answers AttachWithRuntime. Never carried
+    // across a reconnect: a restart can bring up a daemon that predates the request and drops it.
     volatile bool _reportsRuntime;
     ITimer? _resolveTimer;
 
@@ -386,9 +386,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(OnAgentsChanged);
 
-        _statusSub = daemon.Status.Subscribe(status => {
-            if (status.Capabilities is { } caps) _reportsRuntime = caps.Contains(AgentAttachClient.RuntimeCapability);
-        });
+        _statusSub = daemon.Status.Subscribe(status =>
+            _reportsRuntime = status.Capabilities?.Contains(AgentAttachClient.RuntimeCapability) == true);
 
         _resolveTimer = time.CreateTimer(_ => OnResolveTimeout(), null, ResolveBudget, Timeout.InfiniteTimeSpan);
     }
@@ -711,16 +710,26 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     }
 
     /// The verdict read the ledger before it was published, and rows that arrived meanwhile reached a tab
-    /// still attached, where they changed nothing: the entry read after publishing is newer than both.
+    /// still attached, where they changed nothing: the entry read after publishing is newer than both. An
+    /// interruption it publishes is read past again, since a retry's rows can land while it is in flight.
     async Task RecheckSettledAsync(int generation, TerminalSessionState settled) {
-        var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
-        var interrupted = entry is { State: ResumeState.Interrupted } && settled.Phase != TerminalSessionPhase.Interrupted;
-        if (!interrupted && !NamesAnotherRuntime(settled, entry)) return;
-        await Dispatcher.UIThread.InvokeAsync(() => {
-            if (Retired(generation) || State != settled) return;
-            if (interrupted) Publish(TerminalSessionState.Interrupted(entry!.LastError), null);
-            else AwaitRetriedResume();
-        });
+        while (true) {
+            var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
+            var interrupted = entry is { State: ResumeState.Interrupted } && settled.Phase != TerminalSessionPhase.Interrupted;
+            if (!interrupted && !NamesAnotherRuntime(settled, entry)) return;
+            TerminalSessionState? published = null;
+            await Dispatcher.UIThread.InvokeAsync(() => {
+                if (Retired(generation) || State != settled) return;
+                if (!interrupted) {
+                    AwaitRetriedResume();
+                    return;
+                }
+                published = TerminalSessionState.Interrupted(entry!.LastError);
+                Publish(published, null);
+            });
+            if (published is null) return;
+            settled = published;
+        }
     }
 
     static string Describe(AttachCallbackException ex) => ex.InnerException?.Message ?? ex.Message;
@@ -805,14 +814,16 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
 
         if (dto.Status == "Resuming" || previous == "Interrupted" || SessionStatusDots.IsTerminal(previous))
-            PendingRecoveryForTesting = RecoverIfAnotherRuntimeAsync(State);
+            PendingRecoveryForTesting = RecoverIfAnotherRuntimeAsync(Volatile.Read(ref _attemptGeneration), State);
     }
 
-    async Task RecoverIfAnotherRuntimeAsync(TerminalSessionState settled) {
+    /// Bound to the attempt it started from: states are compared by value, and a later attempt can settle
+    /// on one equal to this.
+    async Task RecoverIfAnotherRuntimeAsync(int generation, TerminalSessionState settled) {
         var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
         if (!NamesAnotherRuntime(settled, entry)) return;
         await Dispatcher.UIThread.InvokeAsync(() => {
-            if (Volatile.Read(ref _resolveState) == ResolveDisposed || State != settled) return;
+            if (Retired(generation) || State != settled) return;
             AwaitRetriedResume();
         });
     }
