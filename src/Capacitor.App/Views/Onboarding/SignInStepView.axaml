@@ -100,10 +100,6 @@
                                     Padding="12,7" FontSize="12" HorizontalAlignment="Left" />
                         </StackPanel>
                     </Border>
-
-                    <TextBlock x:Name="ProvisioningText" Text="{Binding ProvisioningProgress}"
-                               TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5"
-                               IsVisible="{Binding ProvisioningVisible}" />
                 </StackPanel>
 
                 <StackPanel Spacing="12">
@@ -126,95 +122,6 @@
                             <Button x:Name="ConfirmTenantButton" Classes="kcapPrimary"
                                     Content="Use this workspace"
                                     Command="{Binding ConfirmTenantCommand}" />
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel Spacing="10" IsVisible="{Binding ModeChoiceVisible}">
-                        <TextBlock Text="No workspace was found for your account. How would you like to continue?"
-                                   TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" FontSize="13.5" />
-                        <StackPanel Spacing="8">
-                            <Button x:Name="CreateWorkspaceButton" Classes="kcapPrimary"
-                                    Content="Create a workspace"
-                                    Command="{Binding CreateWorkspaceCommand}"
-                                    HorizontalAlignment="Left" />
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <TextBox x:Name="ExistingWorkspaceBox" Classes="kcapField" Width="180"
-                                         PlaceholderText="acme"
-                                         Text="{Binding ExistingWorkspaceInput, Mode=TwoWay}" />
-                                <Button x:Name="UseExistingWorkspaceButton" Classes="kcapChip"
-                                        Content="I already have one"
-                                        Command="{Binding UseExistingWorkspaceCommand}" />
-                            </StackPanel>
-                            <Button x:Name="CancelWorkspaceButton" Classes="kcapChip" Content="Cancel"
-                                    Command="{Binding CancelWorkspaceCommand}" HorizontalAlignment="Left" />
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel Spacing="8" IsVisible="{Binding OrgNamePromptVisible}">
-                        <TextBlock Text="Organization name" Foreground="{StaticResource KcapMutedBrush}"
-                                   FontSize="12.5" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBox x:Name="OrgNameBox" Classes="kcapField" Width="240"
-                                     Text="{Binding OrgName, Mode=TwoWay}" />
-                            <Button x:Name="CancelOrgNameButton" Classes="kcapChip" Content="Cancel"
-                                    Command="{Binding CancelOrgNameCommand}" />
-                            <Button x:Name="SubmitOrgNameButton" Classes="kcapPrimary" Content="Continue"
-                                    Command="{Binding SubmitOrgNameCommand}" />
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel Spacing="8" IsVisible="{Binding SlugPromptVisible}">
-                        <TextBlock Text="Workspace address" Foreground="{StaticResource KcapMutedBrush}"
-                                   FontSize="12.5" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBox x:Name="SlugBox" Classes="kcapField" Width="200"
-                                     Text="{Binding Slug, Mode=TwoWay}" />
-                            <TextBlock Text=".kcap.ai" VerticalAlignment="Center"
-                                       Foreground="{StaticResource KcapFaintBrush}" />
-                            <Button x:Name="CancelSlugButton" Classes="kcapChip" Content="Cancel"
-                                    Command="{Binding CancelSlugCommand}" />
-                            <Button x:Name="SubmitSlugButton" Classes="kcapPrimary" Content="Continue"
-                                    Command="{Binding SubmitSlugCommand}" />
-                        </StackPanel>
-                        <TextBlock x:Name="SlugErrorText" Text="{Binding SlugError}" TextWrapping="Wrap"
-                                   Foreground="{StaticResource KcapDangerBrush}" FontSize="12.5"
-                                   IsVisible="{Binding SlugError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    </StackPanel>
-
-                    <StackPanel Spacing="10" IsVisible="{Binding ConfirmVisible}">
-                        <TextBlock x:Name="ConfirmCreateText" Text="{Binding ConfirmText}" TextWrapping="Wrap"
-                                   Foreground="{StaticResource KcapTextBrush}" FontSize="13.5" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="DeclineCreateButton" Classes="kcapChip" Content="Not now"
-                                    Command="{Binding DeclineCreateCommand}" />
-                            <Button x:Name="ConfirmCreateButton" Classes="kcapPrimary" Content="Create"
-                                    Command="{Binding ConfirmCreateCommand}" />
-                        </StackPanel>
-                    </StackPanel>
-
-                    <StackPanel Spacing="8" IsVisible="{Binding InviteCodePromptVisible}">
-                        <TextBlock Text="Capacitor is invite-only right now. Enter your invite code to create the workspace."
-                                   TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}" FontSize="13.5" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <TextBox x:Name="InviteCodeBox" Classes="kcapField" Width="120"
-                                     PlaceholderText="ABCD" AutomationProperties.Name="Invite code"
-                                     Text="{Binding InviteCode, Mode=TwoWay}" />
-                            <Button x:Name="CancelInviteCodeButton" Classes="kcapChip" Content="Cancel"
-                                    Command="{Binding CancelInviteCodeCommand}" />
-                            <Button x:Name="SubmitInviteCodeButton" Classes="kcapPrimary" Content="Continue"
-                                    Command="{Binding SubmitInviteCodeCommand}" />
-                        </StackPanel>
-                        <TextBlock x:Name="InviteCodeErrorText" Text="{Binding InviteCodeError}" TextWrapping="Wrap"
-                                   Foreground="{StaticResource KcapDangerBrush}" FontSize="12.5"
-                                   IsVisible="{Binding InviteCodeError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                        <StackPanel Orientation="Horizontal" Spacing="8"
-                                    IsVisible="{Binding InviteRequestUrl, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                            <TextBlock Text="Don't have one?" VerticalAlignment="Center"
-                                       Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5" />
-                            <Button x:Name="InviteRequestUrlButton" Classes="kcapChip"
-                                    Content="{Binding InviteRequestUrl}"
-                                    Command="{Binding OpenInviteRequestUrlCommand}"
-                                    Padding="12,7" FontSize="12" />
                         </StackPanel>
                     </StackPanel>
 

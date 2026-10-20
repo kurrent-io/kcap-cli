@@ -27,6 +27,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     bool                   _offered;
     EditionChoice?         _choice;
     string?                _unavailable;
+    string?                _notice;
 
     /// <param name="localUnavailableReason">Why Local cannot be chosen, or null when it can.</param>
     /// <param name="locked">True once this machine is committed to the local edition, so the page has nothing to ask.</param>
@@ -70,6 +71,19 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
 
     public bool LocalUnavailableVisible => LocalUnavailableReason is not null;
 
+    /// A line from a later step that sent the user back here; the next choice clears it.
+    public string? Notice {
+        get => _notice;
+        private set {
+            this.RaiseAndSetIfChanged(ref _notice, value);
+            this.RaisePropertyChanged(nameof(NoticeVisible));
+        }
+    }
+
+    public bool NoticeVisible => Notice is not null;
+
+    internal void ShowNotice(string notice) => Notice = notice;
+
     public ReactiveCommand<Unit, Unit> ChooseLocalCommand { get; }
     public ReactiveCommand<Unit, Unit> ChooseCloudCommand { get; }
     public ReactiveCommand<Unit, Unit> SignInCommand      { get; }
@@ -90,6 +104,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) => Task.FromResult(true);
 
     void Choose(EditionChoice choice) {
+        Notice = null;
         Choice = choice;
         _funnel.EditionChosen(choice.Wire());
         AdvanceRequested?.Invoke();

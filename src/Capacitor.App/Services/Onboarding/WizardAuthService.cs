@@ -6,8 +6,9 @@ namespace Capacitor.App.Services.Onboarding;
 public abstract record ConnectIntent {
     public sealed record Paste(string ServerInput) : ConnectIntent;
 
-    /// Single sign-on discovery; creating a workspace runs inside it when it finds none.
-    public sealed record Discover(bool ForceDevice = false) : ConnectIntent;
+    /// Single sign-on discovery. <paramref name="ConfirmPick"/> shows even a single workspace for the
+    /// user to confirm rather than signing in to it.
+    public sealed record Discover(bool ForceDevice = false, bool ConfirmPick = false) : ConnectIntent;
 }
 
 /// <summary>

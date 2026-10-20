@@ -13,11 +13,12 @@ using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.App.Services.Onboarding;
 
 /// The façade's constructor arguments as data, so the composition root's choices — which sink,
-/// which picker, whether a provisioner is armed, which before-commit hook — are inspectable.
+/// which picker, which before-commit hook — are inspectable.
 internal sealed record WizardFacadeSpec(
     ConfigRoot                                                 Root,
     TokenStore                                                 TokenStore,
@@ -28,11 +29,11 @@ internal sealed record WizardFacadeSpec(
     string                                                     Profile,
     IAuthProgress                                              Progress,
     ITenantPicker                                              Picker,
-    ITenantProvisioner?                                        Provisioner,
     CliTelemetry                                               Telemetry,
     AuthEndpoints                                              Endpoints,
     TimeProvider                                               Time,
     Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task> BeforeCommit,
+    Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace,
     CommitPrecondition?                                        Precondition = null);
 
 /// What wizard-first mode runs on: the shell, the sign-in driver the close path awaits, every step
@@ -95,24 +96,20 @@ internal sealed record WizardGraphOptions(
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
-    /// Production bridges: one marshalling boundary (Avalonia's dispatcher in the app) and a
-    /// provisioner built from the bridges' OWN sink, per WizardBridges' contract.
-    internal static WizardBridges BuildBridges(
-            Action<Action> post, TenantProvisioningClient provisioning, CliTelemetry telemetry,
-            AuthEndpoints endpoints, TimeProvider time) =>
-        new(post, telemetry, endpoints, progress => new WizardTenantProvisioner(
-            provisioning, endpoints.SignupUrl, progress, telemetry, time));
+    /// Production bridges: one marshalling boundary, Avalonia's dispatcher in the app.
+    internal static WizardBridges BuildBridges(Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints) =>
+        new(post, telemetry, endpoints);
 
     /// Production operation: the spec IS the façade's arguments, and WizardSignInOperation owns
-    /// the intent→call map (paste adopts the server; create/discover run WorkOS discovery).
+    /// the intent→call map (paste adopts the server; discover runs WorkOS discovery). No provisioner:
+    /// a workspace is created by kcap-web's sign-up in the browser, so discovery finding none ends there.
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> NewOperation(WizardFacadeSpec spec) =>
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-            SystemBrowser.Instance, spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit), spec.Profile, spec.Precondition);
+            SystemBrowser.Instance, spec.Picker, null, spec.Telemetry, spec.Endpoints,
+            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition);
 
-    /// The ONE façade a wizard run signs in through — provisioner armed (a provisioner-less façade
-    /// dead-ends "Create a workspace" at "ask your admin") and the consent-flip claim arming hook wired as
+    /// The ONE façade a wizard run signs in through, with the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.
     internal static Func<ConnectIntent, CancellationToken, Task<AuthResult>> BuildOperation(
             ConfigRoot root, TokenStore tokenStore, IHttpClientFactory httpFactory, IAuthProxyClient proxy,
@@ -122,8 +119,18 @@ internal static class WizardComposition {
             CommitPrecondition? precondition = null) =>
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
-            bridges.Provisioner, bridges.Telemetry, bridges.Endpoints, time,
-            WizardAuthService.ArmingHook(claims), precondition));
+            bridges.Telemetry, bridges.Endpoints, time,
+            WizardAuthService.ArmingHook(claims), ProbeWorkspace(httpFactory, time), precondition));
+
+    /// kcap-web adds the owner to a workspace's organization before the workspace is live, so discovery
+    /// can list one still provisioning. Its host 404s until then, and discovery leaves it out.
+    static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
+            IHttpClientFactory httpFactory, TimeProvider time) =>
+        async (tenant, _, ct) => {
+            using var client = httpFactory.CreateClient(CapacitorClients.Anonymous);
+
+            return await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
+        };
 
     internal static LocalInstallController NewInstallController(WizardGraphOptions options) {
         var cli = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
@@ -178,7 +185,7 @@ internal static class WizardComposition {
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time,
-            passThrough: OnLocalPath);
+            passThrough: OnLocalPath, signingUp: () => edition.Choice == EditionChoice.Cloud);
         var committedLocalAtStart = CommittedLocal();
         if (options.AlreadyAuthenticated && !committedLocalAtStart) signIn.RestoreCommitted();
         var pathFix  = options.ShimApplicable && options.ShimInstaller is { } installer
@@ -255,6 +262,11 @@ internal static class WizardComposition {
             .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
         var wizard = new OnboardingViewModel(
             steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
+        signIn.SignUpExpired += () => {
+            edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
+            wizard.TryGoTo(WizardStepId.Edition);
+        };
+        wizard.CloseRequested += signIn.EndSignUpWait;
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
             install.Settling -= OnSettling;

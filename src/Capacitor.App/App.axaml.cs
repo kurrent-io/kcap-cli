@@ -974,9 +974,7 @@ public partial class App : Application {
             _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
             _foreignHttp.GetRequiredService<WorkOSClient>(),
             profile, serverUrl,
-            WizardComposition.BuildBridges(
-                action => Dispatcher.UIThread.Post(action),
-                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time),
+            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints),
             new ConsentFlipClaims(_config),
             _appState,
             new ShellUrlOpener(),
@@ -1051,9 +1049,7 @@ public partial class App : Application {
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
-        var bridges = WizardComposition.BuildBridges(
-            action => Dispatcher.UIThread.Post(action),
-            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time);
+        var bridges = WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var options = new WizardGraphOptions(
@@ -1249,15 +1245,6 @@ public partial class App : Application {
         var result = await attempt.Result.ConfigureAwait(false);
 
         switch (result) {
-            // Sign-in succeeded and the workspace is on its way; closing the window mid-poll is not a
-            // failure, and stderr saying so would be untrue. The guidance is spelled out here rather
-            // than carried on the message: in the wizard it arrives through the progress sink, and
-            // repeating it there would say the same thing twice — but by now that view is gone, so
-            // this line is the only thing left telling the user how to resume.
-            case AuthResult.Failed { Reason: AuthFailureReason.ProvisioningInProgress } pending:
-                Console.Error.WriteLine(
-                    $"kcap: {pending.Message} Sign in to it once it is ready.");
-                break;
             case AuthResult.Failed failed:
                 Console.Error.WriteLine($"kcap: onboarding sign-in ended with a failure: {failed.Message}");
                 break;

@@ -271,7 +271,7 @@ public sealed class OnboardingFacade(
     /// Only a <see cref="WorkspaceAnswer.Gone"/> leaves one out; an outage keeps it. Unset, every listed
     /// workspace is offered.
     /// </summary>
-    internal Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
+    public Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
 
     /// <param name="adoptServer">
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the
@@ -287,8 +287,9 @@ public sealed class OnboardingFacade(
         GuardAsync(() => LoginCoreAsync(serverUrl, forceDevice, profile, adoptServer, precondition, ct), ct);
 
     /// <param name="provider"><see cref="AuthProvider.GitHubApp"/> or <see cref="AuthProvider.WorkOS"/>.</param>
-    public Task<AuthResult> DiscoverAsync(string provider, bool forceDevice, CancellationToken ct) =>
-        GuardAsync(() => DiscoverCoreAsync(provider, forceDevice, ct), ct);
+    /// <param name="confirmPick">Hand even a single workspace to the picker rather than signing in to it.</param>
+    public Task<AuthResult> DiscoverAsync(string provider, bool forceDevice, CancellationToken ct, bool confirmPick = false) =>
+        GuardAsync(() => DiscoverCoreAsync(provider, forceDevice, confirmPick, ct), ct);
 
     async Task<AuthResult> LoginCoreAsync(
             string serverUrl, bool forceDevice, string profile, bool adoptServer, CommitPrecondition? precondition,
@@ -479,7 +480,7 @@ public sealed class OnboardingFacade(
     static DiscoveryReport Halted(string provider, string error, CancellationToken ct) =>
         ct.IsCancellationRequested ? DiscoveryReport.Cancelled(provider) : DiscoveryReport.Failure(provider, error);
 
-    async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
+    async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, bool confirmPick, CancellationToken ct) {
         var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 
         if (proxyConfig is null) {
@@ -487,14 +488,14 @@ public sealed class OnboardingFacade(
         }
 
         return provider switch {
-            AuthProvider.WorkOS    => await DiscoverWorkOSAsync(proxyConfig, forceDevice, ct),
+            AuthProvider.WorkOS    => await DiscoverWorkOSAsync(proxyConfig, forceDevice, confirmPick, ct),
             AuthProvider.GitHubApp => await DiscoverGitHubAsync(proxyConfig, forceDevice, ct),
             _                      => UnknownProvider(provider)
         };
     }
 
     async Task<AuthResult> DiscoverWorkOSAsync(
-            ProxyConfigResponse proxyConfig, bool forceDevice, CancellationToken ct) {
+            ProxyConfigResponse proxyConfig, bool forceDevice, bool confirmPick, CancellationToken ct) {
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
@@ -521,7 +522,8 @@ public sealed class OnboardingFacade(
                 Proxy: proxy,
                 ProxyUrl: endpoints.ProxyUrl,
                 PickerVersion: proxyConfig.CliPickerVersion),
-            probe: ProbeWorkspace);
+            probe: ProbeWorkspace,
+            confirmPick: confirmPick);
 
         return flow switch {
             WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(
