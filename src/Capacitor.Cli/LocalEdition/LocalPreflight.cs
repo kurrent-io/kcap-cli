@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
@@ -71,7 +70,7 @@ sealed class LocalPreflight(
     }
 
     void CheckPlatform() {
-        if (platform.IsMacOS && platform.Arch == Architecture.Arm64) return;
+        if (platform.SupportsLocalEdition) return;
         if (platform.IsMacOS) throw Refuse(LocalInstallFailureCode.UnsupportedPlatform, "There is no Intel Mac build of the local edition; it needs an Apple silicon Mac.");
         if (platform.IsLinux && platform.IsMusl) throw Refuse(LocalInstallFailureCode.MuslUnsupported, "The musl builds of kcap do not support a local installation.");
 

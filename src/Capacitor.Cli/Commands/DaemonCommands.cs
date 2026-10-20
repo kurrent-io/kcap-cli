@@ -1065,13 +1065,26 @@ public sealed class DaemonCommands(
         await ReportUnitDirectoryExposure(Console.Out, manager.UnitDirectory);
     }
 
-    /// <summary>Reports directories on the path to the unit directory that their group can write.
+    /// <summary>Reports the directories on the path to the unit directory that another account owns, and
+    /// the ones their group can write.
     ///
     /// <para>Advisory, not a failure: whether this matters depends on who else is in that group, which the
     /// bits do not say — umask 002 against a user-private group produces it for a group of one, and that is
     /// the common case on Debian and Ubuntu. Install refuses only the world-writable form, which no umask
     /// produces. Reporting is what is left for the case a program cannot judge but an operator can.</para></summary>
     internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
+        if (!OperatingSystem.IsWindows() && !FileOwner.Available)
+            await output.WriteLineAsync(
+                "\n  ⚠ could not check who owns the directories on the path to the unit directory: no working `stat` found");
+        else if (DirectoryExposure.ForeignOwned(unitDirectory) is { Count: > 0 } foreign) {
+            await output.WriteLineAsync("\n  ⚠ owned by another account on the path to the unit directory:");
+
+            foreach (var (d, owner) in foreign) await output.WriteLineAsync($"      {d}  (uid {owner})");
+
+            await output.WriteLineAsync(
+                "    That account can replace the unit the daemon loads, whatever the directory's mode.");
+        }
+
         if (DirectoryExposure.GrantingWrite(unitDirectory, UnixFileMode.GroupWrite) is not { Count: > 0 } shared)
             return;
 

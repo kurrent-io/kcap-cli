@@ -17,11 +17,12 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands;
 
 sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) : IDisposable {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
-    HttpClient?    _client;
-    CwdRepository? _repository;
+    // Both resolve on first use: kcap-sessions auto-registers, so a session that never calls a tool must stay local-only.
+    readonly OnDemand<HttpClient> _client     = new(() => http.ForSessionAsync());
+    readonly CwdRepository        _repository = new(config, workdir.Path, router, time);
 
     string BaseUrl => profiles.Resolution.ServerUrl!;
 
@@ -65,53 +66,22 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         writer.AutoFlush = true;
 
         try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue; // skip malformed JSON
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
+            await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+                "initialize" => BuildInitializeResponse(id, request),
+                "tools/list" => BuildToolsListResponse(id, tools),
+                _            => McpProtocol.TryHandleStandardMethod(method, id)
+                                ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+            }, "sessions");
         } finally {
-            if (_client is not null) {
-                try { _client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
+            Dispose();
         }
 
         return 0;
     }
 
-    /// <summary>
-    /// Never lets the stdio loop die on one bad request. The authenticated client and the cwd
-    /// repository are resolved on the first call that needs the server, not at startup:
-    /// kcap-sessions auto-registers, so a session that never calls a tool must stay local-only. A
-    /// failed client creation leaves the field null so the next call retries; the stdio loop is
-    /// serial, so no locking.
-    /// </summary>
+    public void Dispose() => _client.Dispose();
+
+    /// <summary>Never lets the stdio loop die on one bad request.</summary>
     internal async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
         if (callRequest["params"] is JsonObject callParams && callParams["name"] is JsonValue name
          && name.TryGetValue(out string? toolName) && toolName == ConnectionTool.Name)
@@ -121,9 +91,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
         try {
-            _client     ??= await http.ForSessionAsync();
-            _repository ??= new CwdRepository(config, workdir.Path, router, time);
-            return await HandleToolCallAsync(callId, callRequest, _client, BaseUrl, await _repository.GetHashAsync());
+            return await HandleToolCallAsync(callId, callRequest, await _client.GetAsync(), BaseUrl, await _repository.GetHashAsync());
         } catch (Exception ex) {
             // The detail goes to stderr only: IO errors can carry local paths.
             await Console.Error.WriteLineAsync($"kcap mcp sessions: unexpected error handling tools/call: {ex}");
@@ -265,9 +233,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     var widenedArgs = arguments?.DeepClone().AsObject() ?? new JsonObject();
                     widenedArgs["repo"] = "all";
 
-                    // The stdio loop is serial — a stalled widen would withhold the already-ready
-                    // first body and block every subsequent MCP request, so bound it well below the
-                    // shared HttpClient's default 100s timeout.
+                    // A stalled widen would withhold the already-ready first body, so bound it well
+                    // below the shared HttpClient's default 100s timeout.
                     using var widenCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
                     var       url      = BuildSearchUrl(baseUrl, widenedArgs, cwdRepoHash);
                     using var second   = await client.GetAsync(url, widenCts.Token);
@@ -302,7 +269,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             var plansUrl = BuildSessionPlansUrl(baseUrl, sessionId);
             var itemsUrl = BuildSessionWorkItemsUrl(baseUrl, sessionId);
 
-            // The stdio loop is serial, so a stalled lookup would block every later request.
+            // A stalled lookup would hold up the whole answer.
             using var lookupsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
             var       plansTask  = FetchBestEffortAsync(client, plansUrl, "declared plans", lookupsCts.Token);
             var       itemsTask  = itemsUrl is null ? Task.FromResult<string?>(null) : FetchBestEffortAsync(client, itemsUrl, "work items", lookupsCts.Token);

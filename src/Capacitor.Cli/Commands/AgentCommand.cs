@@ -300,10 +300,30 @@ internal sealed class AgentCommand(
             targets = [resolved];
         }
 
-        // An empty StopV2 id expands to the daemon's current set, including unconfirmed agents.
+        // Each confirmed id is sent on its own: an empty StopV2 id would expand to the daemon's
+        // current set, including agents started after the confirmation.
         var results = await Task.WhenAll(targets.Select(id => SendStopAsync(sock, id, name, force, missingIsStopped: all)));
 
         return results.Any(code => code != 0) ? 1 : 0;
+    }
+
+    /// <summary>One outcome per line of a StopAck, in the daemon's order. A line with no status, or
+    /// one the client does not know, is a failure; "missing" counts only for the agent this request
+    /// named.</summary>
+    internal static IReadOnlyList<(string Id, StopAckOutcome Outcome)> ReadStopAck(string text, string agentId, bool missingIsStopped) {
+        if (text.Length == 0) return [];
+
+        return [.. text.Split('\n').Select(line => {
+            var parts = line.Split('\t');
+            var outcome = (parts.Length > 1 ? parts[1] : null) switch {
+                "stopped" => StopAckOutcome.Stopped,
+                "skipped" => StopAckOutcome.Skipped,
+                "missing" when parts[0] == agentId && parts.Length == 2 =>
+                    missingIsStopped ? StopAckOutcome.AlreadyStopped : StopAckOutcome.NoSuchAgent,
+                _ => StopAckOutcome.Failed,
+            };
+            return (parts[0], outcome);
+        })];
     }
 
     static async Task<int> SendStopAsync(string sock, string agentId, string daemonName, bool force, bool missingIsStopped) {
@@ -317,38 +337,24 @@ internal sealed class AgentCommand(
 
             switch (resp?.Type) {
                 case FrameType.StopAck:
-                    string[] lines = resp.Text.Length == 0 ? [] : resp.Text.Split('\n');
-                    if (lines.Length == 0) { Console.WriteLine("No agents."); return 0; }
+                    var outcomes = ReadStopAck(resp.Text, agentId, missingIsStopped);
+                    if (outcomes.Count == 0) { Console.WriteLine("No agents."); return 0; }
 
-                    var failed  = 0;
-                    var skipped = 0;
-
-                    foreach (var line in lines) {
-                        var parts  = line.Split('\t');
-                        var id     = parts[0];
-                        var status = parts.Length > 1 ? parts[1] : "failed";
-
-                        switch (status) {
-                            case "stopped": Console.WriteLine($"Stopped {id}."); break;
-                            case "skipped": Console.WriteLine($"Skipped {id} — review agent; pass --force to stop it."); skipped++; break;
-                            case "missing" when id == agentId && parts.Length == 2:
-                                if (missingIsStopped) {
-                                    Console.WriteLine($"Already stopped {id}.");
-                                } else {
-                                    Console.Error.WriteLine($"kcap: no such agent {id}");
-                                    failed++;
-                                }
-                                break;
-                            default:        Console.Error.WriteLine($"Failed to stop {id} — see `kcap daemon logs`."); failed++; break;
+                    foreach (var (id, outcome) in outcomes) {
+                        switch (outcome) {
+                            case StopAckOutcome.Stopped:        Console.WriteLine($"Stopped {id}."); break;
+                            case StopAckOutcome.Skipped:        Console.WriteLine($"Skipped {id} — review agent; pass --force to stop it."); break;
+                            case StopAckOutcome.AlreadyStopped: Console.WriteLine($"Already stopped {id}."); break;
+                            case StopAckOutcome.NoSuchAgent:    Console.Error.WriteLine($"kcap: no such agent {id}"); break;
+                            default:                            Console.Error.WriteLine($"Failed to stop {id} — see `kcap daemon logs`."); break;
                         }
                     }
 
+                    var skipped = outcomes.Count(o => o.Outcome == StopAckOutcome.Skipped);
                     if (skipped > 0)
                         Console.WriteLine($"{skipped} review agent(s) left running — pass --force to stop them.");
 
-                    // Skipping is the documented default, not a failure, so it does not affect
-                    // the exit code.
-                    return failed > 0 ? 1 : 0;
+                    return outcomes.Any(o => o.Outcome.IsFailure()) ? 1 : 0;
                 case FrameType.Error:
                     await Console.Error.WriteLineAsync($"kcap: {resp.Text}");
 
@@ -497,24 +503,12 @@ internal sealed class AgentCommand(
                 return null;
             }
 
-            if (resp.Text.Length == 0) return [];
+            if (ParseAgentTable(resp.Text) is { } table) return table;
 
-            // Older daemons send 3, 6 or 7 columns; current ones send 8. Shifted columns can hide a
-            // protected kind, and an empty id would turn a targeted stop into stop-all.
-            string[] rows = [.. resp.Text.Split('\n').Where(l => l.Length > 0)];
+            await Console.Error.WriteLineAsync(
+                "kcap: daemon sent a malformed agent table (unexpected column count or empty id); refusing to act on it");
 
-            if (rows.Any(l => {
-                    var cells = l.Split('\t');
-
-                    return cells.Length is not (3 or 6 or 7 or 8) || string.IsNullOrWhiteSpace(cells[0]);
-                })) {
-                await Console.Error.WriteLineAsync(
-                    "kcap: daemon sent a malformed agent table (unexpected column count or empty id); refusing to act on it");
-
-                return null;
-            }
-
-            return [.. rows.Select(l => (ParseAgentRow(l), l.Split('\t').Length))];
+            return null;
         } catch (Exception ex) when (ex is SocketException or IOException) {
             await Console.Error.WriteLineAsync($"kcap: cannot reach daemon: {ex.Message}");
 
@@ -619,6 +613,22 @@ internal sealed class AgentCommand(
     );
 
     /// <summary>Tolerates a short row from an older daemon by defaulting the newer columns.</summary>
+    /// <summary>Null for a table with any row the client cannot read safely. Older daemons send 3, 6
+    /// or 7 columns; current ones send 8. Shifted columns can hide a protected kind, and an empty id
+    /// would turn a targeted stop into stop-all.</summary>
+    internal static IReadOnlyList<(AgentRow Row, int Columns)>? ParseAgentTable(string text) {
+        string[] rows = [.. text.Split('\n').Where(l => l.Length > 0)];
+
+        if (rows.Any(l => {
+                var cells = l.Split('\t');
+
+                return cells.Length is not (3 or 6 or 7 or 8) || string.IsNullOrWhiteSpace(cells[0]);
+            }))
+            return null;
+
+        return [.. rows.Select(l => (ParseAgentRow(l), l.Split('\t').Length))];
+    }
+
     internal static AgentRow ParseAgentRow(string line) {
         var p = line.Split('\t');
 

@@ -15,7 +15,6 @@ using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
-using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.LocalIpc;
@@ -153,7 +152,7 @@ static class WizardFixtures {
             Root      = root;
             LocalRoot = new LocalRoot(_config.PathTo("local"));
             Claims  = new ConsentFlipClaims(_config.Root);
-            Bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+            Bridges = WizardComposition.BuildBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
             Surface = new WizardLifecycleSurface((prompt, _) => {
                 Prompts.Add(prompt);
                 return Task.FromResult(false);
@@ -1139,10 +1138,10 @@ public class WizardStartupTests {
         });
     }
 
-    // ── the composition seam: one façade, provisioner armed, arming hook wired ─
+    // ── the composition seam: one façade, arming hook wired ───────────────────
 
     [Test]
-    public async Task The_facade_is_built_from_the_bridges_own_sink_picker_and_provisioner() {
+    public async Task The_facade_is_built_from_the_bridges_own_sink_and_picker() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var harness = new WizardFixtures.GraphHarness(Config.Root);
 
@@ -1151,8 +1150,6 @@ public class WizardStartupTests {
             await Assert.That(harness.Spec).IsNotNull();
             await Assert.That(harness.Spec!.Progress).IsSameReferenceAs(harness.Bridges.Progress);
             await Assert.That(harness.Spec.Picker).IsSameReferenceAs(harness.Bridges.Picker);
-            // A provisioner-less façade dead-ends "Create a workspace" at "ask your admin".
-            await Assert.That(harness.Spec.Provisioner).IsSameReferenceAs(harness.Bridges.Provisioner);
 
             return true;
         });
@@ -1176,21 +1173,19 @@ public class WizardStartupTests {
 
     [Test]
     public async Task The_production_bridges_marshal_through_the_avalonia_dispatcher() {
-        var (marshalled, hasProvisioner) = await AvaloniaSession.DispatchAsync(async () => {
+        var marshalled = await AvaloniaSession.DispatchAsync(async () => {
             var bridges = WizardComposition.BuildBridges(
-            action => Dispatcher.UIThread.Post(action), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+                action => Dispatcher.UIThread.Post(action), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
             var posted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             // Posted from a background thread, exactly as the façade's flows raise their events.
             await Task.Run(() => bridges.Post(() => posted.TrySetResult(Dispatcher.UIThread.CheckAccess())));
             Dispatcher.UIThread.RunJobs();
 
-            // WizardBridges' own contract: the provisioner is built from the bridges' sink.
-            return (await posted.Task.WaitAsync(TimeSpan.FromSeconds(10)), bridges.Provisioner is not null);
+            return await posted.Task.WaitAsync(TimeSpan.FromSeconds(10));
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(marshalled).IsTrue();
-        await Assert.That(hasProvisioner).IsTrue();
     }
 
     // ── the Done step's facts ──────────────────────────────────────────────────
@@ -1258,33 +1253,6 @@ public class WizardStartupTests {
         // A quit mid-probe must not go on to build a wizard window — same rule as the gate's.
         await Assert.ThrowsAsync<OperationCanceledException>(() => AppUnderTest.ResolveShimApplicableAsync(
             true, "/opt/kcap/bin/kcap", ct => Task.FromCanceled<bool?>(ct), cts.Token));
-    }
-
-    // ── the sign-in step's retarget answer ────────────────────────────────────
-
-    [Test]
-    public async Task A_retarget_prefills_the_workspace_url_and_stays_on_sign_in() {
-        await AvaloniaSession.DispatchAsync(async () => {
-            using var harness = new WizardFixtures.GraphHarness(Config.Root);
-            harness.Operation = (_, _) => Task.FromResult<AuthResult>(new AuthResult.Retarget("acme"));
-
-            var graph = WizardComposition.BuildGraph(harness.Options());
-            var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
-            await graph.ViewModel.PendingEnterForTesting;
-
-            await graph.Steps.OfType<EditionStepViewModel>().Single().SignInCommand.Execute().ToTask();
-            await WizardFixtures.WaitUntilAsync(
-                () => graph.ViewModel.Current.Id == WizardStepId.SignIn, what: "the jump to the sign-in step");
-
-            await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(5));
-
-            await Assert.That(graph.ViewModel.Current.Id).IsEqualTo(WizardStepId.SignIn);
-            await Assert.That(graph.Connect.ServerInputText).IsEqualTo("acme");
-            await Assert.That(graph.Connect.Choice).IsEqualTo(ConnectChoice.Paste);
-            await Assert.That(signIn.UrlPanelVisible).IsTrue();
-
-            return true;
-        }).WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     // ── the sign-in step's committed answer ───────────────────────────────────
@@ -1832,7 +1800,7 @@ public class WizardStartupResolutionTests {
 
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+        var bridges = WizardComposition.BuildBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
         using var handler = new StubAuthHandler();
 
         var operation = WizardComposition.BuildOperation(
@@ -1841,7 +1809,7 @@ public class WizardStartupResolutionTests {
             bridges, claims, TimeProvider.System,
             spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints, TimeProvider.System,
+                new RecordingBrowser(), spec.Picker, null, spec.Telemetry, spec.Endpoints, TimeProvider.System,
                 spec.BeforeCommit), spec.Profile));
 
         var result = await operation(new ConnectIntent.Paste("https://acme.example"), CancellationToken.None)
@@ -1856,37 +1824,31 @@ public class WizardStartupResolutionTests {
         await Assert.That(handler.Requests.Any(r => r.Contains("/auth/config"))).IsTrue();
     }
 
-    /// Both zero-tenant intents run the DISCOVERY leg (the auth proxy), not a per-server login —
-    /// which is where the armed provisioner offers to create a workspace.
+    /// Both discovery intents run the DISCOVERY leg (the auth proxy), not a per-server login.
     [Test]
-    [Arguments("create")]
-    [Arguments("discover")]
-    public async Task Create_and_workos_discovery_route_through_the_auth_proxy(string intentName) {
+    [Arguments("device")]
+    [Arguments("browser")]
+    public async Task Workos_discovery_routes_through_the_auth_proxy(string intentName) {
         using var claimsRoot = new TempConfigRoot();
         var claims = new ConsentFlipClaims(claimsRoot.Root);
-        var bridges = WizardComposition.BuildBridges(action => action(), new(new HttpClient(), ClientAgent.Desktop), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults, TimeProvider.System);
+        var bridges = WizardComposition.BuildBridges(action => action(), CliTelemetry.Disabled(TimeProvider.System), AuthEndpoints.Defaults);
         using var handler = new StubAuthHandler { Status = HttpStatusCode.ServiceUnavailable };
-        ConnectIntent intent = intentName == "create"
+        ConnectIntent intent = intentName == "device"
             ? new ConnectIntent.Discover(ForceDevice: true)
             : new ConnectIntent.Discover();
 
-        WizardFacadeSpec? spec = null;
         var operation = WizardComposition.BuildOperation(
             Config.Root, AuthFixtures.NewTokenStore(Config.Root), new PlainHttpClientFactory(handler),
             new AuthProxyClient(new HttpClient(handler, disposeHandler: false), TimeProvider.System), Github, Workos, ProfileName,
             bridges, claims, TimeProvider.System,
-            s => {
-                spec = s;
-                return WizardSignInOperation.For(new OnboardingFacade(
-                    s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
-                    new RecordingBrowser(), s.Picker, s.Provisioner, s.Telemetry, s.Endpoints, TimeProvider.System, s.BeforeCommit), s.Profile);
-            });
+            s => WizardSignInOperation.For(new OnboardingFacade(
+                s.Root, s.TokenStore, s.HttpFactory, s.Proxy, s.GitHub, s.WorkOS, s.Progress,
+                new RecordingBrowser(), s.Picker, null, s.Telemetry, s.Endpoints, TimeProvider.System, s.BeforeCommit), s.Profile));
 
         var result = await operation(intent, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(handler.Requests.Any(r => r.Contains("/config"))).IsTrue();
-        await Assert.That(spec!.Provisioner).IsSameReferenceAs(bridges.Provisioner);
     }
 
     /// Answers every GET with an auth-config body; the discovery rows flip Status so the proxy leg

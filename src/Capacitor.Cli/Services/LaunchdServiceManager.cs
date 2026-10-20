@@ -11,6 +11,10 @@ sealed partial class LaunchdServiceManager(
     Func<string, string[], TimeSpan, (int ExitCode, string StdOut, string StdErr, bool TimedOut)>? runBounded = null
 ) : IServiceManager, IVerifyServiceManager {
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+
+    // The writer's own ancestor checks, run before bootout so a refusal leaves the loaded job alone. An
+    // injected writer is a test's own stand-in for the filesystem, and brings no checks.
+    readonly Action<string> _requireSafeAncestors = writeUnit is null ? ServiceFiles.RequireSafeAncestors : _ => { };
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _runProcess = runProcess ?? ServiceProcess.Run;
     readonly Func<string, string[], TimeSpan, (int ExitCode, string StdOut, string StdErr, bool TimedOut)> _runBounded = runBounded ?? ServiceProcess.RunBounded;
 
@@ -39,8 +43,13 @@ sealed partial class LaunchdServiceManager(
 
     public string UnitDirectory => LaunchdUnit.AgentsDir(home);
 
-    public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
-        [new GeneratedFile(LaunchdUnit.PlistPath(home, spec.ServiceId), LaunchdUnit.Plist(spec))];
+    /// <summary>Refuses an unsafe unit location here as well: a verified install generates first, before it
+    /// retires, clears or replaces anything.</summary>
+    public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) {
+        var path = LaunchdUnit.PlistPath(home, spec.ServiceId);
+        _requireSafeAncestors(path);
+        return [new GeneratedFile(path, LaunchdUnit.Plist(spec))];
+    }
 
     public IReadOnlyList<string> ListInstalled() {
         var dir = LaunchdUnit.AgentsDir(home);
@@ -101,6 +110,7 @@ sealed partial class LaunchdServiceManager(
     /// file on disk keeps describing the job launchd runs.</summary>
     public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         var plistPath = LaunchdUnit.PlistPath(home, spec.ServiceId);
+        _requireSafeAncestors(plistPath);
         var started   = time.GetTimestamp();
         RunCtl(UnloadWait, LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
 

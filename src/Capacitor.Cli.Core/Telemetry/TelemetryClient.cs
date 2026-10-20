@@ -12,6 +12,8 @@ public sealed class TelemetryClient(
         HttpMessageHandler handler, TelemetrySpool spool, string token, string endpoint,
         TimeProvider timeProvider) : ITelemetrySink {
     readonly List<TelemetryEvent> _queue = [];
+    readonly Lock                 _flushLock = new();
+    Task<bool>                    _lastFlush = Task.FromResult(true);
 
     readonly TimeProvider _clock = timeProvider;
 
@@ -36,14 +38,36 @@ public sealed class TelemetryClient(
     /// and <see cref="PostHogPayload.Build"/> (serializing the whole batch) — both of which run
     /// synchronously on the caller's command path (<c>CliTelemetry.CaptureNow</c>, the
     /// ProcessExit handler). Without that, a slow disk with a large spool could stall a command
-    /// well past the intended budget before the HTTP phase even started timing.</summary>
-    public async Task<bool> FlushAsync(string distinctId, string? orgGroup, TimeSpan budget) {
+    /// well past the intended budget before the HTTP phase even started timing.
+    ///
+    /// Flushes run one at a time: each drains, appends to and clears the same spool, so an overlapping
+    /// one could clear events another had just spilled. Waiting for an earlier flush counts against
+    /// the budget, and a flush whose wait used it all spills its queue without draining the spool.</summary>
+    public Task<bool> FlushAsync(string distinctId, string? orgGroup, TimeSpan budget) {
         var start = _clock.GetTimestamp();
+
+        lock (_flushLock) {
+            var prior = _lastFlush;
+            return _lastFlush = FlushAfterAsync(prior, start, distinctId, orgGroup, budget);
+        }
+    }
+
+    async Task<bool> FlushAfterAsync(Task<bool> prior, long start, string distinctId, string? orgGroup, TimeSpan budget) {
+        try {
+            await prior;
+        } catch {
+            // An earlier flush's failure is its own; this one still runs and must not throw.
+        }
 
         List<TelemetryEvent> queued;
         lock (_queue) {
             queued = [.. _queue];
             _queue.Clear();
+        }
+
+        if (_clock.GetElapsedTime(start) >= budget) {
+            spool.Append(queued);
+            return false;
         }
 
         try {

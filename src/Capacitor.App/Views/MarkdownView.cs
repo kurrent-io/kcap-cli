@@ -42,6 +42,7 @@ public sealed class MarkdownView : ContentControl {
     readonly DetailsExtension _detailsExtension;
     readonly CodeBlockActions _codeActions;
     readonly ReferenceLinks _referenceLinks;
+    readonly MarkdownLinkKeys _linkKeys;
 
     static MarkdownView() {
         TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
@@ -57,6 +58,7 @@ public sealed class MarkdownView : ContentControl {
         _detailsExtension = new(_details, OnDetailsToggled);
         _codeActions = new(this);
         _referenceLinks = new(this);
+        _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -95,6 +97,7 @@ public sealed class MarkdownView : ContentControl {
     /// catch; that text shows as plain source, and the viewer is left holding nothing so a pipeline
     /// change cannot re-throw.
     void Render() {
+        _linkKeys.Clear();
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
             _viewer.Markdown = Text;
@@ -104,6 +107,8 @@ public sealed class MarkdownView : ContentControl {
             Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
     }
+
+    internal string? KeyboardLinkUrl => _linkKeys.CurrentUrl;
 
     public string? Text {
         get => GetValue(TextProperty);
@@ -131,6 +136,7 @@ public sealed class MarkdownView : ContentControl {
     }
 
     void ApplyFlavor() {
+        _linkKeys.Clear();
         _details.Clear();
         _viewer.Extensions.Clear();
         if (Flavor == MarkdownFlavor.GitHub) {

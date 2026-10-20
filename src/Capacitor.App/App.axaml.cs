@@ -83,11 +83,14 @@ public partial class App : Application {
     // two read-modify-write cycles interleave and drop an update.
     readonly AppStateStore _appState;
 
+    readonly UiScaleSetting _uiScale;
+
     public App() {
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
         _appState = new AppStateStore(_config.Path("app-state.json"));
 #pragma warning restore RS0030
+        _uiScale = UiScaleSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
@@ -765,7 +768,7 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer, localStack: localStack)),
+                localServer: localServer, localStack: localStack, uiScale: _uiScale)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -884,7 +887,7 @@ public partial class App : Application {
                 },
                 confirmRemove: (name, ct) => ShowLifecyclePromptDialogAsync(_settingsWindow,
                     new LifecyclePrompt(LifecyclePrompt.KindRemoveProfile, null, null, false,
-                        $"Remove profile {name}? Its saved sign-in is deleted too. Nothing on the server changes."), ct),
+                        ProfilesSettingsViewModel.RemovePrompt(name, LatestDaemonProfile(service))), ct),
                 appLifetime: _shutdown.Token);
 
             vm = new SettingsViewModel(settings, service, ops,
@@ -894,7 +897,7 @@ public partial class App : Application {
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
-                profiles: profilesVm);
+                profiles: profilesVm) { Appearance = new AppearanceSettingsViewModel(_uiScale) };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -989,9 +992,7 @@ public partial class App : Application {
             _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
             _foreignHttp.GetRequiredService<WorkOSClient>(),
             profile, serverUrl,
-            WizardComposition.BuildBridges(
-                action => Dispatcher.UIThread.Post(action),
-                _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time),
+            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints),
             new ConsentFlipClaims(_config),
             _appState,
             new ShellUrlOpener(),
@@ -1066,9 +1067,7 @@ public partial class App : Application {
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
-        var bridges = WizardComposition.BuildBridges(
-            action => Dispatcher.UIThread.Post(action),
-            _foreignHttp.GetRequiredService<TenantProvisioningClient>(), _telemetry, _endpoints, _time);
+        var bridges = WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints);
         var surface = new WizardLifecycleSurface(ConfirmLifecyclePromptAsync, action => Dispatcher.UIThread.Post(action));
 
         var options = new WizardGraphOptions(
@@ -1113,7 +1112,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
-        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested);
+        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested, _uiScale);
         _wizardWindow = window;
 
         // The SAME consumer function, over the wizard's own surface: outcome presentation stays
@@ -1187,8 +1186,8 @@ public partial class App : Application {
     // exits the app.
     internal static MainWindow ShowWizardWindow(
             IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null,
-            LocalInstallController? install = null, Func<bool>? shuttingDown = null) {
-        var window = new MainWindow { Onboarding = wizard };
+            LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
+        var window = new MainWindow { Onboarding = wizard, ContentScale = uiScale };
         if (appState is not null) {
             WindowSizeMemory.Restore(window, appState);
             WindowSizeMemory.Attach(window, appState);
@@ -1264,15 +1263,6 @@ public partial class App : Application {
         var result = await attempt.Result.ConfigureAwait(false);
 
         switch (result) {
-            // Sign-in succeeded and the workspace is on its way; closing the window mid-poll is not a
-            // failure, and stderr saying so would be untrue. The guidance is spelled out here rather
-            // than carried on the message: in the wizard it arrives through the progress sink, and
-            // repeating it there would say the same thing twice — but by now that view is gone, so
-            // this line is the only thing left telling the user how to resume.
-            case AuthResult.Failed { Reason: AuthFailureReason.ProvisioningInProgress } pending:
-                Console.Error.WriteLine(
-                    $"kcap: {pending.Message} Sign in to it once it is ready.");
-                break;
             case AuthResult.Failed failed:
                 Console.Error.WriteLine($"kcap: onboarding sign-in ended with a failure: {failed.Message}");
                 break;
@@ -1389,6 +1379,16 @@ public partial class App : Application {
     // ShowMainWindow() exactly once, right after Start, while desktop.MainWindow is still null
     // because startup awaits (the gate's config read, and in wizard-first mode the whole wizard).
     // Show() on an already-visible window is a no-op.
+    /// The profile the attached daemon reports, or null when no daemon is attached now or it does not
+    /// say. Both streams replay their latest value on subscribe, and a snapshot outlives a detach.
+    static string? LatestDaemonProfile(IDaemonClientService service) {
+        string? profile = null;
+        var attached = false;
+        using (service.Status.Subscribe(s => attached = s.State == AttachState.Connected)) { }
+        using (service.Snapshots.Subscribe(s => profile = s.Daemon.Profile)) { }
+        return attached ? profile : null;
+    }
+
     internal static MainWindow BuildAndShowMainWindow(
             IDaemonClientService service, ConfigRoot config, IAppStateStore appState,
             AgentActionService actions, IAppNotifier notifier, ITicker ticker,
@@ -1414,7 +1414,8 @@ public partial class App : Application {
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
-            LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null) {
+            LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
+            UiScaleSetting? uiScale = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1471,6 +1472,7 @@ public partial class App : Application {
         var window = adopt ?? new MainWindow();
         window.DataContext = vm;
         window.Notifier = notifier;
+        window.ContentScale = uiScale;
         window.Onboarding = null;
         if (adopt is null) {
             WindowSizeMemory.Restore(window, appState);

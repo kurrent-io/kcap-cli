@@ -35,14 +35,16 @@ sealed class FakeDaemonClientService : IDaemonClientService {
     public static DaemonStatusDto Snap(
             string daemon = "daemon-a", string version = "1.2.3", string serverUrl = "http://localhost:9999",
             string connection = "connected", int active = 0, int max = 5, int? pid = null, string? instanceId = null,
-            string[]? supportedVendors = null, Dictionary<string, VendorModelOption[]>? vendorModels = null) {
+            string[]? supportedVendors = null, Dictionary<string, VendorModelOption[]>? vendorModels = null,
+            string? credential = null, string? profile = null) {
         var agents = Enumerable.Range(0, active).Select(i => new AgentStatusDto(
             Id: $"a{i}", Kind: "agent", Vendor: "claude", RepoPath: null, Status: "Running",
             FlowRunId: null, FlowRole: null, Requester: null, CreatedAt: DateTime.UtcNow, Model: null,
             RequesterDisplay: null
         )).ToList();
         return new DaemonStatusDto(
-            new DaemonInfoDto(daemon, version, serverUrl, connection, max, active, pid, instanceId, supportedVendors, vendorModels),
+            new DaemonInfoDto(daemon, version, serverUrl, connection, max, active, pid, instanceId, supportedVendors, vendorModels,
+                credential, profile),
             agents);
     }
 }

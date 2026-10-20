@@ -142,26 +142,18 @@ public class TelemetryClientTests {
         await Assert.That(spool.DrainAll().Count).IsEqualTo(1);
     }
 
-    // Regression test for the finding that FlushAsync's budget only bounded the HTTP phase:
-    // DrainAll (disk I/O) and PostHogPayload.Build (serializing the batch) ran unbounded before
-    // the timer started, so a slow drain could still let a doomed HTTP request start and burn the
-    // remaining wall-clock time anyway. With the fix, the drain/serialize phase (simulated here
-    // as a deterministic 10-second "elapsed" via FakeTimeProvider) is charged against the budget
-    // BEFORE the HTTP phase — a 1-second budget is already exhausted by then, so no request is
-    // attempted at all. Against the old (unfixed) code this budget difference is invisible: the
-    // full 1-second budget would still reach the HTTP phase, and the stub handler (which responds
-    // instantly, no real network latency) would succeed well within it — ok=true, Calls=1 — so
-    // this test fails on the old code and passes only once the remaining-budget check exists.
+    // Each clock read advances one second: the check before the drain sees 1s of a 1.5s budget and goes on,
+    // the check after the build sees 2s and must spill rather than post.
     [Test]
     public async Task Budget_already_exhausted_by_drain_and_build_spills_without_a_request() {
         var handler = new StubHandler(HttpStatusCode.OK);
         using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
         var spool   = new TelemetrySpool(spoolPath);
-        var clock   = new FakeTimeProvider(TimeSpan.FromSeconds(10));
+        var clock   = new FakeTimeProvider(TimeSpan.FromSeconds(1));
         var client  = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", clock);
         client.Enqueue(Event("cli_command"));
 
-        var ok = await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(1));
+        var ok = await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(1.5));
 
         await Assert.That(ok).IsFalse();
         await Assert.That(handler.Calls).IsEqualTo(0);
@@ -184,6 +176,59 @@ public class TelemetryClientTests {
 
         await Assert.That(ok).IsTrue();
         await Assert.That(handler.Calls).IsEqualTo(1);
+    }
+
+    /// The first request is held until released and succeeds; every later one fails.
+    sealed class HeldThenFailingHandler : HttpMessageHandler {
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int _calls;
+
+        public int Requests => Volatile.Read(ref _calls);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (Interlocked.Increment(ref _calls) > 1) return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+
+            await Release.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        }
+    }
+
+    [Test]
+    public async Task An_overlapping_flush_never_clears_events_another_flush_spilled() {
+        var handler = new HeldThenFailingHandler();
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+
+        client.Enqueue(Event("held"));
+        var held = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10));
+        client.Enqueue(Event("spilled"));
+        var failing = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10));
+        handler.Release.SetResult();
+
+        await Assert.That(await held).IsTrue();
+        await Assert.That(await failing).IsFalse();
+        await Assert.That(spool.DrainAll().Select(e => e.Name)).IsEquivalentTo(["spilled"]);
+    }
+
+    [Test]
+    public async Task A_flush_that_spends_its_budget_waiting_spills_its_queue_without_a_request() {
+        var handler = new HeldThenFailingHandler();
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+
+        client.Enqueue(Event("held"));
+        var held = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10));
+        client.Enqueue(Event("waited"));
+        var waited = client.FlushAsync("device-1", null, TimeSpan.FromMilliseconds(20));
+        await Task.Delay(100);
+        handler.Release.SetResult();
+
+        await Assert.That(await held).IsTrue();
+        await Assert.That(await waited).IsFalse();
+        await Assert.That(handler.Requests).IsEqualTo(1);
+        await Assert.That(spool.DrainAll().Select(e => e.Name)).IsEquivalentTo(["waited"]);
     }
 
     [Test]

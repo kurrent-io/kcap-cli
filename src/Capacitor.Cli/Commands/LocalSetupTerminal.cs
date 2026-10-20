@@ -1,4 +1,5 @@
 using System.Globalization;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 using Spectre.Console;
 
@@ -6,7 +7,8 @@ namespace Capacitor.Cli.Commands;
 
 /// <summary>The install of <c>kcap setup --local</c> in a terminal: the preflight, the two answers, then the install
 /// rendered as status lines.</summary>
-sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args) {
+/// <param name="report">The whole run's JSON report, which takes every install event and failure as well.</param>
+sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs args, SetupJsonReport? report = null) {
     public const string SingleUserNotice =
         "This first version is for a machine with one user: on a shared machine, other users can open the web UI and act as its admin.";
 
@@ -38,7 +40,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
             installer = factory.Create();
             plan      = installer.Preflight();
         } catch (Exception ex) {
-            return await FailAsync(LocalSetupJsonLines.Classify(ex).Message);
+            return await FailAsync(LocalSetupJsonLines.Classify(ex));
         }
 
         _version = plan.Version;
@@ -48,7 +50,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
         AnsiConsole.MarkupLine($"  {Markup.Escape(SingleUserNotice)}");
 
-        if (!canAsk && MissingAnswer(args, plan, root) is { } missing) return await FailAsync(missing);
+        if (!canAsk && MissingAnswer(args, plan, root) is { } missing) return await RefuseAsync(missing);
 
         if (!args.SingleUser && !Ask("Continue?")) return Declined();
 
@@ -66,11 +68,11 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
         try {
             if (await EmbeddingsAsync(installer, canAsk) is not { } answer)
-                return await FailAsync(MissingEmbeddings(installer.Ollama!.BaseUrl));
+                return await RefuseAsync(MissingEmbeddings(installer.Ollama!.BaseUrl));
 
             embeddings = answer;
         } catch (Exception ex) {
-            return await FailAsync(LocalSetupJsonLines.Classify(ex).Message);
+            return await FailAsync(LocalSetupJsonLines.Classify(ex));
         }
 
         // Taken after the questions, so a Ctrl+C at a prompt still exits at once: nothing exists yet to roll back.
@@ -79,9 +81,14 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         try {
             var committed = await installer.InstallAsync(new(SingleUser: true, Confirmed: confirmed, embeddings), progress, deferral.Token);
 
-            return deferral.Interrupted ? (130, null) : (0, committed);
+            if (!deferral.Interrupted) return (SetupExit.Done, committed);
+
+            // The process exits as the deferral is disposed, before the caller could close the report.
+            report?.Failed(SetupFailureCodes.Cancelled, "Interrupted after the local install committed; run kcap setup again to finish the other steps.");
+
+            return (SetupExit.Interrupted, null);
         } catch (Exception ex) {
-            return await FailAsync(LocalSetupJsonLines.Classify(ex).Message);
+            return await FailAsync(LocalSetupJsonLines.Classify(ex));
         }
     }
 
@@ -133,13 +140,19 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         return (0, null);
     }
 
-    static async Task<(int, LocalInstallEvent.Committed?)> FailAsync(string message) {
-        await Console.Error.WriteLineAsync($"  Error: {message}");
+    Task<(int, LocalInstallEvent.Committed?)> RefuseAsync(string message) =>
+        FailAsync(new LocalInstallFailure(LocalInstallFailureCode.AnswerRequired, message));
 
-        return (1, null);
+    async Task<(int, LocalInstallEvent.Committed?)> FailAsync(LocalInstallFailure failure) {
+        await Console.Error.WriteLineAsync($"  Error: {failure.Message}");
+        report?.Failed(failure.Code.Wire(), failure.Message);
+
+        return (LocalSetupJsonLines.Exit(failure.Code), null);
     }
 
     void Render(LocalInstallEvent e) {
+        report?.Install(e);
+
         if (Line(e, _version) is { } line) AnsiConsole.MarkupLine($"  {Markup.Escape(line)}");
 
         if (e is LocalInstallEvent.Reused reused && reused.InstalledVersion != _version)

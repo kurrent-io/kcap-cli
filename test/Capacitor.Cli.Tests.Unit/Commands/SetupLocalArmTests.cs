@@ -121,7 +121,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task Json_without_single_user_fails_with_answer_required_line() {
         var (exit, stdout, spectre, _) = await Run("setup", "--local", "--json", "--yes");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await AssertAllJson(stdout);
         await Assert.That(spectre).IsEmpty();
 
@@ -163,10 +163,29 @@ internal sealed class SetupLocalArmTests : IDisposable {
     }
 
     [Test]
+    public async Task Json_with_no_prompt_reports_the_install_and_every_later_step() {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(stderr);
+        await AssertAllJson(stdout);
+        await Assert.That(spectre).IsEmpty();
+        await Assert.That(stderr).Contains("Step 2/6");
+
+        var events = Events(stdout);
+        await Assert.That(events[0]).IsEqualTo("step_started");
+        await Assert.That(events).Contains("committed");
+        await Assert.That(Array.IndexOf(events, "committed")).IsLessThan(Array.LastIndexOf(events, "step_started"));
+        await Assert.That(events[^1]).IsEqualTo("done");
+        await Assert.That(JsonNode.Parse(stdout[^1])!["server_url"]?.GetValue<string>()).IsEqualTo(ActiveProfile().ServerUrl);
+    }
+
+    [Test]
     public async Task Json_with_discover_fails_with_invalid_arguments_line() {
         var (exit, stdout, _, _) = await Run("setup", "--local", "--discover", "--json");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stdout.Length).IsEqualTo(1);
 
         var line = JsonNode.Parse(stdout[0])!;
@@ -235,7 +254,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task No_prompt_without_yes_fails() {
         var (exit, _, _, stderr) = await Run("setup", "--local", "--single-user", "--no-prompt");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stderr).Contains("Pass --yes");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(ActiveProfile().ServerUrl).IsNull();
@@ -255,6 +274,20 @@ internal sealed class SetupLocalArmTests : IDisposable {
         await Assert.That(profile.ServerUrl).IsEqualTo(registry.ServerUrl);
         await Assert.That(profile.AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, registry.ServerUrl));
         await Assert.That(string.Join('\n', stdout) + spectre).Contains("No sign-in needed for a local installation.");
+    }
+
+    /// <summary>A local installation has one user, so its sessions default to private, as the app's local path does.</summary>
+    [Test]
+    [Arguments(null, "private")]
+    [Arguments("org_public", "org_public")]
+    public async Task No_prompt_local_visibility_defaults_to_private(string? flag, string expected) {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+            .. flag is null ? Array.Empty<string>() : ["--default-visibility", flag],
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(string.Join('\n', stdout) + spectre + stderr);
+        await Assert.That(ActiveProfile().DefaultVisibility).IsEqualTo(expected);
     }
 
     [Test]
@@ -314,7 +347,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
             "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
         ]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stderr).Contains("--embedding-model mxbai-embed-large");
         await Assert.That(stderr).Contains("--no-embeddings");
         await Assert.That(_log).DoesNotContain("install");
@@ -339,7 +372,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task Plain_setup_refuses_json() {
         var (exit, stdout, spectre, _) = await Run("setup", "--json");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stdout.Length).IsEqualTo(1);
         await Assert.That(spectre).IsEmpty();
         await Assert.That(JsonNode.Parse(stdout[0])!["code"]?.GetValue<string>()).IsEqualTo("invalid_arguments");
@@ -380,7 +413,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
             AnsiConsole.Console = original;
         }
 
-        await Assert.That(run.Exit).IsEqualTo(1);
+        await Assert.That(run.Exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(run.Stderr).Contains("--yes");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(Directory.Exists(Path.Combine(Root.Directory, "bin"))).IsFalse();
@@ -420,6 +453,38 @@ internal sealed class SetupLocalArmTests : IDisposable {
         await Assert.That(run.Spectre).Contains("Committed");
         await Assert.That(run.Spectre).DoesNotContain("Step 2/6");
         await Assert.That(ActiveProfile().AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, ActiveProfile().ServerUrl!));
+    }
+
+    /// <summary>The process exits as the deferral is disposed, so the closing line has to be on stdout by then: read
+    /// at the moment <see cref="InteractiveLifetime.Exit"/> is called, not after the faked exit returns.</summary>
+    [Test]
+    public async Task Json_interrupt_after_the_commit_ends_with_cancelled_before_the_exit() {
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var spectre = new SpectreCapture();
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        string? atExit   = null;
+        var     original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = _ => atExit ??= capture.GetCapturedOutput();
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            await Command(null).HandleAsync([
+                "setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+            ]);
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        var lines = atExit!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(Events(lines)).Contains("committed");
+
+        var last = JsonNode.Parse(lines[^1])!;
+        await Assert.That(last["event"]?.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(last["code"]?.GetValue<string>()).IsEqualTo("cancelled");
     }
 
     /// <summary>Interrupts at the first readiness probe and holds it until the interrupt has cancelled the install,

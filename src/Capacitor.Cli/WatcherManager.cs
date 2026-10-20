@@ -310,7 +310,7 @@ public sealed partial class WatcherManager(
             string  vendor            = "claude",
             int?    parentPid         = null
         ) {
-        if (agentId is null) ClaimAgentProcess(key, vendor);
+        if (agentId is null) ClaimAgentProcess(key, vendor, transcriptPath, cwd);
 
         if (IsWatcherAlive(key)) {
             return; // fast path: no lock needed to observe an already-healthy watcher.
@@ -344,10 +344,10 @@ public sealed partial class WatcherManager(
 
     /// <summary>Records that the agent process this hook runs under is running <paramref name="key"/>'s
     /// session, when the vendor's process hosts one session and the hook can see it.</summary>
-    public void ClaimAgentProcess(string key, string vendor) {
+    public void ClaimAgentProcess(string key, string vendor, string? transcriptPath = null, string? cwd = null) {
         if (AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
          && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
-            AgentSessions.OnThisMachine(config).Claim(agentPid, session);
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session, new ClaimOrigin(vendor, Url, transcriptPath, cwd));
     }
 
     public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude") {

@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
+using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -57,8 +58,66 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    UiScaleSetting? _contentScale;
+    IDisposable? _contentScaleSubscription;
+
+    /// Magnifies everything in the window. Assigned by App; left null on a plainly-constructed
+    /// window, whose zoom shortcuts then do nothing.
+    public UiScaleSetting? ContentScale {
+        get => _contentScale;
+        set {
+            _contentScale = value;
+            _contentScaleSubscription?.Dispose();
+            _contentScaleSubscription = value?.Changes
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(ApplyScale);
+        }
+    }
+
+    double _scale = UiScale.Default;
+    double _captionTop;
+
+    void ApplyScale(double scale) {
+        _scale = scale;
+        ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
+        ApplyMinimumSize();
+        ApplyCaptionInset();
+    }
+
+    // A closed window has no platform window to ask a screen about.
+    void RefreshMinimumSize() {
+        if (_scale != UiScale.Default && PlatformImpl is not null) ApplyMinimumSize();
+    }
+
+    // Bounded by the screen the window is on.
+    void ApplyMinimumSize() {
+        var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
+        var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
+        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
+    }
+
+    // The inset is in window units and the pane sits inside the scale, so it is divided back out.
+    void ApplyCaptionInset() => ContentPane.Margin = new Thickness(0, _captionTop / _scale, 0, 0);
+
     public MainWindow() {
         InitializeComponent();
+        KeyBindings.AddRange(ZoomShortcut.For(this));
+        // A move, a display scaling change and a resized work area each change what the screen offers.
+        PositionChanged += (_, _) => RefreshMinimumSize();
+        ScalingChanged += (_, _) => RefreshMinimumSize();
+        Screens? watchedScreens = null;
+        void OnScreensChanged(object? sender, EventArgs e) => RefreshMinimumSize();
+        Opened += (_, _) => {
+            if (watchedScreens is not null || Screens is not { } screens) return;
+            watchedScreens = screens;
+            screens.Changed += OnScreensChanged;
+        };
+        // Hide-to-tray never closes the window, so only a real close lets the setting and the screens go.
+        Closed += (_, _) => {
+            _contentScaleSubscription?.Dispose();
+            if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
+        };
         BindRefreshShortcuts();
         BindSettingsShortcut();
         KeepContentClearOfCaptionButtons();
@@ -132,7 +191,10 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void KeepContentClearOfCaptionButtons() {
         if (!OperatingSystem.IsWindows()) return;
         this.GetObservable(WindowDecorationMarginProperty)
-            .Subscribe(margin => ContentPane.Margin = new Thickness(0, margin.Top, 0, 0));
+            .Subscribe(margin => {
+                _captionTop = margin.Top;
+                ApplyCaptionInset();
+            });
     }
 
     // F11 is the Windows convention for full screen; Win+Up and Win+Down already maximize and
