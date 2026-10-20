@@ -240,8 +240,6 @@ public class RemoteTerminalViewModelTests {
         });
     }
 
-    /// A stale subscribe the hub took while a newer one was in flight holds the connection in the
-    /// group; if that newer one is then refused, the membership is given back.
     /// <summary>The server says when it refuses the terminal, so the pane says so too, rather than reading
     /// as a connection that dropped; a failed subscribe stays offline.</summary>
     [Test]
@@ -260,6 +258,8 @@ public class RemoteTerminalViewModelTests {
         });
     }
 
+    /// A stale subscribe the hub took while a newer one was in flight holds the connection in the
+    /// group; if that newer one is then refused, the membership is given back.
     [Test]
     public async Task A_stale_subscribe_behind_a_refused_one_is_released() {
         await RunOnUiAsync(async () => {
