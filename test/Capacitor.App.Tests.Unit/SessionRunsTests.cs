@@ -604,6 +604,18 @@ public class SessionRunsTests {
         await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
     }
 
+    /// The drop happens at the end itself, so a later signal in the same projection cannot pair the held id first.
+    [Test]
+    public async Task A_held_id_is_dropped_before_a_later_signal_in_the_same_projection_pairs_it() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Started("c3", T0.AddSeconds(2)), Identified(null, "a1")));
+
+        s.Apply(Signals(Finished("c1", null), Identified("c3", "a3")));
+
+        await Assert.That(s.Rows[1].AgentId).IsNull();
+        await Assert.That(s.Rows[2].AgentId).IsEqualTo("a3");
+    }
+
     /// The call's own id outranks a paired guess, and the agent's end then finds the right row.
     [Test]
     public async Task An_id_by_call_replaces_a_paired_guess_and_its_end_follows() {

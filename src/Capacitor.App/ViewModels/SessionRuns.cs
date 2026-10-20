@@ -64,6 +64,7 @@ public sealed class SessionRuns(TimeProvider time) {
                     break;
                 case RunSignal.Finished finished:
                     Finish(finished);
+                    DropHeldIfACandidateEnded(candidates);
                     break;
                 case RunSignal.Identified identified:
                     Identify(identified);
@@ -78,9 +79,8 @@ public sealed class SessionRuns(TimeProvider time) {
             _pending.Remove(callId);
             if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
+            DropHeldIfACandidateEnded(candidates);
         }
-        // A candidate that ends could have been the held ids' own, so they can no longer be placed on whoever is left.
-        if (candidates?.Any(row => row.IsEnded) == true) _earlyUnpaired.Clear();
         Refresh();
     }
 
@@ -156,6 +156,12 @@ public sealed class SessionRuns(TimeProvider time) {
         if (_earlyUnpaired.Count != 1) return;
         var unnamed = UnnamedRunning().Take(2).ToList();
         if (unnamed.Count == 1) Name(unnamed[0], _earlyUnpaired[0]);
+    }
+
+    // A candidate that ends could have been the held ids' own, so they can no longer be placed on whoever is left —
+    // dropped at once, before a later signal in the same projection pairs them.
+    void DropHeldIfACandidateEnded(List<RunRow>? candidates) {
+        if (candidates?.Any(row => row.IsEnded) == true) _earlyUnpaired.Clear();
     }
 
     IEnumerable<RunRow> UnnamedRunning() =>
