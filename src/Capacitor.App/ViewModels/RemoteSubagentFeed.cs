@@ -4,12 +4,15 @@ using Capacitor.Cli.Core;
 namespace Capacitor.App.ViewModels;
 
 /// A subagent's own events on another machine, paged from the server. The hub tails only a session's
-/// root stream, so a running subagent is polled at a slower pace than the chat reads; once it has ended
-/// and its last page is in, nothing more is fetched.
+/// root stream, so a running subagent is polled at a slower pace than the chat reads, and an ended one
+/// more slowly still.
 internal sealed class RemoteSubagentFeed(
         string sessionId, string agentId, string vendor, SubagentEventsReader read, Func<bool> running,
         TimeProvider time, Action<string> log) : IChatTranscriptFeed {
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    /// Once its subagent has ended the feed still looks now and then: nothing bounds how long its last
+    /// events can trail the parent's word that it ended.
+    internal static readonly TimeSpan EndedPollInterval = TimeSpan.FromSeconds(30);
     const int MaxPagesPerRead = 20;
 
     readonly IChatDisplayRules? _rules = TranscriptChat.SubagentRulesFor(vendor);
@@ -27,9 +30,9 @@ internal sealed class RemoteSubagentFeed(
     public FeedRead ReadAppended() {
         CancellationToken token;
         try { token = _lifetime.Token; } catch (ObjectDisposedException) { return new(FeedStatus.Ok, []); }
-        if (_complete || token.IsCancellationRequested) return new(FeedStatus.Ok, []);
+        if (token.IsCancellationRequested) return new(FeedStatus.Ok, []);
         var now = time.GetUtcNow();
-        if (_fetchedAt is { } last && now - last < PollInterval) return new(FeedStatus.Ok, []);
+        if (_fetchedAt is { } last && now - last < (_complete ? EndedPollInterval : PollInterval)) return new(FeedStatus.Ok, []);
         _fetchedAt = now;
         // Read before fetching: a subagent that ended before this fetch began is complete once it lands.
         var ended = !running();

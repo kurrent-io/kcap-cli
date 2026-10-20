@@ -29,4 +29,21 @@ public class SubagentPaneViewModelTests {
         await Assert.That(pane.IsRunning).IsFalse();
         await pane.TeardownAsync();
     });
+
+    /// The chat reads the agent the pane opened on, so a row that comes to name another agent closes it.
+    [Test]
+    public async Task A_row_renamed_to_another_agent_closes_the_pane() => await RunOnUiAsync(async () => {
+        var time = new FakeTimeProvider();
+        var runs = new SessionRuns(time);
+        runs.Apply(Signals(new RunSignal.Started("c1", "Explore", "Map", time.GetUtcNow()), new RunSignal.Identified("c1", "s1")));
+        var closed = 0;
+        var pane = new SubagentPaneViewModel(
+            runs, runs.Rows.Single(), "Parent", AgentOrigin.Local, "a1", "claude", "key", _ => throw new InvalidOperationException(),
+            new RecordingOpener(), time, new FakePermissionService(), () => closed++);
+
+        runs.Apply(Signals(new RunSignal.Identified("c1", "s2")));
+
+        await Assert.That(closed).IsEqualTo(1);
+        await pane.TeardownAsync();
+    });
 }

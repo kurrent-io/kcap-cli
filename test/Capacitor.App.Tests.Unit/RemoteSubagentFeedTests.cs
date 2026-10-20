@@ -64,6 +64,11 @@ public class RemoteSubagentFeedTests {
         clock.Advance(RemoteSubagentFeed.PollInterval);
         await Assert.That(feed.ReadAppended().Lines).IsEmpty();
         await Assert.That(server.Requests.Count).IsEqualTo(requests);
+
+        // Nothing bounds how long its last events trail its end, so it still looks now and then.
+        server.Events.Add(Text(6, "g"));
+        clock.Advance(RemoteSubagentFeed.EndedPollInterval);
+        await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("g");
     }
 
     [Test]

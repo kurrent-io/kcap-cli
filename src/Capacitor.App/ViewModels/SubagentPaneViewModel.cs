@@ -15,6 +15,8 @@ public sealed class SubagentPaneViewModel : ReactiveObject {
 
     readonly SessionRuns _runs;
     readonly BehaviorSubject<bool> _running;
+    readonly string? _agentId;
+    readonly Action _back;
     RunRow _row;
     IDisposable? _rowWatch;
 
@@ -24,6 +26,8 @@ public sealed class SubagentPaneViewModel : ReactiveObject {
             IPermissionService permissions, Action back) {
         _runs       = runs;
         _row        = row;
+        _agentId    = row.AgentId;
+        _back       = back;
         _running    = new BehaviorSubject<bool>(row.IsRunning);
         ParentTitle = parentTitle;
         Watch(row);
@@ -57,9 +61,15 @@ public sealed class SubagentPaneViewModel : ReactiveObject {
         }
     }
 
+    // The chat reads the transcript of the agent the pane opened on; a row now naming another agent
+    // closes the pane rather than show one agent's state over another's transcript.
     void Watch(RunRow row) {
         _rowWatch?.Dispose();
-        _rowWatch = row.WhenAnyValue(r => r.IsRunning).Subscribe(_running.OnNext);
+        _rowWatch = row.WhenAnyValue(r => r.IsRunning, r => r.AgentId, (running, agentId) => (Running: running, AgentId: agentId))
+            .Subscribe(state => {
+                if (state.AgentId != _agentId) _back();
+                else _running.OnNext(state.Running);
+            });
     }
 
     public Task TeardownAsync() {

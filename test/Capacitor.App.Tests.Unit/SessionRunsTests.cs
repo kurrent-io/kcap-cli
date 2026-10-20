@@ -618,4 +618,18 @@ public class SessionRunsTests {
         await Assert.That(s.Rows[1].AgentId).IsEqualTo("a2");
         await Assert.That(s.Rows[0].AgentId).IsNull();
     }
+
+    /// A start record for an agent its own call already named moves nothing, so its end still finds that row.
+    [Test]
+    public async Task A_start_record_for_a_placed_agent_names_no_other_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("cB"), Detached("cB", "b")));
+        s.Apply(Signals(Started("cF", T0.AddSeconds(1)), Identified(null, "b")));
+
+        s.Apply(Signals(Finished(null, "b")));
+
+        await Assert.That(s.Rows[1].AgentId).IsNull();
+        await Assert.That(s.Rows[0].IsEnded).IsTrue();
+        await Assert.That(s.Rows[1].IsEnded).IsFalse();
+    }
 }

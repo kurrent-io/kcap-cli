@@ -122,6 +122,8 @@ public sealed class SessionRuns(TimeProvider time) {
     void Identify(RunSignal.Identified identified) {
         RunRow? row;
         if (identified.CallId is { } callId) row = _byCall.GetValueOrDefault(callId);
+        // An agent already placed by its own call stays there: a guess never moves it.
+        else if (_byAgent.ContainsKey(identified.AgentId) || _rows.Any(r => r.AgentId == identified.AgentId)) return;
         else {
             var unnamed = _rows.Where(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false }).Take(2).ToList();
             row = unnamed.Count == 1 ? unnamed[0] : null;
