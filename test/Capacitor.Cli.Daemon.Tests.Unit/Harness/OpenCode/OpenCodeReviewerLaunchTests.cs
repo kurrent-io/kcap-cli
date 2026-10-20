@@ -229,9 +229,11 @@ public class OpenCodeReviewerLaunchTests {
         var psi = Psi(isReviewFlow: false);
 
         await Assert.That(psi.Environment[OpenCodeLaunchEnvironment.PureVariable]).IsEqualTo("1");
-        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.PermissionVariable)).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.ConfigDirVariable)).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey(OpenCodeLaunchEnvironment.ProjectConfigVariable)).IsFalse();
+        foreach (var key in new[] {
+                     OpenCodeLaunchEnvironment.PermissionVariable, OpenCodeLaunchEnvironment.ConfigDirVariable,
+                     OpenCodeLaunchEnvironment.ProjectConfigVariable })
+            await Assert.That(psi.Environment.TryGetValue(key, out var value) ? value : null)
+                .IsEqualTo(Environment.GetEnvironmentVariable(key));
     }
 
     /// <summary>

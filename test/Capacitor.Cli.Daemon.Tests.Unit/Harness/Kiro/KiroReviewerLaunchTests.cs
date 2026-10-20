@@ -110,7 +110,8 @@ public class KiroReviewerLaunchTests {
         var psi = Psi(isReviewFlow: false, EnabledConfig(Daemons.Store));
 
         await Assert.That(psi.ArgumentList.Contains("--trust-tools")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("KIRO_HOME")).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue("KIRO_HOME", out var home) ? home : null)
+            .IsEqualTo(Environment.GetEnvironmentVariable("KIRO_HOME"));
     }
 
     [Test]

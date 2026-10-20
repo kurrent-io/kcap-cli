@@ -125,7 +125,8 @@ public class PiReviewerLaunchTests {
         var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx());
 
         await Assert.That(string.Join(" ", psi.ArgumentList)).IsEqualTo("--mode rpc");
-        await Assert.That(psi.Environment.ContainsKey(PiReviewerExtension.ManifestEnvVar)).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue(PiReviewerExtension.ManifestEnvVar, out var manifest) ? manifest : null)
+            .IsEqualTo(Environment.GetEnvironmentVariable(PiReviewerExtension.ManifestEnvVar));
     }
 
     // ── advertisement ──

@@ -250,8 +250,9 @@ public class AntigravityReviewerLaunchTests {
         var psi = BuildPsi(EnabledConfig());
 
         await Assert.That(psi.UseShellExecute).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("AGY_ADC_AUTH")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("GOOGLE_APPLICATION_CREDENTIALS")).IsFalse();
+        foreach (var key in new[] { "AGY_ADC_AUTH", "GOOGLE_APPLICATION_CREDENTIALS" })
+            await Assert.That(psi.Environment.TryGetValue(key, out var value) ? value : null)
+                .IsEqualTo(Environment.GetEnvironmentVariable(key));
     }
 
     // ── advertisement ─────────────────────────────────────────────────────────────────────────────

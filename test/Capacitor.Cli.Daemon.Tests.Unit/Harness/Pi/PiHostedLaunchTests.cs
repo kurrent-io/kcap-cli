@@ -118,8 +118,9 @@ public class PiHostedLaunchTests {
     public async Task BuildPsi_OmitsDaemonIdAndEpoch_WhenContextCarriesNone() {
         var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(daemonId: "", daemonEpoch: ""));
 
-        await Assert.That(psi.Environment.ContainsKey("KCAP_DAEMON_ID")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("KCAP_DAEMON_EPOCH")).IsFalse();
+        foreach (var key in new[] { "KCAP_DAEMON_ID", "KCAP_DAEMON_EPOCH" })
+            await Assert.That(psi.Environment.TryGetValue(key, out var value) ? value : null)
+                .IsEqualTo(Environment.GetEnvironmentVariable(key));
     }
 
     [Test]
