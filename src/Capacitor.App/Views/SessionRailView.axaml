@@ -78,8 +78,13 @@
         <Style Selector="TextBlock.footerMeta.attention">
             <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
         </Style>
-        <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailLocalStackRow > TextBlock">
+        <Style Selector="WrapPanel#RailLocalStackRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
+        </Style>
+        <!-- A WrapPanel stacks line boxes flush. The bottom margin is the gap before a
+             wrapped version. -->
+        <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailDaemonRow > StackPanel">
+            <Setter Property="Margin" Value="0,0,5,4" />
         </Style>
         <!-- Status, machine, and age share an 11px line; the logo and glyph sit in that line. -->
         <Style Selector="Border.railChip">
@@ -335,19 +340,19 @@
                         <!-- Bottom, not Center: the fragments and the button share the row's
                              bottom edge, so the text line and the button agree on one line. One
                              font size across the row, so the baselines coincide outright.
-                             The dot precedes the agent count and hides with it. The version
-                             follows with no separator, so a wrap cannot leave a dot at the
-                             end of the line. -->
+                             The dot and the count are one wrap child, so a break takes the
+                             separator with the count. The version has none. -->
                         <WrapPanel x:Name="RailDaemonRow" VerticalAlignment="Bottom">
                             <TextBlock x:Name="RailDaemonNameText" Text="{Binding DaemonName}" Classes="footerMeta"
                                        TextTrimming="CharacterEllipsis"
                                        ToolTip.Tip="{x:Static vm:MainWindowViewModel.DaemonNameTip}"
                                        IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <TextBlock Classes="footerDot"
-                                       IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
-                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}"
-                                       IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Bottom"
+                                        IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                                <TextBlock Classes="footerDot" />
+                                <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
+                                           ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}" />
+                            </StackPanel>
                             <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" Classes="footerMeta"
                                        Classes.restartPending="{Binding RestartPending}"
                                        IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">

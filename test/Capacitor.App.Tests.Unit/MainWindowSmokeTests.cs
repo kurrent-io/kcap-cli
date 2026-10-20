@@ -1715,12 +1715,25 @@ public class MainWindowSmokeTests {
             new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
     }
 
-    /// Name, then the agent count, then the version. The count's dot leaves with it when the
-    /// attach drops; the snapshot stays, so the name and version remain with nothing between them.
+    /// Name, then the agent count, then the version. The dot shares the count's parent, so a
+    /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
+    /// stays, so the name and version remain with nothing between them.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
-        var (connected, detached) = await AvaloniaSession.DispatchAsync(() => {
+        static IEnumerable<string> VisibleFooterTexts(Control control) {
+            if (!control.IsVisible) yield break;
+            if (control is TextBlock block) {
+                yield return block.Text ?? "";
+                yield break;
+            }
+            if (control is Panel panel)
+                foreach (var child in panel.Children.OfType<Control>())
+                    foreach (var text in VisibleFooterTexts(child))
+                        yield return text;
+        }
+
+        var (connected, detached, dotSharesCountParent) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             service.SnapshotsSubject.OnNext(Snap(
                 daemon: "daemon-a", version: "1.2.3", serverUrl: "http://localhost:9999",
@@ -1733,21 +1746,25 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             var row = window.FindDescendantOfType<SessionRailView>()!.FindControl<Panel>("RailDaemonRow")!;
-            string[] Fragments() => row.Children.OfType<TextBlock>()
-                .Where(t => t.IsVisible).Select(t => t.Text ?? "").ToArray();
+            string[] Fragments() => VisibleFooterTexts(row).ToArray();
 
             var whileConnected = Fragments();
+            var count = row.FindControl<TextBlock>("RailAgentCountText")!;
+            var sharesParent = count.Parent is Panel parent
+                && !ReferenceEquals(parent, row)
+                && parent.Children.OfType<TextBlock>().Any(t => t.Classes.Contains("footerDot"));
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
             Dispatcher.UIThread.RunJobs();
             var whileDetached = Fragments();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
-            return (whileConnected, whileDetached);
+            return (whileConnected, whileDetached, sharesParent);
         });
 
         await Assert.That(connected).IsEquivalentTo(
             new[] { "daemon-a", "\u00b7", "1 of 5 agents", "1.2.3" }, CollectionOrdering.Matching);
+        await Assert.That(dotSharesCountParent).IsTrue();
         await Assert.That(detached).IsEquivalentTo(
             new[] { "daemon-a", "1.2.3" }, CollectionOrdering.Matching);
     }
