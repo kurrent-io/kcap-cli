@@ -69,8 +69,8 @@ public class ClaudeTranscriptEventsTests {
         await Assert.That(e[0].EventId).IsEqualTo(Guid.Parse(Uuid));
 
         var second = (ToolResultReceived)e[1].Payload;
-        await Assert.That(second.Result).IsEqualTo("a\nb");
-        await Assert.That(SchemaExtensions.Slug(second, "claude_code")).IsNull();
+        await Assert.That(second.Result).IsEqualTo("a\n\nb");
+        await Assert.That(SchemaExtensions.Slug(second, "claude_code")!.Fields.Keys).IsEquivalentTo(["output_raw"]);
         await Assert.That(e[1].EventId).IsEqualTo(TranscriptIds.ClaudeBlock(Guid.Parse(Uuid), 2));
     }
 
