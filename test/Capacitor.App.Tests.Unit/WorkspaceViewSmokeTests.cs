@@ -494,7 +494,7 @@ public class WorkspaceViewSmokeTests {
                 var working = StatusMark(window);
                 await Assert.That(working.IsEffectivelyVisible).IsTrue();
                 var workingWord = working.FindControl<TextBlock>("StatusWord")!;
-                await Assert.That(workingWord.Text).IsEqualTo("Working");
+                await Assert.That(workingWord.Text).StartsWith("Thinking…");
                 await Assert.That(workingWord.Foreground).IsSameReferenceAs(window.FindResource("KcapPurpleBrush"));
                 await Assert.That(workingWord.Bounds.Width).IsGreaterThan(workingWord.Bounds.Height);
                 var path = Find<TextBlock>(window, "WorkspaceSubtitle")!;
