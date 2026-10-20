@@ -44,4 +44,22 @@ public class HubIdentityTests {
         await Assert.That(HubIdentity.Changed(HubIdentity.Of(Ok("ana")), Ok("ana", "t2"))).IsFalse();
         await Assert.That(HubIdentity.Changed(HubIdentity.Of(Ok("ana")), Ok("bob"))).IsTrue();
     }
+
+    static string Jwt(string sub) {
+        static string Part(string json) => Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+
+        return $"{Part("{}")}.{Part($"{{\"sub\":\"{sub}\"}}")}.sig";
+    }
+
+    /// <summary>A WorkOS token stores a display name, which two people can share; the token's own subject
+    /// tells them apart.</summary>
+    [Test]
+    public async Task Two_people_with_one_display_name_are_two_identities() =>
+        await Assert.That(HubIdentity.Changed(HubIdentity.Of(Ok("Ana", Jwt("user_1"))), Ok("Ana", Jwt("user_2")))).IsTrue();
+
+    /// <summary>A pre-upgrade token names no issuing server until a refresh stamps one; that refresh is
+    /// the same sign-in, not a new one.</summary>
+    [Test]
+    public async Task A_legacy_token_stamped_with_its_server_is_the_same_identity() =>
+        await Assert.That(HubIdentity.Changed(HubIdentity.Of(Ok("ana", server: null)), Ok("ana", "t2"))).IsFalse();
 }
