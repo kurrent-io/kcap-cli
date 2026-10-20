@@ -88,12 +88,23 @@ public class CodexChatRulesTests {
 
     [Test]
     public async Task Every_other_envelope_and_payload_type_projects_to_nothing() {
-        foreach (var type in new[] { "event_msg", "turn_context", "session_meta", "world_state", "compacted", "inter_agent_communication_metadata" })
+        foreach (var type in new[] { "event_msg", "turn_context", "session_meta", "world_state", "inter_agent_communication_metadata" })
             await Assert.That(P($$$"""{"type":"{{{type}}}","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}}""")).IsEmpty().Because(type);
 
         await Assert.That(P(Item("""{"type":"agent_message","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
         await Assert.That(P("garbage")).IsEmpty();
         await Assert.That(P(Item("""{"type":"message","role":"user","content":"not-an-array"}"""))).IsEmpty();
+    }
+
+    /// A compaction is stored as its own event and reads as a note where it happened.
+    [Test]
+    public async Task A_compaction_reaches_the_chat_as_a_note() {
+        var e = P("""{"timestamp":"2026-08-25T00:00:00Z","type":"compacted","payload":{"replacement_history":[{"type":"compaction","encrypted_content":"x"}]}}""");
+
+        await Assert.That(e).Count().IsEqualTo(1);
+        await Assert.That(e[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(e[0].Text).IsEqualTo("Context compacted");
+        await Assert.That(e[0].TimestampIso).IsEqualTo("2026-08-25T00:00:00Z");
     }
 
     /// Pins the vendor-neutral kind beside the raw name. Codex's shell tools have no name of their

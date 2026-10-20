@@ -1,0 +1,115 @@
+[
+  {
+    "line": 1,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 2,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 3,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 4,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "68b41328-9d25-94d8-0b71-5b49365193a9",
+        "timestamp": "2026-09-04T09:00:42.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:42.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "Review the diff.",
+          "timestamp": "2026-09-04T09:00:42Z",
+          "extensions": {
+            "codex": {
+              "agent_message": {
+                "author": "/root",
+                "recipient": "/root/reviewer"
+              }
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 5,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "38e1ce88-59a1-d57e-a5a4-79f27452bb5a",
+        "timestamp": "2026-09-04T09:00:43.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:43.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "On it.",
+          "timestamp": "2026-09-04T09:00:43Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 6,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UsageApplied",
+        "id": "2983558b-937d-774d-62c0-bbcee1ece78c",
+        "timestamp": "2026-09-04T09:00:44.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:44.000Z",
+        "causedBy": null,
+        "payload": {
+          "usage": {
+            "inputTokens": "300",
+            "outputTokens": "15",
+            "totalTokens": "315",
+            "cachedInputTokens": "0",
+            "reasoningTokens": "0",
+            "model": "gpt-5-codex"
+          },
+          "anchor": "68b41328-9d25-94d8-0b71-5b49365193a9",
+          "targets": [
+            {
+              "eventId": "68b41328-9d25-94d8-0b71-5b49365193a9",
+              "eventType": "AssistantTextGenerated",
+              "toolName": null,
+              "isEcho": false
+            },
+            {
+              "eventId": "38e1ce88-59a1-d57e-a5a4-79f27452bb5a",
+              "eventType": "AssistantTextGenerated",
+              "toolName": null,
+              "isEcho": true
+            }
+          ]
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  }
+]
