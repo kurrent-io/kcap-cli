@@ -40,9 +40,7 @@ sealed record HubIdentity(string Account, string? Server, string Provider) {
             payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
             using var doc = JsonDocument.Parse(Convert.FromBase64String(payload));
 
-            return doc.RootElement.TryGetProperty("sub", out var sub) && sub.ValueKind == JsonValueKind.String
-                ? sub.GetString()
-                : null;
+            return doc.RootElement.Str("sub");
         } catch {
             return null;
         }

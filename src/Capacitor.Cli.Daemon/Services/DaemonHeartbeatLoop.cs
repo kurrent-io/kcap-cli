@@ -145,10 +145,11 @@ internal sealed class DaemonHeartbeatLoop(
     async Task<bool> SafeCredentialChangedAsync(CancellationToken ct) {
         try {
             // Bounded like the ping: a stalled token-store read must not stop the loop probing the hub.
+            // Only the wait is bounded: a refresh under way must still save the token it rotated.
             using var cap = new CancellationTokenSource(pingDeadline, time);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
-            return await port.CredentialChangedAsync(cts.Token).WaitAsync(cts.Token);
+            return await port.CredentialChangedAsync(ct).WaitAsync(cts.Token);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (OperationCanceledException) {
