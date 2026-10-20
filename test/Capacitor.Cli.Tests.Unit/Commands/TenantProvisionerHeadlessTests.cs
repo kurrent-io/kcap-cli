@@ -301,6 +301,50 @@ public class TenantProvisionerHeadlessTests {
         await Assert.That(handler.ProvisionTiers).IsEquivalentTo(["team"]);
     }
 
+    // Free cloud workspaces close while the invite gate binds a caller. A run that named no plan asks for the
+    // Team trial instead; one that named Free is told its choices, not that the slug is taken.
+    [Test]
+    public async Task An_unnamed_plan_moves_to_the_team_trial_when_free_is_closed() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new ProvisioningStubHandler { ProvisionReplies = [(HttpStatusCode.Conflict, "free_unavailable")] };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme"));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Created);
+        await Assert.That(handler.ProvisionTiers).IsEquivalentTo(["free", "team"]);
+        await Assert.That(capture.GetCapturedError()).Contains("Team trial instead");
+    }
+
+    [Test]
+    public async Task A_named_free_plan_that_is_closed_says_what_to_choose_instead() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new ProvisioningStubHandler { ProvisionReplies = [(HttpStatusCode.Conflict, "free_unavailable")] };
+        var provisioner   = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Free));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(handler.ProvisionTiers).IsEquivalentTo(["free"]);
+        await Assert.That(capture.GetCapturedError()).Contains("--tier team --invite-code");
+        await Assert.That(capture.GetCapturedError()).DoesNotContain("is taken");
+    }
+
+    [Test]
+    public async Task A_closed_free_plan_after_a_refused_trial_offers_only_the_local_edition() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new ProvisioningStubHandler {
+            ProvisionReplies = [(HttpStatusCode.BadRequest, "work_email_required"), (HttpStatusCode.Conflict, "free_unavailable")]
+        };
+        var provisioner = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(capture.GetCapturedError()).Contains("--local");
+        await Assert.That(capture.GetCapturedError()).DoesNotContain("--tier team");
+    }
+
     // The fallback can land on an account that already owns a Free workspace, which is not a taken slug.
     [Test]
     public async Task A_free_limit_says_the_account_already_has_a_workspace() {
