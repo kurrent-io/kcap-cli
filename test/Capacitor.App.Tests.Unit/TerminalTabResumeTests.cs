@@ -1,3 +1,4 @@
+using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -403,11 +404,11 @@ public class TerminalTabResumeTests {
         });
     }
 
-    /// A daemon that does not report the runtime is asked as before, and the tab keeps binding the one
-    /// the ledger named before dialing.
+    /// A daemon without attach-runtime/1 gets a plain Attach, and the tab binds the runtime the ledger
+    /// named before dialing.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_older_daemon_is_attached_as_before_and_bound_by_the_ledger_read_before_dialing() {
+    public async Task An_older_daemon_gets_a_plain_attach_bound_by_the_ledger_read_before_dialing() {
         await RunOnUiAsync(async () => {
             var rig = new Rig { Entry = Ledger(ResumeState.Running) };
             var client = await rig.StartAsync();
@@ -621,6 +622,57 @@ public class TerminalTabResumeTests {
 
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
             await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// A daemon handing its agents to a successor marks them Resuming with the departing runtime's own
+    /// stamp, so that runtime's exit is the restart and the tab waits for the resume.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_exit_while_the_attached_runtime_is_handed_over_waits_for_the_resume() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+
+            rig.Entry = Ledger(ResumeState.Resuming, startedAt: FirstStart);
+            await rig.DropAsync(client, new AttachOutcome.Exited(0));
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+        });
+    }
+
+    /// A reattach the user started while a status-driven ledger read was in flight keeps its attempt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_status_recovery_does_not_cancel_a_reattach_already_under_way() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+            await rig.DropAsync(client, new AttachOutcome.Failed("boom"));
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+
+            using var inRead = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var resuming = Ledger(ResumeState.Resuming);
+            rig.Gate = () => { inRead.Set(); release.Wait(TimeSpan.FromSeconds(5)); return resuming; };
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            var recovery = rig.Vm.PendingRecoveryForTesting!;
+            while (!inRead.IsSet) await Task.Delay(5);
+            rig.Gate = null;
+
+            client.DisposeGate = new TaskCompletionSource();
+            var reattach = rig.Vm.ReattachCommand.Execute().ToTask();
+            release.Set();
+            await recovery;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+
+            client.DisposeGate.SetResult();
+            await reattach;
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Connecting);
         });
     }
 

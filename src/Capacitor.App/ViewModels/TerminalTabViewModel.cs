@@ -814,16 +814,17 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
 
         if (dto.Status == "Resuming" || previous == "Interrupted" || SessionStatusDots.IsTerminal(previous))
-            PendingRecoveryForTesting = RecoverIfAnotherRuntimeAsync(Volatile.Read(ref _attemptGeneration), State);
+            PendingRecoveryForTesting = RecoverIfAnotherRuntimeAsync(Volatile.Read(ref _attemptGeneration), Volatile.Read(ref _openingToken), State);
     }
 
-    /// Bound to the attempt it started from: states are compared by value, and a later attempt can settle
-    /// on one equal to this.
-    async Task RecoverIfAnotherRuntimeAsync(int generation, TerminalSessionState settled) {
+    /// Bound to the attempt it started from, since states are compared by value and a later attempt can
+    /// settle on one equal to this; and to the opening token, since a reattach claims it before its
+    /// generation moves and before it leaves the settled state.
+    async Task RecoverIfAnotherRuntimeAsync(int generation, int openingToken, TerminalSessionState settled) {
         var entry = await Task.Run(ReadLedger).ConfigureAwait(false);
         if (!NamesAnotherRuntime(settled, entry)) return;
         await Dispatcher.UIThread.InvokeAsync(() => {
-            if (Retired(generation) || State != settled) return;
+            if (Retired(generation) || Volatile.Read(ref _openingToken) != openingToken || State != settled) return;
             AwaitRetriedResume();
         });
     }
