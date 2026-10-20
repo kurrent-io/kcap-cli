@@ -128,6 +128,16 @@ public class AgentSessionsTests {
         await Assert.That(Sessions.ReapExited("https://other.example")).IsEmpty().Because("taken once");
     }
 
+    /// <summary>A session whose end was set aside, then resumed and gone again, is ended once.</summary>
+    [Test]
+    public async Task A_deferred_end_and_a_fresh_reap_of_the_same_session_end_it_once() {
+        DeadNoteWithOrigin(Shell, "twice", "https://other.example");
+        Sessions.ReapExited("https://kcap.example");
+        DeadNoteWithOrigin(Git, "twice", "https://other.example");
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value)).IsEquivalentTo(new[] { "twice" });
+    }
+
     /// <summary>A claim writes its origin under its own start token; a repeat claim keeps the first one.</summary>
     [Test]
     public async Task A_repeat_claim_keeps_the_first_origin() {

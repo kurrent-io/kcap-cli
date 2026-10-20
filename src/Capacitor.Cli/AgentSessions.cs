@@ -110,7 +110,10 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             } catch { }
         }
 
-        gone.AddRange(TakeDeferredEnds(currentServer));
+        // A session resumed and gone again since its end was deferred is already here: one end is enough.
+        foreach (var deferred in TakeDeferredEnds(currentServer))
+            if (!gone.Any(g => string.Equals(g.Session.Value, deferred.Session.Value, StringComparison.OrdinalIgnoreCase)))
+                gone.Add(deferred);
         PruneExitRecords();
         return gone;
     }
