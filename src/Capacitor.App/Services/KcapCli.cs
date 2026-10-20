@@ -85,6 +85,10 @@ public interface IKcapCli {
     /// through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
     Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
 
+    /// `local upgrade --json --no-update-check`, streamed live via onLine, with the same cancellation
+    /// contract as <see cref="SetupLocalAsync"/>.
+    Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
+
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
 
@@ -115,6 +119,9 @@ public sealed class KcapCli : IKcapCli {
     // A cancelled setup still finishes recovery and commit, which may run back to back: two 10 min readiness waits,
     // a 210 s service stop, two 60 s unit-lock waits, two 10 s lift polls and a 10 s lease wait, 26 min in all.
     static readonly TimeSpan SetupInterruptGrace = TimeSpan.FromMinutes(30);
+    // Only the download stops for an interrupt. A resumed upgrade and this one back to back: two 10 min readiness
+    // waits, three 105 s service stops, five 60 s unit-lock waits and a 10 s lease wait, about 31 min in all.
+    static readonly TimeSpan UpgradeInterruptGrace = TimeSpan.FromMinutes(35);
 
     // Overlay variable names every app-initiated spawn carries — the lane and KcapCliTests reference these.
     public const string SpawnNoTelemetryVar   = "KCAP_APP_SPAWN_NO_TELEMETRY";
@@ -283,6 +290,15 @@ public sealed class KcapCli : IKcapCli {
 
         return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes"],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: SetupInterruptGrace),
+            onLine, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    public async Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        if (CliPath is not { } cliPath)
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
+
+        return await _runner.RunStreamingAsync(cliPath, ["local", "upgrade", "--json", "--no-update-check"],
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: UpgradeInterruptGrace),
             onLine, CancellationToken.None).ConfigureAwait(false);
     }
 
