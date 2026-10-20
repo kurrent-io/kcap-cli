@@ -1,3 +1,4 @@
+using Avalonia;
 using Capacitor.App.Services.Notifications;
 using Capacitor.Cli.Core;
 
@@ -11,6 +12,11 @@ public sealed class LinuxDesktopHost(string cliDirectory, bool updateRelaunch, A
                            ?? BundleLayout.CliDirectory(appDirectory);
         return new LinuxDesktopHost(cliDirectory, updateRelaunch, appImage, singleInstance);
     }
+
+    public override AppBuilder ConfigureAvalonia(AppBuilder builder) =>
+        builder.With(new X11PlatformOptions {
+            RenderingMode = LinuxRenderingOrder.Resolve(Environment.GetEnvironmentVariable(LinuxRenderingOrder.EnvVar)),
+        });
 
     public override bool TrayAnnouncesMenuOpen => false;
 
