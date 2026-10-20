@@ -732,7 +732,7 @@
                 <!-- Session facts. -->
                 <StackPanel x:Name="SessionSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
                     <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable"
-                            AutomationProperties.Name="Session details">
+                            AutomationProperties.Name="{Binding SessionToggleText, StringFormat='Session details, {0}'}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />
                             <!-- The base facts always show, so this toggle reads as more/less detail, not open/shut. -->
