@@ -123,7 +123,14 @@ sealed class PollingServiceVerify(
 
         if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
 
-        if (manager.UnitEnvironment(retireId) is not { } retiredEnv) return (RetireRefusal("unit_unreadable"), true, null);
+        IReadOnlyDictionary<string, string>? retiredEnv;
+        try {
+            retiredEnv = manager.UnitEnvironment(retireId);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            Say($"retire: {ex.Message}");
+            retiredEnv = null;
+        }
+        if (retiredEnv is null) return (RetireRefusal("unit_unreadable"), true, null);
         if (!SameProfile(retiredEnv, spec.Environment)) return (RetireRefusal("foreign_profile"), true, null);
 
         if (old.State != ServiceState.Running) return (null, true, null);

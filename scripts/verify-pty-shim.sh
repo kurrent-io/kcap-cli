@@ -37,14 +37,15 @@ fi
 
 # Built first: a cold `dotnet run` takes far longer than the wait below allows.
 dotnet build test/Capacitor.Cli.Tests.Unit.NativeTestHost -r "$rid" -p:MinVerVersionOverride="$version"
-dotnet run --no-build --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r "$rid" -- spawn-dummy > smoke-output.txt 2>&1 &
+out="$(mktemp)"; trap 'rm -f "$out"' EXIT
+dotnet run --no-build --project test/Capacitor.Cli.Tests.Unit.NativeTestHost -r "$rid" -- spawn-dummy > "$out" 2>&1 &
 host_pid=$!
 
 # spawn-dummy blocks forever by design: poll for its PID= line, then tear it down with a SIGKILL
 # fallback so this never hangs on a host that ignores SIGTERM.
 ok=0
 for _ in $(seq 1 60); do
-  if grep -q '^PID=' smoke-output.txt 2>/dev/null; then ok=1; break; fi
+  if grep -q '^PID=' "$out" 2>/dev/null; then ok=1; break; fi
   if ! kill -0 "$host_pid" 2>/dev/null; then break; fi
   sleep 1
 done
@@ -53,7 +54,7 @@ kill "$host_pid" 2>/dev/null || true
 sleep 1
 kill -9 "$host_pid" 2>/dev/null || true
 wait "$host_pid" 2>/dev/null || true
-cat smoke-output.txt
+cat "$out"
 if [[ "$ok" -ne 1 ]]; then
   echo "::error::load-and-call smoke saw no PID= line from spawn-dummy on $rid"; exit 1
 fi

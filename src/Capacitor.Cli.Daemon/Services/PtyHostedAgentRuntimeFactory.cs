@@ -149,6 +149,10 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
         }
 
+        // Read before the spawn so a throw cannot orphan the PTY. Gates the multi-CR submit spray; see
+        // PtyHostedAgentRuntime.SubmitAsync.
+        var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
+
         IPtyProcess pty;
         try {
             pty = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
@@ -157,9 +161,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             throw;
         }
 
-        // Gate the multi-CR submit spray on whether this launch turned off approval prompts — the
-        // launcher is the authority (it set the flags). See PtyHostedAgentRuntime.SubmitAsync.
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, launcher.DisablesApprovalPrompts(launcherCtx), promptFile);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, promptFile);
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }

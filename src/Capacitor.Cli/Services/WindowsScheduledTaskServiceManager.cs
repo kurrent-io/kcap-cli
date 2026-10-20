@@ -58,6 +58,12 @@ sealed class WindowsScheduledTaskServiceManager(
             .Where(id => id is not null).Select(id => id!).Distinct().Order()];
     }
 
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) {
+        var (code, _, _) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        var wrapper = WrapperOf(serviceId, taskExists: code == 0);
+        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
+    }
+
     /// <summary>
     /// The wrapper an installed task runs, read from the task's own definition: one installed under another
     /// <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has it elsewhere, and a file left under this root is not
@@ -65,11 +71,6 @@ sealed class WindowsScheduledTaskServiceManager(
     /// task whose definition cannot be read, or whose action no kcap release wrote, throws: without its
     /// wrapper, nothing says which daemon it runs.
     /// </summary>
-    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) {
-        var wrapper = WindowsTaskUnit.WrapperPath(config, serviceId);
-        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
-    }
-
     string WrapperOf(string serviceId, bool taskExists) {
         var local = WindowsTaskUnit.WrapperPath(config, serviceId);
         if (!taskExists) return local;

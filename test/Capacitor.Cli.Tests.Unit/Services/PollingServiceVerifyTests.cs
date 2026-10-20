@@ -25,6 +25,7 @@ public class PollingServiceVerifyTests {
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
         public IReadOnlyDictionary<string, string>? OldEnv;
+        public Exception? OldEnvFailure;
         public readonly List<string> Calls = [];
 
         public string Describe() => "fake task";
@@ -32,7 +33,7 @@ public class PollingServiceVerifyTests {
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => Registered ? [Id] : [];
         public ServiceStatus Status(string serviceId) => new(State, null);
-        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => serviceId == Id ? null : OldEnv;
+        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => serviceId == Id ? null : OldEnvFailure is { } failure ? throw failure : OldEnv;
         ServiceState State => !Registered ? ServiceState.NotInstalled : Running ? ServiceState.Running : ServiceState.Installed;
 
         public ServiceQuery Query(string serviceId) => serviceId == Id
@@ -157,6 +158,20 @@ public class PollingServiceVerifyTests {
         var manager = new FakeManager { OldRegistered = true };
 
         var exit = await Verify(manager, retired: Retired(profile))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(typeof(IOException))]
+    [Arguments(typeof(UnauthorizedAccessException))]
+    [Arguments(typeof(InvalidOperationException))]
+    public async Task A_rename_refuses_to_retire_a_unit_whose_environment_cannot_be_read_and_touches_nothing(Type failure) {
+        var manager = new FakeManager { OldRegistered = true, OldEnvFailure = (Exception)Activator.CreateInstance(failure)! };
+
+        var exit = await Verify(manager, retired: Retired("work"))
             .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
 
         await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);

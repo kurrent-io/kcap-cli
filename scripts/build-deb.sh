@@ -21,6 +21,7 @@ chmod 0755 "$root"
 lib="$root/usr/lib/kurrent-capacitor"
 mkdir -p "$lib" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/512x512/apps" "$root/DEBIAN"
 cp -a "$app/." "$lib/"
+chmod -R go-w,a+rX "$lib"
 ln -s "../lib/kurrent-capacitor/Kurrent Capacitor" "$root/usr/bin/kurrent-capacitor"
 cp "$here/../src/Capacitor.App/Assets/kcap-icon.png" "$root/usr/share/icons/hicolor/512x512/apps/kurrent-capacitor.png"
 
