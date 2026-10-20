@@ -57,7 +57,7 @@ public class AppMenuBarTests {
 
         await Assert.That(minimize).IsEqualTo(new KeyGesture(Key.M, KeyModifiers.Meta));
         await Assert.That(fullScreen).IsEqualTo(new KeyGesture(Key.F, KeyModifiers.Control | KeyModifiers.Meta));
-        await Assert.That(main).IsEqualTo(new KeyGesture(Key.D0, KeyModifiers.Meta));
+        await Assert.That(main).IsNull();
     }
 
     [Test]

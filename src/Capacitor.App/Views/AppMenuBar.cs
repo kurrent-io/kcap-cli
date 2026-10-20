@@ -57,7 +57,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         menu.Add(new NativeMenuItemSeparator());
 
         if (showMainWindow() is { } show) {
-            menu.Add(Item("Kurrent Capacitor", show, new KeyGesture(Key.D0, KeyModifiers.Meta)));
+            menu.Add(Item("Kurrent Capacitor", show));
             menu.Add(new NativeMenuItemSeparator());
         }
 
