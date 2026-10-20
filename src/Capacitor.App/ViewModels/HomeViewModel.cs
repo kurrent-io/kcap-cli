@@ -79,6 +79,18 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    /// A daemon attached by name that serves another server: signing in again cannot move it.
+    internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) =>
+        $"This machine's daemon is running for {ServerLabel(daemonServer)}, not {ServerLabel(appServer)}, so it cannot run agents here.";
+
+    static string ServerLabel(string server) =>
+        Uri.TryCreate(server, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : server;
+
+    /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
+    internal static string? ForeignDaemonServer(string? daemonServer, string? appServer) =>
+        string.IsNullOrEmpty(daemonServer) || string.IsNullOrEmpty(appServer) || ServerIdentity.SameServer(daemonServer, appServer)
+            ? null : daemonServer;
+
     internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
 
     /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
@@ -566,6 +578,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var signInRequired = _signInRequired.CombineLatest(laneSignedOut, (expired, lane) => expired || lane);
         SignInExpired = signInRequired;
 
+        var foreignServer = daemon.Snapshots.Select(s => ForeignDaemonServer(s.Daemon.ServerUrl, appServerUrl))
+            .StartWith((string?)null).DistinctUntilChanged();
+
         // IPC attaches by daemon name, so an existing local daemon can target another server.
         var selectedServerLane = _laneStatus.CombineLatest(
             daemon.Snapshots.Select(s => ServerIdentity.SameServer(s.Daemon.ServerUrl, appServerUrl)).StartWith(false),
@@ -629,7 +644,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 signInRequired,
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
-                (a, expired, awaiting, lane) => (Availability: a, Expired: expired, Awaiting: awaiting && lane.Applies, Lane: lane.State))
+                foreignServer.CombineLatest(_machineSelectionChanges, (foreign, sel) => foreign is not null && !sel.Remote),
+                (a, expired, awaiting, lane, foreign) => (Availability: a, Expired: expired, Awaiting: awaiting && lane.Applies, Lane: lane.State, Foreign: foreign))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Chained rather than one wide CombineLatest: local status/connection/signIn/awaiting
         // first, then folded against the selection-aware availability and the selection itself —
@@ -643,10 +659,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 signInRequired,
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
-                (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State));
+                foreignServer,
+                (status, connection, expired, awaiting, lane, foreign) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State, foreign));
         var rawNotices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
-                (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
+                (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane,
+                    n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
@@ -674,7 +692,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .DisposeWith(_disposables);
         _signInVisible = signInState
             .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || timedOut || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
+                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
 
@@ -824,11 +842,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static string? NoticeFor(
             AttachStatus status, string daemonConnection, bool signInExpired, bool awaitingServer,
             bool remoteSelected, LaunchAvailability selectedAvailability,
-            ServerLaneState lane = ServerLaneState.Dormant) {
+            ServerLaneState lane = ServerLaneState.Dormant, string? foreignServerNotice = null) {
         if (signInExpired) return SignInExpiredNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? DaemonIncompatibleNotice : DaemonDownNotice;
+
+        if (!remoteSelected && status.State == AttachState.Connected && foreignServerNotice is not null) return foreignServerNotice;
 
         if (awaitingServer && selectedAvailability is LaunchAvailability.ServerDisconnected or LaunchAvailability.Pending)
             return FinishingSignInNotice;
