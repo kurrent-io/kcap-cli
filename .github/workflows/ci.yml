@@ -271,7 +271,9 @@ jobs:
           fi
           # This bundle is unsigned, but the release signs it, and codesign refuses any file under
           # Contents/MacOS that is not code.
-          not_code="$(find "$APP/Contents/MacOS" -type f -exec file {} + | grep -v 'Mach-O' || true)"
+          not_code="$(find "$APP/Contents/MacOS" -type f -print0 | while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^Mach-O' || echo "$f"
+          done)"
           if [ -n "$not_code" ]; then
             echo "::error::Contents/MacOS holds files codesign cannot sign:"; echo "$not_code"; exit 1
           fi
