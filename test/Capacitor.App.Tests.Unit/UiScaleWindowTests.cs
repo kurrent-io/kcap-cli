@@ -9,6 +9,7 @@ using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core.Config;
+using SvcSystems.UI.Terminal;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -44,6 +45,60 @@ public class UiScaleWindowTests {
             await Assert.That(setting.Current).IsEqualTo(0.9);
             await Assert.That(Applied(window)).IsEqualTo(0.9);
         } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Shift_equals_keypad_keys_and_ctrl_zero_reach_the_scale() => AvaloniaSession.RunOnUiAsync(async () => {
+        var setting = await NewSetting();
+        var window = new MainWindow { ContentScale = setting };
+        try {
+            window.Show();
+            window.KeyPressQwerty(PhysicalKey.Equal, Modifier | RawInputModifiers.Shift);
+            window.KeyPressQwerty(PhysicalKey.NumPadAdd, Modifier);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(setting.Current).IsEqualTo(1.2);
+
+            window.KeyPressQwerty(PhysicalKey.NumPadSubtract, Modifier);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(setting.Current).IsEqualTo(1.1);
+
+            // ⌘0 belongs to the Window menu on macOS, so only Ctrl+0 resets.
+            window.KeyPressQwerty(PhysicalKey.Digit0, Modifier);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(setting.Current).IsEqualTo(RefreshShortcut.UsesControl ? UiScale.Default : 1.1);
+        } finally { window.Close(); }
+    });
+
+    /// A Ctrl shortcut leaves a focused terminal its key; ⌘ never reaches a shell, so it always zooms.
+    [Test]
+    public Task A_focused_terminal_keeps_ctrl_but_not_cmd() => AvaloniaSession.RunOnUiAsync(async () => {
+        var setting = await NewSetting();
+        var window = new MainWindow { ContentScale = setting };
+        var terminal = new TerminalControl { Width = 200, Height = 100, Focusable = true };
+        try {
+            window.FindControl<Panel>("ContentPane")!.Children.Add(terminal);
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            terminal.Focus();
+            Dispatcher.UIThread.RunJobs();
+
+            window.KeyPressQwerty(PhysicalKey.Equal, Modifier);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(setting.Current).IsEqualTo(RefreshShortcut.UsesControl ? UiScale.Default : 1.1);
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task A_closed_window_stops_following_the_scale() => AvaloniaSession.RunOnUiAsync(async () => {
+        var setting = await NewSetting();
+        var window = new MainWindow { ContentScale = setting };
+        window.Show();
+        window.Close();
+        Dispatcher.UIThread.RunJobs();
+
+        await setting.SetAsync(1.3);
+        Dispatcher.UIThread.RunJobs();
+        await Assert.That(Applied(window)).IsNull();
     });
 
     [Test]

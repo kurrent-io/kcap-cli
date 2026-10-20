@@ -77,6 +77,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     public MainWindow() {
         InitializeComponent();
         KeyBindings.AddRange(ZoomShortcut.For(this));
+        // Hide-to-tray never closes the window, so only a real close lets the setting go.
+        Closed += (_, _) => _contentScaleSubscription?.Dispose();
         BindRefreshShortcuts();
         BindSettingsShortcut();
         KeepContentClearOfCaptionButtons();
