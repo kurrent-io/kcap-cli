@@ -48,4 +48,24 @@ public class LocalTranscriptFeedTests {
         await Assert.That(reset.Lines.Single().Offset).IsEqualTo(0);
         await Assert.That(reset.SnapshotOffset).IsEqualTo(UserLine.Length + 1);
     }
+
+    /// A running foreground subagent is named only by the meta file Claude Code writes as it starts.
+    [Test]
+    public async Task A_subagent_meta_file_names_its_call_once_and_again_after_a_reset() {
+        var path = Tmp.PathTo("t.jsonl");
+        await File.WriteAllTextAsync(path, UserLine + "\n");
+        using var feed = new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", new FakeTimeProvider(), _ => { });
+        await Assert.That(feed.ReadAppended().Runs).IsEmpty();
+
+        var dir = Capacitor.Cli.Core.Harness.Claude.ClaudeSubagentFiles.DirectoryOf(path);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "agent-s1.meta.json"), """{"toolUseId":"toolu_1"}""");
+
+        var identified = (RunSignal.Identified)feed.ReadAppended().Runs.Single();
+        await Assert.That((identified.CallId, identified.AgentId)).IsEqualTo(("toolu_1", "s1"));
+        await Assert.That(feed.ReadAppended().Runs).IsEmpty();
+
+        await File.WriteAllTextAsync(path, "");
+        await Assert.That(feed.ReadAppended().Runs.Count).IsEqualTo(1);
+    }
 }
