@@ -48,8 +48,8 @@ public class CursorTranscriptBackfillTests {
 
     CursorMarkers Markers => new(Config.Root, TimeProvider.System);
 
-    /// For the multi-megabyte runs: the watermark and per-chunk HTTP caps run on the clock passed in, and
-    /// encoding these lines on a starved runner can outlast them in real time.
+    /// For the multi-megabyte runs: the watermark and per-chunk HTTP caps run on the clock passed in, and a
+    /// starved runner moving megabytes through the recording handler can outlast them in real time.
     static FakeTimeProvider Frozen => new();
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
