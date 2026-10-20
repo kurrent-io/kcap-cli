@@ -79,6 +79,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
+
+    /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
+    /// hub is down; never on the wire.
+    internal const string DaemonSignedOutWord = "signed out";
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart Capacitor.";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. Capacitor keeps trying to reconnect.";
 
@@ -632,7 +637,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // may apply at all.
         var localNoticeInputs = daemon.Status
             .CombineLatest(
-                daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""),
+                daemon.Snapshots.Select(s => s.Daemon is { Credential: not null, Connection: not "connected" }
+                    ? DaemonSignedOutWord
+                    : s.Daemon.Connection).StartWith(""),
                 signInRequired,
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
@@ -816,6 +823,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             bool remoteSelected, LaunchAvailability selectedAvailability,
             ServerLaneState lane = ServerLaneState.Dormant) {
         if (signInExpired) return SignInExpiredNotice;
+
+        if (!remoteSelected && status.State == AttachState.Connected && daemonConnection == DaemonSignedOutWord)
+            return DaemonSignedOutNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? DaemonIncompatibleNotice : DaemonDownNotice;

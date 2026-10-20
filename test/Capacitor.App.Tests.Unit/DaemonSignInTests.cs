@@ -69,4 +69,13 @@ public class DaemonSignInTests {
     [Test]
     public async Task Removing_another_profile_says_nothing_about_the_daemon() =>
         await Assert.That(ProfilesSettingsViewModel.RemovePrompt("work", "other")).DoesNotContain("daemon");
+
+    [Test]
+    [Arguments(false, false, HomeViewModel.DaemonSignedOutNotice)]
+    [Arguments(true, false, HomeViewModel.SignInExpiredNotice)]
+    [Arguments(false, true, null)]
+    public async Task The_launcher_says_the_daemon_is_signed_out_for_a_local_launch(bool appExpired, bool remote, string? notice) =>
+        await Assert.That(HomeViewModel.NoticeFor(Attached, HomeViewModel.DaemonSignedOutWord, appExpired, awaitingServer: false,
+                remoteSelected: remote, remote ? LaunchAvailability.Ready : LaunchAvailability.ServerDisconnected))
+            .IsEqualTo(notice);
 }

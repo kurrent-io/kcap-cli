@@ -355,7 +355,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
 
     // kcap login signs in whichever profile it resolves, so the variable that names one goes first.
     internal static string LoginHint(string profile) => OperatingSystem.IsWindows()
-        ? $"set KCAP_PROFILE={profile}, then run kcap login"
+        ? $"run $env:KCAP_PROFILE=\"{profile}\"; kcap login"
         : $"run KCAP_PROFILE={profile} kcap login";
 
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
