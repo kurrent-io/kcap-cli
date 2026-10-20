@@ -28,7 +28,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     readonly DaemonStore _store;
     readonly ILoginShellProbe _shellProbe;
     readonly OutcomeChannel _channel;
-    readonly Func<string?> _pinnedCli;
+    readonly Func<CliPin> _pinnedCli;
     readonly Func<MutationRequest, string?, IKcapCli> _executorFactory;
     readonly Func<MutationRequest, IDaemonObservation> _oneShotFactory;
     readonly TimeProvider _time;
@@ -49,7 +49,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     public DaemonMutationLane(
             DaemonStore store, ILoginShellProbe shellProbe, OutcomeChannel channel,
-            Func<string?> pinnedCli, Func<MutationRequest, string?, IKcapCli> executorFactory,
+            Func<CliPin> pinnedCli, Func<MutationRequest, string?, IKcapCli> executorFactory,
             Func<MutationRequest, IDaemonObservation> oneShotFactory, TimeProvider time) {
         _store           = store;
         _shellProbe      = shellProbe;
@@ -77,7 +77,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
     }
 
     public async Task<bool> CanRetireAsync(MutationRequest request, CancellationToken ct) {
-        var path = await ResolvePathAsync(ct).ConfigureAwait(false);
+        var path = await ResolvePathAsync(_pinnedCli(), ct).ConfigureAwait(false);
         if (path is null) return false;
         var cli = _executorFactory(request, path);
         return KcapCliCompatibility.Satisfies(await cli.VersionAsync(ct).ConfigureAwait(false)) &&
@@ -245,8 +245,10 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         // Pinned once, before the first await: evidence is always a fresh socket dial, never a live-graph replay.
         var observation = _oneShotFactory(request);
 
-        var pinnedPath = await ResolvePathAsync(ct).ConfigureAwait(false);
-        if (pinnedPath is null) return new MutationOutcome.Refused("cli_not_found", RecoverySurface.Attention);
+        var pin = _pinnedCli();
+        var pinnedPath = await ResolvePathAsync(pin, ct).ConfigureAwait(false);
+        if (pinnedPath is null)
+            return new MutationOutcome.Refused(pin.OverrideMissing ? "cli_override_missing" : "cli_not_found", RecoverySurface.Attention);
 
         var executor = _executorFactory(request, pinnedPath); // built ONCE; the same instance runs the probe and the mutation
         var version = await executor.VersionAsync(ct).ConfigureAwait(false);
@@ -274,8 +276,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         return await Classify(request, result, executor, observation, attemptId, predecessor, ct).ConfigureAwait(false);
     }
 
-    async Task<string?> ResolvePathAsync(CancellationToken ct) {
-        var path = _pinnedCli() ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: false).ConfigureAwait(false);
+    async Task<string?> ResolvePathAsync(CliPin pin, CancellationToken ct) {
+        if (pin.OverrideMissing) return null;
+        var path = pin.Path ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: false).ConfigureAwait(false);
         // Retry a cached miss so installing the CLI does not require an app restart.
         return path ?? await _shellProbe.KcapPathAsync(ct, forceRefresh: true).ConfigureAwait(false);
     }

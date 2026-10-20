@@ -76,7 +76,7 @@ public class DaemonMutationLaneTests {
 
     DaemonMutationLane MakeLane(
             RecordingExecutorFactory factory, OutcomeChannel? channel = null,
-            Func<string?>? pinnedCli = null, ILoginShellProbe? shellProbe = null,
+            Func<CliPin>? pinnedCli = null, ILoginShellProbe? shellProbe = null,
             Func<MutationRequest, IDaemonObservation>? oneShotFactory = null,
             TimeProvider? time = null, MutationClassifier? classify = null) {
         var lane = new DaemonMutationLane(
@@ -372,6 +372,19 @@ public class DaemonMutationLaneTests {
         await lane.DisposeAsync();
     }
 
+    [Test]
+    public async Task A_missing_override_refuses_without_looking_up_another_cli() {
+        var factory = new RecordingExecutorFactory();
+        var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>("/terminal/kcap") };
+        await using var lane = MakeLane(factory, pinnedCli: () => new CliPin(null, OverrideMissing: true), shellProbe: probe);
+
+        var outcome = await lane.RunAsync(Req(), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("cli_override_missing", RecoverySurface.Attention));
+        await Assert.That(factory.Calls.Count).IsEqualTo(0);
+        await Assert.That(probe.KcapPathForceRefreshCalls).IsEmpty();
+    }
+
     /// A probe that did not answer (a shim that could not start, a timeout) says nothing about the CLI's age.
     [Test]
     public async Task An_unanswered_version_probe_refuses_as_version_unknown_without_a_mutation_call() {
@@ -453,7 +466,7 @@ public class DaemonMutationLaneTests {
         var cliB = new FakeKcapCli();
         var factory = new RecordingExecutorFactory();
         factory.Behavior = (req, _) => req.DaemonName == "daemon-a" ? cliA : cliB;
-        var lane = MakeLane(factory, pinnedCli: paths.Dequeue, classify: CannedSucceeded);
+        var lane = MakeLane(factory, pinnedCli: () => paths.Dequeue(), classify: CannedSucceeded);
 
         var outcome1 = await lane.RunAsync(Req(daemonName: "daemon-a"), CancellationToken.None);
         var outcome2 = await lane.RunAsync(Req(daemonName: "daemon-b"), CancellationToken.None);

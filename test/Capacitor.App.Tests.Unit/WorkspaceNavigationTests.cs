@@ -191,6 +191,20 @@ public class WorkspaceNavigationTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_session_already_ended_when_opened_stays_open() {
+        await RunOnUiAsync(async () => {
+            var nav = NewNav();
+            nav.Daemon.Agents.AddOrUpdate(Agent("a1") with { Status = "Completed" });
+
+            nav.Vm.OpenSession("a1");
+            await (((WorkspaceViewModel)nav.Vm.CurrentWorkspace!).Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+
+            await Assert.That(nav.Vm.CurrentWorkspace?.AgentId).IsEqualTo("a1");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_failed_launch_leaves_another_open_workspace_alone() {
         await RunOnUiAsync(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);

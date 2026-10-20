@@ -153,8 +153,11 @@ internal sealed class PtyHostedAgentRuntime(
     public Task TerminateAsync(TimeSpan?   timeout = null) => pty.TerminateAsync(timeout);
 
     public async ValueTask DisposeAsync() {
-        await pty.DisposeAsync();
-        _lane.Dispose();
-        if (promptFile is not null) PromptFile.Delete(promptFile);
+        try {
+            await pty.DisposeAsync();
+            _lane.Dispose();
+        } finally {
+            if (promptFile is not null) PromptFile.Delete(promptFile);
+        }
     }
 }

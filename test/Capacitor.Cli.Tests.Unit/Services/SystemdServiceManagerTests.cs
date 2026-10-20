@@ -26,4 +26,30 @@ public class SystemdServiceManagerTests {
         await Assert.That(query.State).IsEqualTo(active ? ServiceState.Running : ServiceState.Installed);
         await Assert.That(query.JobPid).IsEqualTo(expectedPid);
     }
+
+    [Test]
+    public async Task A_refused_start_or_stop_returns_false_with_the_error() {
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "denied"));
+
+        await Assert.That(manager.Start("test", out var startError)).IsFalse();
+        await Assert.That(startError).Contains("denied");
+        await Assert.That(manager.Stop("test", out var stopError)).IsFalse();
+        await Assert.That(stopError).Contains("denied");
+    }
+
+    [Test]
+    [Arguments("active", false)]
+    [Arguments("inactive", true)]
+    public async Task A_refused_disable_removes_the_unit_only_once_it_is_inactive(string activeState, bool removed) {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "ExecStart=/opt/kcap/kcap-daemon --name test\n");
+        var manager = new SystemdServiceManager(Home, runProcess: (_, args) =>
+            args.Contains("disable") ? (1, "", "timeout")
+            : args.Contains("is-active") ? (activeState == "active" ? 0 : 3, activeState + "\n", "")
+            : (0, "", ""));
+
+        await Assert.That(manager.Uninstall("test", out _)).IsEqualTo(removed);
+        await Assert.That(File.Exists(path)).IsEqualTo(!removed);
+    }
 }

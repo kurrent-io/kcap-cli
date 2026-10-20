@@ -26,12 +26,8 @@ sealed class SystemdServiceManager(
     }
 
     public ServiceStatus Status(string serviceId) {
-        var path = SystemdUnit.UnitPath(home, serviceId);
-        if (!File.Exists(path)) return new ServiceStatus(ServiceState.NotInstalled, null);
-        var (_, active, _)      = _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId));
-        var (enabledExit, _, _) = _runProcess("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
-        var bin = SystemdUnit.BinaryFromUnit(File.ReadAllText(path)); // quote-aware ExecStart parse
-        return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), bin);
+        var query = Query(serviceId);
+        return query.UnitPresent ? new ServiceStatus(query.State, query.BinaryPath) : new ServiceStatus(ServiceState.NotInstalled, null);
     }
 
     public string? UnitBinary(string serviceId) {
@@ -97,9 +93,7 @@ sealed class SystemdServiceManager(
     }
 
     void Reload() {
-        var (exit, _, err) = _runProcess("systemctl", SystemdUnit.DaemonReloadArgs());
-        if (exit != 0)
-            throw new InvalidOperationException($"systemctl --user daemon-reload exited {exit}{(string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}")}");
+        if (Systemctl(SystemdUnit.DaemonReloadArgs()) is { } error) throw new InvalidOperationException(error);
     }
 
     /// <summary>A refused reload or enable puts the previous unit file back, so a failed install leaves
@@ -133,23 +127,25 @@ sealed class SystemdServiceManager(
     }
 
     public bool Uninstall(string serviceId, out string? error) {
-        ServiceProcess.Run("systemctl", SystemdUnit.DisableNowArgs(serviceId));
         var path = SystemdUnit.UnitPath(home, serviceId);
+        if (Systemctl(SystemdUnit.DisableNowArgs(serviceId)) is { } disableError
+            && _runProcess("systemctl", SystemdUnit.IsActiveArgs(serviceId)).StdOut.Trim() is not ("inactive" or "failed")) {
+            error = $"{disableError} — unit file retained: {path}";
+            return false;
+        }
         if (File.Exists(path)) File.Delete(path);
-        ServiceProcess.Run("systemctl", SystemdUnit.DaemonReloadArgs());
+        _runProcess("systemctl", SystemdUnit.DaemonReloadArgs());
         error = null;
         return true;
     }
 
     public bool Start(string serviceId, out string? error) {
-        ServiceProcess.Check("systemctl", SystemdUnit.StartArgs(serviceId));
-        error = null;
-        return true;
+        error = Systemctl(SystemdUnit.StartArgs(serviceId));
+        return error is null;
     }
 
     public bool Stop(string serviceId, out string? error) {
-        ServiceProcess.Check("systemctl", SystemdUnit.StopArgs(serviceId));
-        error = null;
-        return true;
+        error = Systemctl(SystemdUnit.StopArgs(serviceId));
+        return error is null;
     }
 }

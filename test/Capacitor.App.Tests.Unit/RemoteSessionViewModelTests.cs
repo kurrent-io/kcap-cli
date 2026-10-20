@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -24,11 +25,13 @@ public class RemoteSessionViewModelTests {
         public readonly SessionAccessService Access;
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
-        public readonly AgentActionService Actions = NewActions();
+        public readonly AgentActionService Actions;
         public readonly FakeTimeProvider Time = new();
         public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
+            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(),
+                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm, lane: Lane);
             Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
@@ -399,24 +402,32 @@ public class RemoteSessionViewModelTests {
         });
     }
 
-    /// A transient empty snapshot also removes a live row, so only a removal this workspace asked
-    /// for, or a terminal status, tells the window the session is over.
+    /// A transient empty snapshot also removes a live row, so only a removal after the server
+    /// accepted this workspace's stop, or a live session turning terminal, reports the end.
     [Test]
-    [Arguments(false, false, false)]
-    [Arguments(true, false, true)]
-    [Arguments(false, true, true)]
-    public async Task Only_a_stopped_removal_or_a_terminal_status_reports_the_end(bool stop, bool terminal, bool ends) {
+    [Arguments(null, "Running", false, false)]
+    [Arguments(HubCallResult.Ok, "Running", false, true)]
+    [Arguments(HubCallResult.Denied, "Running", false, false)]
+    [Arguments(null, "Running", true, true)]
+    [Arguments(null, "Completed", true, false)]
+    public async Task Only_an_accepted_stop_or_a_live_session_ending_reports_the_end(
+            HubCallResult? stop, string openStatus, bool terminal, bool ends) {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
-            var vm = h.Build(Harness.Row());
+            if (stop is { } result) h.Lane.StopHandler = _ => Task.FromResult(new HubCallOutcome(result));
+            var vm = h.Build(Harness.Row(status: openStatus));
             var ended = false;
             using var sub = vm.Ended.Subscribe(_ => ended = true);
 
-            if (stop) await vm.StopCommand.Execute();
+            if (stop is not null) {
+                await vm.StopCommand.Execute();
+                await WaitUntilAsync(async () => (await h.Actions.StopsInFlight.FirstAsync()).Count == 0, what: "the stop settled");
+            }
             if (terminal) h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
             else h.Directory.Rows.Remove("remote:a1");
 
-            await Assert.That(ended).IsEqualTo(ends);
+            if (ends) await WaitUntilAsync(() => ended, what: "the end");
+            else await Assert.That(ended).IsFalse();
             await vm.TeardownAsync();
         });
     }

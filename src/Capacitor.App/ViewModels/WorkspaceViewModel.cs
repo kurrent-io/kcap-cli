@@ -175,7 +175,13 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
         // A terminal status, not a removed row: a row dropped while its twin takes over on the
         // server lane is still a live session.
-        Ended = presence.Where(p => SessionStatusDots.IsTerminal(p.Dto?.Status)).Take(1).Select(_ => Unit.Default);
+        Ended = presence.Where(p => p.Dto is not null)
+            .Select(p => SessionStatusDots.IsTerminal(p.Dto!.Status))
+            .DistinctUntilChanged()
+            .SkipWhile(terminal => terminal)
+            .Where(terminal => terminal)
+            .Take(1)
+            .Select(_ => Unit.Default);
 
         var runs = new SessionRuns(time);
         commands?.Track($"local:{agentId}", runs).DisposeWith(_disposables);

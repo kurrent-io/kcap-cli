@@ -34,52 +34,23 @@ public class AppMutationLaneWiringTests {
 
     static Func<CancellationToken, Task<string?>> FixedTerminalPath(string? path) => _ => Task.FromResult(path);
 
-    // ---- ResolveBundledCli ----
+    // ---- ResolvePinnedCliCore ----
 
+    /// A configured override pins itself or, when missing, refuses: neither falls through to the
+    /// bundled CLI. Only no override at all reaches the bundle, and "kcap" is a real override.
     [Test]
-    public async Task ResolveBundledCli_is_the_kcap_beside_the_app_when_present() {
-        var expected = Path.Combine("/opt/app", CliResolver.BundledCliFileName);
-        await Assert.That(AppUnderTest.ResolveBundledCli("/opt/app", p => p == expected)).IsEqualTo(expected);
-        await Assert.That(AppUnderTest.ResolveBundledCli("/opt/app", _ => false)).IsNull();
-    }
+    [Arguments(null, true, "bundle", false)]
+    [Arguments("", true, "bundle", false)]
+    [Arguments(null, false, null, false)]
+    [Arguments("kcap", true, "full:kcap", false)]
+    [Arguments("/opt/kcap/kcap", false, null, true)]
+    public async Task ResolvePinnedCliCore_pins_the_override_else_the_bundle(
+            string? overrideEnv, bool filesExist, string? expectedPath, bool overrideMissing) {
+        var bundled = Path.Combine("/opt/app", CliResolver.BundledCliFileName);
+        var pin = AppUnderTest.ResolvePinnedCliCore(overrideEnv, "/opt/app", _ => filesExist, p => "full:" + p);
 
-    // ---- ResolveCliOverrideCore ----
-
-    [Test]
-    public async Task ResolveCliOverrideCore_no_override_is_null() {
-        await Assert.That(AppUnderTest.ResolveCliOverrideCore(null, _ => true, p => p)).IsNull();
-    }
-
-    [Test]
-    public async Task ResolveCliOverrideCore_empty_override_is_null() {
-        await Assert.That(AppUnderTest.ResolveCliOverrideCore("", _ => true, p => p)).IsNull();
-    }
-
-    [Test]
-    public async Task ResolveCliOverrideCore_existing_override_is_absolute_pinned() {
-        // Absolute on every platform (a Windows leg exercises this with its own drive/backslash
-        // form), rather than a hardcoded Unix literal. Nothing reads it.
-        using var tmp = new TempDir();
-        var absRoot = tmp.PathTo("abs-root");
-        var overrideEnv = Path.Combine(".", "bin", "kcap");
-        var result = AppUnderTest.ResolveCliOverrideCore(overrideEnv, _ => true, p => Path.Combine(absRoot, p));
-        await Assert.That(result).IsEqualTo(Path.Combine(absRoot, overrideEnv));
-    }
-
-    [Test]
-    public async Task ResolveCliOverrideCore_broken_override_is_null_fail_closed() {
-        await Assert.That(AppUnderTest.ResolveCliOverrideCore("/opt/kcap/kcap", _ => false, p => p)).IsNull();
-    }
-
-    // A real override whose value happens to equal the no-override sentinel string ("kcap") must
-    // still resolve as a real, absolute-pinned override — not be silently treated as "no override
-    // set" via a string-compare ambiguity.
-    [Test]
-    public async Task ResolveCliOverrideCore_override_literally_named_kcap_is_not_confused_with_the_old_sentinel() {
-        using var tmp = new TempDir();
-        var absRoot = tmp.PathTo("abs-root");
-        var result = AppUnderTest.ResolveCliOverrideCore("kcap", _ => true, p => Path.Combine(absRoot, p));
-        await Assert.That(result).IsEqualTo(Path.Combine(absRoot, "kcap"));
+        await Assert.That(pin.Path).IsEqualTo(expectedPath == "bundle" ? bundled : expectedPath);
+        await Assert.That(pin.OverrideMissing).IsEqualTo(overrideMissing);
     }
 
     // ---- PresentOutcomeAsync: Takeover ----

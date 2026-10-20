@@ -1643,21 +1643,15 @@ public partial class App : Application {
         }
     }
 
-    static string? ResolvePinnedCli() => ResolveCliOverride() ?? ResolveBundledCli(Program.Host.CliDirectory, File.Exists);
+    static CliPin ResolvePinnedCli() =>
+        ResolvePinnedCliCore(Environment.GetEnvironmentVariable("KCAP_APP_CLI_PATH"), Program.Host.CliDirectory, File.Exists, Path.GetFullPath);
 
-    internal static string? ResolveBundledCli(string cliDirectory, Func<string, bool> fileExists) {
-        var sibling = Path.Combine(cliDirectory, CliResolver.BundledCliFileName);
-        return fileExists(sibling) ? sibling : null;
-    }
-
-    // Reads KCAP_APP_CLI_PATH directly, not CliResolver.ResolvePath (its no-override "kcap" answer is indistinguishable from a real override): set+exists → absolute pin; set+missing or absent → null.
-    static string? ResolveCliOverride() =>
-        ResolveCliOverrideCore(Environment.GetEnvironmentVariable("KCAP_APP_CLI_PATH"), File.Exists, Path.GetFullPath);
-
-    // Split out so a test can drive it without touching the real environment.
-    internal static string? ResolveCliOverrideCore(string? overrideEnv, Func<string, bool> fileExists, Func<string, string> getFullPath) {
-        if (string.IsNullOrEmpty(overrideEnv)) return null;
-        return fileExists(overrideEnv) ? getFullPath(overrideEnv) : null;
+    // Reads KCAP_APP_CLI_PATH directly: CliResolver.ResolvePath answers "kcap" with no override, which reads the same as a real one.
+    internal static CliPin ResolvePinnedCliCore(string? overrideEnv, string cliDirectory, Func<string, bool> fileExists, Func<string, string> getFullPath) {
+        if (!string.IsNullOrEmpty(overrideEnv))
+            return fileExists(overrideEnv) ? getFullPath(overrideEnv) : new CliPin(null, OverrideMissing: true);
+        var bundled = Path.Combine(cliDirectory, CliResolver.BundledCliFileName);
+        return fileExists(bundled) ? bundled : null;
     }
 
     // Drains every non-success outcome: pre-presentation failures/cancellations requeue once, post-presentation ones still ack. Owns the per-run (never persisted) Takeover decline memory.
@@ -1785,6 +1779,7 @@ public partial class App : Application {
     internal static string? AttentionCopyFor(string token) => token switch {
         "daemon_renamed_restart_app" => "The daemon was renamed. Restart this app before managing it.",
         "cli_not_found"            => "kcap CLI not found. Can't manage the daemon from this app.",
+        "cli_override_missing"     => "KCAP_APP_CLI_PATH names a file that does not exist. Fix or unset it, then restart this app.",
         // App↔CLI floor — never "for the daemon"; this gate runs before any daemon contact.
         "cli_below_floor"          => "This kcap is too old for this app. Update kcap, then press Start daemon.",
         "cli_version_unknown"      => "kcap did not answer a version check. Run `kcap --version` in a terminal, then try again.",
