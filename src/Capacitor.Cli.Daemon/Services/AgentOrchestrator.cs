@@ -5053,7 +5053,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5543,7 +5543,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the

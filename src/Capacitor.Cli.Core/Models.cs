@@ -2321,6 +2321,10 @@ public readonly record struct AgentRegistered(
         // it against its own launch decision and refuses a mismatch. Trailing name-bound field — an
         // older server ignores it, an older daemon never sets it (null there).
         string? RuntimeTransport = null,
+        // The agent's vendor. A re-registration after a reconnect has no launch on the server to
+        // read it from. Trailing name-bound field — an older server ignores it, an older daemon
+        // never sets it.
+        string? Vendor = null,
         // The session's start title, with the same meaning as on LaunchAgentCommand.
         string? Title        = null,
         bool    TitleDerived = false
