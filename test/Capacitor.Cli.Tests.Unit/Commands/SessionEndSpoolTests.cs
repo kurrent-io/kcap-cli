@@ -10,7 +10,7 @@ public class SessionEndSpoolTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     static ExitedSession Exited(string id, string? vendor = "claude", string? server = "https://kcap.example") =>
-        new(SessionId.Parse(id)!, vendor, server);
+        new(SessionId.Parse(id)!, new ClaimOrigin(vendor, server, "/t/x.jsonl", "/repo"));
 
     [Test]
     public async Task Only_a_session_recorded_against_this_server_is_queued() {
@@ -40,6 +40,9 @@ public class SessionEndSpoolTests {
         await Assert.That(route).IsEqualTo("session-end/codex");
         var node = JsonNode.Parse(body!)!;
         await Assert.That(node["session_id"]!.GetValue<string>()).IsEqualTo("here");
+        await Assert.That(node["transcript_path"]!.GetValue<string>()).IsEqualTo("/t/x.jsonl");
+        await Assert.That(node["cwd"]!.GetValue<string>()).IsEqualTo("/repo");
+        await Assert.That(node["hook_event_name"]!.GetValue<string>()).IsEqualTo("SessionEnd");
         await Assert.That(node["reason"]!.GetValue<string>()).IsEqualTo("parent_exited");
         await Assert.That(node["ended_at"]).IsNotNull();
     }

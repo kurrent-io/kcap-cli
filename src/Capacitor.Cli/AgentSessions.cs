@@ -26,10 +26,10 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     /// <summary>
     /// A hook firing for <paramref name="session"/> proves it is running, so any exit record for it goes.
-    /// <paramref name="vendor"/> and <paramref name="server"/> say where its end belongs once the process
-    /// is gone: <see cref="Reap"/> hands them back.
+    /// <paramref name="origin"/> says where its end belongs once the process is gone; the first claim's
+    /// stands, since the session lives on the server it started on.
     /// </summary>
-    public void Claim(int agentPid, SessionId session, string? vendor = null, string? server = null) {
+    public void Claim(int agentPid, SessionId session, ClaimOrigin? origin = null) {
         try { File.Delete(ExitRecord(session)); } catch { }
 
         try {
@@ -38,7 +38,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
             if (File.Exists(note) && File.ReadAllText(note) == text) {
-                WriteOrigin(agentPid, token, vendor, server);
+                if (origin is not null && ReadOrigin(agentPid, token) is null) WriteOrigin(agentPid, token, origin);
                 return;
             }
 
@@ -48,7 +48,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var temp = $"{note}.{Environment.ProcessId}";
             File.WriteAllText(temp, text);
             File.Move(temp, note, overwrite: true);
-            WriteOrigin(agentPid, token, vendor, server);
+            WriteOrigin(agentPid, token, origin);
         } catch { }
     }
 
@@ -80,10 +80,12 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// daemon agent. A note whose holder cannot be compared stays, since an exit record lets another
     /// session take this one over.
     /// </summary>
-    public void Reap() => ReapExited();
+    public void Reap() => ReapExited(currentServer: null);
 
-    /// <summary><see cref="Reap"/>, returning the sessions it found gone.</summary>
-    public IReadOnlyList<ExitedSession> ReapExited() {
+    /// <summary><see cref="Reap"/>, returning the sessions it found gone. A dead claim recorded against a
+    /// server other than <paramref name="currentServer"/> keeps its note and origin, up to the exit
+    /// retention, so a later pass on that server can still end the session there.</summary>
+    public IReadOnlyList<ExitedSession> ReapExited(string? currentServer) {
         var gone = new List<ExitedSession>();
         foreach (var pid in Claimants()) {
             if (Of(pid) is not null) continue;
@@ -92,11 +94,15 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                 if (File.ReadAllText(Note(pid)).Split('\n') is [var session, var token]) {
                     if (!HolderIsGone(pid, token)) continue;
 
+                    var origin = ReadOrigin(pid, token);
                     if (SessionId.Parse(session) is { } exited) {
                         RecordExit(exited);
-                        var (vendor, server) = ReadOrigin(pid, token);
+                        if (origin is { Server: { } server } && !SameServer(server, currentServer)
+                         && _time.GetUtcNow() - File.GetLastWriteTimeUtc(Note(pid)) < ExitRetention)
+                            continue;
+
                         // A session resumed under another process is running again: no end for it.
-                        if (LiveClaimant(exited) is null) gone.Add(new ExitedSession(exited, vendor, server));
+                        if (LiveClaimant(exited) is null) gone.Add(new ExitedSession(exited, origin));
                     }
 
                     DeleteOrigin(pid, token);
@@ -109,6 +115,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         PruneExitRecords();
         return gone;
     }
+
+    internal static bool SameServer(string a, string? b) =>
+        b is not null && string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Gone when no process has the pid, or one does under a different start token (the pid was
@@ -205,32 +214,34 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     // Carries the claim's start token, so an origin written by a later holder of a reused pid is never
     // read as, or deleted for, the claim that was reaped.
-    void WriteOrigin(int pid, string token, string? vendor, string? server) {
-        var origin = Origin(pid);
-        if (vendor is null && server is null) {
-            if (File.Exists(origin)) File.Delete(origin);
+    void WriteOrigin(int pid, string token, ClaimOrigin? origin) {
+        var path = Origin(pid);
+        if (origin is null) {
+            if (File.Exists(path)) File.Delete(path);
             return;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(origin)!);
-        var temp = $"{origin}.{Environment.ProcessId}";
-        File.WriteAllText(temp, $"{token}\n{vendor}\n{server}");
-        File.Move(temp, origin, overwrite: true);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = $"{path}.{Environment.ProcessId}";
+        File.WriteAllText(temp, string.Join('\n', token, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.Move(temp, path, overwrite: true);
     }
 
     void DeleteOrigin(int pid, string token) {
         try {
-            if (File.ReadAllText(Origin(pid)).Split('\n') is [var owner, _, _] && owner == token) File.Delete(Origin(pid));
+            if (File.ReadAllText(Origin(pid)).Split('\n') is [var owner, ..] && owner == token) File.Delete(Origin(pid));
         } catch { }
     }
 
-    (string? Vendor, string? Server) ReadOrigin(int pid, string token) {
+    ClaimOrigin? ReadOrigin(int pid, string token) {
         try {
-            return File.ReadAllText(Origin(pid)).Split('\n') is [var owner, var vendor, var server] && owner == token
-                ? (vendor.Length > 0 ? vendor : null, server.Length > 0 ? server : null)
-                : (null, null);
+            return File.ReadAllText(Origin(pid)).Split('\n') is [var owner, var vendor, var server, var transcript, var cwd] && owner == token
+                ? new ClaimOrigin(NullIfEmpty(vendor), NullIfEmpty(server), NullIfEmpty(transcript), NullIfEmpty(cwd))
+                : null;
         } catch {
-            return (null, null);
+            return null;
         }
+
+        static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
     }
 }

@@ -263,7 +263,7 @@ internal sealed class AgentHookPoster(
         lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
         transcript.ReapOlderThan(TimeSpan.FromDays(30));
         SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
-        SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(), Url, lifecycle, time);
+        SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(Url), Url, lifecycle, time);
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,
         // and a test must be able to prove THIS one did.
@@ -306,20 +306,21 @@ internal sealed class AgentHookPoster(
 
         var spooled = 0;
         foreach (var session in exited) {
-            if (session is not { Vendor: { } vendor, Server: { } server } || !SameServer(server, url)) continue;
+            if (session.Origin is not { Vendor: { } vendor, Server: { } server } origin || !AgentSessions.SameServer(server, url)) continue;
 
+            // The fields every vendor's session-end binding requires, as the watcher's own end sends them.
             var body = new JsonObject {
-                ["session_id"] = session.Session.Value,
-                ["reason"]     = "parent_exited",
-                ["ended_at"]   = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
+                ["session_id"]      = session.Session.Value,
+                ["transcript_path"] = origin.TranscriptPath ?? "",
+                ["cwd"]             = origin.Cwd ?? "",
+                ["hook_event_name"] = "SessionEnd",
+                ["reason"]          = "parent_exited",
+                ["ended_at"]        = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
             }.ToJsonString();
             if (spool.Append(session.Session.Value, $"session-end/{vendor}", body)) spooled++;
         }
 
         return spooled;
-
-        static bool SameServer(string a, string b) =>
-            string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

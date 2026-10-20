@@ -90,36 +90,57 @@ public class AgentSessionsTests {
         await Assert.That(Sessions.Liveness(SessionId.Parse("reused")!)).IsEqualTo(SessionLiveness.Exited);
     }
 
-    /// <summary>The vendor and server a claim recorded come back with its session once the process is gone,
-    /// so its end can be sent where the session lives.</summary>
-    [Test]
-    public async Task A_reaped_claim_returns_where_its_session_was_recorded() {
-        DeadNote(Shell, "traced");
-        File.WriteAllText(Note(Shell) + ".origin", "lx:another-boot:1\nclaude\nhttps://kcap.example");
+    static readonly ClaimOrigin Here = new("claude", "https://kcap.example", "/t/x.jsonl", "/repo");
 
-        var exited = Sessions.ReapExited();
-
-        await Assert.That(exited).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("traced")!, "claude", "https://kcap.example") });
-        await Assert.That(File.Exists(Note(Shell) + ".origin")).IsFalse();
+    void DeadNoteWithOrigin(int pid, string session, string server) {
+        DeadNote(pid, session);
+        File.WriteAllText(Note(pid) + ".origin", $"lx:another-boot:1\nclaude\n{server}\n/t/x.jsonl\n/repo");
     }
 
-    /// <summary>A claim writes its origin beside the note, bound to the claim's own start token.</summary>
+    /// <summary>Where a claim recorded its session comes back once the process is gone, so its end can be
+    /// sent where the session lives.</summary>
     [Test]
-    public async Task A_claim_writes_its_origin_under_its_own_token() {
-        Sessions.Claim(Agent, Session, "claude", "https://kcap.example");
+    public async Task A_reaped_claim_returns_where_its_session_was_recorded() {
+        DeadNoteWithOrigin(Shell, "traced", "https://kcap.example");
+
+        var exited = Sessions.ReapExited("https://kcap.example/");
+
+        await Assert.That(exited).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("traced")!, Here) });
+        await Assert.That(File.Exists(Note(Shell) + ".origin")).IsFalse();
+        await Assert.That(File.Exists(Note(Shell))).IsFalse();
+    }
+
+    /// <summary>A dead claim recorded against another server waits, note and origin intact, for a pass on
+    /// that server, while its exit is still recorded for the takeover.</summary>
+    [Test]
+    public async Task A_claim_recorded_against_another_server_is_kept_for_that_server() {
+        DeadNoteWithOrigin(Shell, "away", "https://other.example");
+
+        await Assert.That(Sessions.ReapExited("https://kcap.example")).IsEmpty();
+        await Assert.That(File.Exists(Note(Shell))).IsTrue();
+        await Assert.That(Sessions.Liveness(SessionId.Parse("away")!)).IsEqualTo(SessionLiveness.Exited);
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value)).IsEquivalentTo(new[] { "away" });
+    }
+
+    /// <summary>A claim writes its origin under its own start token; a repeat claim keeps the first one.</summary>
+    [Test]
+    public async Task A_repeat_claim_keeps_the_first_origin() {
+        Sessions.Claim(Agent, Session, Here);
+        Sessions.Claim(Agent, Session, new ClaimOrigin("claude", null, null, null));
 
         await Assert.That(File.ReadAllText(Note(Agent) + ".origin"))
-            .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example");
+            .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example\n/t/x.jsonl\n/repo");
     }
 
     /// <summary>A resumed session runs under a new process before the old claim is reaped; ending it then
     /// would close a running session.</summary>
     [Test]
     public async Task A_session_another_live_process_claims_is_not_returned() {
-        Sessions.Claim(Agent, SessionId.Parse("resumed")!, "claude", "https://kcap.example");
-        DeadNote(Shell, "resumed");
+        Sessions.Claim(Agent, SessionId.Parse("resumed")!, Here);
+        DeadNoteWithOrigin(Shell, "resumed", "https://kcap.example");
 
-        await Assert.That(Sessions.ReapExited()).IsEmpty();
+        await Assert.That(Sessions.ReapExited("https://kcap.example")).IsEmpty();
     }
 
     /// <summary>A reused pid's new claim writes its own origin; the reaped claim must not take it.</summary>
@@ -127,17 +148,10 @@ public class AgentSessionsTests {
     public async Task An_origin_from_another_claim_of_the_pid_is_not_used_or_deleted() {
         DeadNote(Shell, "old");
         var origin = Note(Shell) + ".origin";
-        File.WriteAllText(origin, "lx:new-boot:2\nclaude\nhttps://new.example");
+        File.WriteAllText(origin, "lx:new-boot:2\nclaude\nhttps://new.example\n\n");
 
-        await Assert.That(Sessions.ReapExited()).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("old")!, null, null) });
+        await Assert.That(Sessions.ReapExited("https://new.example")).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("old")!, null) });
         await Assert.That(File.Exists(origin)).IsTrue();
-    }
-
-    [Test]
-    public async Task A_dead_claim_without_an_origin_returns_its_session_alone() {
-        DeadNote(Shell, "bare");
-
-        await Assert.That(Sessions.ReapExited()).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("bare")!, null, null) });
     }
 
     void UncomparableNote(string session) {
