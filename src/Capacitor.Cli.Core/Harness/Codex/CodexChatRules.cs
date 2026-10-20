@@ -13,6 +13,9 @@ public sealed class CodexChatRules : IChatDisplayRules {
 
     CodexChatRules() { }
 
+    public IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) =>
+        raw is { Kind: AcpEventKind.UserMessage, Text: { Length: > 0 } text } ? [text] : [];
+
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) => envelope.Kind switch {
         AcpEventKind.UserMessage when IsInjectedPrelude(envelope.Text ?? "") => null,
         AcpEventKind.ToolCall => envelope with { ToolKind = CodexToolKinds.Of(envelope.ToolName, envelope.ToolInputJson) },
