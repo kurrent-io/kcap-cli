@@ -78,25 +78,25 @@ static class DirectoryExposure {
         writeBits.HasFlag(write) && mode.HasFlag(write) && mode.HasFlag(execute);
 
     /// <summary>The directories the kernel walks to reach <paramref name="directory"/>, nearest first, then
-    /// the ones holding the path's symlinks: whoever can rename a link can point the path elsewhere, so the
-    /// directories that hold the links count as much as the ones they lead to.</summary>
+    /// every directory that holds a symlink met on the way, with their own ancestors: whoever can rename a
+    /// link can point the path elsewhere, so a link's directory counts as much as the ones it leads to.
+    /// The given path's own lexical chain is the first such holder.</summary>
     static IEnumerable<string> Ancestors(string directory) {
+        var holders = new List<string> { Path.GetFullPath(directory) };
+        var physical = Resolve(Path.GetFullPath(directory), depth: 0, holders);
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        for (var d = Physical(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!)
-            if (seen.Add(d)) yield return d;
-        for (var d = Path.GetFullPath(directory); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!)
-            if (seen.Add(d)) yield return d;
+        foreach (var start in holders.Prepend(physical))
+            for (var d = start; !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d)!)
+                if (seen.Add(d)) yield return d;
     }
 
     /// <summary>The path with every symlinked component replaced by its target, so the walk ascends the
-    /// directories the kernel will, not the ones the string suggests.</summary>
-    static string Physical(string path) => Resolve(Path.GetFullPath(path), depth: 0);
-
-    /// <summary>A substituted target is resolved again rather than accepted as written: the target is an
-    /// ordinary path and may itself sit under links, so accepting it leaves the very prefix this exists to
-    /// resolve unresolved. A Mac shows it without any exotic setup — a link into <c>/var/...</c> lands back
+    /// directories the kernel will, not the ones the string suggests. <paramref name="holders"/> collects
+    /// the directory holding each link met. A substituted target is resolved again rather than accepted as
+    /// written: the target is an ordinary path and may itself sit under links, so accepting it leaves the
+    /// very prefix this exists to resolve unresolved. A Mac shows it without any exotic setup — a link into <c>/var/...</c> lands back
     /// on the symlink into <c>/private</c>.</summary>
-    static string Resolve(string full, int depth) {
+    static string Resolve(string full, int depth, List<string> holders) {
         if (depth > 20) return full;   // a cycle ResolveLinkTarget did not refuse
 
         var root    = Path.GetPathRoot(full)!;
@@ -109,8 +109,10 @@ static class DirectoryExposure {
             // A cycle or a dangling link throws rather than resolving; the lexical component stands in,
             // and its own mode read then decides.
             try {
-                if (Directory.ResolveLinkTarget(current, returnFinalTarget: true) is { } target)
-                    current = Resolve(target.FullName, depth + 1);
+                if (Directory.ResolveLinkTarget(current, returnFinalTarget: true) is { } target) {
+                    holders.Add(Path.GetDirectoryName(current)!);
+                    current = Resolve(target.FullName, depth + 1, holders);
+                }
             } catch (IOException) { /* keep the lexical component */ }
         }
 
