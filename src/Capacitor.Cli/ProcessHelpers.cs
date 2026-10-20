@@ -881,13 +881,15 @@ static partial class ProcessHelpers {
     /// <summary>
     /// The names a JavaScript runtime's script identifies its agent by. Gemini CLI runs as <c>node</c>
     /// and sets no title, so only the script it runs names it: the <c>gemini</c> shim the shebang
-    /// hands over, or the entry point inside its installed package. Pure so it is unit-testable.
+    /// hands over, or the entry point inside its installed package. A script file of any other kind,
+    /// such as <c>codex.js</c>, names nothing: it is an ordinary script, not an installed agent.
     /// </summary>
     internal static IEnumerable<string> ScriptNameCandidates(IReadOnlyList<string> argv) {
         if (argv.Count < 2 || !IsScriptRuntime(argv[0])) yield break;
         if (ScriptArgument(argv) is not { } script) yield break;
 
-        foreach (var candidate in ExecutableNameCandidates(script)) yield return candidate;
+        if (!Path.HasExtension(script.Replace('\\', '/').Split('/')[^1]))
+            foreach (var candidate in ExecutableNameCandidates(script)) yield return candidate;
 
         // An installed package's entry point is …/node_modules/[@scope/]<package>/….
         var parts = script.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
@@ -910,7 +912,9 @@ static partial class ProcessHelpers {
         for (var i = 1; i < argv.Count; i++) {
             var arg = argv[i];
             if (arg is "--") return i + 1 < argv.Count ? argv[i + 1] : null;
-            if (arg is "-" or "-e" or "--eval" or "-p" or "--print") return null;
+            if (arg is "-" or "-e" or "--eval" or "-p" or "--print"
+                || arg.StartsWith("--eval=", StringComparison.Ordinal) || arg.StartsWith("--print=", StringComparison.Ordinal)
+                || (arg.Length > 2 && arg[0] == '-' && arg[1] != '-' && arg.AsSpan(1).IndexOfAny('e', 'p') >= 0)) return null;
             if (ValueOptions.Contains(arg)) { i++; continue; }
             if (arg.StartsWith('-') || (i == 1 && arg == "run")) continue;
             return arg;
@@ -925,8 +929,8 @@ static partial class ProcessHelpers {
     }
 
     /// <summary>
-    /// A Windows command line split as the C runtime splits it. The program name runs to the closing quote
-    /// or the first whitespace, with no escapes. After it, whitespace separates arguments outside quotes;
+    /// A Windows command line split as the C runtime splits it. The program name runs to the first space or tab
+    /// outside quotes, each quote toggling them, with no escapes. After it, spaces and tabs outside quotes separate arguments;
     /// before a quote, 2n backslashes are n and the quote toggles quoting, 2n+1 are n and a literal quote;
     /// and <c>""</c> inside quotes is one literal quote.
     /// </summary>
@@ -934,15 +938,15 @@ static partial class ProcessHelpers {
         var args = new List<string>();
         if (string.IsNullOrEmpty(commandLine)) return args;
 
-        var program = 0;
-        if (commandLine[0] == '"') {
-            var close = commandLine.IndexOf('"', 1);
-            args.Add(close < 0 ? commandLine[1..] : commandLine[1..close]);
-            program = close < 0 ? commandLine.Length : close + 1;
-        } else {
-            while (program < commandLine.Length && !char.IsWhiteSpace(commandLine[program])) program++;
-            args.Add(commandLine[..program]);
+        var program     = 0;
+        var programName = new StringBuilder();
+        for (var inQuotes = false; program < commandLine.Length; program++) {
+            var c = commandLine[program];
+            if (c == '"') inQuotes = !inQuotes;
+            else if (!inQuotes && IsSeparator(c)) break;
+            else programName.Append(c);
         }
+        args.Add(programName.ToString());
 
         var current  = new StringBuilder();
         var quoted   = false;
@@ -969,7 +973,7 @@ static partial class ProcessHelpers {
                     quoted = !quoted;
                 }
                 inArg = true;
-            } else if (char.IsWhiteSpace(c) && !quoted) {
+            } else if (IsSeparator(c) && !quoted) {
                 if (inArg) { args.Add(current.ToString()); current.Clear(); inArg = false; }
             } else {
                 current.Append(c);
@@ -978,6 +982,8 @@ static partial class ProcessHelpers {
         }
         if (inArg) args.Add(current.ToString());
         return args;
+
+        static bool IsSeparator(char c) => c is ' ' or '\t';
     }
 
     /// <summary>

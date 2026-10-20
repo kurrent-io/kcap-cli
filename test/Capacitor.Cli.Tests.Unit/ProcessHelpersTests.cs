@@ -252,6 +252,10 @@ public class ProcessHelpersTests {
     [Arguments(new[] { "node", "-e", "/usr/local/bin/gemini" }, null)]
     [Arguments(new[] { "node", "--no-warnings", "--", "/usr/local/bin/gemini" }, "gemini")]
     [Arguments(new[] { "bun", "run", "/usr/local/bin/gemini" }, "gemini")]
+    [Arguments(new[] { "node", "--import", "tsx", "/usr/local/bin/gemini" }, "gemini")]
+    [Arguments(new[] { "node", "/home/a/scripts/gemini.js" }, null)]
+    [Arguments(new[] { "node", "--eval=1", "/usr/local/bin/gemini" }, null)]
+    [Arguments(new[] { "node", "-pe", "/usr/local/bin/gemini" }, null)]
     public async Task A_script_run_by_node_names_its_agent(string[] argv, string? expected) {
         var names = ProcessHelpers.ScriptNameCandidates(argv).ToList();
 
@@ -271,6 +275,8 @@ public class ProcessHelpersTests {
             .IsEquivalentTo(["node", "a\\\"b", "c\\\\d e", "ge\"mini.js"]);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine("\"C:\\node\\\" x.js"))
             .IsEquivalentTo(["C:\\node\\", "x.js"]);
+        await Assert.That(ProcessHelpers.SplitWindowsCommandLine("C:\\\"Program Files\"\\node.exe a\u00a0b"))
+            .IsEquivalentTo(["C:\\Program Files\\node.exe", "a\u00a0b"]);
         await Assert.That(ProcessHelpers.SplitWindowsCommandLine(null)).IsEmpty();
     }
 
