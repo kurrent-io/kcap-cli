@@ -57,8 +57,8 @@ public class HubIdentityTests {
     public async Task Two_people_with_one_display_name_are_two_identities() =>
         await Assert.That(HubIdentity.Changed(HubIdentity.Of(Ok("Ana", Jwt("user_1"))), Ok("Ana", Jwt("user_2")))).IsTrue();
 
-    /// <summary>A pre-upgrade token names no issuing server until a refresh stamps one; that refresh is
-    /// the same sign-in, not a new one.</summary>
+    /// <summary>A token file the store wrote before it recorded the issuing server still loads with none,
+    /// until a refresh stamps one; that refresh is the same sign-in, not a new one.</summary>
     [Test]
     public async Task A_legacy_token_stamped_with_its_server_is_the_same_identity() =>
         await Assert.That(HubIdentity.Changed(HubIdentity.Of(Ok("ana", server: null)), Ok("ana", "t2"))).IsFalse();

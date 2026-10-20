@@ -331,4 +331,21 @@ public class DaemonHeartbeatLoopTests {
 
         await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
     }
+
+    /// <summary>A read that outlived one tick's wait is joined by the next, so stalled reads never pile up.</summary>
+    [Test]
+    public async Task A_stalled_credential_check_is_not_started_again_while_it_runs() {
+        var stalled = new TaskCompletionSource<bool>();
+        var checks  = 0;
+        var port    = new FakePort { CredentialChangedHandler = () => { checks++; return stalled.Task; } };
+        var loop    = CreateLoop(port, TimeSpan.FromMilliseconds(100));
+
+        await loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(checks).IsEqualTo(1);
+
+        stalled.SetResult(false);
+        await loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(checks).IsEqualTo(2);
+    }
 }

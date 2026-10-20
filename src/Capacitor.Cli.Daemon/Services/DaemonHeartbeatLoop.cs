@@ -48,6 +48,9 @@ internal sealed class DaemonHeartbeatLoop(
     /// </summary>
     readonly TimeSpan _slowPingThreshold = slowPingThreshold ?? TimeSpan.FromTicks(pingDeadline.Ticks / 2);
 
+    /// A read that outlived its tick's wait, joined by the next tick rather than raced by a second read.
+    Task<bool>? _credentialRead;
+
     /// <summary>
     /// Total — never throws (modulo outer cancellation, which is expected at
     /// shutdown). The loop in <c>AgentOrchestrator.RunDaemonHeartbeatLoopAsync</c>
@@ -149,7 +152,9 @@ internal sealed class DaemonHeartbeatLoop(
             using var cap = new CancellationTokenSource(pingDeadline, time);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
-            return await port.CredentialChangedAsync(ct).WaitAsync(cts.Token);
+            if (_credentialRead is not { IsCompleted: false }) _credentialRead = port.CredentialChangedAsync(ct);
+
+            return await _credentialRead.WaitAsync(cts.Token);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (OperationCanceledException) {
