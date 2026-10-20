@@ -9,19 +9,30 @@ namespace Capacitor.Cli.Services;
 static partial class FileOwner {
     static readonly TimeSpan StatTimeout = TimeSpan.FromSeconds(5);
 
-    /// <summary>An absolute path, so a directory earlier on PATH cannot answer for it.</summary>
-    const string Stat = "/usr/bin/stat";
+    /// <summary>The usual locations first; PATH covers a system that keeps it elsewhere, such as NixOS. An
+    /// account that can change this user's PATH can already replace the unit itself.</summary>
+    static readonly Lazy<string?> Stat = new(() =>
+        new[] { "/usr/bin/stat", "/bin/stat" }
+            .Concat((Environment.GetEnvironmentVariable("PATH") ?? "")
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+                .Where(Path.IsPathFullyQualified)
+                .Select(dir => Path.Combine(dir, "stat")))
+            .FirstOrDefault(File.Exists));
 
     public static uint Effective => geteuid();
 
-    /// <summary>The owning uid, or null when it cannot be read: on Windows, without <c>/usr/bin/stat</c>, or
-    /// for a path this process cannot stat.</summary>
+    /// <summary>Whether owners can be read on this system at all. False on Windows, which has no owner
+    /// model this audit uses, and on a system with no <c>stat</c>.</summary>
+    public static bool Available => !OperatingSystem.IsWindows() && Stat.Value is not null;
+
+    /// <summary>The owning uid, or null when it cannot be read: on Windows, without <c>stat</c>, or for a
+    /// path this process cannot stat.</summary>
     public static uint? Of(string path) {
-        if (OperatingSystem.IsWindows() || !File.Exists(Stat)) return null;
+        if (!Available) return null;
 
         try {
             var (code, stdout, _, timedOut) = ServiceProcess.RunBounded(
-                Stat, OperatingSystem.IsMacOS() ? ["-f", "%u", path] : ["-c", "%u", path], StatTimeout);
+                Stat.Value!, OperatingSystem.IsMacOS() ? ["-f", "%u", path] : ["-c", "%u", path], StatTimeout);
 
             return !timedOut && code == 0
                 && uint.TryParse(stdout.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var uid)

@@ -198,8 +198,15 @@ static class ServiceFiles {
 
     /// <summary>Refuses when a directory on the path to the unit is owned by another account, which can
     /// rename the unit directory away whatever the modes say. Root-owned directories pass: every path
-    /// starts under them.</summary>
+    /// starts under them. One directory whose owner cannot be read is left to the mode check, but a system
+    /// where no owner can be read at all is refused rather than passed unchecked.</summary>
     static void RequireNoForeignOwnedAncestor(string directory) {
+        if (OperatingSystem.IsWindows()) return;
+        if (!FileOwner.Available)
+            throw new InvalidOperationException(
+                "Refusing to write a service unit without checking who owns the directories above it: no `stat` "
+              + "command was found in /usr/bin, /bin or PATH. Install coreutils and re-run the install.");
+
         if (DirectoryExposure.ForeignOwned(directory) is not [var (offender, owner), ..]) return;
 
         throw new InvalidOperationException(

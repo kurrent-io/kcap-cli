@@ -143,10 +143,12 @@ public class DirectoryExposureTests {
     /// <summary>The owner read is the system's own stat, so it must agree with the kernel on each target:
     /// a directory this process made is its own, and the root is root's.</summary>
     [Test]
+    [ParallelLimiter<SubprocessLimit>]
     [UnsupportedOSPlatform("windows")]
     public async Task Reads_this_process_as_the_owner_of_its_own_directory_and_root_of_the_root() {
         Skip.When(OperatingSystem.IsWindows(), "POSIX owners");
 
+        await Assert.That(FileOwner.Available).IsTrue();
         await Assert.That(FileOwner.Of(Tmp.CreateDir("mine").Path)).IsEqualTo(FileOwner.Effective);
         await Assert.That(FileOwner.Of("/")).IsEqualTo(0u);
         await Assert.That(FileOwner.Of(Tmp.PathTo("absent"))).IsNull();

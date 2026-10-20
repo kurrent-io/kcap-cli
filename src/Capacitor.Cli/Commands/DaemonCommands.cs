@@ -1073,7 +1073,10 @@ public sealed class DaemonCommands(
     /// the common case on Debian and Ubuntu. Install refuses only the world-writable form, which no umask
     /// produces. Reporting is what is left for the case a program cannot judge but an operator can.</para></summary>
     internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
-        if (DirectoryExposure.ForeignOwned(unitDirectory) is { Count: > 0 } foreign) {
+        if (!OperatingSystem.IsWindows() && !FileOwner.Available)
+            await output.WriteLineAsync(
+                "\n  ⚠ could not check who owns the directories on the path to the unit directory: no `stat` found");
+        else if (DirectoryExposure.ForeignOwned(unitDirectory) is { Count: > 0 } foreign) {
             await output.WriteLineAsync("\n  ⚠ owned by another account on the path to the unit directory:");
 
             foreach (var (d, owner) in foreign) await output.WriteLineAsync($"      {d}  (uid {owner})");
