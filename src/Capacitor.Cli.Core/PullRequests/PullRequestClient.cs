@@ -164,10 +164,10 @@ public sealed class PullRequestClient(HttpClient http, string serverUrl, TimePro
         const int limit = 4 * 1024 * 1024;
         if (response.Content.Headers.ContentLength > limit) throw new JsonException();
         await using var input = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        var bytes = new byte[limit + 1];
-        var count = await input.ReadAtLeastAsync(bytes, bytes.Length, false, ct).ConfigureAwait(false);
-        if (count > limit) throw new JsonException();
-        return JsonDocument.Parse(bytes.AsMemory(0, count), new JsonDocumentOptions { MaxDepth = 64 });
+        // Parsed from the stream so the buffer grows with the body: a cap-sized array would put a
+        // large-object allocation behind every poll for a response of a few KB.
+        await using var capped = new CappedReadStream(input, limit);
+        return await JsonDocument.ParseAsync(capped, new JsonDocumentOptions { MaxDepth = 64 }, ct).ConfigureAwait(false);
     }
     static PullRequestRead<T> Invalid<T>(string reason = "protocol_error") where T : class => new(PullRequestReadKind.InvalidProtocol, Reason: reason, AccessFailure: "invalid");
     public void Dispose() => _discoveryGate.Dispose();
