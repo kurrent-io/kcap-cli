@@ -80,11 +80,16 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void ApplyScale(double scale) {
         _scale = scale;
         ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
+        ApplyMinimumSize();
+        ApplyCaptionInset();
+    }
+
+    // Bounded by the screen the window is on, so a move to a smaller one recomputes it.
+    void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, scale, available?.Width);
-        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, scale, available?.Height);
-        ApplyCaptionInset();
+        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.
@@ -93,6 +98,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     public MainWindow() {
         InitializeComponent();
         KeyBindings.AddRange(ZoomShortcut.For(this));
+        PositionChanged += (_, _) => { if (_scale != UiScale.Default) ApplyMinimumSize(); };
         // Hide-to-tray never closes the window, so only a real close lets the setting go.
         Closed += (_, _) => _contentScaleSubscription?.Dispose();
         BindRefreshShortcuts();
