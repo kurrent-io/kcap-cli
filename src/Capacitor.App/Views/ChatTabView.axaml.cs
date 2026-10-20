@@ -29,6 +29,10 @@ public partial class ChatTabView : UserControl {
     bool _readerGesture;
     int _listInputVersion;
     bool _thumbDragging;
+    bool _dragSelecting;
+    bool _edgeScrollQueued;
+    Point _dragInScroll;
+    MarkdownView? _dragView;
     double? _thumbFraction;
     double _smoothRemaining;
     bool _smoothFrameQueued;
@@ -49,7 +53,9 @@ public partial class ChatTabView : UserControl {
         // Press and release both: a click's command runs on the release, in a later dispatcher turn
         // than the press, by which time a flag armed on the press alone has been released.
         ChatItems.AddHandler(PointerPressedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ChatItems.AddHandler(PointerMovedEvent, OnSelectionDrag, RoutingStrategies.Bubble, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ChatItems.AddHandler(PointerReleasedEvent, OnSelectionDragEnded, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerWheelChangedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerWheelChangedEvent, OnChatWheelChanged, RoutingStrategies.Tunnel);
         ChatItems.AddHandler(KeyDownEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -95,6 +101,8 @@ public partial class ChatTabView : UserControl {
         _thumbDragging = false;
         _thumbFraction = null;
         _readerGesture = false;
+        _dragSelecting = false;
+        _dragView = null;
         _followTail = true;
         base.OnDataContextChanged(e);
     }
@@ -104,6 +112,8 @@ public partial class ChatTabView : UserControl {
         CancelSmoothScroll();
         _thumbDragging = false;
         _thumbFraction = null;
+        _dragSelecting = false;
+        _dragView = null;
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
@@ -388,6 +398,62 @@ public partial class ChatTabView : UserControl {
             && ChatItems.ItemsPanelRoot is ChatVirtualizingPanel { MeasuredAtEstimatedEnd: true };
         _followTail = _readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd;
         if (_followTail && !atBottom) scroll.ScrollToEnd();
+    }
+
+    void OnSelectionDrag(object? sender, PointerEventArgs e) {
+        EnsureChatScroll();
+        if (_scroll is null) return;
+        if (!e.GetCurrentPoint(ChatItems).Properties.IsLeftButtonPressed || OriginatesFromTextBox(e)) {
+            _dragSelecting = false;
+            return;
+        }
+        if (e.Source is not Visual visual) return;
+        var view = visual.GetSelfAndVisualAncestors().OfType<MarkdownView>().FirstOrDefault();
+        if (!_dragSelecting) {
+            if (view is not { IsSelecting: true }) return;
+            _dragView = view;
+            _dragSelecting = true;
+        } else if (view is { IsSelecting: true }) {
+            _dragView = view;
+        }
+        if (_dragView is { HasSelection: true }) _followTail = false;
+        _dragInScroll = e.GetPosition(_scroll);
+        QueueEdgeScroll();
+    }
+
+    void OnSelectionDragEnded(object? sender, RoutedEventArgs e) => _dragSelecting = false;
+
+    void QueueEdgeScroll() {
+        if (_edgeScrollQueued || !_dragSelecting || _scroll is null) return;
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
+        _edgeScrollQueued = true;
+        top.RequestAnimationFrame(_ => {
+            _edgeScrollQueued = false;
+            if (_dragSelecting) StepEdgeScroll();
+        });
+    }
+
+    void StepEdgeScroll() {
+        if (_scroll is null || !_dragSelecting) return;
+        const double edge = 28;
+        const double step = 18;
+        var y = _dragInScroll.Y;
+        var height = _scroll.Viewport.Height;
+        var delta = y < edge ? -step : y > height - edge ? step : 0.0;
+        if (Math.Abs(delta) < 0.01) return;
+        var max = Math.Max(0, _scroll.Extent.Height - _scroll.Viewport.Height);
+        var next = Math.Clamp(_scroll.Offset.Y + delta, 0, max);
+        if (Math.Abs(next - _scroll.Offset.Y) > 0.5) {
+            var wasGesture = _readerGesture;
+            _readerGesture = true;
+            _scroll.Offset = new Vector(_scroll.Offset.X, next);
+            if (!wasGesture) Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+        }
+        if (_dragView?.TranslatePoint(default, _scroll) is { } origin) {
+            _dragView.ExtendSelection(new Point(_dragInScroll.X - origin.X, _dragInScroll.Y - origin.Y));
+            if (_dragView.HasSelection) _followTail = false;
+        }
+        QueueEdgeScroll();
     }
 
     static bool OriginatesFromTextBox(RoutedEventArgs e) =>
