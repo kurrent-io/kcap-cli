@@ -48,8 +48,12 @@ internal sealed class DaemonHeartbeatLoop(
     /// </summary>
     readonly TimeSpan _slowPingThreshold = slowPingThreshold ?? TimeSpan.FromTicks(pingDeadline.Ticks / 2);
 
-    /// A read that outlived its tick's wait, joined by the next tick rather than raced by a second read.
-    Task<bool>? _credentialRead;
+    /// A read that outlived its tick's wait, joined by the next tick rather than raced by a second read —
+    /// until it has run this many deadlines, when it is abandoned so one hung read cannot end detection.
+    const int CredentialReadAbandonedAfterDeadlines = 5;
+
+    Task<bool>?    _credentialRead;
+    DateTimeOffset _credentialReadStarted;
 
     /// <summary>
     /// Total — never throws (modulo outer cancellation, which is expected at
@@ -152,7 +156,11 @@ internal sealed class DaemonHeartbeatLoop(
             using var cap = new CancellationTokenSource(pingDeadline, time);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
 
-            if (_credentialRead is not { IsCompleted: false }) _credentialRead = port.CredentialChangedAsync(ct);
+            if (_credentialRead is not { IsCompleted: false }
+             || time.GetUtcNow() - _credentialReadStarted >= pingDeadline * CredentialReadAbandonedAfterDeadlines) {
+                _credentialReadStarted = time.GetUtcNow();
+                _credentialRead        = port.CredentialChangedAsync(ct);
+            }
 
             return await _credentialRead.WaitAsync(cts.Token);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {

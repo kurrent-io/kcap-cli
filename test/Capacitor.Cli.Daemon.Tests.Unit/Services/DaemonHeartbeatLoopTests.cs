@@ -1,6 +1,7 @@
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -332,20 +333,56 @@ public class DaemonHeartbeatLoopTests {
         await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
     }
 
-    /// <summary>A read that outlived one tick's wait is joined by the next, so stalled reads never pile up.</summary>
+    /// <summary>A read that outlived one tick's wait is joined by the next, so stalled reads never pile up;
+    /// a new read starts once it finishes.</summary>
     [Test]
     public async Task A_stalled_credential_check_is_not_started_again_while_it_runs() {
         var stalled = new TaskCompletionSource<bool>();
         var checks  = 0;
         var port    = new FakePort { CredentialChangedHandler = () => { checks++; return stalled.Task; } };
-        var loop    = CreateLoop(port, TimeSpan.FromMilliseconds(100));
+        var rig     = new StalledReadRig(port);
 
-        await loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
-        await loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await rig.TickPastDeadline();
+        await rig.TickPastDeadline();
         await Assert.That(checks).IsEqualTo(1);
 
         stalled.SetResult(false);
-        await loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await rig.Loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
         await Assert.That(checks).IsEqualTo(2);
+    }
+
+    /// <summary>A read that never finishes is abandoned after five deadlines, so a sign-in change made while
+    /// it hangs is still seen.</summary>
+    [Test]
+    public async Task A_credential_check_that_never_finishes_is_abandoned() {
+        var checks = 0;
+        var port   = new FakePort { CredentialChangedHandler = () => ++checks == 1 ? new TaskCompletionSource<bool>().Task : Task.FromResult(true) };
+        var rig    = new StalledReadRig(port);
+
+        await rig.TickPastDeadline();
+        rig.Clock.Advance(StalledReadRig.Deadline * 3);
+        await rig.TickPastDeadline();
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(0);
+
+        rig.Clock.Advance(StalledReadRig.Deadline);
+        await rig.Loop.TickAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
+        await Assert.That(checks).IsEqualTo(2);
+        await Assert.That(port.ForceReconnectCalls).IsEqualTo(1);
+    }
+
+    sealed class StalledReadRig(FakePort port) {
+        public static readonly TimeSpan Deadline = TimeSpan.FromSeconds(10);
+
+        public FakeTimeProvider    Clock { get; } = new();
+        public DaemonHeartbeatLoop Loop  => _loop ??= new(port, Deadline, NullLogger.Instance, Clock);
+
+        DaemonHeartbeatLoop? _loop;
+
+        /// One tick whose credential wait runs out on the fake clock.
+        public async Task TickPastDeadline() {
+            var tick = Loop.TickAsync(CancellationToken.None);
+            Clock.Advance(Deadline);
+            await tick.WaitAsync(TimeSpan.FromSeconds(10));
+        }
     }
 }
