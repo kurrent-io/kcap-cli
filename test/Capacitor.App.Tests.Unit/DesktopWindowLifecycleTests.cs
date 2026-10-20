@@ -272,13 +272,13 @@ public class DesktopWindowLifecycleTests {
 
             await Assert.That(emitted).Count().IsEqualTo(2);
             await Assert.That(threads[^1]).IsEqualTo(ui);
-            await Assert.That(emitted[^1]).IsEqualTo("Sent from Kurrent Capacitor Desktop 9.9.9 · daemon daemon-a 1.0.3");
+            await Assert.That(emitted[^1]).IsEqualTo("Sent from kcap Desktop 9.9.9 · daemon daemon-a 1.0.3");
             await Assert.That(emitted[^1]).DoesNotContain("abc123");
             return true;
         });
 
     static IObservable<string> Trailer =>
-        Observable.Return("Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3");
+        Observable.Return("Sent from kcap Desktop 1.0.3 · daemon d 1.0.3");
 
     sealed class SilentFeedbackApi : IFeedbackApi {
         public Task<FeedbackResult> SubmitAsync(FeedbackSubmission submission, CancellationToken ct = default) =>

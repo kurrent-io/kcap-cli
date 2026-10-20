@@ -1,6 +1,6 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- The browser first-run setup's palette, for the onboarding pane. Kept apart from the Kcap
+    <!-- The browser first-run setup's palette, for the onboarding pane. Kept apart from the kcap
          tokens because the server scopes it to its own page the same way. -->
     <SolidColorBrush x:Key="FrAccentBrush" Color="#DED9FF" />
     <SolidColorBrush x:Key="FrAccentHoverBrush" Color="#C6BDFF" />

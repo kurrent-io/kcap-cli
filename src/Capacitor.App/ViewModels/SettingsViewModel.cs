@@ -172,9 +172,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public string? NotificationAccessText => _access switch {
         DesktopNotificationAccess.Denied =>
-            $"Notifications from Kurrent Capacitor are turned off in {SystemSettingsName}, so none of these will appear.",
+            $"Notifications from kcap are turned off in {SystemSettingsName}, so none of these will appear.",
         DesktopNotificationAccess.NotDetermined =>
-            "Kurrent Capacitor has not been allowed to send notifications yet.",
+            "kcap has not been allowed to send notifications yet.",
         _ => null,
     };
 

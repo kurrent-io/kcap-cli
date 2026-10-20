@@ -7,7 +7,7 @@ Usage: kcap muse-assistant ingest <dir>
        kcap muse-assistant scope show
        kcap muse-assistant sweep
 
-Runs inside a Muse Assistant VM, driven by Muse: the capacitor-recording skill
+Runs inside a Muse Assistant VM, driven by Muse: the kcap-recording skill
 runs `scope` in the turn where the user grants or withdraws recording, and a
 15-minute cron pages each granted chat with chat.read_messages into a fresh
 directory and runs `ingest` on it. Only user, assistant and commentary items

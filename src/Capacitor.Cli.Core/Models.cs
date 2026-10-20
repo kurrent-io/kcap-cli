@@ -1211,6 +1211,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AgentPidRecord))]
 [JsonSerializable(typeof(PidIdentityKind))]
 [JsonSerializable(typeof(AgentRegistered))]
+[JsonSerializable(typeof(AgentRegisteredResponse))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
 [JsonSerializable(typeof(LaunchFailed))]

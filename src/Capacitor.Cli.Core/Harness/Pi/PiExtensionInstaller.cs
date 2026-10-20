@@ -22,7 +22,7 @@ public static class PiExtensionInstaller {
     /// </summary>
     public const string ExtensionContent =
         """
-        // kcap.ts — Kurrent Capacitor live-ingest extension for Pi (badlogic/pi-mono).
+        // kcap.ts — kcap live-ingest extension for Pi (badlogic/pi-mono).
         //
         // Installed by `kcap plugin install --pi` into ~/.pi/agent/extensions/kcap.ts.
         // Pi has no shell hooks, so this extension bridges Pi's in-process lifecycle

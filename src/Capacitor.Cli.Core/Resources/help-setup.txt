@@ -6,7 +6,7 @@ On macOS and Windows the desktop app is the easier way to set up. kcap setup
 is for the terminal, and with --no-prompt for scripts, sandboxes and fleets:
 see "Unattended setup" below for both editions.
 
-A bare kcap setup in a terminal first asks how you want to run Capacitor, as
+A bare kcap setup in a terminal first asks how you want to run kcap, as
 the desktop app does: "For you, locally" runs the local edition (--local,
 macOS only); "For your team, cloud" opens sign-up in your browser, where you
 create the workspace, then discovers it once you press Enter; "Already have a
@@ -42,7 +42,7 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
-  --local                     Install and start a Capacitor server on this machine
+  --local                     Install and start a kcap server on this machine
                               instead of using a hosted workspace (macOS on Apple
                               silicon). See "Local edition" below. Cannot be
                               combined with <tenant>, --server-url, --discover,
@@ -118,7 +118,7 @@ Options:
   --skip-codex-network-access Don't enable Codex sandbox network access. By
                               default, after installing Codex hooks the wizard
                               also allows Codex's workspace-write sandbox to
-                              reach your Capacitor server(s) so kcap skills
+                              reach your kcap server(s) so kcap skills
                               (recap, errors, …) work — Codex blocks sandbox
                               network by default. Writes a network_proxy
                               allowlist to ~/.codex/config.toml limited to your
@@ -200,7 +200,7 @@ Options:
                               approve in the chat before each stage contacts
                               them, and reads "cannot reach server" as "not yet
                               approved" with a retry hint. Run from the
-                              connect-capacitor skill; see README → Unattended
+                              connect-kcap skill; see README → Unattended
                               setup → Muse Assistant.
 
 Unattended setup: --no-prompt never asks. Each question has a flag; one with
@@ -212,11 +212,11 @@ changes.
     kcap setup --server-url https://acme.kcap.ai --no-prompt
 
   Question                              Flag                    --no-prompt
-  How to run Capacitor                  <tenant>, --server-url,  required
+  How to run kcap                       <tenant>, --server-url,  required
                                         --local, --org/--slug
   Re-run on a configured machine        -                       yes
   One user on this machine (local)      --single-user           required
-  Install Capacitor local (local)       --yes                   required*
+  Install kcap local (local)            --yes                   required*
   Ollama for search by meaning (local)  --embedding-model,      required**
                                         --no-embeddings
   Default visibility                    --default-visibility    org_public
@@ -256,7 +256,7 @@ changes.
   invalid_arguments, server_unreachable, workspace_unavailable, sign_in_failed,
   machine_credential_rejected, daemon_name_held, cancelled, or setup_failed.
 
-Local edition: `kcap setup --local` runs a Capacitor server on this machine
+Local edition: `kcap setup --local` runs a kcap server on this machine
 instead of a hosted workspace, then continues with login, hooks and the daemon
 against it. macOS on Apple silicon only for now. The first version is for a
 machine with one user: on a shared machine, other OS users can open the web UI

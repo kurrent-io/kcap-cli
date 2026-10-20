@@ -29,8 +29,8 @@ internal sealed class SeqCaptureServerConnection() : ServerConnection(
     public override Task CommandRejectedAsync(CommandRejected rej) { lock (Rejects) Rejects.Add(rej); return Task.CompletedTask; }
     public override Task CommandAckAsync(CommandAck           ack)           { lock (Acks)    Acks.Add(ack);    return Task.CompletedTask; }
 
-    public override Task AgentRegisteredAsync(
+    public override Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null, AgentStartTitle? title = null) => Task.CompletedTask;
+        string? runtimeTransport = null, AgentStartTitle? title = null) => Task.FromResult(AgentRegisteredResponse.Accepted);
 }

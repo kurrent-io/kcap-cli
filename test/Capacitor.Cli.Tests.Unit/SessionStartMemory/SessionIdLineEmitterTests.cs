@@ -8,7 +8,7 @@ public class SessionIdLineEmitterTests {
     [TempDir]  public required TempDir  Tmp  { get; init; }
 
     const string Line =
-        "Kurrent Capacitor session id: `s1`. Pass it as `session_id` to a kcap MCP tool that cannot resolve the session by itself.";
+        "kcap session id: `s1`. Pass it as `session_id` to a kcap MCP tool that cannot resolve the session by itself.";
 
     HarnessRegistry Harnesses => TestHarnesses.Under(Home);
 

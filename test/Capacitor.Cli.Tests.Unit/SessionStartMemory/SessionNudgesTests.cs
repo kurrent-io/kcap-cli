@@ -9,7 +9,7 @@ public class SessionNudgesTests {
     [TempDir]  public required TempDir  Tmp  { get; init; }
 
     const string Line =
-        "Kurrent Capacitor session id: `s1`. Pass it as `session_id` to a kcap MCP tool that cannot resolve the session by itself.";
+        "kcap session id: `s1`. Pass it as `session_id` to a kcap MCP tool that cannot resolve the session by itself.";
 
     HarnessRegistry Harnesses => TestHarnesses.Under(Home);
 
@@ -27,7 +27,7 @@ public class SessionNudgesTests {
         await Assert.That(nudges).IsNotNull();
         await Assert.That(nudges!).Contains("## Work items");
         await Assert.That(nudges).Contains("## Plans");
-        await Assert.That(nudges).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(nudges).DoesNotContain("kcap session id:");
     }
 
     /// <summary>With a nudge shown, the output is the two nudges and nothing more.</summary>
@@ -70,7 +70,7 @@ public class SessionNudgesTests {
 
         await Assert.That(nudges).IsNotNull();
         await Assert.That(nudges!).StartsWith("## Plans\n");
-        await Assert.That(nudges).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(nudges).DoesNotContain("kcap session id:");
     }
 
     [Test]

@@ -45,7 +45,7 @@ public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink, ID
                 Channels = [new NotificationChannel("attention", "Agent attention", NotificationPriority.High)],
                 ClearOnAppClose = true,
                 AppUserModelId = AppUserModelId,
-                AppName = "Kurrent Capacitor",
+                AppName = "kcap",
             });
             return builder.AfterSetup(app => {
                 try {

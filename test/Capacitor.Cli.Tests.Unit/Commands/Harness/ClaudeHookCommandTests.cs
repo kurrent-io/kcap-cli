@@ -469,7 +469,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains("## Plans");
         await Assert.That(ctx).Contains("Flows you may offer");
-        await Assert.That(ctx).Contains("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).Contains("## kcap is set up");
     }
 
     [Test, NotInParallel]
@@ -483,8 +483,8 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("Team memory");
         await Assert.That(ctx).DoesNotContain("## Work items");
         await Assert.That(ctx).DoesNotContain("## Plans");
-        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
-        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("kcap session id:");
+        await Assert.That(ctx).DoesNotContain("## kcap is set up");
         await Assert.That(ctx).DoesNotContain("Flows you may offer");
         await Assert.That(fx.MemoryIndexRequested).IsFalse();
         await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
@@ -504,7 +504,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains("## Plans");
         await Assert.That(ctx).DoesNotContain("newer kcap version");
-        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("## kcap is set up");
     }
 
     /// <summary>Withholding the notice must not spend it: it belongs to the person's next session.</summary>
@@ -528,7 +528,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("Team memory");
         await Assert.That(ctx).DoesNotContain("## Work items");
         await Assert.That(ctx).DoesNotContain("## Plans");
-        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("## kcap is set up");
     }
 
     const string ProactiveCatalog = """{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}""";
@@ -601,7 +601,7 @@ public class ClaudeHookCommandTests {
         using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
-        fx.MemoryIndexBody = """{"entries":[],"projects":[{"slug":"capacitor","name":"Kurrent Capacitor"}]}""";
+        fx.MemoryIndexBody = """{"entries":[],"projects":[{"slug":"capacitor","name":"kcap"}]}""";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -612,7 +612,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(query).Contains("include=projects");
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains(
-            "This repo belongs to project \"capacitor\" (Kurrent Capacitor). " +
+            "This repo belongs to project \"capacitor\" (kcap). " +
             "Save learnings that span its repos with project: \"capacitor\".");
         await Assert.That(ctx).DoesNotContain("## Team memory");
     }
@@ -752,10 +752,10 @@ public class ClaudeHookCommandTests {
             fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(stdout).Contains("Kurrent Capacitor session id:");
+        await Assert.That(stdout).Contains("kcap session id:");
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
-        await Assert.That(ctx).Contains($"Kurrent Capacitor session id: `{sid}`.");
+        await Assert.That(ctx).Contains($"kcap session id: `{sid}`.");
     }
 
     [Test, NotInParallel]
@@ -772,7 +772,7 @@ public class ClaudeHookCommandTests {
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains($"`{sid}`");
-        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(ctx).DoesNotContain("kcap session id:");
     }
 
     /// <summary>Pins that a memory index far past Claude Code's context cap is what gets trimmed, not

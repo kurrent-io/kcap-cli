@@ -5,8 +5,8 @@
                      x:Class="Capacitor.App.Views.ConsentPromptWindow"
                      x:TypeArguments="vm:ConsentPromptViewModel"
                      x:DataType="vm:ConsentPromptViewModel"
-                     Title="Kurrent Capacitor — launch approval"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                     Title="kcap — launch approval"
+                     Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="460" Height="260"
                      CanResize="False" Topmost="True" WindowStartupLocation="CenterScreen"
                      Background="{StaticResource KcapCanvasBrush}" Foreground="{StaticResource KcapTextBrush}">

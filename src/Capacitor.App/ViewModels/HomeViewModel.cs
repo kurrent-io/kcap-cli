@@ -84,8 +84,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
     /// hub is down; never on the wire.
     internal const string DaemonSignedOutWord = "signed out";
-    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart Capacitor.";
-    internal const string LocalServerLostNotice    = "Lost the connection to the local server. Capacitor keeps trying to reconnect.";
+    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
 
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 

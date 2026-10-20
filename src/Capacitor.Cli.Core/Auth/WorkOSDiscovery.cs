@@ -138,7 +138,7 @@ public static class WorkOSDiscovery {
         funnel.TenantNone(AuthProvider.WorkOS);
 
         if (provisioner is null) {
-            progress.Error("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
+            progress.Error("No kcap tenants are linked to your account. Ask your admin to invite you.");
 
             return new WorkOSDiscoveryFlow.NoTenants();
         }

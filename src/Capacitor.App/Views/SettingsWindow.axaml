@@ -4,8 +4,8 @@
         xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
-        Title="Kurrent Capacitor — Settings"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="kcap — Settings"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,20" RowDefinitions="*,Auto">
@@ -111,7 +111,7 @@
                         <StackPanel Spacing="10">
                             <TextBlock Classes="kcapTitle" Text="Notifications" LineHeight="22" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                                       Text="Shown only while Kurrent Capacitor is in the background. Your operating system must also allow notifications." />
+                                       Text="Shown only while kcap is in the background. Your operating system must also allow notifications." />
                         </StackPanel>
 
                         <Border x:Name="NotificationAccessNotice"

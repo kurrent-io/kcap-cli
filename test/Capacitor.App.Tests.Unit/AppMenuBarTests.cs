@@ -36,7 +36,7 @@ public class AppMenuBarTests {
         var layout = await AvaloniaSession.DispatchAsync(() =>
             Layout(Submenu(NewBar(showMainWindow: () => { }).Build(new Window()), "Window")));
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Kurrent Capacitor|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|kcap|-|Bring All to Front");
     }
 
     [Test]
@@ -52,7 +52,7 @@ public class AppMenuBarTests {
     public async Task Window_menu_carries_the_standard_macOS_shortcuts() {
         var (minimize, fullScreen, main) = await AvaloniaSession.DispatchAsync(() => {
             var menu = Submenu(NewBar(showMainWindow: () => { }).Build(new Window()), "Window");
-            return (Item(menu, "Minimize").Gesture, Item(menu, "Toggle Full Screen").Gesture, Item(menu, "Kurrent Capacitor").Gesture);
+            return (Item(menu, "Minimize").Gesture, Item(menu, "Toggle Full Screen").Gesture, Item(menu, "kcap").Gesture);
         });
 
         await Assert.That(minimize).IsEqualTo(new KeyGesture(Key.M, KeyModifiers.Meta));
@@ -71,7 +71,7 @@ public class AppMenuBarTests {
             return (Layout(menu), refresh.Gesture, refresh.IsEnabled);
         });
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|Kurrent Capacitor|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|kcap|-|Bring All to Front");
         await Assert.That(gesture).IsEqualTo(RefreshShortcut.Primary);
         await Assert.That(enabled).IsFalse();
     }
@@ -146,7 +146,7 @@ public class AppMenuBarTests {
     public async Task The_main_window_item_shows_the_main_window() {
         var shown = 0;
         await AvaloniaSession.DispatchAsync(() =>
-            Click(Item(Submenu(NewBar(showMainWindow: () => shown++).Build(new Window()), "Window"), "Kurrent Capacitor")));
+            Click(Item(Submenu(NewBar(showMainWindow: () => shown++).Build(new Window()), "Window"), "kcap")));
 
         await Assert.That(shown).IsEqualTo(1);
     }
@@ -198,12 +198,12 @@ public class AppMenuBarTests {
         var opener = new RecordingOpener();
         var layout = await AvaloniaSession.DispatchAsync(() => {
             var help = Submenu(NewBar(opener).Build(new Window()), "Help");
-            Click(Item(help, "Kurrent Capacitor Documentation"));
+            Click(Item(help, "kcap Documentation"));
             Click(Item(help, "Changelog"));
             return Layout(help);
         });
 
-        await Assert.That(layout).IsEqualTo("Kurrent Capacitor Documentation|Changelog|-|Report a Bug…|Send Feedback…");
+        await Assert.That(layout).IsEqualTo("kcap Documentation|Changelog|-|Report a Bug…|Send Feedback…");
         await Assert.That(string.Join("|", opener.Opened))
             .IsEqualTo("https://www.kurrent.io/docs/capacitor/|https://github.com/kurrent-io/kcap-cli/releases");
     }
@@ -223,11 +223,11 @@ public class AppMenuBarTests {
         var opened = 0;
         var layout = await AvaloniaSession.DispatchAsync(() => {
             var menu = new AppMenu(() => opened++).Menu;
-            Click(Item(menu, "About Kurrent Capacitor"));
+            Click(Item(menu, "About kcap"));
             return Layout(menu);
         });
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…|Set up Capacitor…");
+        await Assert.That(layout).IsEqualTo("About kcap|-|Settings…|Set up kcap…");
         await Assert.That(opened).IsEqualTo(1);
     }
 
@@ -237,7 +237,7 @@ public class AppMenuBarTests {
     public async Task The_app_brings_its_own_app_menu() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(NativeMenu.GetMenu(Avalonia.Application.Current!)!));
 
-        await Assert.That(layout).IsEqualTo("About Kurrent Capacitor|-|Settings…|Set up Capacitor…");
+        await Assert.That(layout).IsEqualTo("About kcap|-|Settings…|Set up kcap…");
     }
 
     [Test]

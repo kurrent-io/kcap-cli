@@ -5,7 +5,7 @@
         x:Class="Capacitor.App.Views.SignInWindow"
         x:DataType="vm:SignInStepViewModel"
         Title="Sign in"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="480" Height="560"
         MinWidth="420" MinHeight="480"
         Background="{StaticResource KcapCanvasBrush}"

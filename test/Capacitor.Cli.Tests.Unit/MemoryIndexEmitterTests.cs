@@ -214,10 +214,10 @@ public class MemoryIndexEmitterTests {
         var entries = new[] { new SessionStartMemoryEntry("id", "a-rule", "org", "d", "feedback") };
 
         var fragment = MemoryIndexEmitter.BuildFragment(
-            entries, [new SessionStartMemoryProject("capacitor", "Kurrent Capacitor")])!;
+            entries, [new SessionStartMemoryProject("capacitor", "kcap")])!;
 
         await Assert.That(fragment).Contains(
-            "This repo belongs to project \"capacitor\" (Kurrent Capacitor). " +
+            "This repo belongs to project \"capacitor\" (kcap). " +
             "Save learnings that span its repos with project: \"capacitor\".");
         await Assert.That(fragment.IndexOf("This repo belongs", StringComparison.Ordinal))
             .IsLessThan(fragment.IndexOf("## Team memory", StringComparison.Ordinal));
@@ -229,7 +229,7 @@ public class MemoryIndexEmitterTests {
     public async Task Lead_in_alone_is_a_fragment_when_the_index_is_empty() {
         // A project with no memories yet is exactly when the agent needs the slug it can save to,
         // so projects alone must produce a fragment where entries alone would produce none.
-        var fragment = MemoryIndexEmitter.BuildFragment([], [new SessionStartMemoryProject("capacitor", "Kurrent Capacitor")]);
+        var fragment = MemoryIndexEmitter.BuildFragment([], [new SessionStartMemoryProject("capacitor", "kcap")]);
 
         await Assert.That(fragment).IsNotNull();
         await Assert.That(fragment!.StartsWith(MemoryIndexEmitter.FragmentMarker, StringComparison.Ordinal)).IsTrue();
@@ -252,11 +252,11 @@ public class MemoryIndexEmitterTests {
     [Test]
     public async Task Several_projects_get_a_line_each() {
         var fragment = MemoryIndexEmitter.BuildFragment([], [
-            new SessionStartMemoryProject("capacitor", "Kurrent Capacitor"),
+            new SessionStartMemoryProject("capacitor", "kcap"),
             new SessionStartMemoryProject("platform", "Platform")
         ])!;
 
-        await Assert.That(fragment).Contains("This repo belongs to project \"capacitor\" (Kurrent Capacitor).");
+        await Assert.That(fragment).Contains("This repo belongs to project \"capacitor\" (kcap).");
         await Assert.That(fragment).Contains("This repo belongs to project \"platform\" (Platform).");
         await Assert.That(fragment.Split('\n').Count(l => l.StartsWith("This repo belongs", StringComparison.Ordinal)))
             .IsEqualTo(2);

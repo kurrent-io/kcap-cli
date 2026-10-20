@@ -38,8 +38,8 @@ public sealed class SpectreTenantProvisioner(
         // Says what was actually established, not more: single sign-on returned nothing. Claiming
         // "no tenant is linked to your account" is the very falsehood this prompt exists to stop —
         // a GitHub-App workspace IS linked to the user and simply cannot appear in this lane.
-        Note("Single sign-on found no Capacitor workspace for your account.",
-             markup: "[yellow]Single sign-on found no Capacitor workspace for your account.[/]");
+        Note("Single sign-on found no kcap workspace for your account.",
+             markup: "[yellow]Single sign-on found no kcap workspace for your account.[/]");
         Note("A workspace that signs in with the GitHub App won't appear here.");
 
         // The answers are already in hand, so nothing is offered and nothing is asked — including on
@@ -230,8 +230,8 @@ public sealed class SpectreTenantProvisioner(
                     // Passing the flags means no prompt is raised, so the code has to come as a flag too.
                     if (Scripted) {
                         Fail(requestUrl is { Length: > 0 }
-                                 ? $"Capacitor is invite-only right now. Request an invite at {requestUrl}, then re-run with --invite-code <code>."
-                                 : "Capacitor is invite-only right now. Re-run with --invite-code <code>.",
+                                 ? $"kcap is invite-only right now. Request an invite at {requestUrl}, then re-run with --invite-code <code>."
+                                 : "kcap is invite-only right now. Re-run with --invite-code <code>.",
                              "invite_required");
                         return ProvisionOffer.Failed;
                     }
@@ -242,7 +242,7 @@ public sealed class SpectreTenantProvisioner(
                         return ProvisionOffer.Failed;
                     }
 
-                    Note($"Capacitor is invite-only right now. Enter your invite code{RequestAt(requestUrl, u => $", or request one at {u}")}.");
+                    Note($"kcap is invite-only right now. Enter your invite code{RequestAt(requestUrl, u => $", or request one at {u}")}.");
                     code = PromptInviteCode();
 
                     if (code is null) {
