@@ -1,6 +1,7 @@
 using Capacitor.App.Services;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
@@ -1501,6 +1502,85 @@ public class DaemonLifecycleControllerTests {
     /// 10's controller tests drive instead of a raw IKcapCli mutation call. Defaults to an
     /// immediate Succeeded so tests that don't care about the mutation's own outcome (most of the
     /// "no mutation happens" tests never even call this) aren't forced to script one.
+    static DaemonStatusDto ForeignDaemon(string server = "https://norton.kcap.ai:443", string? profile = "norton", int active = 0) =>
+        FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: server, profile: profile, active: active);
+
+    /// A daemon attached by name that serves another server or profile is reported, and an idle one is offered
+    /// the ordinary Replace, which the lane runs for the app's own profile.
+    [Test]
+    [Arguments("https://norton.kcap.ai:443", "norton", "Daemon daemon-a is running for norton.kcap.ai, profile norton, not kcap.example.com, profile default.")]
+    [Arguments("https://kcap.example.com:443", "norton", "Daemon daemon-a is running for profile norton, not profile default.")]
+    public async Task A_daemon_serving_another_identity_is_reported_and_offered_a_replace(string server, string profile, string message) {
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server, profile));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace");
+        await Assert.That(h.Surface.AttentionMessages).Contains(message);
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(h.Lane.Requests.Single().Profile).IsEqualTo("default");
+    }
+
+    /// A busy daemon is reported but not offered a replace, which would end its agents.
+    [Test]
+    public async Task A_busy_foreign_daemon_is_reported_without_an_offer() {
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 2));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single()).EndsWith("The app offers to replace it once its 2 running agents finish.");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// Under a server override the resolution names no profile, so no request can be built: the report says
+    /// how to fix it by hand. Auto actions closed after an abandoned wizard report the same way.
+    [Test]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task Without_a_profile_or_with_auto_actions_closed_the_mismatch_is_only_reported(bool urlOverride, bool closed) {
+        await using var h = new Harness(autoActionsPermanentlyClosed: closed);
+        if (urlOverride) h.ProfileName = null;
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single())
+            .Contains($"kcap daemon service install --replace --verify --name daemon-a --profile {(urlOverride ? "<profile>" : "default")}");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// An older daemon reports no profile, and one that matches on name and server is then accepted;
+    /// a reattach to the same mismatch does not report it again.
+    [Test]
+    public async Task A_daemon_matching_what_it_reports_is_accepted_and_a_mismatch_is_reported_once() {
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server: "https://kcap.example.com:443", profile: null));
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount >= 1, what: "the reconciliation");
+        await Assert.That(h.Surface.AttentionMessages).IsEmpty();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 1));
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        h.PushConnecting();
+        h.PushConnected();
+        await Task.Delay(50);
+        await Assert.That(h.Surface.AttentionMessages.Count).IsEqualTo(1);
+    }
+
     sealed class FakeMutationLane {
         public readonly List<MutationRequest> Requests = [];
         public Func<MutationRequest, CancellationToken, Task<MutationOutcome>> Behavior =
@@ -1547,7 +1627,8 @@ public class DaemonLifecycleControllerTests {
             Client.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, reason, null, daemonVersion));
 
         public void PushSnapshot(int activeAgents) =>
-            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents));
+            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents,
+                serverUrl: CanonicalServer ?? "http://localhost:9999"));
 
         public bool Background() { bool? v = null; using (Controller.BackgroundPriority.Subscribe(x => v = x)) { } return v ?? false; }
         public ReloadState? Reload() { ReloadState? v = null; using (Controller.ReloadState.Subscribe(x => v = x)) { } return v; }

@@ -2,6 +2,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.App.Services;
@@ -96,6 +97,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     readonly BehaviorSubject<ReloadState?> _reloadState        = new(null);
     readonly BehaviorSubject<bool>         _isReloading        = new(false);
     IDisposable? _snapshots;
+    DaemonInfoDto? _latestDaemon;
+    string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
     int  _latestActiveAgents;
     bool _latestResumes;
     int  _reloadClaim;   // 0 free, 1 claimed; Interlocked only
@@ -168,7 +171,10 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// hinges on.
     public void Start() {
         _subscription = _client.Status.Subscribe(OnAttachStatus);
-        _snapshots    = _client.Snapshots.Subscribe(snap => _latestActiveAgents = snap.Daemon.ActiveAgents);
+        _snapshots    = _client.Snapshots.Subscribe(snap => {
+            _latestActiveAgents = snap.Daemon.ActiveAgents;
+            Volatile.Write(ref _latestDaemon, snap.Daemon);
+        });
         _ = CacheVersionAsync(); // never faults
     }
 
@@ -197,6 +203,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             isFirstTerminalOutcome = status.State != AttachState.Connecting && !_armClaimed;
             if (isFirstTerminalOutcome) _armClaimed = true;
         }
+
+        if (status.State == AttachState.Connected) _ = CheckAttachedIdentityAsync();
 
         if (!isFirstTerminalOutcome) {
             // A later Connected is a daemon that came up after the arm, or came back after a reload
@@ -802,6 +810,43 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         }
 
         await ReportStartMutationAsync(verb, ct).ConfigureAwait(false);
+    }
+
+    /// The app attaches by daemon name, so the daemon behind it can be serving another server or profile,
+    /// typically one installed under a profile since switched away from. The expected identity is the
+    /// graph's own resolution, never a re-read of the active profile, so an external selection change
+    /// cannot move the daemon out from under the app.
+    async Task CheckAttachedIdentityAsync() {
+        try {
+            if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
+            var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
+            var mismatch = AttachedIdentity.Mismatch(daemon, _client.DaemonName, _canonicalServer, expectedProfile);
+            lock (_lock) {
+                if (mismatch == _reportedMismatch) return;
+                _reportedMismatch = mismatch;
+            }
+            if (mismatch is null) return;
+
+            if (expectedProfile is null || _autoActionsPermanentlyClosed) {
+                _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
+                return;
+            }
+            if (daemon.ActiveAgents > 0) {
+                var agents = daemon.ActiveAgents == 1 ? "its running agent finishes" : $"its {daemon.ActiveAgents} running agents finish";
+                _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
+                return;
+            }
+
+            _surface.Attention(mismatch);
+            var terminalPath = await _probe.TerminalPathAsync(_lifetime.Token).ConfigureAwait(false);
+            await ConfirmAndReplaceAsync(
+                new LifecyclePrompt(LifecyclePrompt.KindRepair, null, null, terminalPath is null, TakeoverDisclosure), _lifetime.Token)
+                .ConfigureAwait(false);
+        } catch (OperationCanceledException) {
+            // shutdown
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: daemon identity check failed unexpectedly: {ex.Message}");
+        }
     }
 
     /// The Start button's one dialog: a manual daemon holds the name, and replacing it is the user's call.
