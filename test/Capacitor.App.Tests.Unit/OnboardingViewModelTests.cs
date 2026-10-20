@@ -135,6 +135,35 @@ public class OnboardingViewModelTests {
         await Assert.That(entered).IsEqualTo(1);
     }
 
+    /// The counter counts pages this run shows, from the first page that offers a choice; a page shown before it
+    /// began passing through keeps its place.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_step_counter_counts_only_pages_this_run_shows() {
+        var (start, first, second, afterPassing) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = new FakeWizardStep(WizardStepId.Install);
+            var vm = new OnboardingViewModel([
+                new FakeWizardStep(WizardStepId.Edition) { PassThrough = true },
+                install,
+                new FakeWizardStep(WizardStepId.SignIn) { PassThrough = true },
+                new FakeWizardStep(WizardStepId.Done)]);
+            await vm.PendingEnterForTesting;
+            var start = vm.Current.Id;
+            var first = vm.Eyebrow;
+
+            await vm.NextCommand.Execute().ToTask();
+            var second = vm.Eyebrow;
+            install.PassThrough = true;
+
+            return (start, first, second, vm.Eyebrow);
+        });
+
+        await Assert.That(start).IsEqualTo(WizardStepId.Install);
+        await Assert.That(first).StartsWith("STEP 1 OF 2 ·");
+        await Assert.That(second).StartsWith("STEP 2 OF 2 ·");
+        await Assert.That(afterPassing).StartsWith("STEP 2 OF 2 ·");
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Back_skips_pass_through_steps() {
