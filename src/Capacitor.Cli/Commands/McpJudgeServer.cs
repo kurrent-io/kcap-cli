@@ -30,8 +30,9 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         // Validate the shape locally, then defer client construction to the first tools/call —
         // the shape every sibling MCP server already uses.
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
-        HttpClient? client = null;
-        McpEvidenceJudgeTools? evidence = null;
+        using var sessionClient = new OnDemand<HttpClient>(() => http.ForSessionAsync());
+        using var evidence = new OnDemand<McpEvidenceJudgeTools>(async () =>
+            McpEvidenceJudgeTools.Open(runPath!, await sessionClient.GetAsync(), baseUrl, time));
 
         // Best-effort, and recorded even when the read throws: a stale token on disk must never
         // block the server from starting, and an absent property is a different value in a funnel
@@ -55,41 +56,13 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-        while (await reader.ReadLineAsync() is { } line) {
-            if (string.IsNullOrWhiteSpace(line)) continue;
-
-            JsonObject? request;
-
-            try {
-                request = JsonNode.Parse(line) as JsonObject;
-            } catch {
-                continue; // skip malformed JSON
-            }
-
-            if (request is null) continue;
-
-            var id     = request["id"];
-            var method = StringOf(request["method"]);
-
-            // Notifications have no id — don't send a response
-            if (id is null) continue;
-
-            var response = method switch {
-                "initialize" => BuildInitializeResponse(id, request),
-                "tools/list" => BuildToolsListResponse(id, tools),
-                "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-            };
-
-            await writer.WriteLineAsync(response);
-        }
-        } finally {
-            // Deferring construction must not also defer disposal: the loop ends when stdin closes.
-            evidence?.Dispose();
-            client?.Dispose();
-        }
+        // In arrival order: an evidence run's ledger, budgets and page handles form one sequence.
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "judge", McpStdioLoop.InArrivalOrder);
 
         return 0;
 
@@ -98,17 +71,18 @@ sealed class McpJudgeServer(ConfigRoot config, ProfileContext profiles, TokenSto
         async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
             if (!urlOk) return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
-            client ??= await http.ForSessionAsync();
+            var client = await sessionClient.GetAsync();
 
             if (runPath is null) return await HandleToolCallAsync(callId, callRequest, client, baseUrl, expectedSessionId);
 
+            McpEvidenceJudgeTools judgeTools;
             try {
-                evidence ??= McpEvidenceJudgeTools.Open(runPath, client, baseUrl, time);
+                judgeTools = await evidence.GetAsync();
             } catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException or JsonException or KeyNotFoundException or InvalidOperationException) {
                 return BuildToolResult(callId, $"Error: the evidence run could not be opened: {e.Message}", isError: true);
             }
 
-            return await DispatchEvidenceCallAsync(callId, callRequest, evidence);
+            return await DispatchEvidenceCallAsync(callId, callRequest, judgeTools);
         }
 
         // Records which MCP tools agents actually reach for. Never touches the response path:

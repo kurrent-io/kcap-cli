@@ -18,7 +18,7 @@ static partial class SessionEvalsTool {
     const int MaxConcurrency = 4;
     const int MaxSummaryChars = 600;
 
-    // The stdio loop is serial, so the whole fan-out shares one deadline.
+    // The whole fan-out shares one deadline, so one answer never waits on every slow session in turn.
     static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
 
     [GeneratedRegex("^[A-Za-z0-9_-]{1,128}$")]
