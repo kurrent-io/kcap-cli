@@ -60,6 +60,21 @@ public class SessionEndSpoolTests {
         await Assert.That(spool.HasBacklog("here")).IsTrue();
     }
 
+    /// What the earlier end left behind is a straggler of the run it closed, discarded as the drain
+    /// would have, so only the new end is delivered.
+    [Test]
+    public async Task A_straggler_of_the_earlier_end_is_discarded_not_delivered() {
+        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        spool.MarkEnded("here");
+        spool.Append("here", "subagent-stop/claude", "{}");
+
+        AgentHookPoster.SpoolEnds([Exited("here")], "https://kcap.example", spool, TimeProvider.System);
+
+        var routes = new List<string>();
+        await spool.DrainAllAsync("here", (r, _) => { routes.Add(r); return Task.FromResult(DrainOutcome.Delivered); }, TimeSpan.FromSeconds(5), CancellationToken.None);
+        await Assert.That(routes).IsEquivalentTo(new[] { "session-end/claude" });
+    }
+
     [Test]
     public async Task Nothing_is_queued_without_a_server_to_post_to() =>
         await Assert.That(AgentHookPoster.SpoolEnds([Exited("here")], null, new HookSpool(Config.Root, TimeProvider.System), TimeProvider.System))

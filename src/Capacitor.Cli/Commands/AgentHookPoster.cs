@@ -318,7 +318,11 @@ internal sealed class AgentHookPoster(
                 ["ended_at"]        = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
             }.ToJsonString();
             // An earlier end of a session since resumed left a marker that would discard this one.
-            spool.ClearEnded(session.Session.Value);
+            // What is spooled behind it are that run's stragglers, dropped as the drain would drop them.
+            if (spool.IsMarkedEnded(session.Session.Value)) {
+                spool.DiscardRemainder(session.Session.Value);
+                spool.ClearEnded(session.Session.Value);
+            }
             if (spool.Append(session.Session.Value, $"session-end/{vendor}", body)) spooled++;
         }
 
