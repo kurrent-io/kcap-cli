@@ -16,15 +16,18 @@ public class SubagentPaneViewModelTests {
         var time = new FakeTimeProvider();
         var runs = new SessionRuns(time);
         runs.Apply(Signals(new RunSignal.Started("c1", "Explore", "Map", time.GetUtcNow()), new RunSignal.Identified("c1", "s1")));
+        var closed = 0;
         var pane = new SubagentPaneViewModel(
             runs, runs.Rows.Single(), "Parent", AgentOrigin.Local, "a1", "claude", "key", _ => throw new InvalidOperationException(),
-            new RecordingOpener(), time, new FakePermissionService(), () => { });
+            new RecordingOpener(), time, new FakePermissionService(), () => closed++);
         await Assert.That(pane.IsRunning).IsTrue();
 
+        // A reset replays the start before the id, as the feed reads them.
         runs.Clear();
-        runs.Apply(Signals(new RunSignal.Started("c1", "Explore", "Map", time.GetUtcNow()), new RunSignal.Identified("c1", "s1"),
-            new RunSignal.Finished("c1", null, RunOutcome.Done, time.GetUtcNow())));
+        runs.Apply(Signals(new RunSignal.Started("c1", "Explore", "Map", time.GetUtcNow())));
+        runs.Apply(Signals(new RunSignal.Identified("c1", "s1"), new RunSignal.Finished("c1", null, RunOutcome.Done, time.GetUtcNow())));
 
+        await Assert.That(closed).IsEqualTo(0);
         await Assert.That(pane.Row).IsSameReferenceAs(runs.Rows.Single());
         await Assert.That(pane.IsRunning).IsFalse();
         await pane.TeardownAsync();
