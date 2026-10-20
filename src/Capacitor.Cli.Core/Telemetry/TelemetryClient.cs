@@ -14,7 +14,9 @@ public sealed class TelemetryClient(
     readonly List<TelemetryEvent> _queue = [];
     readonly Lock                 _flushLock = new();
     Task<bool>                    _lastFlush = Task.FromResult(true);
-    volatile bool                 _discarded;
+    readonly Lock                    _discardLock = new();
+    volatile bool                    _discarded;
+    CancellationTokenSource?         _sending;
 
     readonly TimeProvider _clock = timeProvider;
 
@@ -28,13 +30,22 @@ public sealed class TelemetryClient(
     /// but if it fails its events are dropped rather than parked for a later run to send.
     /// </summary>
     public void Discard() {
-        _discarded = true;
-        lock (_queue) _queue.Clear();
-        try { spool.Clear(); } catch { }
+        CancellationTokenSource? sending;
+        lock (_discardLock) {
+            _discarded = true;
+            sending    = _sending;
+            lock (_queue) _queue.Clear();
+            try { spool.Clear(); } catch { }
+        }
+        // Outside the lock: cancelling runs the request's callbacks, which must not wait on it. The
+        // flush may have disposed it in between, which leaves nothing to cancel.
+        try { sending?.Cancel(); } catch (ObjectDisposedException) { }
     }
 
+    // Under the lock, so a spill can never land after the discard cleared the spool.
     void Spill(List<TelemetryEvent> queued) {
-        if (!_discarded) spool.Append(queued);
+        lock (_discardLock)
+            if (!_discarded) spool.Append(queued);
     }
 
     /// <summary>Ships queued + previously spooled events. Returns false when nothing reached
@@ -112,7 +123,19 @@ public sealed class TelemetryClient(
             using var content = new StringContent(body, Encoding.UTF8);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
 
-            var response = await http.PostAsync($"{endpoint.TrimEnd('/')}/batch/", content, cts.Token);
+            // Re-checked after the drain and build, under the lock Discard takes: an opt-out before this
+            // point starts no send, and one after it cancels the send in flight.
+            lock (_discardLock) {
+                if (_discarded) return false;
+                _sending = cts;
+            }
+
+            HttpResponseMessage response;
+            try {
+                response = await http.PostAsync($"{endpoint.TrimEnd('/')}/batch/", content, cts.Token);
+            } finally {
+                lock (_discardLock) _sending = null;
+            }
 
             if (!response.IsSuccessStatusCode) {
                 Spill(queued);

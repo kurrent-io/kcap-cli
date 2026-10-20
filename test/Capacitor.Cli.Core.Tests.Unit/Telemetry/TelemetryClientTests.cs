@@ -280,13 +280,29 @@ public class TelemetryClientTests {
         await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task A_discard_cancels_the_send_in_flight() {
+        var handler = new GatedHandler(HttpStatusCode.OK);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+        client.Enqueue(Event("in_flight_event"));
+
+        var flush = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(30));
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        client.Discard();
+
+        await Assert.That(await flush.WaitAsync(TimeSpan.FromSeconds(10))).IsFalse();
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
     sealed class GatedHandler(HttpStatusCode status) : HttpMessageHandler {
         public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             Started.TrySetResult();
-            await Release.Task;
+            await Release.Task.WaitAsync(ct);
 
             return new HttpResponseMessage(status);
         }
