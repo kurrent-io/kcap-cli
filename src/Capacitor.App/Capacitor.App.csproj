@@ -42,6 +42,12 @@
         <AvaloniaResource Include="Assets\Lucide*-LICENSE.txt" />
         <AvaloniaResource Include="Assets\LobeHub-Icons-LICENSE.txt" />
     </ItemGroup>
+    <!-- Loaded by PatchedAvaloniaNative in place of the package's library on macOS, and a file of
+         its own so codesign can sign it. Native/AvaloniaNative/build.sh rebuilds it on an Avalonia bump. -->
+    <ItemGroup Condition="$([MSBuild]::IsOSPlatform('OSX')) Or '$(RuntimeIdentifier)' == 'osx-arm64' Or '$(RuntimeIdentifier)' == 'osx-x64'">
+        <None Include="Native\AvaloniaNative\libAvaloniaNative.patched.dylib" Link="libAvaloniaNative.patched.dylib" CopyToOutputDirectory="PreserveNewest" />
+        <None Include="Native\AvaloniaNative\libAvaloniaNative.patched.version" Link="libAvaloniaNative.patched.version" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
     <ItemGroup>
         <AdditionalFiles Include="BannedSymbols.App.txt" Visible="false" />
     </ItemGroup>

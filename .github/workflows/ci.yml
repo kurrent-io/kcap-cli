@@ -263,6 +263,12 @@ jobs:
           bash scripts/assert-bundle-digest.sh "$APP" publish/daemon.sha256
           "$APP/Contents/MacOS/kcap" --version --no-update-check
           "$APP/Contents/MacOS/kcap-daemon" --version
+          # The app loads the patched Avalonia.Native; a bundle that carries the stock bytes under
+          # that name would reintroduce the accessibility leak without any other symptom.
+          test -f "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib"
+          if cmp -s "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib" "$APP/Contents/MacOS/libAvaloniaNative.dylib"; then
+            echo "::error::libAvaloniaNative.patched.dylib is the stock library"; exit 1
+          fi
           # Pins the manifest field names the alias-promotion script depends on. Captured rather
           # than piped: grep -q closes the pipe at its first match, and a stable candidate prints a
           # second line after it.

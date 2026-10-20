@@ -929,6 +929,12 @@ jobs:
           bash scripts/assert-bundle-digest.sh "$APP" trio/bin/daemon.sha256
           "$APP/Contents/MacOS/kcap" --version --no-update-check
           "$APP/Contents/MacOS/kcap-daemon" --version
+          # The app loads the patched Avalonia.Native; a bundle that carries the stock bytes under
+          # that name would reintroduce the accessibility leak without any other symptom.
+          test -f "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib"
+          if cmp -s "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib" "$APP/Contents/MacOS/libAvaloniaNative.dylib"; then
+            echo "::error::libAvaloniaNative.patched.dylib is the stock library"; exit 1
+          fi
           # JIT under hardened runtime: the signed app must still be alive after 15 s.
           SCRATCH="$(mktemp -d)"
           KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" "$APP/Contents/MacOS/Kurrent Capacitor" &

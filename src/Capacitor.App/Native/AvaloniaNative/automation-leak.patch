@@ -1,0 +1,331 @@
+diff --git a/native/Avalonia.Native/src/OSX/AvnAutomationNode.h b/native/Avalonia.Native/src/OSX/AvnAutomationNode.h
+index 58bea8caf..92a9e8069 100644
+--- a/native/Avalonia.Native/src/OSX/AvnAutomationNode.h
++++ b/native/Avalonia.Native/src/OSX/AvnAutomationNode.h
+@@ -2,17 +2,29 @@
+ #include "avalonia-native.h"
+ #include "AvnAccessibility.h"
+ 
+-// Defines a means for managed code to raise accessibility events.
++// Lets managed code raise accessibility events on the NSAccessibility object that currently
++// represents its peer. The node lives as long as the peer: the managed side keeps the reference
++// handed to it in SetNode and returns it through Dispose. The owner holds both the node and the
++// peer, so the node's reference back to the owner must stay weak or neither can ever be released.
+ class AvnAutomationNode : public ComSingleObject<IAvnAutomationNode, &IID_IAvnAutomationNode>
+ {
+ public:
+     FORWARD_IUNKNOWN()
+     AvnAutomationNode(id <AvnAccessibility> owner) { _owner = owner; }
+-    AvnAccessibilityElement* GetOwner() { return _owner; }
+-    virtual void Dispose() override { _owner = nil; }
++    id <AvnAccessibility> GetOwner() { return _owner; }
++    void SetOwner(id <AvnAccessibility> owner) { _owner = owner; }
++    virtual void Dispose() override
++    {
++        if (_disposed)
++            return;
++        _disposed = true;
++        _owner = nil;
++        Release();
++    }
+     virtual void ChildrenChanged () override { [_owner raiseChildrenChanged]; }
+     virtual void PropertyChanged (AvnAutomationProperty property) override { [_owner raisePropertyChanged:property]; }
+     virtual void FocusChanged () override { [_owner raiseFocusChanged]; }
+ private:
+-    __strong id <AvnAccessibility> _owner;
++    __weak id <AvnAccessibility> _owner;
++    bool _disposed = false;
+ };
+diff --git a/native/Avalonia.Native/src/OSX/AvnView.mm b/native/Avalonia.Native/src/OSX/AvnView.mm
+index dccf58cea..953a7e359 100644
+--- a/native/Avalonia.Native/src/OSX/AvnView.mm
++++ b/native/Avalonia.Native/src/OSX/AvnView.mm
+@@ -1138,8 +1138,8 @@ - (id _Nullable) accessibilityHitTest:(NSPoint)point
+ 
+     auto clientPoint = [window convertPointFromScreen:point];
+     auto localPoint = [self translateLocalPoint:ToAvnPoint(clientPoint)];
+-    auto hit = peer->RootProvider_GetPeerFromPoint(localPoint);
+-    return [AvnAccessibilityElement acquire:hit];
++    ComPtr<IAvnAutomationPeer> hit(peer->RootProvider_GetPeerFromPoint(localPoint), true);
++    return [AvnAccessibilityElement acquire:hit.getRaw()];
+ }
+ 
+ - (void)raiseAccessibilityChildrenChanged
+@@ -1174,18 +1174,18 @@ - (void)recalculateAccessibiltyChildren
+     {
+         return;
+     }
+-    auto childPeers = peer->GetChildren();
++    ComPtr<IAvnAutomationPeerArray> childPeers(peer->GetChildren(), true);
+     auto childCount = childPeers != nullptr ? childPeers->GetCount() : 0;
+ 
+     if (childCount > 0)
+     {
+         for (int i = 0; i < childCount; ++i)
+         {
+-            IAvnAutomationPeer* child;
++            ComPtr<IAvnAutomationPeer> child;
+ 
+-            if (childPeers->Get(i, &child) == S_OK)
++            if (childPeers->Get(i, child.getPPV()) == S_OK)
+             {
+-                id element = [AvnAccessibilityElement acquire:child];
++                id element = [AvnAccessibilityElement acquire:child.getRaw()];
+                 [_accessibilityChildren addObject:element];
+             }
+         }
+diff --git a/native/Avalonia.Native/src/OSX/AvnWindow.mm b/native/Avalonia.Native/src/OSX/AvnWindow.mm
+index 5912ac90a..e9fc496d4 100644
+--- a/native/Avalonia.Native/src/OSX/AvnWindow.mm
++++ b/native/Avalonia.Native/src/OSX/AvnWindow.mm
+@@ -38,7 +38,7 @@ @implementation CLASS_NAME
+     bool _isTitlebarSession;
+     AvnMenu* _menu;
+     ComPtr<IAvnAutomationPeer> _automationPeer;
+-    AvnAutomationNode* _automationNode;
++    ComPtr<AvnAutomationNode> _automationNode;
+ }
+ 
+ -(AvnView* _Nullable) view
+@@ -616,11 +616,11 @@ - (id _Nullable) accessibilityFocusedUIElement
+     if (automationPeer == nullptr || !automationPeer->IsRootProvider())
+         return nil;
+ 
+-    auto focusedPeer = automationPeer->RootProvider_GetFocus();
++    ComPtr<IAvnAutomationPeer> focusedPeer(automationPeer->RootProvider_GetFocus(), true);
+     if (focusedPeer == nullptr)
+         return nil;
+ 
+-    return [AvnAccessibilityElement acquire:focusedPeer];
++    return [AvnAccessibilityElement acquire:focusedPeer.getRaw()];
+ }
+ 
+ - (NSString * _Nullable) accessibilityIdentifier
+@@ -637,12 +637,26 @@ - (IAvnAutomationPeer* _Nullable) automationPeer
+     auto parent = _parent.tryGet();
+     if (parent && _automationPeer == nullptr)
+     {
+-        auto peer = parent->BaseEvents->GetAutomationPeer();
+-        if (peer != nullptr)
++        _automationPeer.setNoAddRef(parent->BaseEvents->GetAutomationPeer());
++        if (_automationPeer != nullptr)
+         {
+-            _automationPeer = peer;
+-            _automationNode = new AvnAutomationNode(self);
+-            _automationPeer->SetNode(_automationNode);
++            ComPtr<IAvnAutomationNode> existing(_automationPeer->GetNode(), true);
++            auto node = existing != nullptr ? dynamic_cast<AvnAutomationNode*>(existing.getRaw()) : nullptr;
++
++            if (node != nullptr)
++            {
++                _automationNode = node;
++                _automationNode->SetOwner(self);
++            }
++            else if (existing == nullptr)
++            {
++                _automationNode = comnew<AvnAutomationNode>(self);
++                _automationPeer->SetNode(_automationNode.getRetainedReference());
++            }
++            else
++            {
++                NSLog(@"IAvnAutomationPeer.GetNode returned an unknown IAvnAutomationNode implementation.");
++            }
+         }
+     }
+ 
+diff --git a/native/Avalonia.Native/src/OSX/automation.mm b/native/Avalonia.Native/src/OSX/automation.mm
+index 8750e9986..3c1a3be46 100644
+--- a/native/Avalonia.Native/src/OSX/automation.mm
++++ b/native/Avalonia.Native/src/OSX/automation.mm
+@@ -9,7 +9,7 @@
+ @implementation AvnAccessibilityElement
+ {
+     ComPtr<IAvnAutomationPeer> _peer;
+-    AvnAutomationNode* _node;
++    ComPtr<AvnAutomationNode> _node;
+     NSMutableArray* _children;
+     NSArray<NSString*>* _attributeNames;
+ }
+@@ -19,11 +19,21 @@ + (NSAccessibilityElement *)acquire:(IAvnAutomationPeer *)peer
+     if (peer == nullptr)
+         return nil;
+     
+-    auto instance = peer->GetNode();
+-    
+-    if (instance != nullptr)
+-        return dynamic_cast<AvnAutomationNode*>(instance)->GetOwner();
+-    
++    ComPtr<IAvnAutomationNode> existing(peer->GetNode(), true);
++    auto node = existing != nullptr ? dynamic_cast<AvnAutomationNode*>(existing.getRaw()) : nullptr;
++
++    if (node != nullptr)
++    {
++        id owner = node->GetOwner();
++        if (owner != nil)
++            return owner;
++    }
++    else if (existing != nullptr)
++    {
++        NSLog(@"IAvnAutomationPeer.GetNode returned an unknown IAvnAutomationNode implementation.");
++        return nil;
++    }
++
+     if (peer->IsInteropPeer())
+     {
+         auto view = (__bridge NSAccessibilityElement*)peer->InteropPeer_GetNativeControlHandle();
+@@ -31,38 +41,43 @@ + (NSAccessibilityElement *)acquire:(IAvnAutomationPeer *)peer
+     }
+     else if (peer->IsRootProvider())
+     {
+-        auto window = peer->RootProvider_GetWindow();
+-        
++        ComPtr<IAvnWindowBase> window(peer->RootProvider_GetWindow(), true);
++
+         if (window == nullptr)
+         {
+             NSLog(@"IRootProvider.PlatformImpl returned null or a non-WindowBaseImpl.");
+             return nil;
+         }
+-        
+-        auto holder = dynamic_cast<INSViewHolder*>(window);
++
++        auto holder = dynamic_cast<INSViewHolder*>(window.getRaw());
+         auto view = holder->GetNSView();
+         return (NSAccessibilityElement*)[view window];
+     }
+     else
+     {
+-        return [[AvnAccessibilityElement alloc] initWithPeer:peer];
++        // A peer keeps its node for life; an element released while its peer lives on
++        // is replaced by a fresh one behind the same node.
++        return [[AvnAccessibilityElement alloc] initWithPeer:peer node:node];
+     }
+ }
+ 
+-- (AvnAccessibilityElement *)initWithPeer:(IAvnAutomationPeer *)peer
++- (AvnAccessibilityElement *)initWithPeer:(IAvnAutomationPeer *)peer node:(AvnAutomationNode *)node
+ {
+     self = [super init];
+     _peer = peer;
+-    _node = new AvnAutomationNode(self);
+-    _peer->SetNode(_node);
+-    return self;
+-}
+ 
+-- (void)dealloc
+-{
+-    if (_node)
+-        delete _node;
+-    _node = nullptr;
++    if (node != nullptr)
++    {
++        _node = node;
++        _node->SetOwner(self);
++    }
++    else
++    {
++        _node = comnew<AvnAutomationNode>(self);
++        _peer->SetNode(_node.getRetainedReference());
++    }
++
++    return self;
+ }
+ 
+ - (NSString *)description
+@@ -335,7 +350,7 @@ - (NSRect)accessibilityFrame
+ 
+ - (id)accessibilityParent
+ {
+-    auto parentPeer = _peer->GetParent();
++    ComPtr<IAvnAutomationPeer> parentPeer(_peer->GetParent(), true);
+ 
+     if (parentPeer == nullptr)
+         return [NSApplication sharedApplication];
+@@ -350,42 +365,44 @@ - (id)accessibilityParent
+     // AvnView instead of the target AvnAccessibilityElement.
+     if (parentPeer->IsRootProvider())
+     {
+-        auto window = parentPeer->RootProvider_GetWindow();
++        ComPtr<IAvnWindowBase> window(parentPeer->RootProvider_GetWindow(), true);
+         if (window != nullptr)
+         {
+-            auto holder = dynamic_cast<INSViewHolder*>(window);
++            auto holder = dynamic_cast<INSViewHolder*>(window.getRaw());
+             if (holder != nullptr)
+                 return holder->GetNSView();
+         }
+     }
+ 
+-    return [AvnAccessibilityElement acquire:parentPeer];
++    return [AvnAccessibilityElement acquire:parentPeer.getRaw()];
+ }
+ 
+ - (id)accessibilityTopLevelUIElement
+ {
+-    auto rootPeer = _peer->GetRootPeer();
+-    return [AvnAccessibilityElement acquire:rootPeer];
++    ComPtr<IAvnAutomationPeer> rootPeer(_peer->GetRootPeer(), true);
++    return [AvnAccessibilityElement acquire:rootPeer.getRaw()];
+ }
+ 
+ - (id)accessibilityWindow
+ {
+-    auto rootPeer = _peer->GetVisualRoot();
+-    return [AvnAccessibilityElement acquire:rootPeer];
++    ComPtr<IAvnAutomationPeer> rootPeer(_peer->GetVisualRoot(), true);
++    return [AvnAccessibilityElement acquire:rootPeer.getRaw()];
+ }
+ 
+ - (id)accessibilityHorizontalScrollBar
+ {
+     if (_peer == nullptr)
+         return nil;
+-    return [AvnAccessibilityElement acquire:_peer->ScrollProvider_GetHorizontalScrollBar()];
++    ComPtr<IAvnAutomationPeer> scrollBar(_peer->ScrollProvider_GetHorizontalScrollBar(), true);
++    return [AvnAccessibilityElement acquire:scrollBar.getRaw()];
+ }
+ 
+ - (id)accessibilityVerticalScrollBar
+ {
+     if (_peer == nullptr)
+         return nil;
+-    return [AvnAccessibilityElement acquire:_peer->ScrollProvider_GetVerticalScrollBar()];
++    ComPtr<IAvnAutomationPeer> scrollBar(_peer->ScrollProvider_GetVerticalScrollBar(), true);
++    return [AvnAccessibilityElement acquire:scrollBar.getRaw()];
+ }
+ 
+ - (BOOL)isAccessibilityExpanded
+@@ -572,7 +589,8 @@ only real elements (Text, Button, List) do, parented to one root AXHostingView.
+     That's exactly what the code below does (templated parent, else walk to the nearest exposed ancestor).
+ 	*/
+ 
+-    id target = [AvnAccessibilityElement acquire:_peer->GetTemplatedParent()];
++    ComPtr<IAvnAutomationPeer> templatedParent(_peer->GetTemplatedParent(), true);
++    id target = [AvnAccessibilityElement acquire:templatedParent.getRaw()];
+     if (target == nil)
+         target = self;
+     while ([target isKindOfClass:[AvnAccessibilityElement class]] && ![(AvnAccessibilityElement*)target isAccessibilityElement])
+@@ -665,7 +683,7 @@ - (void)setAccessibilityFocused:(BOOL)accessibilityFocused
+ 
+ - (void)recalculateChildren
+ {
+-    auto childPeers = _peer->GetChildren();
++    ComPtr<IAvnAutomationPeerArray> childPeers(_peer->GetChildren(), true);
+     auto childCount = childPeers != nullptr ? childPeers->GetCount() : 0;
+ 
+     if (childCount > 0)
+@@ -674,11 +692,11 @@ - (void)recalculateChildren
+         
+         for (int i = 0; i < childCount; ++i)
+         {
+-            IAvnAutomationPeer* child;
++            ComPtr<IAvnAutomationPeer> child;
+             
+-            if (childPeers->Get(i, &child) == S_OK)
++            if (childPeers->Get(i, child.getPPV()) == S_OK)
+             {
+-                id element = [AvnAccessibilityElement acquire:child];
++                id element = [AvnAccessibilityElement acquire:child.getRaw()];
+                 [_children addObject:element];
+             }
+         }

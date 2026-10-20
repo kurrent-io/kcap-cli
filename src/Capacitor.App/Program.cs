@@ -66,6 +66,7 @@ internal static class Program
             .UsePlatformDetect()
             .With(new AvaloniaNativePlatformOptions {
                 RenderingMode = MacRenderingOrder.Resolve(Environment.GetEnvironmentVariable(MacRenderingOrder.EnvVar)),
+                AvaloniaNativeLibraryPath = PatchedAvaloniaNative.Path,
             })
             .UseReactiveUI(_ => { })
             .LogToTrace());
