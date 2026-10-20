@@ -2,9 +2,9 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
-// Real-manager counterpart to ServiceVerifyStartGateProductionPathTests, covering the same
+// Real-manager counterpart to LaunchdServiceVerifyStartGateProductionPathTests, covering the same
 // discriminated-read contract for InstallVerifiedAsync's marker recovery.
-public class ServiceVerifyInstallProductionPathTests {
+public class LaunchdServiceVerifyInstallProductionPathTests {
     const string Id = "prodpath-install";
 
     static ServiceSpec Spec(string daemonPath) =>
@@ -28,7 +28,7 @@ public class ServiceVerifyInstallProductionPathTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(false, null, null, null));
 
-        var sut = new ServiceVerify(fx.Store, fx.Config, fx.Manager, _ => 4242, Hello, TimeProvider.System);
+        var sut = new LaunchdServiceVerify(fx.Store, fx.Config, fx.Manager, _ => 4242, Hello, TimeProvider.System);
 
         var exit = await sut.InstallVerifiedAsync(Spec(fx.DaemonPath), replace: false, expectedVersion: null);
 

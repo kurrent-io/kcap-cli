@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Services;
 
 /// <summary>
 /// Unit-identity resolution shared by <c>DaemonCommands</c>'s service verbs and
-/// <see cref="ServiceVerify"/>'s gate: the daemon binary this install ships
+/// <see cref="LaunchdServiceVerify"/>'s gate: the daemon binary this install ships
 /// (<see cref="ResolveDaemonBinary"/>) and the config.json path implied by a unit's baked
 /// <c>KCAP_CONFIG_DIR</c> (<see cref="ConfigPathFromUnitEnv"/>). Neither method is itself a
 /// decision — each caller wraps its own failure contract on top (UX-only fail-soft-to-null in

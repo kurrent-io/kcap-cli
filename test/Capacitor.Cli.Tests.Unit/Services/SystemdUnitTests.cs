@@ -56,4 +56,54 @@ public class SystemdUnitTests {
         await Assert.That(SystemdUnit.StatusFrom("inactive", 0)).IsEqualTo(ServiceState.Installed);
         await Assert.That(SystemdUnit.StatusFrom("inactive", 1)).IsEqualTo(ServiceState.NotInstalled);
     }
+
+    [Test]
+    public async Task QueryFromShow_reports_the_running_daemons_pid() {
+        var q = SystemdUnit.QueryFromShow(0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", unitPresent: true, "/opt/kcap/kcap-daemon");
+
+        await Assert.That(q).IsEqualTo(new ServiceQuery(LabelProbe.Loaded, true, ServiceState.Running, "/opt/kcap/kcap-daemon", 4242));
+    }
+
+    [Test]
+    public async Task QueryFromShow_stopped_unit_is_loaded_without_a_pid() {
+        var q = SystemdUnit.QueryFromShow(0, "ActiveState=inactive\nUnitFileState=enabled\nMainPID=0\n", unitPresent: true, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Loaded);
+        await Assert.That(q.State).IsEqualTo(ServiceState.Installed);
+        await Assert.That(q.JobPid).IsNull();
+    }
+
+    [Test]
+    public async Task QueryFromShow_unknown_unit_is_absent() {
+        var q = SystemdUnit.QueryFromShow(0, "ActiveState=inactive\nUnitFileState=\nMainPID=0\n", unitPresent: false, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Absent);
+        await Assert.That(q.State).IsEqualTo(ServiceState.NotInstalled);
+    }
+
+    /// <summary>Without a user bus nothing is known about the unit, so it must not read as free to install over.</summary>
+    [Test]
+    public async Task QueryFromShow_failed_systemctl_is_unknown() {
+        var q = SystemdUnit.QueryFromShow(1, "", unitPresent: true, "/opt/kcap/kcap-daemon");
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Unknown);
+        await Assert.That(q.UnitPresent).IsTrue();
+        await Assert.That(q.JobPid).IsNull();
+    }
+
+    [Test]
+    public async Task EnvFromUnit_reads_back_what_Unit_wrote() {
+        var env = new Dictionary<string, string> {
+            ["PATH"]         = "/a b:/c",
+            ["KCAP_PROFILE"] = "work",
+            ["QUOTED"]       = "say \"hi\" O'Reilly",
+            ["SLASHES"]      = @"C:\x\y",
+            ["PERCENT"]      = "50%off $HOME",
+            ["EQUALS"]       = "a=b",
+        };
+
+        var parsed = SystemdUnit.EnvFromUnit(SystemdUnit.Unit(Spec() with { Environment = env }));
+
+        await Assert.That(parsed).IsEquivalentTo(env);
+    }
 }

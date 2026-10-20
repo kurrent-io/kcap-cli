@@ -42,7 +42,7 @@
 | `src/Capacitor.Cli.Daemon/Services/LocalControlCapabilities.cs` | Advertise `settings/1`. |
 | `src/Capacitor.Cli.Daemon/DaemonRunner.cs` | Register the handler; `ApplyProfileCapacity`. |
 | `src/Capacitor.Cli/Commands/DaemonServiceCommands.cs` | Parse and validate `--retire`. |
-| `src/Capacitor.Cli/Services/ServiceVerify.cs` | `RetireAsync` inside the install transaction; `VerifyExit.RetireRefused`. |
+| `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs` | `RetireAsync` inside the install transaction; `VerifyExit.RetireRefused`. |
 | `README.md`, `docs/CHANGES.md` | Document the flag and the reasoning. |
 
 ---
@@ -900,19 +900,19 @@ Expected: all 13 pass.
 ### Task 5: `--retire` on `install --replace --verify`
 
 **Files:**
-- Modify: `src/Capacitor.Cli/Services/ServiceVerify.cs` (`VerifyExit` block at lines 10-78; `InstallVerifiedAsync` at 695; add `RetireAsync` beside `ApplyReplaceMatrixAsync`)
+- Modify: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs` (`VerifyExit` block at lines 10-78; `InstallVerifiedAsync` at 695; add `RetireAsync` beside `ApplyReplaceMatrixAsync`)
 - Modify: `src/Capacitor.Cli/Commands/DaemonServiceCommands.cs:92-155` (parse, validate, forward) and the usage text at `:634`
 - Modify: `README.md:864-874`
-- Test: `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyRetireTests.cs` (new)
+- Test: `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyRetireTests.cs` (new)
 - Test: `test/Capacitor.Cli.Tests.Unit/Commands/DaemonCommandsServiceInstallTests.cs`
 
 **Interfaces:**
-- Consumes: `ServiceVerify(store, config, manager, validatedDaemonPid, hello, time, readPlist:, plistExists:)`; `IVerifyServiceManager.UnitPath`; `LaunchdUnit.EnvFromPlist`; `ServiceTxnLock.TryAcquire`; existing `ClearLabelAsync`, `WaitForStopConfirmedAsync`, `Say`.
-- Produces: `Task<int> ServiceVerify.InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId = null)`; `VerifyExit.RetireRefused = 30`, `VerifyExit.RetireRefusedToken = "verify_retire_refused"`, stderr line `retire_reason=foreign_profile | unit_unreadable`; CLI flag `--retire <id>`.
+- Consumes: `LaunchdServiceVerify(store, config, manager, validatedDaemonPid, hello, time, readPlist:, plistExists:)`; `IVerifyServiceManager.UnitPath`; `LaunchdUnit.EnvFromPlist`; `ServiceTxnLock.TryAcquire`; existing `ClearLabelAsync`, `WaitForStopConfirmedAsync`, `Say`.
+- Produces: `Task<int> LaunchdServiceVerify.InstallVerifiedAsync(ServiceSpec spec, bool replace, string? expectedVersion, string? retireServiceId = null)`; `VerifyExit.RetireRefused = 30`, `VerifyExit.RetireRefusedToken = "verify_retire_refused"`, stderr line `retire_reason=foreign_profile | unit_unreadable`; CLI flag `--retire <id>`.
 
 - [ ] **Step 1: Write the failing engine tests**
 
-Create `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyRetireTests.cs`:
+Create `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyRetireTests.cs`:
 
 ```csharp
 using Capacitor.Cli.Core;
@@ -925,7 +925,7 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// same transaction, only when it is pinned to the same profile, and a live daemon under the new
 /// name is a collision rather than a takeover.
 /// </summary>
-public class ServiceVerifyRetireTests {
+public class LaunchdServiceVerifyRetireTests {
     [TempHome] public required TempHome Home { get; init; }
 
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -950,7 +950,7 @@ public class ServiceVerifyRetireTests {
         </dict></plist>
         """;
 
-    /// <summary>Same state machine as ServiceVerifyInstallTests' fake, plus the retired label's own
+    /// <summary>Same state machine as LaunchdServiceVerifyInstallTests' fake, plus the retired label's own
     /// presence flag so Query answers per id.</summary>
     sealed class FakeServiceManager(UserHome home) : IVerifyServiceManager {
         public string UnitPath(string serviceId) => LaunchdUnit.PlistPath(home, serviceId);
@@ -1006,7 +1006,7 @@ public class ServiceVerifyRetireTests {
             ? new HelloProbeResult(true, 1, ExpectedVersion, NewId)
             : new HelloProbeResult(false, null, null, null));
 
-    ServiceVerify Sut(FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null) =>
+    LaunchdServiceVerify Sut(FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null) =>
         new(Daemons.Store, Config.Root, manager,
             validatedPid ?? (id => id == NewId && manager.Bootstrapped ? 4242 : null),
             Hello(manager), TimeProvider.System,
@@ -1080,7 +1080,7 @@ public class ServiceVerifyRetireTests {
     [Test]
     public async Task An_unreadable_retired_unit_is_refused_untouched() {
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello(manager), TimeProvider.System,
             readPlist: path => path == manager.UnitPath(OldId) ? null : OwnPlistContent,
             plistExists: _ => true);
@@ -1116,13 +1116,13 @@ In `test/Capacitor.Cli.Tests.Unit/Commands/DaemonCommandsServiceInstallTests.cs`
 
 Run:
 ```bash
-dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/ServiceVerifyRetireTests/*"
+dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/LaunchdServiceVerifyRetireTests/*"
 ```
 Expected: build error, `InstallVerifiedAsync` has no `retireServiceId` parameter.
 
 - [ ] **Step 4: Add the exit code**
 
-In `src/Capacitor.Cli/Services/ServiceVerify.cs`, inside `VerifyExit` after `StartGateDriftToken`:
+In `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs`, inside `VerifyExit` after `StartGateDriftToken`:
 
 ```csharp
     /// <summary><c>--retire</c> refused to remove the named unit: its plist is unreadable, or it is
@@ -1334,16 +1334,16 @@ After the `install --replace --verify` paragraph (line 874) add:
 Run:
 ```bash
 dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj
-dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/ServiceVerifyRetireTests/*"
+dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/LaunchdServiceVerifyRetireTests/*"
 dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/DaemonCommandsServiceInstallTests/*"
-dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/ServiceVerifyInstallTests/*"
+dotnet run --project test/Capacitor.Cli.Tests.Unit/Capacitor.Cli.Tests.Unit.csproj -- --treenode-filter "/*/*/LaunchdServiceVerifyInstallTests/*"
 ```
-Expected: build clean; 6 retire tests, 7 install-command tests and every pre-existing `ServiceVerifyInstallTests` test pass. If `ServiceVerifyInstallTests` fails on a `--replace` case, the retire step ran without `--retire`: the `if (retireServiceId is not null)` guard is missing.
+Expected: build clean; 6 retire tests, 7 install-command tests and every pre-existing `LaunchdServiceVerifyInstallTests` test pass. If `LaunchdServiceVerifyInstallTests` fails on a `--replace` case, the retire step ran without `--retire`: the `if (retireServiceId is not null)` guard is missing.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-/usr/bin/git -C /Users/alexey/dev/eventstore/kcap-cli/.claude/worktrees/zany-dancing-coral add src/Capacitor.Cli/Services/ServiceVerify.cs src/Capacitor.Cli/Commands/DaemonServiceCommands.cs src/Capacitor.Cli.Core/Resources README.md test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyRetireTests.cs test/Capacitor.Cli.Tests.Unit/Commands/DaemonCommandsServiceInstallTests.cs
+/usr/bin/git -C /Users/alexey/dev/eventstore/kcap-cli/.claude/worktrees/zany-dancing-coral add src/Capacitor.Cli/Services/LaunchdServiceVerify.cs src/Capacitor.Cli/Commands/DaemonServiceCommands.cs src/Capacitor.Cli.Core/Resources README.md test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyRetireTests.cs test/Capacitor.Cli.Tests.Unit/Commands/DaemonCommandsServiceInstallTests.cs
 /usr/bin/git -C /Users/alexey/dev/eventstore/kcap-cli/.claude/worktrees/zany-dancing-coral commit -q -m "Retire the old unit inside install --replace --verify (#791)" -m "The unit bakes the daemon name in as --name, so a rename is a reinstall under a new label; retiring the old one in the same transaction keeps the app to one verb." -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 

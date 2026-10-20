@@ -259,7 +259,7 @@ public partial class LaunchdStartStopTests {
 
     // ── Query containment: a malformed on-disk plist (duplicate key, truncated XML) must never
     // escape Query as an uncoded failure — Query is a total, never-throwing probe. See
-    // ServiceVerifyStartGateProductionPathTests for the same shape carried through the gate. ──
+    // LaunchdServiceVerifyStartGateProductionPathTests for the same shape carried through the gate. ──
 
     [Test]
     public async Task Query_does_not_throw_on_a_duplicate_ProgramArguments_key_plist_and_reports_null_binary_path() {

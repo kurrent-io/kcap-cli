@@ -1681,8 +1681,8 @@ git commit -m "AI-1655: detached-start digest gate — exit 43 daemon_start_reas
 ### Task 16: `service start --verify` gates — Phase A (exit 28) and Phase B (exit 29)
 
 **Files:**
-- Modify: `src/Capacitor.Cli/Services/ServiceVerify.cs` (`VerifyExit` constants; `StartVerifiedAsync` gains the gated path)
-- Test: extend `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyStartTests.cs`
+- Modify: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs` (`VerifyExit` constants; `StartVerifiedAsync` gains the gated path)
+- Test: extend `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyStartTests.cs`
 
 **Interfaces:**
 - Consumes: `LaunchdUnit.EnvFromPlist` (Task 13), `DaemonDigest` (Task 14), `ConfigMutator.LoadPure` (Task 2), the existing `readPlist`/`plistExists` ctor seams, `ServiceTxnMarker`.
@@ -1712,13 +1712,13 @@ Phase placement in `StartVerifiedAsync`: Phase A runs after `ServiceTxnLock` acq
 ```csharp
 [Test]
 public async Task Gate_inactive_without_invoking_directive() {
-    var r = ServiceVerify.EvaluateStartGate(new Dictionary<string, string>(), "/b", "/b", _ => null);
+    var r = LaunchdServiceVerify.EvaluateStartGate(new Dictionary<string, string>(), "/b", "/b", _ => null);
     await Assert.That(r).IsNull();
 }
 
 [Test]
 public async Task Missing_unit_directive_is_directive_missing() {
-    var r = ServiceVerify.EvaluateStartGate(
+    var r = LaunchdServiceVerify.EvaluateStartGate(
         new Dictionary<string, string>(),  // unit bakes nothing
         "/b", "/b", k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
     await Assert.That(r).IsEqualTo(StartGateReason.DirectiveMissing);
@@ -1727,7 +1727,7 @@ public async Task Missing_unit_directive_is_directive_missing() {
 [Test]
 public async Task Unit_directive_with_wrong_value_is_directive_invalid() {
     var unit = new Dictionary<string, string> { ["KCAP_CONSENT_SEED_DEFAULT"] = "allow" };
-    var r = ServiceVerify.EvaluateStartGate(unit, "/b", "/b",
+    var r = LaunchdServiceVerify.EvaluateStartGate(unit, "/b", "/b",
         k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
     await Assert.That(r).IsEqualTo(StartGateReason.DirectiveInvalid);
 }
@@ -1739,10 +1739,10 @@ public async Task Digest_mismatch_at_canonical_sibling_is_package_inconsistent_e
     string? Env(string k) => k switch {
         "KCAP_CONSENT_SEED_DEFAULT" => "prompt", _ => null };
 
-    var same = ServiceVerify.EvaluateStartGate(unit, "/opt/kcap/kcap-daemon", "/opt/kcap/kcap-daemon", Env);
+    var same = LaunchdServiceVerify.EvaluateStartGate(unit, "/opt/kcap/kcap-daemon", "/opt/kcap/kcap-daemon", Env);
     await Assert.That(same).IsEqualTo(StartGateReason.PackageInconsistent);
 
-    var other = ServiceVerify.EvaluateStartGate(unit, "/somewhere/else/kcap-daemon", "/opt/kcap/kcap-daemon", Env);
+    var other = LaunchdServiceVerify.EvaluateStartGate(unit, "/somewhere/else/kcap-daemon", "/opt/kcap/kcap-daemon", Env);
     await Assert.That(other).IsEqualTo(StartGateReason.ForeignBinary);
 }
 
@@ -1760,7 +1760,7 @@ public async Task Stale_unit_expectation_is_identity_mismatch() {
         "KCAP_EXPECT_SERVER_URL" => "https://t.example",  // fresh invocation expects T
         _ => null };
     // digest can't pass in test builds — inject a digest-pass seam for identity-only tests:
-    var r = ServiceVerify.EvaluateStartGate(unit, "/b", "/b", Env, digestMatches: _ => true);
+    var r = LaunchdServiceVerify.EvaluateStartGate(unit, "/b", "/b", Env, digestMatches: _ => true);
     await Assert.That(r).IsEqualTo(StartGateReason.IdentityMismatch);
 }
 ```
@@ -1773,12 +1773,12 @@ public async Task Stale_unit_expectation_is_identity_mismatch() {
 
 - [ ] **Step 4: Wire Phase A + Phase B into `StartVerifiedAsync`** (gated only when `gateEnv(SeedVar)` non-empty): Phase A after the initial under-lock query using `readPlist(plistPath)` + `EnvFromPlist`; Phase B replaces the kickstart arm — `manager.Stop(id)` (bootout) when loaded, re-read plist + re-check digest, drift → write marker phase `"gate-drift"` → `Rollback(serviceId)` → print `verify_start_gate_drift` + reason line context → return 29. Add `FakeServiceManager`-driven tests: loaded-inactive unit whose `readPlist` seam returns different content on the second read → exit 29, final state unloaded-plist-retained (assert `manager.Calls` has `stop` and no `start` after drift); pre-mutation gate failure → exit 28 and `manager.Calls` contains only `query` entries.
 
-- [ ] **Step 5: Run the ServiceVerify suites. Expected: PASS (existing ungated tests untouched — gate default-inactive).**
+- [ ] **Step 5: Run the LaunchdServiceVerify suites. Expected: PASS (existing ungated tests untouched — gate default-inactive).**
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/Capacitor.Cli/Services/ServiceVerify.cs test/Capacitor.Cli.Tests.Unit/Services/
+git add src/Capacitor.Cli/Services/LaunchdServiceVerify.cs test/Capacitor.Cli.Tests.Unit/Services/
 git commit -m "AI-1655: gated service start — exit 28 phase-A reasons, exit 29 phase-B drift"
 ```
 
@@ -1787,8 +1787,8 @@ git commit -m "AI-1655: gated service start — exit 28 phase-A reasons, exit 29
 ### Task 17: Install/replace digest viability arm + rechecks
 
 **Files:**
-- Modify: `src/Capacitor.Cli/Services/ServiceVerify.cs:242-360` (`InstallVerifiedAsync`)
-- Test: extend `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyInstallTests.cs`
+- Modify: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs:242-360` (`InstallVerifiedAsync`)
+- Test: extend `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyInstallTests.cs`
 
 **Interfaces:**
 - Consumes: `DaemonDigest`, the existing viability arm (missing sibling / unusable profile → `VerifyExit.Viability`).
@@ -1806,7 +1806,7 @@ public async Task Gated_install_with_bad_sibling_digest_aborts_viability_with_re
         Task<HelloProbeResult> Hello(string id, TimeSpan _) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
         var stderr = CaptureStderr(); // suite helper capturing Console.Error, or assert via Say-seam
-        var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new LaunchdServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             digestMatches: _ => false);   // viability digest check fails
 
@@ -1827,7 +1827,7 @@ public async Task Gated_install_digest_drift_before_bootstrap_rolls_back_with_29
         Task<HelloProbeResult> Hello(string id, TimeSpan _) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
         var digestCalls = 0;
-        var sut = new ServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new LaunchdServiceVerify(manager, _ => 4242, Hello, TimeProvider.System,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null,
             digestMatches: _ => Interlocked.Increment(ref digestCalls) == 1); // pass viability, fail pre-bootstrap
 
@@ -1851,7 +1851,7 @@ public async Task Gated_install_digest_drift_before_bootstrap_rolls_back_with_29
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/Capacitor.Cli/Services/ServiceVerify.cs test/Capacitor.Cli.Tests.Unit/Services/
+git add src/Capacitor.Cli/Services/LaunchdServiceVerify.cs test/Capacitor.Cli.Tests.Unit/Services/
 git commit -m "AI-1655: install/replace embedded-digest viability + pre-bootstrap and post-readiness rechecks"
 ```
 
@@ -1860,7 +1860,7 @@ git commit -m "AI-1655: install/replace embedded-digest viability + pre-bootstra
 ### Task 18: Boot-refusal attribution in verify readiness failures
 
 **Files:**
-- Modify: `src/Capacitor.Cli/Services/ServiceVerify.cs` (pre-clear + readiness-failure marker consultation)
+- Modify: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs` (pre-clear + readiness-failure marker consultation)
 - Create: `src/Capacitor.Cli/Services/BootRefusalReader.cs` (CLI-side read of the daemon's marker)
 - Test: `test/Capacitor.Cli.Tests.Unit/Services/BootRefusalAttributionTests.cs` (new)
 
@@ -1883,7 +1883,7 @@ public static class BootRefusalReader {
     public static void Consume(string daemonName);                      // best-effort delete after attribution
 }
 
-// ServiceVerify (gated path): attribution rules —
+// LaunchdServiceVerify (gated path): attribution rules —
 //   pre-clear: TryClear before bootstrap; false → coded attribution DISABLED for this action (log line), proceed.
 //   on readiness timeout: TryRead; attribute ONLY when evidence.DaemonName == serviceId's daemon name
 //   AND evidence.Expectation == the unit's baked KCAP_EXPECT_SERVER_URL
@@ -1903,25 +1903,25 @@ public class BootRefusalAttributionTests {
     [Test]
     public async Task Marker_with_matching_name_expectation_and_observed_pid_attributes() {
         var e = new BootRefusalEvidence("d1", "server_expectation_mismatch", "https://s", "https://t", 4242, "i", null);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsTrue();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsTrue();
     }
 
     [Test]
     public async Task Foreign_pid_never_attributes_even_with_same_name_and_expectation() {
         var e = new BootRefusalEvidence("d1", "server_expectation_mismatch", "https://s", "https://t", 9999, "i", null);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Different_daemon_name_never_attributes() {
         var e = new BootRefusalEvidence("other", "consent_seed_unwritable", null, null, 4242, "i", null);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", null, new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", null, new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Attempt_id_bearing_marker_is_detached_evidence_not_service_evidence() {
         var e = new BootRefusalEvidence("d1", "server_expectation_mismatch", "https://s", "https://t", 4242, "i", "att-1");
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
     }
 }
 ```

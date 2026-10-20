@@ -4,7 +4,7 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
-public class ServiceVerifyStartTests {
+public class LaunchdServiceVerifyStartTests {
     /// <summary>A clock nothing advances: these tests resolve on their first probe, and a loaded
     /// runner stalled between entry and that probe would otherwise spend the whole forward budget.</summary>
     static FakeTimeProvider Stopped() => new();
@@ -140,7 +140,7 @@ public class ServiceVerifyStartTests {
             return Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped());
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped());
 
         var exit = await sut.StartVerifiedAsync(Id);
 
@@ -162,7 +162,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(false, null, null, null));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
 
         var task = sut.StartVerifiedAsync(Id);
         var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
@@ -181,7 +181,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 222, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 222, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
 
         var task = sut.StartVerifiedAsync(Id);
         var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
@@ -200,7 +200,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, null, "0.9.0", null));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped());
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped());
 
         var exit = await sut.StartVerifiedAsync(Id);
 
@@ -216,7 +216,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(false, null, null, null));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2), rollbackReserve: TimeSpan.FromSeconds(1));
 
         var task = sut.StartVerifiedAsync(Id);
@@ -246,7 +246,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(false, null, null, null));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2), rollbackReserve: TimeSpan.FromSeconds(1));
 
         var task = sut.StartVerifiedAsync(Id);
@@ -270,7 +270,7 @@ public class ServiceVerifyStartTests {
         Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(helloCalls++ == 0, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
 
         var task = sut.StartVerifiedAsync(Id);
         var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
@@ -297,7 +297,7 @@ public class ServiceVerifyStartTests {
             return Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
 
         var exit = await sut.StartVerifiedAsync(Id);
 
@@ -321,7 +321,7 @@ public class ServiceVerifyStartTests {
             return Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2), rollbackReserve: TimeSpan.FromSeconds(1));
 
         var task = sut.StartVerifiedAsync(Id);
@@ -348,7 +348,7 @@ public class ServiceVerifyStartTests {
             return Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => manager.RunningPid, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => manager.RunningPid, Hello, time, forwardBudget: TimeSpan.FromSeconds(2));
 
         var task = sut.StartVerifiedAsync(Id);
         var exit = await Drive(task, time, TimeSpan.FromMilliseconds(500));
@@ -369,7 +369,7 @@ public class ServiceVerifyStartTests {
         // A crash between verify-success and marker removal must be recoverable as "committed →
         // just clear the marker", so the durable committed phase is written BEFORE the delete —
         // mirroring the install path.
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             onCommitted: () => phaseAtCommit = ServiceTxnMarker.Read(Daemons.Store, Id)?.Phase);
 
         var exit = await sut.StartVerifiedAsync(Id);
@@ -432,7 +432,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => null,
             plistExists: _ => false,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
@@ -466,7 +466,7 @@ public class ServiceVerifyStartTests {
 
         // The wall clock, not a stopped one: the second call reaches Contended only by exhausting a
         // real lock wait, and the gap between its attempts is measured on whatever clock it is given.
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
             readPlist: _ => null,
             plistExists: _ => false,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
@@ -509,7 +509,7 @@ public class ServiceVerifyStartTests {
                 : MinimalPlist("/bin/kcap-daemon-moved", "prompt", GatedServerUrl);
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: ReadPlist,
             gateEnv: GatedEnvWithIdentity(),
             digestMatches: _ => true);
@@ -539,7 +539,7 @@ public class ServiceVerifyStartTests {
         // defends against — makes LaunchdUnit.EnvFromPlist/BinaryFromPlist throw XmlException.
         // That must land as EvidenceUnreadable (28), not escape StartVerifiedAsync to a
         // generic, uncoded exit 1.
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => "<plist version=\"1.0\"><dict><key>Truncated",
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
 
@@ -579,7 +579,7 @@ public class ServiceVerifyStartTests {
             </plist>
             """;
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => duplicateKeyPlist,
             gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
 
@@ -612,7 +612,7 @@ public class ServiceVerifyStartTests {
             return reads == 1 ? MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl) : "not even xml, let alone a plist";
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: ReadPlist,
             gateEnv: GatedEnvWithIdentity(),
             digestMatches: _ => true);
@@ -646,7 +646,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl),
             gateEnv: GatedEnvWithIdentity(),
             digestMatches: _ => true);
@@ -678,7 +678,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2), rollbackReserve: TimeSpan.FromSeconds(2),
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl),
             gateEnv: GatedEnvWithIdentity(),
@@ -718,7 +718,7 @@ public class ServiceVerifyStartTests {
                 : MinimalPlist("/bin/kcap-daemon-moved", "prompt", GatedServerUrl);
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: ReadPlist,
             gateEnv: GatedEnvWithIdentity(),
             digestMatches: _ => true);
@@ -750,7 +750,7 @@ public class ServiceVerifyStartTests {
             return digestChecks <= 2;
         }
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl),
             gateEnv: GatedEnvWithIdentity(),
             digestMatches: DigestMatches);
@@ -773,7 +773,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => { readPlistCalls++; return MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl); });
         // no gateEnv — ungated
 
@@ -794,7 +794,7 @@ public class ServiceVerifyStartTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, Stopped(),
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", GatedServerUrl),
             gateEnv: GatedEnvWithIdentity(),
             digestMatches: _ => true);

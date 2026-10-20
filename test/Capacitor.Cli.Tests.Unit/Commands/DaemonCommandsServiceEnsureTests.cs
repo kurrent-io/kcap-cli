@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <summary>
 /// Dispatch rows of <c>kcap daemon service ensure</c> that need no real service manager: the
 /// already-enabled and fail-closed-attention rows are pure classification reads. (The install/start
-/// arms on launchd run the ServiceVerify transaction — covered by the engine's own suites; the
+/// arms on launchd run the LaunchdServiceVerify transaction — covered by the engine's own suites; the
 /// plain arms need the daemon binary present, which a unit test host does not have.)
 /// </summary>
 /// <remarks>Bare <c>[NotInParallel]</c>: <c>Ensure</c> writes to the process-global

@@ -57,6 +57,7 @@ static class SystemdUnit {
     public static string[] IsActiveArgs(string id)  => ["--user", "is-active", UnitName(id)];
     public static string[] IsEnabledArgs(string id) => ["--user", "is-enabled", UnitName(id)];
     public static string[] NeedDaemonReloadArgs(string id) => ["--user", "show", "--property=NeedDaemonReload", "--value", UnitName(id)];
+    public static string[] ShowStateArgs(string id) => ["--user", "show", "--property=ActiveState,UnitFileState,MainPID", UnitName(id)];
 
     /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
     public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
@@ -64,6 +65,62 @@ static class SystemdUnit {
     public static ServiceState StatusFrom(string activeOut, int enabledExit) {
         if (activeOut.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)) return ServiceState.Running;
         return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
+    }
+
+    // The UnitFileState values for which `systemctl is-enabled` exits 0, so both probes agree on Installed.
+    static readonly string[] EnabledFileStates = ["enabled", "enabled-runtime", "static", "alias", "indirect", "generated", "transient"];
+
+    /// <summary>
+    /// A query from <see cref="ShowStateArgs"/> output. <c>MainPID</c> is the daemon's own pid because
+    /// <c>ExecStart</c> runs it directly. A failed <c>systemctl</c> — no user bus over SSH or in a container —
+    /// reads <see cref="LabelProbe.Unknown"/>, never Absent: absence would let a verify treat a live unit as free.
+    /// </summary>
+    public static ServiceQuery QueryFromShow(int exitCode, string output, bool unitPresent, string? binaryPath) {
+        if (exitCode != 0) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, binaryPath, null);
+
+        var props = output.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Contains('='))
+            .ToDictionary(l => l[..l.IndexOf('=')], l => l[(l.IndexOf('=') + 1)..], StringComparer.Ordinal);
+
+        var active  = props.GetValueOrDefault("ActiveState") == "active";
+        var enabled = EnabledFileStates.Contains(props.GetValueOrDefault("UnitFileState"));
+        var state   = active ? ServiceState.Running : enabled ? ServiceState.Installed : ServiceState.NotInstalled;
+        var pid     = active && int.TryParse(props.GetValueOrDefault("MainPID"), out var p) && p > 0 ? p : (int?)null;
+
+        return new ServiceQuery(state == ServiceState.NotInstalled ? LabelProbe.Absent : LabelProbe.Loaded, unitPresent, state, binaryPath, pid);
+    }
+
+    /// <summary>
+    /// The <c>Environment=</c> assignments of a unit <see cref="Unit"/> rendered, undoing its quoting and
+    /// <c>%</c> doubling, so a rename can prove the unit it retires belongs to the same profile.
+    /// </summary>
+    public static Dictionary<string, string> EnvFromUnit(string unitText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var raw in unitText.Split('\n')) {
+            var line = raw.Trim();
+            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
+
+            var assignment = line["Environment=".Length..];
+            if (assignment.Length >= 2 && assignment[0] == '"' && assignment[^1] == '"')
+                assignment = Unescape(assignment[1..^1]);
+
+            var eq = assignment.IndexOf('=');
+            if (eq <= 0) continue;
+            env[assignment[..eq]] = assignment[(eq + 1)..].Replace("%%", "%");
+        }
+
+        return env;
+    }
+
+    static string Unescape(string s) {
+        var sb = new StringBuilder(s.Length);
+        for (var i = 0; i < s.Length; i++) {
+            if (s[i] == '\\' && i + 1 < s.Length) i++;
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

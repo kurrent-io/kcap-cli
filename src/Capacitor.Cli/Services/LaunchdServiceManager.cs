@@ -93,7 +93,7 @@ sealed partial class LaunchdServiceManager(
     /// together, contained so that ANY failure — an I/O error, malformed XML, a duplicate
     /// <c>ProgramArguments</c> key — yields null rather than escaping. <see cref="Query(string)"/>
     /// and <see cref="Status"/> are total, never-throwing probes; the gate's own contained Phase-A
-    /// parse (<c>ServiceVerify</c>'s <c>_readPlist</c> path) remains the sole authority for coded
+    /// parse (<c>LaunchdServiceVerify</c>'s <c>_readPlist</c> path) remains the sole authority for coded
     /// evidence classification (malformed → <c>evidence_unreadable</c>).</summary>
     static string? ReadBinaryPathSafe(string path) {
         try { return LaunchdUnit.BinaryFromPlist(File.ReadAllText(path)); }

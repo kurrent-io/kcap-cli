@@ -46,12 +46,9 @@ sealed class SystemdServiceManager(
     public ServiceQuery Query(string serviceId) {
         var path = SystemdUnit.UnitPath(home, serviceId);
         var unitPresent = File.Exists(path);
-        var (_, active, _)      = ServiceProcess.Run("systemctl", SystemdUnit.IsActiveArgs(serviceId));
-        var (enabledExit, _, _) = ServiceProcess.Run("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
         var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
-        var state = SystemdUnit.StatusFrom(active, enabledExit);
-        var probe = state != ServiceState.NotInstalled ? LabelProbe.Loaded : LabelProbe.Absent;
-        return new ServiceQuery(probe, unitPresent, state, bin, null);
+        var (exit, output, _) = _runProcess("systemctl", SystemdUnit.ShowStateArgs(serviceId));
+        return SystemdUnit.QueryFromShow(exit, output, unitPresent, bin);
     }
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
@@ -120,29 +117,39 @@ sealed class SystemdServiceManager(
         return code == 0 ? null : $"systemctl {string.Join(' ', args)} failed (exit {code}): {err.Trim()}";
     }
 
-    /// <summary>No distinct verify path for systemd yet — delegate mechanically to <see cref="Install"/>.</summary>
     public void WriteAndBootstrap(ServiceSpec spec) {
         if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);
     }
 
+    /// <summary>A failed disable keeps the unit when its daemon may still run, so a rollback never reports
+    /// a removal that left the process behind.</summary>
     public bool Uninstall(string serviceId, out string? error) {
-        ServiceProcess.Run("systemctl", SystemdUnit.DisableNowArgs(serviceId));
+        if (Systemctl(SystemdUnit.DisableNowArgs(serviceId)) is { } disableError
+         && Query(serviceId) is { Probe: LabelProbe.Unknown } or { State: ServiceState.Running }) {
+            error = $"{disableError}; the daemon may still be running, so its unit was kept";
+            return false;
+        }
+
         var path = SystemdUnit.UnitPath(home, serviceId);
-        if (File.Exists(path)) File.Delete(path);
-        ServiceProcess.Run("systemctl", SystemdUnit.DaemonReloadArgs());
+        try {
+            if (File.Exists(path)) File.Delete(path);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            error = $"could not remove {path}: {ex.Message}";
+            return false;
+        }
+
+        Systemctl(SystemdUnit.DaemonReloadArgs());
         error = null;
         return true;
     }
 
     public bool Start(string serviceId, out string? error) {
-        ServiceProcess.Check("systemctl", SystemdUnit.StartArgs(serviceId));
-        error = null;
-        return true;
+        error = Systemctl(SystemdUnit.StartArgs(serviceId));
+        return error is null;
     }
 
     public bool Stop(string serviceId, out string? error) {
-        ServiceProcess.Check("systemctl", SystemdUnit.StopArgs(serviceId));
-        error = null;
-        return true;
+        error = Systemctl(SystemdUnit.StopArgs(serviceId));
+        return error is null;
     }
 }

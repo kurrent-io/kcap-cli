@@ -6,9 +6,9 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 
 /// <summary>Proves <see cref="LaunchdServiceManager"/>'s default, unstubbed plist read never lets
 /// a malformed or unreadable on-disk unit escape the start gate as an uncoded failure — end to end
-/// through the REAL manager, complementing <see cref="ServiceVerifyStartTests"/>'s stubbed-seam
+/// through the REAL manager, complementing <see cref="LaunchdServiceVerifyStartTests"/>'s stubbed-seam
 /// coverage of the same contract.</summary>
-public class ServiceVerifyStartGateProductionPathTests {
+public class LaunchdServiceVerifyStartGateProductionPathTests {
     const string Id = "prodpath";
 
     // A duplicate top-level ProgramArguments key — never written by LaunchdUnit.Plist itself, so
@@ -46,7 +46,7 @@ public class ServiceVerifyStartGateProductionPathTests {
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
         public async Task<(int Exit, string[] StdErrLines)> RunStartVerifiedAsync() {
-            var sut = new ServiceVerify(Store, Config, Manager, _ => 4242, Hello, TimeProvider.System,
+            var sut = new LaunchdServiceVerify(Store, Config, Manager, _ => 4242, Hello, TimeProvider.System,
                 gateEnv: k => k == "KCAP_CONSENT_SEED_DEFAULT" ? "prompt" : null);
 
             using var capture = ConsoleOutput.StartErrorCapture();

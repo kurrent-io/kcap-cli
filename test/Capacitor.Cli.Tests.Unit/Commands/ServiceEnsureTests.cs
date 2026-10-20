@@ -60,7 +60,7 @@ public class EnsureClassifierTests {
     }
 
     // launchd reports the job pid, so already-enabled additionally requires the running job to OWN
-    // the validated daemon pid (the same ownership predicate ServiceVerify.IsReadyAsync uses).
+    // the validated daemon pid (the same ownership predicate LaunchdServiceVerify.IsReadyAsync uses).
     [Test]
     public async Task Launchd_running_with_job_pid_matching_the_validated_daemon_is_already_enabled() {
         var d = EnsureClassifier.Classify(LabelProbe.Loaded, ServiceState.Running, unitPresent: true, daemonPid: 42, txnMarker: false, txnActive: false, jobPid: 42, jobPidAvailable: true);

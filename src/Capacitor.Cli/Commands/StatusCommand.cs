@@ -388,7 +388,7 @@ public sealed class StatusCommand(
             return ([], false);
         }
 
-        var verifySupported = manager is LaunchdServiceManager or WindowsScheduledTaskServiceManager;
+        var verifySupported = DaemonServiceCommands.SupportsVerify(manager);
         try {
             return (await Task.Run(() => ReadUnits(manager)).WaitAsync(UnitsBudget, time), verifySupported);
         } catch (TimeoutException) {

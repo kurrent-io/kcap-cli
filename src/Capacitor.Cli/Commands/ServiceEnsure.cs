@@ -110,7 +110,7 @@ internal static class EnsureFailureMap {
             int exit, StartGateReason? gateReason, bool verified,
             string? viabilityReason = null, string? bootRefusalToken = null) {
         if (exit == VerifyExit.StartGate) {
-            var reason = gateReason is { } r ? ServiceVerify.GateReasonToken(r) : null;
+            var reason = gateReason is { } r ? LaunchdServiceVerify.GateReasonToken(r) : null;
             var surface = reason is not null
                 ? ReasonRouting.ForStartGate(reason)
                 : RecoverySurface.Attention;
