@@ -181,6 +181,7 @@ public partial class App : Application {
     LocalServerRecoveryViewModel? _localServer;
     // Only on a machine whose server is its local installation; a quit settles the upgrade like the install.
     LocalUpgradeController? _localUpgrade;
+    LocalSearchController? _localSearch;
     LocalStackViewModel? _localStack;
     // The server-side clients that outlive a window rebuild (MainWindowCoordinator can build a
     // second window over the same launch client) and own live transports. Torn down through one
@@ -355,6 +356,7 @@ public partial class App : Application {
             _lifecycle = null;
             _lane = null;
             _localUpgrade = null;
+            _localSearch = null;
             _shimOffer = null; // no disposal of its own (see field comment) — just drop the reference
             _consentFlip = null; // same — no disposal of its own
             _tray = null;
@@ -692,9 +694,14 @@ public partial class App : Application {
         // The bundled CLI's own coordinator, never a hook: the stack follows the CLI this app ships.
         var localUpgrade = isLocalServer ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
         _localUpgrade = localUpgrade;
+        var localSearch = isLocalServer ? new LocalSearchController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
+        _localSearch = localSearch;
         var localStack = localUpgrade is null ? null : new LocalStackViewModel(
             () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
-            () => serverLane.RestartAsync(), _shutdown.Token);
+            () => serverLane.RestartAsync(), _shutdown.Token) {
+            Search = localSearch is null ? null : new LocalSearchViewModel(
+                () => LocalEmbeddingFile.Read(_localRoot), localSearch, localUpgrade, () => serverLane.RestartAsync(), _shutdown.Token),
+        };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;
         if (localStack is not null) stackOwnsStart = localStack.WhenAnyValue(x => x.SuppressesServerStart);
@@ -2069,8 +2076,9 @@ public partial class App : Application {
         // An in-flight sign-in always settles, mutations get a bounded chance
         // to — both while the UI is still up, before teardown.
         if (_wizardAuth is not null || _historyImport is not null || _localInstall is not null || _lifecycle is not null
-         || _lane is not null || _localUpgrade is not null)
-            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time, _localUpgrade)
+         || _lane is not null || _localUpgrade is not null || _localSearch is not null)
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time, _localUpgrade,
+                    _localSearch)
                 .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -2124,17 +2132,18 @@ public partial class App : Application {
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install and upgrade finish
+    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install, upgrade and search change finish
     /// uncapped so an in-progress commit, switch or rollback isn't torn down, then lifecycle/lane quiesce
     /// under the cap.</summary>
     internal static async Task QuiesceAppAsync(
             WizardAuthService? auth, HistoryStepViewModel? import, LocalInstallController? install,
             DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time,
-            LocalUpgradeController? upgrade = null) {
+            LocalUpgradeController? upgrade = null, LocalSearchController? search = null) {
         var authTerminal = CancelAndAwaitAuthAsync(auth);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
         if (install is not null) await install.SettleAsync().ConfigureAwait(false);
         if (upgrade is not null) await upgrade.SettleAsync().ConfigureAwait(false);
+        if (search is not null) await search.SettleAsync().ConfigureAwait(false);
         await authTerminal.ConfigureAwait(false);
         await AwaitQuiescedAsync(() => QuiesceLifecycleAndLaneAsync(lifecycle, lane), cap, time).ConfigureAwait(false);
     }

@@ -181,7 +181,9 @@ internal static class WizardComposition {
                 ? config.ActiveName
                 : null,
             // A committed machine has nothing left to install.
-            onLocalPath: () => OnLocalPath() && !CommittedLocal());
+            onLocalPath: () => OnLocalPath() && !CommittedLocal(),
+            recorded: () => LocalEmbeddingFile.Read(root),
+            resuming: Pending);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time,

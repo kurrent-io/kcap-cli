@@ -95,6 +95,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         });
     }
 
+    public LocalSearchViewModel? Search { get; init; }
+
     LocalUpgradeProgress Progress => _upgrade.Progress;
 
     public bool Upgrading => _upgrade.Running;
@@ -260,5 +262,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         foreach (var name in Derived) this.RaisePropertyChanged(name);
     }
 
-    public void Dispose() => _disposables.Dispose();
+    public void Dispose() {
+        Search?.Dispose();
+        _disposables.Dispose();
+    }
 }

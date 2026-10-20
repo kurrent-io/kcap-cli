@@ -1,17 +1,16 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Skills;
 
-namespace Capacitor.Cli.LocalEdition;
+namespace Capacitor.Cli.Core.LocalEdition;
 
 /// <summary>
-/// <c>data/embedding.json</c>: the embedding model setup chose, or that the user declined one. A model is what
-/// <see cref="LocalServerUnit"/> renders into the server's environment; a decline is kept so that a later setup which
+/// <c>data/embedding.json</c>: the embedding model setup chose, or that the user declined one. A model is what the
+/// server's service passes to it in its environment; a decline is kept so that a later setup which
 /// asks nothing does not undo it. It lives under <c>data/</c> because it describes the vectors stored there: a rollback
 /// or a purge that deletes them deletes it too, and an uninstall that keeps them keeps it.
 /// </summary>
-static partial class LocalEmbeddingFile {
+public static partial class LocalEmbeddingFile {
     const string OllamaProvider = "ollama";
     const string NoProvider     = "none";
 

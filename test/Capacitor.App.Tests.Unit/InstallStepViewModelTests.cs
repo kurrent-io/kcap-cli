@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services.LocalSetup;
@@ -15,6 +16,11 @@ public class InstallStepViewModelTests {
 
     static InstallStepViewModel Step(LocalInstallController controller, string? appProfile = "default", string? active = "default") =>
         new(controller, () => appProfile, () => active, () => true);
+
+    static async Task EnterAndInstallAsync(InstallStepViewModel install) {
+        await install.OnEnterAsync(CancellationToken.None);
+        await install.InstallCommand.Execute().ToTask();
+    }
 
     static LocalInstallController Controller(FakeKcapCli cli, LocalRoot root, TelemetryProbe probe, Action<Action>? post = null) =>
         new(() => cli, root, () => false, post ?? (action => action()), probe.Funnel);
@@ -35,6 +41,7 @@ public class InstallStepViewModelTests {
             await vm.PendingEnterForTesting;
 
             await vm.NextCommand.Execute().ToTask();
+            await install.InstallCommand.Execute().ToTask();
             await vm.PendingAdvanceForTesting;
 
             return (vm.Current.Id, advances);
@@ -67,6 +74,7 @@ public class InstallStepViewModelTests {
             ]);
             await vm.PendingEnterForTesting;
             await vm.NextCommand.Execute().ToTask();
+            await install.InstallCommand.Execute().ToTask();
             var before = vm.Current.Id;
 
             var settled = new TaskCompletionSource();
@@ -91,7 +99,7 @@ public class InstallStepViewModelTests {
 
         var (failureVisible, tryAgain) = await AvaloniaSession.DispatchAsync(async () => {
             var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
-            await Step(controller).OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(Step(controller));
 
             // A reopened wizard builds a new page over the same controller.
             var reopened = Step(controller);
@@ -113,7 +121,7 @@ public class InstallStepViewModelTests {
 
         var (tryAgain, back, locked, message, canBack) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
 
             return (install.TryAgainVisible, install.BackVisible, install.LockedVisible, install.FailureMessage,
                 await install.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None));
@@ -136,7 +144,7 @@ public class InstallStepViewModelTests {
 
         var (tryAgain, back, message) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
 
             return (install.TryAgainVisible, install.BackVisible, install.FailureMessage);
         });
@@ -158,7 +166,7 @@ public class InstallStepViewModelTests {
 
         var (message, detail, detailVisible) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
 
             return (install.FailureMessage, install.FailureDetail, install.FailureDetailVisible);
         });
@@ -180,7 +188,7 @@ public class InstallStepViewModelTests {
 
         var shown = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()));
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
 
             return string.Join("\n", new[] { install.FailureMessage, install.FailureDetail }.Where(t => t is not null));
         });
@@ -225,7 +233,7 @@ public class InstallStepViewModelTests {
 
         var (message, detail) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
 
             return (install.FailureMessage, install.FailureDetail);
         });
@@ -242,7 +250,7 @@ public class InstallStepViewModelTests {
 
         var (tryAgain, back, locked, canBack, runs) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), probe));
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
             var shown = (install.TryAgainVisible, install.BackVisible, install.LockedVisible,
                 await install.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None));
 
@@ -279,7 +287,7 @@ public class InstallStepViewModelTests {
         var (cancel, back, canBack, canNext, after) = await AvaloniaSession.DispatchAsync(async () => {
             var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
             var install = Step(controller);
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
             var shown = (install.CancelVisible, install.BackVisible,
                 await install.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None),
                 await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None));
@@ -327,7 +335,7 @@ public class InstallStepViewModelTests {
             var offPath = install.PassThrough;
             onLocal = true;
             var before = install.PassThrough;
-            await install.OnEnterAsync(CancellationToken.None);
+            await EnterAndInstallAsync(install);
 
             return (offPath, before, install.PassThrough);
         });
@@ -345,11 +353,13 @@ public class InstallStepViewModelTests {
 
         var (running, failed) = await AvaloniaSession.DispatchAsync(async () => {
             var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
+            var install = Step(controller);
             var vm = new OnboardingViewModel([
-                new FakeWizardStep(WizardStepId.Edition), Step(controller), new FakeWizardStep(WizardStepId.Done),
+                new FakeWizardStep(WizardStepId.Edition), install, new FakeWizardStep(WizardStepId.Done),
             ]);
             await vm.PendingEnterForTesting;
             await vm.NextCommand.Execute().ToTask();
+            await install.InstallCommand.Execute().ToTask();
             var running = vm.BackVisible;
 
             exit.SetResult(new StreamingResult(1, false, []));
@@ -360,5 +370,64 @@ public class InstallStepViewModelTests {
 
         await Assert.That(running).IsFalse();
         await Assert.That(failed).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Entry_asks_about_search_and_starts_nothing_until_install() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var (choice, progress, runsBefore) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+            var shown = (install.ChoiceVisible, install.ProgressVisible, cli.SetupLocalCallCount);
+
+            install.Search.UseKeyword = true;
+            await install.InstallCommand.Execute().ToTask();
+
+            return shown;
+        });
+
+        await Assert.That(choice).IsTrue();
+        await Assert.That(progress).IsFalse();
+        await Assert.That(runsBefore).IsEqualTo(0);
+        await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.KeywordOnly], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_choice_starts_from_the_recorded_model_and_a_retry_keeps_it() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed")) };
+
+        var (other, model) = await AvaloniaSession.DispatchAsync(async () => {
+            var install = new InstallStepViewModel(
+                Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), () => "default", () => "default", () => true,
+                () => new LocalEmbeddingSetting("nomic-embed-text"));
+            await EnterAndInstallAsync(install);
+            await install.TryAgainCommand.Execute().ToTask();
+
+            return (install.Search.UseOther, install.Search.OtherModel);
+        });
+
+        await Assert.That(other).IsTrue();
+        await Assert.That(model).IsEqualTo("nomic-embed-text");
+        await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo(
+            [new LocalEmbeddingChoice("nomic-embed-text"), new LocalEmbeddingChoice("nomic-embed-text")], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Another_model_with_no_name_cannot_install() {
+        var cli = new FakeKcapCli();
+
+        var canInstall = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            await install.OnEnterAsync(CancellationToken.None);
+            install.Search.UseOther = true;
+
+            return await install.InstallCommand.CanExecute.FirstAsync().ToTask();
+        });
+
+        await Assert.That(canInstall).IsFalse();
     }
 }

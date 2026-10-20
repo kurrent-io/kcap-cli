@@ -1,6 +1,8 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels.Onboarding"
+             xmlns:vmr="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
              xmlns:views="clr-namespace:Capacitor.App.Views.Onboarding"
              xmlns:icons="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.Views.Onboarding.InstallPaneView"
@@ -13,6 +15,44 @@
                 <TextBlock Grid.Column="1" x:Name="RefusalText" Classes="frBody" TextWrapping="Wrap"
                            Text="{Binding RefusalMessage}" />
             </Grid>
+        </Border>
+
+        <Border Classes="frCard" IsVisible="{Binding ChoiceVisible}">
+            <StackPanel Spacing="12">
+                <StackPanel Spacing="10" DataContext="{Binding Search}" x:DataType="vmr:SearchChoiceViewModel">
+                    <TextBlock Classes="frLabel" FontSize="13" Text="Search by meaning" />
+                    <TextBlock Classes="frDetail" TextWrapping="Wrap" Text="{x:Static vmr:SearchChoiceViewModel.Explainer}" />
+                    <StackPanel Spacing="2">
+                        <RadioButton x:Name="SearchDefaultOption" Classes="frOption" GroupName="InstallSearch"
+                                     IsChecked="{Binding UseDefault, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="frLabel" FontSize="13" Text="{x:Static vmr:SearchChoiceViewModel.DefaultLabel}" />
+                                <TextBlock Classes="frDetail" TextWrapping="Wrap"
+                                           Text="{x:Static vmr:SearchChoiceViewModel.DefaultDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="SearchOtherOption" Classes="frOption" GroupName="InstallSearch"
+                                     IsChecked="{Binding UseOther, Mode=TwoWay}">
+                            <StackPanel Spacing="6">
+                                <TextBlock Classes="frLabel" FontSize="13" Text="Use another Ollama model" />
+                                <TextBox x:Name="SearchOtherModel" Classes="frField" PlaceholderText="Model name, e.g. nomic-embed-text"
+                                         Text="{Binding OtherModel, Mode=TwoWay}" IsEnabled="{Binding UseOther}"
+                                         AutomationProperties.Name="Ollama embedding model" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="SearchKeywordOption" Classes="frOption" GroupName="InstallSearch"
+                                     IsChecked="{Binding UseKeyword, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="frLabel" FontSize="13" Text="Search by keyword only" />
+                                <TextBlock Classes="frDetail" TextWrapping="Wrap"
+                                           Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                </StackPanel>
+                <Button x:Name="InstallButton" Classes="frPrimary" Content="Install" HorizontalAlignment="Left"
+                        Command="{Binding InstallCommand}" />
+            </StackPanel>
         </Border>
 
         <Border Classes="frCard" IsVisible="{Binding ProgressVisible}">
@@ -40,6 +80,8 @@
                                     </Panel>
                                     <icons:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Done}" />
+                                    <icons:AppIcon Kind="CircleMinus" Size="14" Foreground="{StaticResource FrMutedBrush}"
+                                                   IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Skipped}" />
                                 </Panel>
                                 <TextBlock Grid.Column="1" Classes="frBody" VerticalAlignment="Center" Text="{Binding Label}" />
                             </Grid>
@@ -51,6 +93,22 @@
                              Value="{Binding DownloadPercent}" IsIndeterminate="{Binding DownloadIndeterminate}"
                              Background="{StaticResource FrDividerBrush}" Foreground="{StaticResource FrAccentBrush}"
                              IsVisible="{Binding DownloadBarVisible}" />
+
+                <StackPanel Spacing="6" DataContext="{Binding Progress.Embeddings}" x:DataType="services:LocalEmbeddingProgress">
+                    <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
+                        <TextBlock x:Name="EmbeddingPullText" Classes="frDetail" Text="{Binding PullText}" />
+                        <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="1"
+                                     Value="{Binding PullFraction, FallbackValue=0, TargetNullValue=0}"
+                                     IsIndeterminate="{Binding PullFraction, Converter={x:Static ObjectConverters.IsNull}}"
+                                     Background="{StaticResource FrDividerBrush}" Foreground="{StaticResource FrAccentBrush}" />
+                    </StackPanel>
+                    <TextBlock x:Name="EmbeddingSummaryText" Classes="frDetail" TextWrapping="Wrap" Text="{Binding Summary}"
+                               IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="EmbeddingReembedText" Classes="frDetail" TextWrapping="Wrap" Text="{Binding ReembedNote}"
+                               IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock Classes="frDetail" TextWrapping="Wrap" IsVisible="{Binding Skipped}"
+                               Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
+                </StackPanel>
 
                 <Button x:Name="CancelInstallButton" Classes="frLink" Content="Cancel" HorizontalAlignment="Left"
                         AutomationProperties.Name="Cancel the install"

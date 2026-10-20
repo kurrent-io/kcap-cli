@@ -119,4 +119,64 @@ public class LocalSetupProgressTests {
         p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"rolled_back\"}")!);
         await Assert.That(p.RollingBack).IsFalse();
     }
+
+    [Test]
+    public async Task A_model_pull_runs_the_search_row_and_finishes_installing() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"unpacked\"}",
+            "{\"v\":1,\"event\":\"embeddings_ollama_found\",\"version\":\"0.12.3\",\"url\":\"http://localhost:11434\"}",
+            "{\"v\":1,\"event\":\"embeddings_model_pulling\",\"model\":\"mxbai-embed-large\"}",
+            "{\"v\":1,\"event\":\"embeddings_model_progress\",\"model\":\"mxbai-embed-large\",\"received\":50,\"bytes\":200}");
+
+        await Assert.That(p.Install.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Running);
+        await Assert.That(p.Embeddings.Pulling).IsTrue();
+        await Assert.That(p.Embeddings.PullFraction).IsEqualTo(0.25);
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading mxbai-embed-large… 25%");
+        await Assert.That(p.Embeddings.Summary).IsNull();
+    }
+
+    [Test]
+    public async Task A_configured_model_ends_in_search_by_meaning_and_names_a_replaced_one() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_model_ready\",\"model\":\"nomic-embed-text\",\"dimensions\":768}",
+            "{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"nomic-embed-text\",\"replaced_model\":\"mxbai-embed-large\"}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Pulling).IsFalse();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with nomic-embed-text.");
+        await Assert.That(p.Embeddings.ReembedNote!).Contains("embedded again with nomic-embed-text in the background");
+    }
+
+    /// The CLI's skip message is written for a terminal; the row keeps its cause and drops its advice.
+    [Test]
+    public async Task A_skip_ends_in_keyword_search_with_its_reason_and_fails_nothing() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"No Ollama answers on http://localhost:11434; search works by keyword.\"}",
+            "{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Skipped);
+        await Assert.That(p.Embeddings.Skipped).IsTrue();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("No Ollama answers on http://localhost:11434; search works by keyword.");
+        await Assert.That(p.FailedCode).IsNull();
+        await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Running);
+    }
+
+    [Test]
+    public async Task A_decline_reads_as_chosen_rather_than_the_cli_flag_advice() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"declined\",\"message\":\"Search by meaning stays off, as an earlier setup chose; --embedding-model <model> turns it on.\"}");
+
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by keyword, as chosen.");
+    }
+
+    [Test]
+    public async Task A_run_that_halts_mid_pull_leaves_the_search_row_pending() {
+        var p = Run("{\"v\":1,\"event\":\"embeddings_model_pulling\",\"model\":\"m\"}");
+
+        p.Halt();
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Pending);
+        await Assert.That(p.Embeddings.Pulling).IsFalse();
+    }
 }
