@@ -59,6 +59,14 @@ public class DaemonSignInTests {
         });
     }
 
+    /// A local server takes no sign-in, so neither the app's nor the daemon's sign-in notice may ask for one.
+    [Test]
+    [Arguments(HomeViewModel.SignInExpiredNotice)]
+    [Arguments(HomeViewModel.DaemonSignedOutNotice)]
+    public async Task A_local_server_reports_a_refusal_rather_than_asking_for_a_sign_in(string notice) =>
+        await Assert.That(HomeViewModel.NoticeForLocalServer(notice, localServer: true, localServerDown: false, remoteMachine: null))
+            .IsEqualTo(HomeViewModel.LocalServerRefusedNotice);
+
     [Test]
     [Arguments("work", "work", "The local daemon runs on this profile")]
     [Arguments("work", null, "If the local daemon runs on this profile")]

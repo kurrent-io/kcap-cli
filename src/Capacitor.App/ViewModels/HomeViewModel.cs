@@ -867,7 +867,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// (<paramref name="remoteMachine"/>) keeps its own notices, naming the machine when it is lost.
     internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown, string? remoteMachine) =>
         !localServer ? notice : (notice, remoteMachine) switch {
-            (SignInExpiredNotice, _)                                    => LocalServerRefusedNotice,
+            (SignInExpiredNotice or DaemonSignedOutNotice, _)           => LocalServerRefusedNotice,
             (ServerLostNotice, { } machine)                             => RemoteOfflineNotice(machine),
             (_, not null)                                               => notice,
             (ConnectingNotice or ServerLostNotice, _) when localServerDown => null,
