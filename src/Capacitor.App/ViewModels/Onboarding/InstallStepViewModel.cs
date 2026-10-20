@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Reactive;
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.Cli.Core.LocalEdition;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
@@ -21,19 +22,28 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<string?>          _appProfile;
     readonly Func<string?>          _configActiveProfile;
     readonly Func<bool>             _onLocalPath;
+    readonly Func<LocalEmbeddingSetting?> _recorded;
+    readonly Func<bool>             _resuming;
     CancellationToken               _lifetime;
     string?                         _refusal;
+    bool                            _choosing;
     IReadOnlyList<InstallStepRow>   _rows = [];
     LocalSetupProgress?             _watched;
 
+    /// <param name="recorded">The installation's recorded embedding setting; a disk read, run off the UI thread.</param>
+    /// <param name="resuming">True while an earlier setup is unfinished: the page finishes it without asking again.</param>
     public InstallStepViewModel(
             LocalInstallController controller, Func<string?> appProfile, Func<string?> configActiveProfile,
-            Func<bool> onLocalPath) {
+            Func<bool> onLocalPath, Func<LocalEmbeddingSetting?>? recorded = null, Func<bool>? resuming = null) {
         _controller          = controller;
         _appProfile          = appProfile;
         _configActiveProfile = configActiveProfile;
         _onLocalPath         = onLocalPath;
+        _recorded            = recorded ?? (() => null);
+        _resuming            = resuming ?? (() => false);
 
+        Search          = new SearchChoiceViewModel();
+        InstallCommand  = ReactiveCommand.CreateFromTask(InstallAsync, Search.WhenAnyValue(x => x.Valid));
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
         CancelCommand   = ReactiveCommand.Create(() => { if (CancelVisible) _controller.Interrupt(); });
 
@@ -54,6 +64,17 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public string Lede => "The server runs on this Mac and your sessions stay on it. This usually takes a minute or two.";
 
     public LocalSetupProgress Progress => _controller.Progress;
+
+    public SearchChoiceViewModel Search { get; }
+
+    /// The page asks about search by meaning before the run starts.
+    public bool ChoiceVisible {
+        get => _choosing;
+        private set {
+            this.RaiseAndSetIfChanged(ref _choosing, value);
+            this.RaisePropertyChanged(nameof(ProgressVisible));
+        }
+    }
 
     public IReadOnlyList<InstallStepRow> Rows {
         get => _rows;
@@ -89,7 +110,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool CancelVisible   => Running;
     public bool BackVisible     => !Running && Failure is not { LockedToLocal: true };
 
-    public bool ProgressVisible => RefusalMessage is null;
+    public bool ProgressVisible => RefusalMessage is null && !ChoiceVisible;
 
     public string? RefusalMessage {
         get => _refusal;
@@ -104,6 +125,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     public bool RefusalVisible => RefusalMessage is not null;
 
+    public ReactiveCommand<Unit, Unit> InstallCommand  { get; }
     public ReactiveCommand<Unit, Unit> TryAgainCommand { get; }
     public ReactiveCommand<Unit, Unit> CancelCommand   { get; }
 
@@ -131,8 +153,25 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         }
 
         RefusalMessage = null;
-        await _controller.StartAsync(ct);
+        if (ChoiceVisible) return;
+
+        LocalEmbeddingSetting? recorded;
+        try {
+            recorded = await Task.Run(_recorded, ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            return;
+        }
+        Search.Prefill(recorded);
+        // Only a known answer resumes unasked: the earlier run's choice may never have reached the record.
+        if (_resuming() && (_controller.Embeddings ?? Known(recorded)) is { } known) await _controller.StartAsync(known, ct);
+        else ChoiceVisible = true;
     }
+
+    static LocalEmbeddingChoice? Known(LocalEmbeddingSetting? recorded) => recorded switch {
+        null              => null,
+        { Model: null }   => LocalEmbeddingChoice.KeywordOnly,
+        { Model: { } m }  => new LocalEmbeddingChoice(m),
+    };
 
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) =>
         Task.FromResult(direction switch {
@@ -160,10 +199,19 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _                     => NotStartedText,
     };
 
+    Task InstallAsync() {
+        if (!ChoiceVisible || !Search.Valid) return Task.CompletedTask;
+
+        ChoiceVisible = false;
+        return _controller.StartAsync(Search.Choice, _lifetime);
+    }
+
     Task TryAgainAsync() => TryAgainVisible ? _controller.RetryAsync(_lifetime) : Task.CompletedTask;
 
     void OnSettled(LocalInstallOutcome outcome) {
         if (outcome is LocalInstallOutcome.Installed) AdvanceRequested?.Invoke();
+        // Refused arguments changed nothing, so the answers can be given again.
+        else if (outcome is LocalInstallOutcome.Failed { Code: "invalid_arguments" }) ChoiceVisible = true;
     }
 
     void OnControllerChanged(object? sender, PropertyChangedEventArgs e) {
@@ -204,6 +252,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             new("Downloading", next.Download),
             new("Verifying the signature", next.Verify),
             new("Installing", next.Install),
+            new("Search by meaning", next.Embeddings.Row),
             new("First start", next.FirstStart),
         ];
         RestateDownload();

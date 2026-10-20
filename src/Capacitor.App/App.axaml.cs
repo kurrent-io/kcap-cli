@@ -181,6 +181,7 @@ public partial class App : Application {
     LocalServerRecoveryViewModel? _localServer;
     // Only on a machine whose server is its local installation; a quit settles the upgrade like the install.
     LocalUpgradeController? _localUpgrade;
+    LocalSearchController? _localSearch;
     LocalStackViewModel? _localStack;
     // The server-side clients that outlive a window rebuild (MainWindowCoordinator can build a
     // second window over the same launch client) and own live transports. Torn down through one
@@ -356,7 +357,7 @@ public partial class App : Application {
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane, _localUpgrade);
+                _lifecycle, _lane, _localUpgrade, _localSearch);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -364,6 +365,7 @@ public partial class App : Application {
             _lifecycle = null;
             _lane = null;
             _localUpgrade = null;
+            _localSearch = null;
             _shimOffer = null; // no disposal of its own (see field comment) — just drop the reference
             _consentFlip = null; // same — no disposal of its own
             _tray = null;
@@ -711,11 +713,22 @@ public partial class App : Application {
             OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true);
         });
         // The bundled CLI's own coordinator, never a hook: the stack follows the CLI this app ships.
-        var localUpgrade = isLocalServer ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
+        // The upgrade and a search change both take the installation, so each holds the other off; both start on the UI thread.
+        LocalSearchController? localSearch = null;
+        var localUpgrade = isLocalServer
+            ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action), held: () => localSearch?.Running == true)
+            : null;
         _localUpgrade = localUpgrade;
+        localSearch = localUpgrade is null ? null
+            : new LocalSearchController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action), held: () => localUpgrade.Running);
+        _localSearch = localSearch;
         var localStack = localUpgrade is null ? null : new LocalStackViewModel(
             () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
-            () => serverLane.RestartAsync(), _shutdown.Token);
+            () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
+            Search = localSearch is null ? null : new LocalSearchViewModel(
+                () => LocalEmbeddingFile.Read(_localRoot), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
+                _shutdown.Token),
+        };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;
         if (localStack is not null) stackOwnsStart = localStack.WhenAnyValue(x => x.SuppressesServerStart);
@@ -1307,7 +1320,8 @@ public partial class App : Application {
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
-            DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null) {
+            DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null,
+            LocalSearchController? search = null) {
         // The dependent goes first (it subscribes to service's streams) — same ordering rule as
         // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
         // token and waits out any mutation it started; that wait is unbounded here on purpose — a
@@ -1343,6 +1357,10 @@ public partial class App : Application {
         if (upgrade is not null) {
             shutdown.Cancel();
             await upgrade.SettleAsync();
+        }
+        if (search is not null) {
+            shutdown.Cancel();
+            await search.SettleAsync();
         }
         // Same rule, same reason, for whatever the success path had already built when it threw
         // (tray icon first): the error window's close handler force-shuts-down, so this is their
@@ -2090,8 +2108,9 @@ public partial class App : Application {
         // An in-flight sign-in always settles, mutations get a bounded chance
         // to — both while the UI is still up, before teardown.
         if (_wizardAuth is not null || _historyImport is not null || _localInstall is not null || _lifecycle is not null
-         || _lane is not null || _localUpgrade is not null)
-            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time, _localUpgrade)
+         || _lane is not null || _localUpgrade is not null || _localSearch is not null)
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall, _lifecycle, _lane, QuiesceShutdownCap, _time, _localUpgrade,
+                    _localSearch)
                 .ConfigureAwait(false);
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
@@ -2145,17 +2164,18 @@ public partial class App : Application {
         await _serverClients.DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install and upgrade finish
+    /// <summary>Quiesces shutdown in two phases: sign-in, import and the local install, upgrade and search change finish
     /// uncapped so an in-progress commit, switch or rollback isn't torn down, then lifecycle/lane quiesce
     /// under the cap.</summary>
     internal static async Task QuiesceAppAsync(
             WizardAuthService? auth, HistoryStepViewModel? import, LocalInstallController? install,
             DaemonLifecycleController? lifecycle, DaemonMutationLane? lane, TimeSpan cap, TimeProvider time,
-            LocalUpgradeController? upgrade = null) {
+            LocalUpgradeController? upgrade = null, LocalSearchController? search = null) {
         var authTerminal = CancelAndAwaitAuthAsync(auth);
         if (import is not null) await import.CancelActiveRunAsync().ConfigureAwait(false);
         if (install is not null) await install.SettleAsync().ConfigureAwait(false);
         if (upgrade is not null) await upgrade.SettleAsync().ConfigureAwait(false);
+        if (search is not null) await search.SettleAsync().ConfigureAwait(false);
         await authTerminal.ConfigureAwait(false);
         await AwaitQuiescedAsync(() => QuiesceLifecycleAndLaneAsync(lifecycle, lane), cap, time).ConfigureAwait(false);
     }

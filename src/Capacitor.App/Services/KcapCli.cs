@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 
@@ -80,10 +81,11 @@ public interface IKcapCli {
     /// (imports are long; ct cancellation is the only bound).
     Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct);
 
-    /// `setup --local --json --single-user --yes`, streamed live via onLine. No internal timeout:
-    /// <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops only
-    /// through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
-    Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
+    /// `setup --local --json --single-user --yes` and the embedding choice's flag, streamed live via onLine. No
+    /// internal timeout: <paramref name="ct"/> bounds only the work before the spawn; once running, the child stops
+    /// only through <paramref name="interrupt"/>, which lets the CLI roll back before a tree kill.
+    Task<StreamingResult> SetupLocalAsync(
+        LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
 
     /// `local upgrade --json --no-update-check`, streamed live via onLine, with the same cancellation
     /// contract as <see cref="SetupLocalAsync"/>.
@@ -284,11 +286,12 @@ public sealed class KcapCli : IKcapCli {
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, ct).ConfigureAwait(false);
     }
 
-    public async Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+    public async Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
         if (CliPath is not { } cliPath)
             return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
 
-        return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes"],
+        return await _runner.RunStreamingAsync(cliPath, ["setup", "--local", "--json", "--single-user", "--yes", .. embeddings.Args],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: SetupInterruptGrace),
             onLine, CancellationToken.None).ConfigureAwait(false);
     }

@@ -15,6 +15,8 @@ public sealed class LocalSetupProgress : ReactiveObject {
     public InstallRow Install    { get; } = new();
     public InstallRow FirstStart { get; } = new();
 
+    public LocalEmbeddingProgress Embeddings { get; } = new();
+
     public double? DownloadFraction {
         get => _downloadFraction;
         private set => this.RaiseAndSetIfChanged(ref _downloadFraction, value);
@@ -65,6 +67,11 @@ public sealed class LocalSetupProgress : ReactiveObject {
     public string Plan => Reused ? "reused" : _sawRecovery && SawSuccess ? "recovered" : "fresh";
 
     public void Apply(LocalSetupLine line) {
+        if (Embeddings.Apply(line)) {
+            FinishInstall();
+            return;
+        }
+
         var root = line.Root;
         switch (line.Event) {
             case "recovering":
@@ -127,19 +134,25 @@ public sealed class LocalSetupProgress : ReactiveObject {
     public void Halt() {
         foreach (var row in new[] { Download, Verify, Install, FirstStart })
             if (row.State == RowState.Running) row.State = RowState.Pending;
+        Embeddings.Halt();
     }
 
     double? Fraction(long received) => _bytes > 0 ? Math.Clamp((double)received / _bytes, 0, 1) : null;
 
-    // Installing spans unpacking, the embedding setup and writing the unit; the CLI marks only its start and end.
     void StartInstall() {
         if (Install.State == RowState.Pending) Install.State = RowState.Running;
+    }
+
+    // The CLI marks no end of unpacking: the embedding step follows it. A reuse has nothing to install.
+    void FinishInstall() {
+        if (Install.State == RowState.Running) Install.State = RowState.Done;
     }
 
     void StartFirstStart() {
         Download.State = RowState.Done;
         Verify.State   = RowState.Done;
         Install.State  = RowState.Done;
+        Embeddings.Close();
         if (FirstStart.State == RowState.Pending) FirstStart.State = RowState.Running;
     }
 
@@ -147,6 +160,7 @@ public sealed class LocalSetupProgress : ReactiveObject {
         Download.State   = RowState.Done;
         Verify.State     = RowState.Done;
         Install.State    = RowState.Done;
+        Embeddings.Close();
         FirstStart.State = RowState.Done;
     }
 }
