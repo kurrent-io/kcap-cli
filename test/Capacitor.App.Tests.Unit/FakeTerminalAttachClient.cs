@@ -14,7 +14,7 @@ sealed class FakeTerminalAttachClient : ITerminalAttachClient {
     // the VM has nulled its own Surface/_client fields, so a test proving the surface is released
     // (weak-reference goes dead after GC.Collect) needs this hold broken too, exactly like the
     // production client dropping its own captured state on Dispose.
-    Func<byte[], string?, CancellationToken, Task>? _onAttached;
+    Func<AttachAck, CancellationToken, Task>? _onAttached;
     Func<byte[], CancellationToken, Task>? _onOutput;
 
     /// Cancelled by DisposeAsync (mirrors AgentAttachClient's internal `_lifetime`) and linked
@@ -57,9 +57,14 @@ sealed class FakeTerminalAttachClient : ITerminalAttachClient {
     /// runs, preserving every test written before this existed.
     public TaskCompletionSource? DisposeGate { get; set; }
 
+    /// Whether the VM asked this attach for the runtime's start stamp.
+    public bool RequestedRuntime { get; }
+
     public FakeTerminalAttachClient(
-            Func<byte[], string?, CancellationToken, Task> onAttached,
+            bool requestedRuntime,
+            Func<AttachAck, CancellationToken, Task> onAttached,
             Func<byte[], CancellationToken, Task> onOutput) {
+        RequestedRuntime = requestedRuntime;
         _onAttached = onAttached;
         _onOutput = onOutput;
     }
@@ -80,10 +85,10 @@ sealed class FakeTerminalAttachClient : ITerminalAttachClient {
 
     /// Invokes the captured onAttached callback with the run's own token, exactly like the
     /// production client's read loop does.
-    public Task TriggerAttached(byte[] snapshot, string? reason = null) =>
+    public Task TriggerAttached(byte[] snapshot, string? reason = null, DateTimeOffset? runtimeStartedAt = null) =>
         _onAttached is null
             ? throw new ObjectDisposedException(nameof(FakeTerminalAttachClient))
-            : _onAttached(snapshot, reason, _lifetime?.Token ?? CancellationToken.None);
+            : _onAttached(new AttachAck(snapshot, reason, runtimeStartedAt), _lifetime?.Token ?? CancellationToken.None);
 
     /// Invokes the captured onOutput callback with the run's own token.
     public Task TriggerOutput(byte[] bytes) =>
@@ -133,8 +138,8 @@ sealed class FakeTerminalAttachClientFactory {
     /// HangOnOutputForever/HangDetachForever before the VM triggers the attach that creates it.
     public Action<FakeTerminalAttachClient>? ConfigureNext { get; set; }
 
-    public TerminalAttachClientFactory Factory => (agentId, onAttached, onOutput) => {
-        var client = new FakeTerminalAttachClient(onAttached, onOutput);
+    public TerminalAttachClientFactory Factory => (agentId, requestRuntime, onAttached, onOutput) => {
+        var client = new FakeTerminalAttachClient(requestRuntime, onAttached, onOutput);
         ConfigureNext?.Invoke(client);
         ConfigureNext = null;
         Created.Add(client);

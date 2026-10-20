@@ -147,7 +147,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1", "attach-runtime/1" });
         });
     }
 
@@ -163,7 +163,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1", "attach-runtime/1" });
         });
     }
 
@@ -182,7 +182,7 @@ public class LocalControlHelloTests {
             await Assert.That(dto!.ProtocolVersion).IsEqualTo(1);
             await Assert.That(dto.DaemonVersion).IsNotEmpty();
             await Assert.That(dto.DaemonName).IsEqualTo(h.Config.Name);
-            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1" });
+            await Assert.That(dto.Capabilities).IsEquivalentTo(new[] { "consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1", "attach-runtime/1" });
         });
     }
 

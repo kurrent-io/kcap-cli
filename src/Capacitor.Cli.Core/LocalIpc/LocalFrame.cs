@@ -11,6 +11,7 @@ public sealed record LocalFrame(FrameType Type) {
     public ushort       Rows     { get; init; }
     public WorkLocation Work     { get; init; }
     public int          ExitCode { get; init; }
+    public DateTimeOffset StartedAt { get; init; }
 
     public static LocalFrame Stdin(byte[] b)            => new(FrameType.Stdin)  { Bytes = b };
     public static LocalFrame Stdout(byte[] b)           => new(FrameType.Stdout) { Bytes = b };
@@ -18,6 +19,7 @@ public sealed record LocalFrame(FrameType Type) {
     public static LocalFrame Detach()                   => new(FrameType.Detach);
     public static LocalFrame Exited(int code)           => new(FrameType.Exited) { ExitCode = code };
     public static LocalFrame Error(string m)            => new(FrameType.Error)  { Text = m };
+    public static LocalFrame RuntimeStarted(DateTimeOffset at) => new(FrameType.RuntimeStarted) { StartedAt = at };
 
     /// <summary>The refusal for an id the daemon is not running; an attach to a resuming agent retries on
     /// this text and on no other.</summary>

@@ -1136,10 +1136,11 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    /// <summary>Rewrites a resumed agent's entry as running under this daemon, keeping the original
-    /// launch descriptor: the agent's own prompt is the nudge.</summary>
+    /// The ledger's started_at, and the stamp an attach acknowledgement reports: both must be this value.
     static DateTimeOffset StartedAtOf(AgentInstance agent) => new(DateTime.SpecifyKind(agent.CreatedAt, DateTimeKind.Utc));
 
+    /// <summary>Rewrites a resumed agent's entry as running under this daemon, keeping the original
+    /// launch descriptor: the agent's own prompt is the nudge.</summary>
     void WriteResumedLedger(AgentInstance agent, ResumeLedgerEntry entry) {
         if (ResumeLedger is null) return;
 
