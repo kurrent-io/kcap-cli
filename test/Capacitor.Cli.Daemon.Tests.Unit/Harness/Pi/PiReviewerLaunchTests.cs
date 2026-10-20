@@ -120,12 +120,15 @@ public class PiReviewerLaunchTests {
         await Assert.That(psi.Environment.Keys.Any(k => k.StartsWith("JITI_", StringComparison.Ordinal))).IsFalse();
     }
 
-    [Test]
+    [Test, NotInParallel]
     public async Task An_interactive_launch_is_unchanged() {
+        using var inherited = EnvScope.Exclusive(PiReviewerExtension.ManifestEnvVar, "/tmp/kcap-pi-manifest-probe.json");
+
         var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx());
 
         await Assert.That(string.Join(" ", psi.ArgumentList)).IsEqualTo("--mode rpc");
-        await Assert.That(psi.Environment.ContainsKey(PiReviewerExtension.ManifestEnvVar)).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue(PiReviewerExtension.ManifestEnvVar, out var manifest) ? manifest : null)
+            .IsEqualTo("/tmp/kcap-pi-manifest-probe.json");
     }
 
     // ── advertisement ──

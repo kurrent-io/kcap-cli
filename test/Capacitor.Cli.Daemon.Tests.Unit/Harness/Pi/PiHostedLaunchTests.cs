@@ -115,11 +115,18 @@ public class PiHostedLaunchTests {
     }
 
     [Test]
-    public async Task BuildPsi_OmitsDaemonIdAndEpoch_WhenContextCarriesNone() {
+    [NotInParallel]
+    public async Task BuildPsi_PassesInheritedDaemonIdAndEpochThrough_WhenContextCarriesNone() {
+        // The values must be seeded: with nothing inherited, a dropped variable would match.
+        using var id    = EnvScope.Exclusive("KCAP_DAEMON_ID", "inherited-id");
+        using var epoch = EnvScope.Exclusive("KCAP_DAEMON_EPOCH", "inherited-epoch");
+
         var psi = PiRpcHostedAgentRuntimeFactory.BuildPsi(new DaemonConfig(), Ctx(daemonId: "", daemonEpoch: ""));
 
-        await Assert.That(psi.Environment.ContainsKey("KCAP_DAEMON_ID")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("KCAP_DAEMON_EPOCH")).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue("KCAP_DAEMON_ID", out var actualId) ? actualId : null)
+            .IsEqualTo("inherited-id");
+        await Assert.That(psi.Environment.TryGetValue("KCAP_DAEMON_EPOCH", out var actualEpoch) ? actualEpoch : null)
+            .IsEqualTo("inherited-epoch");
     }
 
     [Test]
