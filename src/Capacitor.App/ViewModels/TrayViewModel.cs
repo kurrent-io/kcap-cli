@@ -361,9 +361,13 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     internal static string LoginHint(string profile, bool windows) {
         if (!windows) return $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
 
-        var inner = $"$env:KCAP_PROFILE='{profile.Replace("'", "''")}'; kcap login";
-        return $"in PowerShell, run powershell -NoProfile -Command '{inner.Replace("'", "''")}'";
+        var inner = $"$env:KCAP_PROFILE='{PowerShellQuoted(profile)}'; kcap login";
+        return $"in PowerShell, run powershell -NoProfile -Command '{PowerShellQuoted(inner)}'";
     }
+
+    // PowerShell ends a single-quoted string at any of these, not only at ', and each is escaped by doubling.
+    static string PowerShellQuoted(string text) =>
+        string.Concat(text.Select(c => c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B' ? $"{c}{c}" : c.ToString()));
 
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
     // share the neutral fallback; reconnecting and disconnected get their own copy.

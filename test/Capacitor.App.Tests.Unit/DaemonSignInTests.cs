@@ -84,6 +84,7 @@ public class DaemonSignInTests {
     [Arguments(false, "it's work", "run KCAP_PROFILE='it'\\''s work' kcap login")]
     [Arguments(true, "work", "in PowerShell, run powershell -NoProfile -Command '$env:KCAP_PROFILE=''work''; kcap login'")]
     [Arguments(true, "it's", "in PowerShell, run powershell -NoProfile -Command '$env:KCAP_PROFILE=''it''''s''; kcap login'")]
+    [Arguments(true, "it\u2019s", "in PowerShell, run powershell -NoProfile -Command '$env:KCAP_PROFILE=''it\u2019\u2019\u2019\u2019s''; kcap login'")]
     public async Task The_login_hint_quotes_the_profile_and_leaves_the_shell_untouched(bool windows, string profile, string hint) =>
         await Assert.That(TrayViewModel.LoginHint(profile, windows)).IsEqualTo(hint);
 }
