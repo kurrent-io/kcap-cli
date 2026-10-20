@@ -1,6 +1,7 @@
 using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
+using Capacitor.App.Services;
 using Capacitor.App.Services.Notifications;
 using Capacitor.Cli.Core;
 
@@ -11,6 +12,7 @@ public sealed class MacDesktopHost(string cliDirectory, bool updateRelaunch, Sin
     public override AppBuilder ConfigureAvalonia(AppBuilder builder) =>
         builder.With(new AvaloniaNativePlatformOptions {
             RenderingMode = MacRenderingOrder.Resolve(Environment.GetEnvironmentVariable(MacRenderingOrder.EnvVar)),
+            AvaloniaNativeLibraryPath = PatchedAvaloniaNative.Path,
         });
 
     public override void WaitUntilReady() =>
