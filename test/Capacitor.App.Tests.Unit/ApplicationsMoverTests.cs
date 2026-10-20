@@ -87,10 +87,8 @@ public class ApplicationsMoverTests {
     [Arguments("dmg", false)]
     [Arguments("dmg", true)]
     [Arguments("system", false)]
-    [Arguments("system", true)]
-    [Arguments("user", false)]
     [Arguments("user", true)]
-    public async Task Legacy_upgrade_targets_the_existing_install_from_the_DMG_or_a_dragged_copy(string sourceLocation, bool perUser) {
+    public async Task Legacy_upgrade_targets_the_existing_install_from_the_DMG_or_a_copy_in_the_same_folder(string sourceLocation, bool perUser) {
         if (!OperatingSystem.IsMacOS()) return;
         var systemApps = Tmp.CreateDir("SystemApplications");
         var userApps = Tmp.CreateDir("UserApplications");
@@ -129,6 +127,33 @@ public class ApplicationsMoverTests {
         await Assert.That(File.Exists(Path.Combine(apps, "kcap.app", "Contents", "MacOS", "kcap-desktop"))).IsTrue();
         await Assert.That(Directory.Exists(installed)).IsFalse();
         await Assert.That(File.Exists(Path.Combine(installed, "Contents", "MacOS", "Kurrent Capacitor"))).IsFalse();
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Opening_a_canonical_install_keeps_its_folder_when_only_a_legacy_copy_is_elsewhere(bool perUser) {
+        var system = Tmp.CreateDir("SystemApplications");
+        var user = Tmp.CreateDir("UserApplications");
+        var home = perUser ? user : system;
+        var other = perUser ? system : user;
+        var source = Path.Combine(home, "kcap.app");
+        var legacy = Path.Combine(other, "Kurrent Capacitor.app");
+        CompleteBundle(source, "1.1.0");
+        CompleteBundle(legacy);
+        File.Move(Path.Combine(legacy, "Contents", "MacOS", "kcap-desktop"),
+            Path.Combine(legacy, "Contents", "MacOS", "Kurrent Capacitor"));
+
+        var selected = ApplicationsMover.ApplicationDirectories(source, user, system).Single();
+        var mover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, selected);
+        var plan = mover.Inspect(source);
+
+        await Assert.That(selected).IsEqualTo(home);
+        await Assert.That(plan.Action).IsEqualTo(ApplicationsInstallAction.OpenInstalled);
+        await Assert.That(App.ShouldPromptToInstall(
+            perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
+            source, plan)).IsFalse();
+        await Assert.That(File.Exists(Path.Combine(legacy, "Contents", "MacOS", "Kurrent Capacitor"))).IsTrue();
     }
 
     [Test]
