@@ -273,6 +273,24 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(finished.Outcome).IsEqualTo(RunOutcome.Done);
     }
 
+    /// A filtered user message with no ordinary display row still carries its literal candidate so
+    /// the chat can restore it when a matching send is queued.
+    [Test]
+    public async Task A_literal_only_projection_survives_the_feed() {
+        using var h = new Harness(vendor: "codex");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
+        h.Feed.ReadAppended();
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived,
+            """{"content":"# AGENTS.md instructions\nLiteral example"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the position");
+
+        var line = h.Feed.ReadAppended().Lines.Single();
+        await Assert.That(line.Offset).IsEqualTo(2);
+        await Assert.That(line.Projection.Envelopes).IsEmpty();
+        await Assert.That(line.Projection.LiteralInputs).IsEquivalentTo(new[] { "# AGENTS.md instructions\nLiteral example" });
+    }
+
     /// The server's lifecycle event ends the row with no notification on the stream at all.
     [Test]
     public async Task The_servers_subagent_completion_ends_a_seeded_background_row() {

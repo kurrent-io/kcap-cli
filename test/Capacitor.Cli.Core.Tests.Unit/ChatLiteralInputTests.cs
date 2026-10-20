@@ -46,6 +46,15 @@ public class ChatLiteralInputTests {
     }
 
     [Test]
+    public async Task A_live_slash_command_takes_precedence_over_an_older_literal_wrapper() {
+        const string wrapper = "<command-name>/review</command-name><command-args>path</command-args>";
+        var projected = Claude(wrapper);
+        var restored = projected.RestoreSubmittedInputs(text => text == "/review path", text => text == wrapper);
+        await Assert.That(restored).IsSameReferenceAs(projected);
+        await Assert.That(restored.SubmittedInputs).IsEquivalentTo(new[] { "/review path" });
+    }
+
+    [Test]
     public async Task Combining_events_preserves_unrelated_rows_and_run_signals() {
         const string text = "<system-reminder>literal</system-reminder>";
         var run = new RunSignal.Started("t", "explore", "look", DateTimeOffset.UnixEpoch);

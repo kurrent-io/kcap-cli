@@ -276,7 +276,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly List<QueuedChatMessage> _unechoed = new();
     // Keep confirmed literal receipts for replay in this feed. Display cleanup must not hide a
     // user turn again after its queue row has retired. A different feed drops this evidence.
-    readonly HashSet<string> _literalInputHistory = new(StringComparer.Ordinal);
+    readonly HashSet<(long Offset, string Text)> _literalInputHistory = [];
     int _recallEdits = -1;
     /// Replaces the composer text with the next older prompt; false when nothing changed.
     public bool RecallOlder() => Recall(_history.Older(Recallable(), Unechoed()));
@@ -1278,9 +1278,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var projected = line.RestoreSubmittedInputs(text => {
                 if (!Tracked.Any(q => !q.IsForeign && !q.Acknowledged && q.Matches(text, _inputGeneration, offset))
                     && !_superseded.Any(pair => !pair.Old.Acknowledged && pair.Old.Matches(text, _inputGeneration, offset))) return false;
-                _literalInputHistory.Add(text);
+                _literalInputHistory.Add((offset, text));
                 return true;
-            }, _literalInputHistory.Contains);
+            }, text => _literalInputHistory.Contains((offset, text)));
             _runs.Apply(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));

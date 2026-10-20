@@ -61,6 +61,7 @@ public class ChatPromptReceiptTests {
     });
 
     [Test]
+    [Arguments("claude", "<system-reminder>literal</system-reminder>")]
     [Arguments("claude", "Explain <system-reminder>literal</system-reminder>\nKeep it.")]
     [Arguments("codex", "# AGENTS.md instructions\nThis is a user example.")]
     public Task Replay_keeps_a_confirmed_literal_without_acknowledging_a_new_identical_send(string vendor, string text) => RunOnUiAsync(async () => {
@@ -70,13 +71,13 @@ public class ChatPromptReceiptTests {
         await h.SendAsync(text);
         await h.DeliverAsync(receipt);
         await h.SendAsync(text);
-        h.Feed.Reset(receipt);
+        h.Feed.Reset(receipt, receipt);
         await h.TickAsync();
         await Assert.That(h.Chat.QueuedMessages.Count).IsEqualTo(1);
-        await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Single().Text).IsEqualTo(text);
+        await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Count(i => i.Text == text)).IsEqualTo(1);
         await h.DeliverAsync(receipt);
         await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
-        await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Count()).IsEqualTo(2);
+        await Assert.That(h.Chat.Items.OfType<UserTurnItem>().Count(i => i.Text == text)).IsEqualTo(2);
     });
 
     [Test]
