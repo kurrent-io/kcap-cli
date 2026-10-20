@@ -357,7 +357,7 @@ public partial class App : Application {
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane, _localUpgrade);
+                _lifecycle, _lane, _localUpgrade, _localSearch);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -1320,7 +1320,8 @@ public partial class App : Application {
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
-            DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null) {
+            DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null,
+            LocalSearchController? search = null) {
         // The dependent goes first (it subscribes to service's streams) — same ordering rule as
         // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
         // token and waits out any mutation it started; that wait is unbounded here on purpose — a
@@ -1356,6 +1357,10 @@ public partial class App : Application {
         if (upgrade is not null) {
             shutdown.Cancel();
             await upgrade.SettleAsync();
+        }
+        if (search is not null) {
+            shutdown.Cancel();
+            await search.SettleAsync();
         }
         // Same rule, same reason, for whatever the success path had already built when it threw
         // (tray icon first): the error window's close handler force-shuts-down, so this is their

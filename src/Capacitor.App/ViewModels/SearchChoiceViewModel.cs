@@ -40,16 +40,20 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         }
     }
 
-    public bool Valid => !UseOther || LocalEmbeddingModelName.IsValid(OtherModel.Trim());
+    string Named => OtherModel.Trim();
+
+    bool NamedValid => LocalEmbeddingModelName.IsValid(Named);
+
+    public bool Valid => !UseOther || NamedValid;
 
     /// Shown once something is typed: an empty field only keeps the button disabled.
-    public string? OtherModelError => UseOther && OtherModel.Trim().Length > 0 && !Valid
+    public string? OtherModelError => UseOther && Named.Length > 0 && !NamedValid
         ? "Not an Ollama model name: letters, digits and . _ : / - only, starting with a letter or digit."
         : null;
 
     public LocalEmbeddingChoice Choice =>
         UseKeyword ? LocalEmbeddingChoice.KeywordOnly
-        : UseOther && OtherModel.Trim() is var other && LocalEmbeddingModelName.IsValid(other) ? new LocalEmbeddingChoice(other)
+        : UseOther && NamedValid ? new LocalEmbeddingChoice(Named)
         : LocalEmbeddingChoice.Default;
 
     /// Starts from what an earlier setup recorded, so a plain confirmation changes nothing.
