@@ -82,10 +82,11 @@ sealed class MarkdownLinkKeys {
         if (LinkRects(link.Block, link.Link) is [var first, ..]) link.Block.BringIntoView(first.Inflate(4));
     }
 
+    /// A link with no text has nowhere to draw its mark, so the keyboard passes over it.
     List<(TextBlock Block, MarkdownHyperlink Link)> Links() =>
         [.. _viewer.GetVisualDescendants().OfType<TextBlock>()
             .Where(b => b.Inlines is not null)
-            .SelectMany(b => Spans(b.Inlines!).Select(link => (b, link)))];
+            .SelectMany(b => Spans(b.Inlines!).Where(link => Length(link.Inlines) > 0).Select(link => (b, link)))];
 
     static IEnumerable<MarkdownHyperlink> Spans(InlineCollection inlines) {
         foreach (var inline in inlines) {
@@ -103,7 +104,7 @@ sealed class MarkdownLinkKeys {
 
         var length = Length(link.Inlines);
         var padding = block.Padding;
-        return [.. block.TextLayout.HitTestTextRange(start, Math.Max(length, 1))
+        return [.. block.TextLayout.HitTestTextRange(start, length)
             .Select(r => r.Translate(new Vector(padding.Left, padding.Top)))];
     }
 

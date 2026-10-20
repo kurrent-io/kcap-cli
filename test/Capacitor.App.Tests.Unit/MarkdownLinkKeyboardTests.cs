@@ -121,6 +121,20 @@ public class MarkdownLinkKeyboardTests {
     });
 
     [Test]
+    public Task A_flavor_change_drops_the_current_link() => RunOnUiAsync(async () => {
+        var (window, view, _, _, _) = Show();
+        try {
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(view.KeyboardLink).IsNotNull();
+
+            view.Flavor = MarkdownFlavor.GitHub;
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(view.KeyboardLink).IsNull();
+        } finally { window.Close(); }
+    });
+
+    [Test]
     public Task A_pointer_focus_selects_no_link_and_enter_opens_nothing() => RunOnUiAsync(async () => {
         var (window, view, _, _, opened) = Show();
         try {

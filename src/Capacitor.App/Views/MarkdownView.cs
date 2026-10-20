@@ -59,6 +59,7 @@ public sealed class MarkdownView : ContentControl {
         _detailsExtension = new(_details, OnDetailsToggled);
         _codeActions = new(this);
         _referenceLinks = new(this);
+        _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -68,7 +69,6 @@ public sealed class MarkdownView : ContentControl {
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
-        _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
@@ -109,7 +109,6 @@ public sealed class MarkdownView : ContentControl {
         }
     }
 
-    /// The link the keyboard is on.
     internal MarkdownHyperlink? KeyboardLink => _linkKeys.Current;
 
     public string? Text {
@@ -138,6 +137,7 @@ public sealed class MarkdownView : ContentControl {
     }
 
     void ApplyFlavor() {
+        _linkKeys.Clear();
         _details.Clear();
         _viewer.Extensions.Clear();
         if (Flavor == MarkdownFlavor.GitHub) {
