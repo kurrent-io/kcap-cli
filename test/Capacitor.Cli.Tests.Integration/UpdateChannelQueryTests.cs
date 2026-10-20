@@ -43,8 +43,10 @@ public class UpdateChannelQueryTests : IDisposable {
     async Task<UpdateCommand.UpdateCheckResult> ReachedCheckAsync(string channel) {
         for (var attempt = 1; ; attempt++) {
             var result = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm, time: TimeProvider.System);
-            if (!result.FromCache || attempt == 3) return result;
-            File.Delete(Config.Root.Path($"update-check-{channel}.json"));
+            if (!result.FromCache) return result;
+            if (attempt == 3)
+                throw new InvalidOperationException($"every check of '{channel}' was served from cache: the stub registry was never reached");
+            File.Delete(UpdateCommand.CachePathFor(channel, Config.Root));
             _server.ResetLogEntries();
         }
     }
