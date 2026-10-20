@@ -148,6 +148,35 @@ public class AgentSessionsTests {
             .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example\n/t/x.jsonl\n/repo");
     }
 
+    /// <summary>A claim made before the server was known leaves its end nowhere to go, so a later claim
+    /// that knows the server fills it in.</summary>
+    [Test]
+    public async Task A_repeat_claim_fills_in_a_server_the_first_lacked() {
+        Sessions.Claim(Agent, Session, new ClaimOrigin("claude", null, null, null));
+        Sessions.Claim(Agent, Session, Here);
+
+        await Assert.That(File.ReadAllText(Note(Agent) + ".origin"))
+            .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example\n/t/x.jsonl\n/repo");
+    }
+
+    /// <summary>A deferred end is filed under a case-folded name, but the server is told the id as claimed.</summary>
+    [Test]
+    public async Task A_deferred_end_keeps_the_sessions_case() {
+        DeadNoteWithOrigin(Shell, "AwayMiXed", "https://other.example");
+        Sessions.ReapExited("https://kcap.example");
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value))
+            .IsEquivalentTo(new[] { "AwayMiXed" });
+    }
+
+    /// <summary>Scheme and host fold case and a trailing slash is ignored, but a path names a tenant as written.</summary>
+    [Test]
+    [Arguments("https://KCAP.example/t/", "https://kcap.example/t", true)]
+    [Arguments("https://kcap.example/Tenant", "https://kcap.example/tenant", false)]
+    [Arguments("https://kcap.example", null, false)]
+    public async Task Servers_match_as_server_identities(string a, string? b, bool same) =>
+        await Assert.That(AgentSessions.SameServer(a, b)).IsEqualTo(same);
+
     /// <summary>A resumed session runs under a new process before the old claim is reaped; ending it then
     /// would close a running session.</summary>
     [Test]

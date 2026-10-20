@@ -1,5 +1,6 @@
 using System.Globalization;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Continuation;
 
 namespace Capacitor.Cli;
@@ -26,8 +27,8 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     /// <summary>
     /// A hook firing for <paramref name="session"/> proves it is running, so any exit record for it goes.
-    /// <paramref name="origin"/> says where its end belongs once the process is gone; the first claim's
-    /// stands, since the session lives on the server it started on.
+    /// <paramref name="origin"/> says where its end belongs once the process is gone; the first claim that
+    /// names a server stands, since the session lives on the server it started on.
     /// </summary>
     public void Claim(int agentPid, SessionId session, ClaimOrigin? origin = null) {
         try { File.Delete(ExitRecord(session)); } catch { }
@@ -38,7 +39,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
             if (File.Exists(note) && File.ReadAllText(note) == text) {
-                if (origin is not null && ReadOrigin(agentPid, token) is null) WriteOrigin(agentPid, token, origin);
+                if (origin is not null && ReadOrigin(agentPid, token) is not { Server: not null }) WriteOrigin(agentPid, token, origin);
                 return;
             }
 
@@ -122,7 +123,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         var path = DeferredEnd(session);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Environment.ProcessId}";
-        File.WriteAllText(temp, string.Join('\n', origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.WriteAllText(temp, string.Join('\n', session, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
         File.Move(temp, path, overwrite: true);
     }
 
@@ -135,8 +136,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                 try {
                     if (Path.GetFileName(path).Contains('.')) continue; // an unfinished write's temp
                     var stale = _time.GetUtcNow() - File.GetLastWriteTimeUtc(path) >= ExitRetention;
-                    if (SessionId.Parse(Path.GetFileName(path)) is not { } session
-                     || File.ReadAllText(path).Split('\n') is not [var vendor, var server, var transcript, var cwd]) {
+                    // Named case-folded so one session is set aside once; the id as claimed is inside.
+                    if (File.ReadAllText(path).Split('\n') is not [var id, var vendor, var server, var transcript, var cwd]
+                     || SessionId.Parse(id) is not { } session) {
                         File.Delete(path);
                         continue;
                     }
@@ -153,8 +155,7 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
 
-    internal static bool SameServer(string a, string? b) =>
-        b is not null && string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+    internal static bool SameServer(string a, string? b) => ServerIdentity.SameServer(a, b);
 
     /// <summary>
     /// Gone when no process has the pid, or one does under a different start token (the pid was
