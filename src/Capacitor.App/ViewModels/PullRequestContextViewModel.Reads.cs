@@ -231,7 +231,10 @@ public sealed partial class PullRequestContextViewModel {
         _sessionItems.AddRange(snapshot.Links);
         _hasListed = true;
         ApplyChoices(listed: true);
-        if (snapshot.Overview is not { Data: { } overview } read || !AcceptAccess(read)) return;
+        ShowLastOverview();
+    }
+    void ShowLastOverview() {
+        if (_session is not { } session || _snapshots?.Get(session)?.Overview is not { Data: { } overview } read || !AcceptAccess(read)) return;
         _overview = overview; _overviewRead = read;
         Notify();
     }

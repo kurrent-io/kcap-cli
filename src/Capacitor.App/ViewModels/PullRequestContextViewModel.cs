@@ -239,12 +239,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _masked = true;
         _grace = false;
         _staleReason = null;
-        // Nothing polls in the background, and the return lists afresh anyway.
-        if (!foreground) _queuedRefresh = false;
         Notify();
+        // Nothing polls in the background, and the return lists afresh anyway.
+        if (!foreground) { _queuedRefresh = false; return; }
+        ShowLastOverview();
         // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
         // already fresh; force only a genuine return, where a prior refresh could have gone stale.
-        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; _lastOverview = null; RequestRefresh(); }
+        if (_lastRefresh is not null) _refreshDiscovery = true;
+        _lastRefresh = null; _lastOverview = null; RequestRefresh();
     }
     public void Reconnected() {
         if (_disposed) return;
