@@ -38,6 +38,17 @@ public class UpdateChannelQueryTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.9.0-beta.1"}"""));
     }
 
+    /// A passive check that read the stub's reply. The registered client's 5 s cap runs on real time,
+    /// so on a starved runner the first fetch can time out and arm the backoff before any reply is read.
+    async Task<UpdateCommand.UpdateCheckResult> ReachedCheckAsync(string channel) {
+        for (var attempt = 1; ; attempt++) {
+            var result = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm, time: TimeProvider.System);
+            if (!result.FromCache || attempt == 3) return result;
+            File.Delete(Config.Root.Path($"update-check-{channel}.json"));
+            _server.ResetLogEntries();
+        }
+    }
+
     public void Dispose() {
         _http.Dispose();
         _server.Stop();
@@ -77,7 +88,7 @@ public class UpdateChannelQueryTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"version":"0.12.0"}""")
                 .WithDelay(TimeSpan.FromMilliseconds(400)));
 
-        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm, time: TimeProvider.System);
+        var first = await ReachedCheckAsync(channel);
         await Assert.That(first.Latest).IsEqualTo("0.12.0");
         await Assert.That(first.FromCache).IsFalse();
 
@@ -193,7 +204,7 @@ public class UpdateChannelQueryTests : IDisposable {
         _server.Given(Request.Create().WithPath($"/@kurrent/kcap/{channel}").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"dist-tags":{}}"""));
 
-        var first = await UpdateCommand.CheckForUpdateAsync(forceCheck: false, channel, Config.Root, Npm, time: TimeProvider.System);
+        var first = await ReachedCheckAsync(channel);
 
         await Assert.That(first.Latest).IsNull();
         await Assert.That(first.FromCache).IsFalse();
