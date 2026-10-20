@@ -194,7 +194,7 @@
                     </StackPanel>
                     <Panel IsVisible="{Binding LocalStack, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <WrapPanel x:Name="RailLocalStackRow" DataContext="{Binding LocalStack}" x:DataType="vm:LocalStackViewModel">
-                            <TextBlock Text="Capacitor local" Classes="footerMeta"
+                            <TextBlock Text="kcap local" Classes="footerMeta"
                                        ToolTip.Tip="{x:Static vm:LocalStackViewModel.NameTip}" />
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding Version, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />

@@ -6,7 +6,7 @@ On macOS and Windows the desktop app is the easier way to set up. kcap setup
 is for the terminal, and with --no-prompt for scripts, sandboxes and fleets:
 see "Unattended setup" below for both editions.
 
-A bare kcap setup in a terminal first asks how you want to run Capacitor, as
+A bare kcap setup in a terminal first asks how you want to run kcap, as
 the desktop app does: "For you, locally" runs the local edition (--local,
 macOS only); "For your team, cloud" opens sign-up in your browser, where you
 create the workspace, then discovers it once you press Enter; "Already have a
@@ -212,11 +212,11 @@ changes.
     kcap setup --server-url https://acme.kcap.ai --no-prompt
 
   Question                              Flag                    --no-prompt
-  How to run kcap                  <tenant>, --server-url,  required
+  How to run kcap                       <tenant>, --server-url,  required
                                         --local, --org/--slug
   Re-run on a configured machine        -                       yes
   One user on this machine (local)      --single-user           required
-  Install kcap local (local)       --yes                   required*
+  Install kcap local (local)            --yes                   required*
   Ollama for search by meaning (local)  --embedding-model,      required**
                                         --no-embeddings
   Default visibility                    --default-visibility    org_public

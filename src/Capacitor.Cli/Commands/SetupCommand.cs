@@ -2166,7 +2166,7 @@ sealed class SetupCommand(
             : [SetupEdition.Choice.Cloud, SetupEdition.Choice.Existing];
 
         var choice = AnsiConsole.Prompt(new SelectionPrompt<SetupEdition.Choice>()
-            .Title("How do you want to run Capacitor?")
+            .Title("How do you want to run kcap?")
             .AddChoices(offered)
             .UseConverter(SetupEdition.Label));
 
