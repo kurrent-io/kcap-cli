@@ -197,15 +197,21 @@ public class LocalPermissionBridgeInteractiveTests {
         await Assert.That(h.Server.Responds.Count).IsEqualTo(0);
     }
 
+    /// The request goes pending before the server leg handles its fault, and the fault is denied only
+    /// when no subscriber is attached at that moment. The delayed fault holds that window open, so the
+    /// subscriber must stay until the leg has finished.
     [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
     public async Task Begin_fault_with_a_subscriber_keeps_the_request_answerable() {
         await using var h = new Harness();
         var (id, _) = h.Broker.Subscribe();
-        h.Server.BeginScript = (_, _) => throw new Microsoft.AspNetCore.SignalR.HubException("boom");
+        h.Server.BeginScript = async (_, _) => {
+            await Task.Delay(200);
+            throw new Microsoft.AspNetCore.SignalR.HubException("boom");
+        };
         await h.StartAsync();
         var response = h.PostAsync();
         var pending = await h.WaitPendingAsync(response);
-        await Task.Delay(100);
+        await WaitUntil(() => h.Server.Calls.Count == 1 && h.Bridge.ServerLegsInFlightForTest == 0, "the server leg handles its fault");
         await Assert.That(response.IsCompleted).IsFalse();
         h.Broker.Unsubscribe(id);
         await Task.Delay(100);
