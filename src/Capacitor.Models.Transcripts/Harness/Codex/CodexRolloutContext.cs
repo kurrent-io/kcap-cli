@@ -36,6 +36,7 @@ public sealed class CodexRolloutContext : TranscriptContext {
     }
 
     internal void Track(CanonicalEvent evt) {
+        if (Cluster.Exists(m => m.EventId == evt.EventId)) return;
         if (ClusterFinalized) {
             Cluster.Clear();
             ClusterFinalized = false;

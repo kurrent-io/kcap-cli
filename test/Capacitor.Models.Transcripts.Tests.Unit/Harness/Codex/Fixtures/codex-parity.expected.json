@@ -45,7 +45,21 @@
     "line": 3,
     "batch": 1,
     "rejected": null,
-    "events": [],
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "dc60b15b-ec85-4c36-9baa-2169e2f22366",
+        "timestamp": "2026-09-04T09:00:03.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:03.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "\u003Cenvironment_context\u003E\n  \u003Ccwd\u003E/work/repo\u003C/cwd\u003E\n\u003C/environment_context\u003E",
+          "timestamp": "2026-09-04T09:00:03Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
     "amendments": []
   },
   {

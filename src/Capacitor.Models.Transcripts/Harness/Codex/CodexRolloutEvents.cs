@@ -93,7 +93,8 @@ public sealed class CodexRolloutEvents : ITranscriptProjection {
         return ProjectionResult.Of([evt]);
     }
 
-    // Codex prepends an `<environment_context>` block to every turn as a user message of its own.
+    // A user message that is only Codex's injected `<environment_context>` is kept: the chat hides it,
+    // except when it is the receipt of a prompt the user typed in that shape.
     static ProjectionResult Message(JsonElement payload, Record rec, CodexRolloutContext ctx) {
         if (payload.Arr("content") is not { } blocks) return ProjectionResult.Empty;
         var text = MessageText(blocks);
@@ -101,9 +102,7 @@ public sealed class CodexRolloutEvents : ITranscriptProjection {
 
         switch (payload.Str("role")) {
             case "user":
-                return IsEnvironmentContextOnly(text)
-                    ? ProjectionResult.Empty
-                    : ProjectionResult.Of([rec.Event(new UserMessageReceived { Content = text, Timestamp = rec.Ts })]);
+                return ProjectionResult.Of([rec.Event(new UserMessageReceived { Content = text, Timestamp = rec.Ts })]);
             case "assistant": {
                 var evt = new AssistantTextGenerated { Content = text, Timestamp = rec.Ts };
                 if (payload.Str("phase") is { } phase)
@@ -113,11 +112,6 @@ public sealed class CodexRolloutEvents : ITranscriptProjection {
             default:
                 return ProjectionResult.Empty;
         }
-    }
-
-    static bool IsEnvironmentContextOnly(string text) {
-        var trimmed = text.AsSpan().Trim();
-        return trimmed.StartsWith("<environment_context>") && trimmed.EndsWith("</environment_context>");
     }
 
     static string MessageText(JsonElement blocks) {

@@ -80,12 +80,6 @@ public class CodexServerParityTests {
     }
 
     [Test]
-    public async Task A_user_message_that_is_only_the_environment_context_is_dropped() {
-        await Assert.That(P(Item("""{"type":"message","role":"user","content":[{"type":"input_text","text":"  <environment_context>\n<cwd>/w</cwd>\n</environment_context>\n"}]}""")).Events).IsEmpty();
-        await Assert.That(P(Item("""{"type":"message","role":"user","content":[{"type":"text","text":"hi"}]}""")).Events).Count().IsEqualTo(1);
-    }
-
-    [Test]
     public async Task Reasoning_keeps_its_encrypted_blob_and_prefers_plain_content() {
         var e = P(Item("""{"type":"reasoning","content":"plain","summary":[{"type":"summary_text","text":"s"}],"encrypted_content":"blob"}""")).Events;
         var thinking = (AssistantThinkingGenerated)e[0].Payload;
@@ -210,6 +204,19 @@ public class CodexServerParityTests {
         await Assert.That(Ids(applied)).IsEqualTo(string.Join(",", thinking.EventId, text.EventId, call.EventId));
         await Assert.That(Echoes(applied)).IsEqualTo("True,False,True");
         await Assert.That(applied.Targets[2].ToolName).IsEqualTo("exec_command");
+    }
+
+    /// A line read twice is one event: it is one usage target, and once its cluster is counted it joins no later one.
+    [Test]
+    public async Task A_replayed_line_is_one_cluster_member() {
+        var ctx  = Ctx();
+        var text = P(Assistant("a"), ctx).Events[0];
+        P(Assistant("a"), ctx);
+        await Assert.That(Ids(Applied(P(Tokens(10), ctx)))).IsEqualTo(text.EventId.ToString());
+
+        P(Assistant("a"), ctx);
+        var next = P(Assistant("b"), ctx).Events[0];
+        await Assert.That(Ids(Applied(P(Tokens(20), ctx)))).IsEqualTo(next.EventId.ToString());
     }
 
     [Test]

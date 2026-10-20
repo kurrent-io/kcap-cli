@@ -77,7 +77,7 @@ public class CodexRolloutEventsTests {
 
     [Test]
     public async Task Injected_preludes_are_kept_here_and_developer_and_system_roles_are_skipped() {
-        var prelude = E(Item("""{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\nstuff"}]}"""));
+        var prelude = E(Item("""{"type":"message","role":"user","content":[{"type":"input_text","text":"  <environment_context>\n<cwd>/w</cwd>\n</environment_context>\n"}]}"""));
         await Assert.That(prelude).Count().IsEqualTo(1);
 
         await Assert.That(E(Item("""{"type":"message","role":"developer","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
