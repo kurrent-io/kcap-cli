@@ -10,19 +10,21 @@ public interface ITerminalAttachClient : IAsyncDisposable {
     Task DetachAsync();
 }
 
-/// One client per attach attempt — the factory is the unit tests' scripting seam.
+/// One client per attach attempt — the factory is the unit tests' scripting seam. `requestRuntime`
+/// asks for the runtime's start stamp; only a daemon advertising AgentAttachClient.RuntimeCapability
+/// understands that request.
 public delegate ITerminalAttachClient TerminalAttachClientFactory(
-    string agentId,
-    Func<byte[], string?, CancellationToken, Task> onAttached,
+    string agentId, bool requestRuntime,
+    Func<AttachAck, CancellationToken, Task> onAttached,
     Func<byte[], CancellationToken, Task> onOutput);
 
 /// Production adapter: Core client, diagnostics to Console.Error (the app's
 /// teardown-diagnostic convention — never AppNotifier toasts).
 public sealed class CoreTerminalAttachClient(AgentAttachClient inner) : ITerminalAttachClient {
     public static TerminalAttachClientFactory Factory(Func<string> socketPath) =>
-        (agentId, onAttached, onOutput) => new CoreTerminalAttachClient(new AgentAttachClient(
+        (agentId, requestRuntime, onAttached, onOutput) => new CoreTerminalAttachClient(new AgentAttachClient(
             socketPath(), agentId, onAttached, onOutput,
-            (ctx, ex) => Console.Error.WriteLine($"kcap: terminal attach {ctx}: {ex.Message}")));
+            (ctx, ex) => Console.Error.WriteLine($"kcap: terminal attach {ctx}: {ex.Message}"), requestRuntime));
     public Task<AttachOutcome> RunAsync(int c, int r, CancellationToken ct) => inner.RunAsync(c, r, ct);
     public Task SendInputAsync(byte[] b) => inner.SendInputAsync(b);
     public Task ResizeAsync(int c, int r) => inner.ResizeAsync(c, r);
