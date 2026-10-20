@@ -25,13 +25,18 @@ sealed class DaemonCredentialHealth(Action changed) {
             case AuthStatus.NotAuthenticated or AuthStatus.Expired or AuthStatus.WrongServer:
                 Set(SignedOut);
                 break;
-            case AuthStatus.Ok or AuthStatus.NoAuthRequired when Problem == SignedOut:
-                Set(null);
+            case AuthStatus.Ok or AuthStatus.NoAuthRequired:
+                // Compared and cleared in one step, so a rejection recorded meanwhile stands.
+                if (Interlocked.CompareExchange(ref _problem, null, SignedOut) == SignedOut) changed();
                 break;
         }
     }
 
-    public void ObserveRejection() => Set(Rejected);
+    /// <summary>Counted only while the hub is down: a refusal on a connected hub's side channel is
+    /// not why it cannot connect, and nothing would clear it before a later, unrelated outage.</summary>
+    public void ObserveRejection(bool hubConnected) {
+        if (!hubConnected) Set(Rejected);
+    }
 
     public void ObserveConnected() => Set(null);
 

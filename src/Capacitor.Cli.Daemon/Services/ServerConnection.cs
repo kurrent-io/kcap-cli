@@ -235,7 +235,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         CredentialHealth = new DaemonCredentialHealth(_statusNotifier.Pulse);
         void ReportRejection(string report) {
             logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
-            CredentialHealth.ObserveRejection();
+            CredentialHealth.ObserveRejection(HubState == HubConnectionState.Connected);
         }
 
         // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
