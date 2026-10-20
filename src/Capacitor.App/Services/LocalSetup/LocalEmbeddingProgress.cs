@@ -62,9 +62,12 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
             _          => TerminalAdvice.Strip(SkipMessage) ?? "Search by keyword.",
         };
 
-    public string? ReembedNote => ConfiguredModel is { } model && ReplacedModel is { } replaced
-        ? $"Everything stored was embedded with {replaced}, so it is embedded again with {model} in the background."
-        : null;
+    public string? ReembedNote => ConfiguredModel switch {
+        null                                => null,
+        var model when ReplacedModel is { } replaced
+            => $"Everything stored was embedded with {replaced}, so it is embedded again with {model} in the background.",
+        var model                           => $"What is already stored is embedded with {model} in the background.",
+    };
 
     public string? PullText => Pulling && Model is { } model
         ? PullFraction is { } f ? $"Downloading {model}… {(int)Math.Round(f * 100)}%" : $"Downloading {model}…"
@@ -100,7 +103,12 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
                 Model           = root.Str("model") ?? Model;
                 ReplacedModel   = root.Str("replaced_model");
                 ConfiguredModel = Model;
+                SkipCode        = null;
+                SkipMessage     = null;
                 End(RowState.Done);
+                break;
+            // The unit serves a configured model before setup records it, so a failed record leaves it serving.
+            case "embeddings_skipped" when Configured:
                 break;
             case "embeddings_skipped":
                 SkipMessage = root.Str("message");

@@ -20,11 +20,13 @@ static class LocalSetupScript {
             return Task.FromResult(new StreamingResult(exitCode, false, []));
         };
 
-    public static LocalRoot PendingSetup(TempConfigRoot config) {
+    /// An interrupted setup, past recording its embedding answer unless <paramref name="recorded"/> is false.
+    public static LocalRoot PendingSetup(TempConfigRoot config, bool recorded = true) {
         var root = new LocalRoot(config.PathTo("local"));
         root.EnsureCreated();
         LocalStateFiles.WriteJournal(root, new(LocalSetupState.Operation, "committing", ServerStart.Deny, null,
             DateTimeOffset.UnixEpoch, new Dictionary<string, string>()));
+        if (recorded) LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
 
         return root;
     }

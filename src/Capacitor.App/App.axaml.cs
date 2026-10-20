@@ -692,15 +692,21 @@ public partial class App : Application {
             OpenSignInDialog(profiles.Name, serverUrl, refreshAppState: true);
         });
         // The bundled CLI's own coordinator, never a hook: the stack follows the CLI this app ships.
-        var localUpgrade = isLocalServer ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
+        // The upgrade and a search change both take the installation, so each holds the other off; both start on the UI thread.
+        LocalSearchController? localSearch = null;
+        var localUpgrade = isLocalServer
+            ? new LocalUpgradeController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action), held: () => localSearch?.Running == true)
+            : null;
         _localUpgrade = localUpgrade;
-        var localSearch = isLocalServer ? new LocalSearchController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action)) : null;
+        localSearch = localUpgrade is null ? null
+            : new LocalSearchController(() => lifecycleCli, action => Dispatcher.UIThread.Post(action), held: () => localUpgrade.Running);
         _localSearch = localSearch;
         var localStack = localUpgrade is null ? null : new LocalStackViewModel(
             () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
-            () => serverLane.RestartAsync(), _shutdown.Token) {
+            () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
-                () => LocalEmbeddingFile.Read(_localRoot), localSearch, localUpgrade, () => serverLane.RestartAsync(), _shutdown.Token),
+                () => LocalEmbeddingFile.Read(_localRoot), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
+                _shutdown.Token),
         };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;

@@ -236,6 +236,10 @@
                                                              PlaceholderText="Model name, e.g. nomic-embed-text"
                                                              Text="{Binding OtherModel, Mode=TwoWay}" IsVisible="{Binding UseOther}"
                                                              AutomationProperties.Name="Ollama embedding model" />
+                                                    <TextBlock x:Name="RailSearchOtherModelError" Text="{Binding OtherModelError}"
+                                                               Margin="28,0,0,0" FontSize="12" TextWrapping="Wrap"
+                                                               Foreground="{StaticResource KcapDangerBrush}"
+                                                               IsVisible="{Binding OtherModelError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                                     <RadioButton x:Name="RailSearchKeywordOption" GroupName="RailSearch" FontSize="12.5"
                                                                  Content="Search by keyword only"
                                                                  IsChecked="{Binding UseKeyword, Mode=TwoWay}" />

@@ -8,7 +8,8 @@ namespace Capacitor.App.Services.LocalSetup;
 /// app's lifetime. The child reuses the installation, so a changed model restarts the server. Lines and the
 /// settled outcome reach the UI through <c>post</c>, in order.
 /// </summary>
-public sealed class LocalSearchController(Func<IKcapCli> cli, Action<Action> post) : ReactiveObject {
+/// <param name="held">True while another app-owned change to the installation runs; a start then does nothing.</param>
+public sealed class LocalSearchController(Func<IKcapCli> cli, Action<Action> post, Func<bool>? held = null) : ReactiveObject {
     LocalSetupProgress       _progress = new();
     bool                     _running;
     LocalInstallOutcome?     _outcome;
@@ -36,7 +37,7 @@ public sealed class LocalSearchController(Func<IKcapCli> cli, Action<Action> pos
     /// Spawns the child and returns; a no-op while a run is in flight or once <paramref name="ct"/>, the app's
     /// shutdown, is cancelled.
     public Task StartAsync(LocalEmbeddingChoice embeddings, CancellationToken ct) {
-        if (Running || ct.IsCancellationRequested) return Task.CompletedTask;
+        if (Running || ct.IsCancellationRequested || held?.Invoke() == true) return Task.CompletedTask;
 
         var progress  = new LocalSetupProgress();
         var interrupt = new CancellationTokenSource();

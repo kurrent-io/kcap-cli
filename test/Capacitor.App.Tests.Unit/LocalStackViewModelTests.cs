@@ -14,6 +14,7 @@ public class LocalStackViewModelTests {
         public readonly FakeKcapCli Cli = new();
         public readonly BehaviorSubject<ServerLaneStatus> Status = new(new(ServerLaneState.Connected));
         public readonly LocalUpgradeController Upgrade;
+        public readonly LocalSearchController Search;
         public readonly LocalStackViewModel Vm;
         public int Reconnects;
         public int Reads;
@@ -24,7 +25,8 @@ public class LocalStackViewModelTests {
 
         public Harness(string? installed = "1.2.0") {
             Registry = installed;
-            Upgrade = new LocalUpgradeController(() => Cli, action => action());
+            Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
+            Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
             Vm = new LocalStackViewModel(() => {
                 Reads++;
                 return Registry;
@@ -34,7 +36,7 @@ public class LocalStackViewModelTests {
             }, () => {
                 Reconnects++;
                 return Task.CompletedTask;
-            }, CancellationToken.None, ImmediateScheduler.Instance);
+            }, CancellationToken.None, ImmediateScheduler.Instance, Search);
         }
 
         public async Task RunAsync(int exitCode, params string[] lines) {
@@ -181,6 +183,34 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Cli.LocalUpgradeCallCount).IsEqualTo(2);
             await Assert.That(h.Vm.BannerVisible).IsFalse();
+        });
+    }
+
+    /// A search change can restart the server and holds the installation: the reconnect it causes must not start
+    /// the waiting upgrade, nor offer Start, until the change is over.
+    [Test]
+    public async Task A_search_change_holds_a_waiting_upgrade_and_start_until_it_settles() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness();
+            await h.RunAsync(1, UpgradeScript.Failed("lifecycle_busy", "Another kcap local command holds the lifecycle lock.", false));
+            var exit = new TaskCompletionSource<StreamingResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Cli.SetupLocalBehavior = (_, _, _) => exit.Task;
+            h.Cli.LocalUpgradeBehavior = UpgradeScript.Prints(3, UpgradeScript.NothingToDo("current", "1.2.0", "1.2.0"));
+
+            await h.Search.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+            var during = (h.Cli.LocalUpgradeCallCount, h.Vm.SuppressesServerStart, h.Vm.TryAgainVisible);
+
+            exit.SetResult(new StreamingResult(0, false, []));
+            await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            await h.Upgrade.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(during.LocalUpgradeCallCount).IsEqualTo(1);
+            await Assert.That(during.SuppressesServerStart).IsTrue();
+            await Assert.That(during.TryAgainVisible).IsFalse();
+            await Assert.That(h.Cli.LocalUpgradeCallCount).IsEqualTo(2);
+            await Assert.That(h.Vm.SuppressesServerStart).IsFalse();
         });
     }
 

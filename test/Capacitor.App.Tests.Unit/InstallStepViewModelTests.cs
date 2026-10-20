@@ -415,19 +415,76 @@ public class InstallStepViewModelTests {
             [new LocalEmbeddingChoice("nomic-embed-text"), new LocalEmbeddingChoice("nomic-embed-text")], CollectionOrdering.Matching);
     }
 
+    /// An interrupted setup may have stopped before it recorded the answer; resuming with the default would replace it.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Another_model_with_no_name_cannot_install() {
+    public async Task A_pending_setup_with_no_recorded_answer_asks_again() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var choice = await AvaloniaSession.DispatchAsync(async () => {
+            var install = new InstallStepViewModel(
+                Controller(cli, LocalSetupScript.PendingSetup(Config, recorded: false), Probe()), () => "default", () => "default",
+                () => true, () => null, resuming: () => true);
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return install.ChoiceVisible;
+        });
+
+        await Assert.That(choice).IsTrue();
+        await Assert.That(cli.SetupLocalCallCount).IsEqualTo(0);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_setup_resumes_with_its_recorded_answer() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
+
+        var choice = await AvaloniaSession.DispatchAsync(async () => {
+            var install = new InstallStepViewModel(
+                Controller(cli, LocalSetupScript.PendingSetup(Config), Probe()), () => "default", () => "default",
+                () => true, () => LocalEmbeddingSetting.Declined, resuming: () => true);
+            await install.OnEnterAsync(CancellationToken.None);
+
+            return install.ChoiceVisible;
+        });
+
+        await Assert.That(choice).IsFalse();
+        await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.KeywordOnly], CollectionOrdering.Matching);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Refused_arguments_reopen_the_choice() {
+        var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(2, LocalSetupScript.Failed("invalid_arguments")) };
+
+        var choice = await AvaloniaSession.DispatchAsync(async () => {
+            var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            await EnterAndInstallAsync(install);
+
+            return install.ChoiceVisible;
+        });
+
+        await Assert.That(choice).IsTrue();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("")]
+    [Arguments("my model")]
+    [Arguments("-rm")]
+    public async Task Another_model_the_cli_would_refuse_cannot_install(string name) {
         var cli = new FakeKcapCli();
 
-        var canInstall = await AvaloniaSession.DispatchAsync(async () => {
+        var (canInstall, error) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
             await install.OnEnterAsync(CancellationToken.None);
-            install.Search.UseOther = true;
+            install.Search.UseOther   = true;
+            install.Search.OtherModel = name;
 
-            return await install.InstallCommand.CanExecute.FirstAsync().ToTask();
+            return (await install.InstallCommand.CanExecute.FirstAsync().ToTask(), install.Search.OtherModelError);
         });
 
         await Assert.That(canInstall).IsFalse();
+        await Assert.That(error is null).IsEqualTo(name.Length == 0);
     }
 }

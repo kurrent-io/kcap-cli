@@ -162,9 +162,16 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
             return;
         }
         Search.Prefill(recorded);
-        if (_resuming()) await _controller.StartAsync(Search.Choice, ct);
+        // Only a known answer resumes unasked: the earlier run's choice may never have reached the record.
+        if (_resuming() && (_controller.Embeddings ?? Known(recorded)) is { } known) await _controller.StartAsync(known, ct);
         else ChoiceVisible = true;
     }
+
+    static LocalEmbeddingChoice? Known(LocalEmbeddingSetting? recorded) => recorded switch {
+        null              => null,
+        { Model: null }   => LocalEmbeddingChoice.KeywordOnly,
+        { Model: { } m }  => new LocalEmbeddingChoice(m),
+    };
 
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) =>
         Task.FromResult(direction switch {
@@ -203,6 +210,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     void OnSettled(LocalInstallOutcome outcome) {
         if (outcome is LocalInstallOutcome.Installed) AdvanceRequested?.Invoke();
+        // Refused arguments changed nothing, so the answers can be given again.
+        else if (outcome is LocalInstallOutcome.Failed { Code: "invalid_arguments" }) ChoiceVisible = true;
     }
 
     void OnControllerChanged(object? sender, PropertyChangedEventArgs e) {

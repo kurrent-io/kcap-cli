@@ -1,5 +1,7 @@
 using System.Reactive.Concurrency;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -14,6 +16,7 @@ public class LocalSearchViewModelTests {
 
     sealed class Harness : IDisposable {
         public readonly FakeKcapCli Cli = new();
+        public readonly BehaviorSubject<ServerLaneStatus> Status = new(new(ServerLaneState.Connected));
         public readonly LocalSearchController Search;
         public readonly LocalUpgradeController Upgrade;
         public readonly LocalSearchViewModel Vm;
@@ -23,9 +26,9 @@ public class LocalSearchViewModelTests {
 
         public Harness(LocalEmbeddingSetting? setting) {
             Setting = setting;
-            Search  = new LocalSearchController(() => Cli, action => action());
-            Upgrade = new LocalUpgradeController(() => Cli, action => action());
-            Vm = new LocalSearchViewModel(() => Setting, Search, Upgrade, () => {
+            Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
+            Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
+            Vm = new LocalSearchViewModel(() => Setting, Status, Search, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
             }, CancellationToken.None, ImmediateScheduler.Instance);
@@ -115,6 +118,42 @@ public class LocalSearchViewModelTests {
 
             await Assert.That(during).IsFalse();
             await Assert.That(h.Vm.CanApply).IsTrue();
+        });
+    }
+
+    [Test]
+    public async Task An_upgrade_does_not_start_while_a_search_change_runs() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(null);
+            var exit = new TaskCompletionSource<StreamingResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Cli.SetupLocalBehavior = (_, _, _) => exit.Task;
+            h.Vm.Choice.UseDefault = true;
+
+            await h.Vm.ApplyCommand.Execute().ToTask();
+            await h.Upgrade.StartAsync(CancellationToken.None);
+            var upgrading = h.Upgrade.Running;
+            exit.SetResult(new StreamingResult(0, false, []));
+            await h.Search.SettleAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            await Assert.That(upgrading).IsFalse();
+            await Assert.That(h.Cli.LocalUpgradeCallCount).IsEqualTo(0);
+        });
+    }
+
+    /// A setup run from a terminal changes the record and restarts the server; nothing else tells the app.
+    [Test]
+    public async Task A_reconnect_rereads_a_setting_changed_elsewhere() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+
+            h.Setting = LocalEmbeddingSetting.Declined;
+            h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
+            var before = h.Vm.StateText;
+            h.Status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(before).IsEqualTo("search by meaning");
+            await Assert.That(h.Vm.StateText).IsEqualTo("keyword search");
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
         });
     }
 }

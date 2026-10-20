@@ -8,7 +8,9 @@ namespace Capacitor.App.Services.LocalSetup;
 /// reach the UI through <c>post</c>, in order, so the outcome is always decided after every line the
 /// child printed has been applied.
 /// </summary>
-public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> post) : ReactiveObject {
+/// <param name="held">True while another app-owned change to the installation runs; a start then does nothing,
+/// since its child would only find the installation busy.</param>
+public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> post, Func<bool>? held = null) : ReactiveObject {
     LocalUpgradeProgress     _progress = new();
     bool                     _running;
     LocalUpgradeOutcome?     _outcome;
@@ -51,7 +53,7 @@ public sealed class LocalUpgradeController(Func<IKcapCli> cli, Action<Action> po
     /// Spawns the child and returns; a no-op while a run is in flight or once <paramref name="ct"/>, the
     /// app's shutdown, is cancelled: a quit's settle may already have found nothing to wait for.
     public Task StartAsync(CancellationToken ct) {
-        if (Running || ct.IsCancellationRequested) return Task.CompletedTask;
+        if (Running || ct.IsCancellationRequested || held?.Invoke() == true) return Task.CompletedTask;
 
         var progress  = new LocalUpgradeProgress();
         var interrupt = new CancellationTokenSource();

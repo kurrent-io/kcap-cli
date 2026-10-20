@@ -38,6 +38,9 @@
                                 <TextBox x:Name="SearchOtherModel" Classes="frField" PlaceholderText="Model name, e.g. nomic-embed-text"
                                          Text="{Binding OtherModel, Mode=TwoWay}" IsEnabled="{Binding UseOther}"
                                          AutomationProperties.Name="Ollama embedding model" />
+                                <TextBlock x:Name="SearchOtherModelError" Classes="frError" TextWrapping="Wrap"
+                                           Text="{Binding OtherModelError}"
+                                           IsVisible="{Binding OtherModelError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             </StackPanel>
                         </RadioButton>
                         <RadioButton x:Name="SearchKeywordOption" Classes="frOption" GroupName="InstallSearch"

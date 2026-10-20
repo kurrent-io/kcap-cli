@@ -36,14 +36,20 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         set {
             this.RaiseAndSetIfChanged(ref _otherModel, value ?? "");
             this.RaisePropertyChanged(nameof(Valid));
+            this.RaisePropertyChanged(nameof(OtherModelError));
         }
     }
 
-    public bool Valid => !UseOther || OtherModel.Trim().Length > 0;
+    public bool Valid => !UseOther || LocalEmbeddingModelName.IsValid(OtherModel.Trim());
+
+    /// Shown once something is typed: an empty field only keeps the button disabled.
+    public string? OtherModelError => UseOther && OtherModel.Trim().Length > 0 && !Valid
+        ? "Not an Ollama model name: letters, digits and . _ : / - only, starting with a letter or digit."
+        : null;
 
     public LocalEmbeddingChoice Choice =>
         UseKeyword ? LocalEmbeddingChoice.KeywordOnly
-        : UseOther && OtherModel.Trim() is { Length: > 0 } other ? new LocalEmbeddingChoice(other)
+        : UseOther && OtherModel.Trim() is var other && LocalEmbeddingModelName.IsValid(other) ? new LocalEmbeddingChoice(other)
         : LocalEmbeddingChoice.Default;
 
     /// Starts from what an earlier setup recorded, so a plain confirmation changes nothing.
@@ -71,6 +77,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(UseOther));
         this.RaisePropertyChanged(nameof(UseKeyword));
         this.RaisePropertyChanged(nameof(Valid));
+        this.RaisePropertyChanged(nameof(OtherModelError));
         this.RaisePropertyChanged(nameof(Choice));
     }
 }

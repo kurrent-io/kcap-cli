@@ -170,6 +170,25 @@ public class LocalSetupProgressTests {
         await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by keyword, as chosen.");
     }
 
+    /// The server already serves the model when setup fails to clear its pending mark.
+    [Test]
+    public async Task A_failed_record_after_configuring_leaves_search_by_meaning() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}",
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"write_failed\",\"message\":\"/x/embedding.json could not be written (disk full).\"}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Skipped).IsFalse();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with mxbai-embed-large.");
+    }
+
+    [Test]
+    public async Task A_configured_model_with_nothing_replaced_still_says_stored_sessions_are_embedded() {
+        var p = Run("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}");
+
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("What is already stored is embedded with mxbai-embed-large in the background.");
+    }
+
     [Test]
     public async Task A_run_that_halts_mid_pull_leaves_the_search_row_pending() {
         var p = Run("{\"v\":1,\"event\":\"embeddings_model_pulling\",\"model\":\"m\"}");

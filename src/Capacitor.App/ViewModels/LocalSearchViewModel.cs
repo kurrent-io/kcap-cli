@@ -3,6 +3,7 @@ using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
+using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core.LocalEdition;
 using ReactiveUI.Reactive;
@@ -35,8 +36,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
     public LocalSearchViewModel(
-            Func<LocalEmbeddingSetting?> readSetting, LocalSearchController search, LocalUpgradeController upgrade,
-            Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
+            Func<LocalEmbeddingSetting?> readSetting, IObservable<ServerLaneStatus> status, LocalSearchController search,
+            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
@@ -59,6 +60,16 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         search.Settled += OnSettled;
         Disposable.Create(() => search.Settled -= OnSettled).DisposeWith(_disposables);
 
+        // A setup run from a terminal restarts the server when it changes the model, so a reconnect rereads the setting.
+        status
+            .Select(s => s.State == ServerLaneState.Connected)
+            .DistinctUntilChanged()
+            .Skip(1)
+            .Where(connected => connected)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => ReadSetting())
+            .DisposeWith(_disposables);
+
         ApplyCommand = ReactiveCommand.CreateFromTask(ApplyAsync);
     }
 
@@ -75,7 +86,9 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         : _current?.Model is not null ? "search by meaning" : "keyword search";
 
     public string? CurrentText => !_loaded ? null
-        : (_current?.Model is { } model ? $"Searches by meaning with {model}." : "Searches by keyword.")
+        : (_current?.Model is { } model
+            ? $"Searches by meaning with {model}."
+            : "Searches by keyword, unless an embedding provider is set in the server's own settings.")
         + (_current is { Pending: true } ? " The change is not applied yet." : "");
 
     public bool CanApply =>
@@ -108,9 +121,10 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         _read.Disposable = Observable.Start(_readSetting, _readScheduler)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(setting => {
+                // An unchanged setting leaves a choice the user is still making alone.
+                if (!_loaded || setting != _current) Choice.Prefill(setting);
                 _current = setting;
                 _loaded  = true;
-                Choice.Prefill(setting);
                 Refresh();
             }, ex => Console.Error.WriteLine($"kcap app: reading the local search setting failed: {ex.Message}"));
 
