@@ -108,12 +108,15 @@ public class OpenCodeHostedLaunchTests {
     /// vendor read the same variable.
     /// </summary>
     [Test]
+    [NotInParallel]
     public async Task PluginSuppression_IsNotAppliedToOtherVendors() {
+        using var inherited = EnvScope.Exclusive(OpenCodeLaunchEnvironment.PureVariable, "inherited");
+
         var cursor = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
             AcpVendorDescriptors.Cursor, new DaemonConfig(), Ctx() with { Vendor = "cursor" });
 
         await Assert.That(cursor.Environment.TryGetValue(OpenCodeLaunchEnvironment.PureVariable, out var pure) ? pure : null)
-            .IsEqualTo(Environment.GetEnvironmentVariable(OpenCodeLaunchEnvironment.PureVariable));
+            .IsEqualTo("inherited");
     }
 
     /// <summary>

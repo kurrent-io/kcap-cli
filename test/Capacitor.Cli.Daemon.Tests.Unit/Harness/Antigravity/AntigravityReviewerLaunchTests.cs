@@ -246,13 +246,17 @@ public class AntigravityReviewerLaunchTests {
     /// false, so the child gets the daemon's block plus our overrides). Re-stamping it here would mean
     /// a rotated ADC path resolved at daemon start rather than at spawn.</summary>
     [Test]
+    [NotInParallel]
     public async Task Google_auth_variables_are_inherited_rather_than_restamped() {
+        using var adc   = EnvScope.Exclusive("AGY_ADC_AUTH", "1");
+        using var creds = EnvScope.Exclusive("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/kcap-adc-probe.json");
+
         var psi = BuildPsi(EnabledConfig());
 
         await Assert.That(psi.UseShellExecute).IsFalse();
-        foreach (var key in new[] { "AGY_ADC_AUTH", "GOOGLE_APPLICATION_CREDENTIALS" })
-            await Assert.That(psi.Environment.TryGetValue(key, out var value) ? value : null)
-                .IsEqualTo(Environment.GetEnvironmentVariable(key));
+        await Assert.That(psi.Environment.TryGetValue("AGY_ADC_AUTH", out var auth) ? auth : null).IsEqualTo("1");
+        await Assert.That(psi.Environment.TryGetValue("GOOGLE_APPLICATION_CREDENTIALS", out var path) ? path : null)
+            .IsEqualTo("/tmp/kcap-adc-probe.json");
     }
 
     // ── advertisement ─────────────────────────────────────────────────────────────────────────────
