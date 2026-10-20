@@ -208,6 +208,8 @@ public sealed class SpectreTenantProvisioner(
 
         var code       = requested?.InviteCode;
         var wrongCodes = 0;
+        // Why the Team trial was refused this run, so a closed Free plan does not send the user back to it.
+        string? teamRefused = null;
 
         while (true) {
             var outcome = await client.ProvisionAsync(
@@ -223,6 +225,7 @@ public sealed class SpectreTenantProvisioner(
             // Both refusals land before kcap-web reserves anything, so asking again for Free is a fresh
             // request rather than a resume. The user has already approved a sign-in to get this far.
             if (tier == WorkspaceTier.Team && TeamRefusal(outcome) is { } refusal) {
+                teamRefused = refusal;
                 Retry($"{refusal} Creating the workspace on the Free plan instead.");
                 tier    = WorkspaceTier.Free;
                 outcome = await client.ProvisionAsync(
@@ -296,9 +299,11 @@ public sealed class SpectreTenantProvisioner(
                     Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
                     return ProvisionOffer.Failed;
                 case 409 when IsFreeUnavailable(outcome):
-                    Fail(Scripted
-                             ? "Free cloud workspaces aren't open right now. Re-run with --tier team --invite-code <code>, or with --local to run kcap on this machine."
-                             : "Free cloud workspaces aren't open right now. Re-run and choose the Team trial, which needs an invite code, or run `kcap setup --local` to run kcap on this machine.",
+                    Fail(teamRefused is not null
+                             ? $"Free cloud workspaces aren't open right now either. {(Scripted ? "Re-run with --local" : "Run `kcap setup --local`")} to run kcap on this machine."
+                             : Scripted
+                                 ? "Free cloud workspaces aren't open right now. Re-run with --tier team --invite-code <code>, or with --local to run kcap on this machine."
+                                 : "Free cloud workspaces aren't open right now. Re-run and choose the Team trial, which needs an invite code, or run `kcap setup --local` to run kcap on this machine.",
                          "free_unavailable");
                     return ProvisionOffer.Failed;
                 case 409:

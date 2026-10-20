@@ -330,6 +330,22 @@ public class TenantProvisionerHeadlessTests {
         await Assert.That(capture.GetCapturedError()).DoesNotContain("is taken");
     }
 
+    // A Team trial already refused is not offered again when Free turns out to be closed too.
+    [Test]
+    public async Task A_closed_free_plan_after_a_refused_trial_offers_only_the_local_edition() {
+        using var capture = ConsoleOutput.StartErrorCapture();
+        using var handler = new ProvisioningStubHandler {
+            ProvisionReplies = [(HttpStatusCode.BadRequest, "work_email_required"), (HttpStatusCode.Conflict, "free_unavailable")]
+        };
+        var provisioner = Provisioner(handler, () => false, new RequestedWorkspace("Acme", "acme", WorkspaceTier.Team));
+
+        var offer = await provisioner.OfferCreateAsync(Tokens());
+
+        await Assert.That(offer.Status).IsEqualTo(ProvisionOfferStatus.Failed);
+        await Assert.That(capture.GetCapturedError()).Contains("--local");
+        await Assert.That(capture.GetCapturedError()).DoesNotContain("--tier team");
+    }
+
     // The fallback can land on an account that already owns a Free workspace, which is not a taken slug.
     [Test]
     public async Task A_free_limit_says_the_account_already_has_a_workspace() {
