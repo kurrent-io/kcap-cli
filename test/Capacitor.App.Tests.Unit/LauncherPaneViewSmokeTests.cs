@@ -692,4 +692,79 @@ public class LauncherPaneViewSmokeTests {
             vm.Dispose();
         });
     }
+
+    static (Flyout Menu, List<AppIcon> Checks) OpenMenu(Window window, LauncherPaneView view, string chipName) {
+        Click(window, Find<Button>(window, chipName)!);
+        var menu = view.OpenMenuForTesting!;
+        var checks = ((Control)menu.Content!).GetVisualDescendants().OfType<AppIcon>()
+            .Where(i => i.Kind == Lucide.Avalonia.LucideIconKind.Check).ToList();
+        return (menu, checks);
+    }
+
+    /// Pins one selection marker across the chip menus: a single visible check on the current
+    /// choice, and the menu aligned to its chip's left edge rather than centred past the composer.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chip_menus_mark_the_choice_with_one_check_and_open_from_the_chip_left_edge() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, _, _, tmp) = Build();
+            using var _tmp = tmp;
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            vm.SelectedEffort = "high";
+
+            var (effort, effortChecks) = OpenMenu(window, view, "EffortChip");
+            await Assert.That(effort.Placement).IsEqualTo(PlacementMode.BottomEdgeAlignedLeft);
+            await Assert.That(effortChecks.Count(c => c.IsVisible)).IsEqualTo(1);
+            var checkedRow = effortChecks.Single(c => c.IsVisible).FindAncestorOfType<Button>()!;
+            await Assert.That(checkedRow.GetVisualDescendants().OfType<TextBlock>().First().Text)
+                .IsEqualTo(HostedHarnessCatalog.EffortLabelFor("high"));
+            effort.Hide();
+            Settle(window);
+
+            var (agent, agentChecks) = OpenMenu(window, view, "AgentChip");
+            await Assert.That(agent.Placement).IsEqualTo(PlacementMode.BottomEdgeAlignedLeft);
+            await Assert.That(agentChecks.Count(c => c.IsVisible)).IsEqualTo(1);
+            agent.Hide();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
+
+    /// Pins that a harness the daemon does not advertise says why on hover; a disabled control
+    /// shows no tooltip unless it opts in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unavailable_harness_explains_itself_on_hover() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["claude"]));
+            var view = new LauncherPaneView { DataContext = vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            var tiles = ((Control)agent.Content!).GetVisualDescendants().OfType<Button>()
+                .Where(b => b.Width == 34).ToList();
+            var disabled = tiles.Where(t => !t.IsEnabled).ToList();
+
+            await Assert.That(disabled).IsNotEmpty();
+            foreach (var tile in disabled) {
+                await Assert.That(ToolTip.GetShowOnDisabled(tile)).IsTrue();
+                await Assert.That(ToolTip.GetTip(tile) as string).Contains("not installed or not supported");
+            }
+            var enabled = tiles.Single(t => t.IsEnabled);
+            await Assert.That(ToolTip.GetTip(enabled) as string).DoesNotContain("not installed");
+            agent.Hide();
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+        });
+    }
 }
