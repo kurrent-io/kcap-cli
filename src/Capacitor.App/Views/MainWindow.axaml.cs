@@ -32,6 +32,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             OnboardingPane.DataContext = value;
             OnboardingPane.IsVisible   = value is not null;
             SessionsSurface.IsVisible  = value is null;
+            ApplyMinimumSize();
         }
     }
 
@@ -93,7 +94,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinWidth  = UiScale.Minimum(Onboarding is null ? WindowSizeMemory.MinWidth : 640, _scale, available?.Width);
         MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 

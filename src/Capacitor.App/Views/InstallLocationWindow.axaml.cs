@@ -19,9 +19,6 @@ public partial class InstallLocationWindow : Window {
             MoveButton.Content = _actionLabel;
             var detail = selected?.Detail ?? "Its command-line tool and background service need a permanent location.";
             Explanation.Text = selected is null ? $"{where} {detail}" : detail;
-            LocationPanel.IsVisible = selected is not null && selected.Action != ApplicationsInstallAction.Blocked
-                && destinations is not { Count: > 1 };
-            LocationPath.Text = selected?.Target;
             InstallBadge.IsVisible = selected is null || selected.Action == ApplicationsInstallAction.Install;
             UpdateBadge.IsVisible = selected?.Action == ApplicationsInstallAction.Update;
             ReadyBadge.IsVisible = selected?.Action == ApplicationsInstallAction.OpenInstalled;

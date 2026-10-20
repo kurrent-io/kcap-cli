@@ -8,61 +8,61 @@
              x:Class="Capacitor.App.Views.Onboarding.InstallPaneView"
              x:DataType="vm:InstallStepViewModel">
     <StackPanel Spacing="14">
-        <Border Classes="frWarning" IsVisible="{Binding RefusalVisible}">
+        <Border Classes="onboardingWarning" IsVisible="{Binding RefusalVisible}">
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                 <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
                                Foreground="{StaticResource KcapWarningBrush}" />
-                <TextBlock Grid.Column="1" x:Name="RefusalText" Classes="frBody" TextWrapping="Wrap"
+                <TextBlock Grid.Column="1" x:Name="RefusalText" Classes="onboardingBody" TextWrapping="Wrap"
                            Text="{Binding RefusalMessage}" />
             </Grid>
         </Border>
 
-        <Border Classes="frCard" IsVisible="{Binding ChoiceVisible}">
+        <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
             <StackPanel Spacing="12">
                 <StackPanel Spacing="10" DataContext="{Binding Search}" x:DataType="vmr:SearchChoiceViewModel">
-                    <TextBlock Classes="frLabel" FontSize="13" Text="Search by meaning" />
-                    <TextBlock Classes="frDetail" TextWrapping="Wrap" Text="{x:Static vmr:SearchChoiceViewModel.Explainer}" />
+                    <TextBlock Classes="onboardingLabel" FontSize="13" Text="Search by meaning" />
+                    <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{x:Static vmr:SearchChoiceViewModel.Explainer}" />
                     <StackPanel Spacing="2">
-                        <RadioButton x:Name="SearchDefaultOption" Classes="frOption" GroupName="InstallSearch"
+                        <RadioButton x:Name="SearchDefaultOption" Classes="onboardingOption" GroupName="InstallSearch"
                                      IsChecked="{Binding UseDefault, Mode=TwoWay}">
                             <StackPanel Spacing="2">
-                                <TextBlock Classes="frLabel" FontSize="13" Text="{x:Static vmr:SearchChoiceViewModel.DefaultLabel}" />
-                                <TextBlock Classes="frDetail" TextWrapping="Wrap"
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vmr:SearchChoiceViewModel.DefaultLabel}" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap"
                                            Text="{x:Static vmr:SearchChoiceViewModel.DefaultDetail}" />
                             </StackPanel>
                         </RadioButton>
-                        <RadioButton x:Name="SearchOtherOption" Classes="frOption" GroupName="InstallSearch"
+                        <RadioButton x:Name="SearchOtherOption" Classes="onboardingOption" GroupName="InstallSearch"
                                      IsChecked="{Binding UseOther, Mode=TwoWay}">
                             <StackPanel Spacing="6">
-                                <TextBlock Classes="frLabel" FontSize="13" Text="Use another Ollama model" />
-                                <TextBox x:Name="SearchOtherModel" Classes="frField" PlaceholderText="Model name, e.g. nomic-embed-text"
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="Use another Ollama model" />
+                                <TextBox x:Name="SearchOtherModel" Classes="onboardingField" PlaceholderText="Model name, e.g. nomic-embed-text"
                                          Text="{Binding OtherModel, Mode=TwoWay}" IsEnabled="{Binding UseOther}"
                                          AutomationProperties.Name="Ollama embedding model" />
-                                <TextBlock x:Name="SearchOtherModelError" Classes="frError" TextWrapping="Wrap"
+                                <TextBlock x:Name="SearchOtherModelError" Classes="onboardingError" TextWrapping="Wrap"
                                            Text="{Binding OtherModelError}"
                                            IsVisible="{Binding OtherModelError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             </StackPanel>
                         </RadioButton>
-                        <RadioButton x:Name="SearchKeywordOption" Classes="frOption" GroupName="InstallSearch"
+                        <RadioButton x:Name="SearchKeywordOption" Classes="onboardingOption" GroupName="InstallSearch"
                                      IsChecked="{Binding UseKeyword, Mode=TwoWay}">
                             <StackPanel Spacing="2">
-                                <TextBlock Classes="frLabel" FontSize="13" Text="Search by keyword only" />
-                                <TextBlock Classes="frDetail" TextWrapping="Wrap"
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="Search by keyword only" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap"
                                            Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
                             </StackPanel>
                         </RadioButton>
                     </StackPanel>
                 </StackPanel>
-                <Button x:Name="InstallButton" Classes="frPrimary" Content="Install" HorizontalAlignment="Left"
+                <Button x:Name="InstallButton" Classes="onboardingPrimary" Content="Install" HorizontalAlignment="Left"
                         Command="{Binding InstallCommand}" />
             </StackPanel>
         </Border>
 
-        <Border Classes="frCard" IsVisible="{Binding ProgressVisible}">
+        <Border Classes="onboardingCard" IsVisible="{Binding ProgressVisible}">
             <StackPanel Spacing="12">
-                <TextBlock Classes="frNote" Text="Finishing an earlier setup" IsVisible="{Binding Progress.Recovering}" />
-                <TextBlock Classes="frNote" Text="Undoing the partial install" IsVisible="{Binding Progress.RollingBack}" />
-                <TextBlock Classes="frNote" Text="Already installed" IsVisible="{Binding Progress.Reused}" />
+                <TextBlock Classes="onboardingNote" Text="Finishing an earlier setup" IsVisible="{Binding Progress.Recovering}" />
+                <TextBlock Classes="onboardingNote" Text="Undoing the partial install" IsVisible="{Binding Progress.RollingBack}" />
+                <TextBlock Classes="onboardingNote" Text="Already installed" IsVisible="{Binding Progress.Reused}" />
 
                 <ItemsControl x:Name="InstallRows" ItemsSource="{Binding Rows}">
                     <ItemsControl.ItemsPanel>
@@ -74,19 +74,19 @@
                         <DataTemplate x:DataType="vm:InstallStepRow">
                             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
                                 <Panel Width="14" Height="14" VerticalAlignment="Center">
-                                    <icons:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource FrMutedBrush}"
+                                    <icons:AppIcon Kind="Circle" Size="14" Foreground="{StaticResource OnboardingMutedBrush}"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Pending}" />
-                                    <Panel Classes="frSpinner"
+                                    <Panel Classes="onboardingSpinner"
                                            IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}">
-                                        <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource FrAccentBrush}"
+                                        <icons:AppIcon Kind="LoaderCircle" Size="14" Foreground="{StaticResource OnboardingAccentBrush}"
                                                        Classes.kcapSpinning="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Running}" />
                                     </Panel>
                                     <icons:AppIcon Kind="Check" Size="14" Foreground="{StaticResource KcapSuccessBrush}"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Done}" />
-                                    <icons:AppIcon Kind="CircleMinus" Size="14" Foreground="{StaticResource FrMutedBrush}"
+                                    <icons:AppIcon Kind="CircleMinus" Size="14" Foreground="{StaticResource OnboardingMutedBrush}"
                                                    IsVisible="{Binding Row.State, Converter={x:Static views:RowStateIsConverter.Instance}, ConverterParameter=Skipped}" />
                                 </Panel>
-                                <TextBlock Grid.Column="1" Classes="frBody" VerticalAlignment="Center" Text="{Binding Label}" />
+                                <TextBlock Grid.Column="1" Classes="onboardingBody" VerticalAlignment="Center" Text="{Binding Label}" />
                             </Grid>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -94,48 +94,48 @@
 
                 <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100"
                              Value="{Binding DownloadPercent}" IsIndeterminate="{Binding DownloadIndeterminate}"
-                             Background="{StaticResource FrDividerBrush}" Foreground="{StaticResource FrAccentBrush}"
+                             Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}"
                              IsVisible="{Binding DownloadBarVisible}" />
 
                 <StackPanel Spacing="6" DataContext="{Binding Progress.Embeddings}" x:DataType="services:LocalEmbeddingProgress">
                     <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
-                        <TextBlock x:Name="EmbeddingPullText" Classes="frDetail" Text="{Binding PullText}" />
+                        <TextBlock x:Name="EmbeddingPullText" Classes="onboardingDetail" Text="{Binding PullText}" />
                         <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="1"
                                      Value="{Binding PullFraction, FallbackValue=0, TargetNullValue=0}"
                                      IsIndeterminate="{Binding PullFraction, Converter={x:Static ObjectConverters.IsNull}}"
-                                     Background="{StaticResource FrDividerBrush}" Foreground="{StaticResource FrAccentBrush}" />
+                                     Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}" />
                     </StackPanel>
-                    <TextBlock x:Name="EmbeddingSummaryText" Classes="frDetail" TextWrapping="Wrap" Text="{Binding Summary}"
+                    <TextBlock x:Name="EmbeddingSummaryText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding Summary}"
                                IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <TextBlock x:Name="EmbeddingReembedText" Classes="frDetail" TextWrapping="Wrap" Text="{Binding ReembedNote}"
+                    <TextBlock x:Name="EmbeddingReembedText" Classes="onboardingDetail" TextWrapping="Wrap" Text="{Binding ReembedNote}"
                                IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <TextBlock Classes="frDetail" TextWrapping="Wrap" IsVisible="{Binding Skipped}"
+                    <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" IsVisible="{Binding Skipped}"
                                Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
                 </StackPanel>
 
-                <Button x:Name="CancelInstallButton" Classes="frLink" Content="Cancel" HorizontalAlignment="Left"
+                <Button x:Name="CancelInstallButton" Classes="onboardingLink" Content="Cancel" HorizontalAlignment="Left"
                         AutomationProperties.Name="Cancel the install"
                         Command="{Binding CancelCommand}" IsVisible="{Binding CancelVisible}" />
             </StackPanel>
         </Border>
 
-        <Border Classes="frWarning" IsVisible="{Binding FailureVisible}">
+        <Border Classes="onboardingWarning" IsVisible="{Binding FailureVisible}">
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                 <icons:AppIcon Kind="TriangleAlert" Size="14" VerticalAlignment="Top" Margin="0,2,0,0"
                                Foreground="{StaticResource KcapDangerBrush}" />
                 <StackPanel Grid.Column="1" Spacing="8">
-                    <TextBlock Classes="frLabel" FontSize="12.5" Text="{x:Static vm:InstallStepViewModel.LockedText}"
+                    <TextBlock Classes="onboardingLabel" FontSize="12.5" Text="{x:Static vm:InstallStepViewModel.LockedText}"
                                IsVisible="{Binding LockedVisible}" />
-                    <TextBlock x:Name="FailureText" Classes="frDetail" Foreground="{StaticResource FrMutedBrush}"
+                    <TextBlock x:Name="FailureText" Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
                                TextWrapping="Wrap" Text="{Binding FailureMessage}" />
                     <StackPanel Spacing="2" IsVisible="{Binding FailureDetailVisible}">
                         <TextBlock Text="Details from the installer" FontSize="11"
-                                   Foreground="{StaticResource FrDimBrush}" />
+                                   Foreground="{StaticResource OnboardingDimBrush}" />
                         <SelectableTextBlock x:Name="FailureDetailText" Text="{Binding FailureDetail}"
                                              TextWrapping="Wrap" FontSize="11" LineHeight="16"
-                                             Foreground="{StaticResource FrDimBrush}" />
+                                             Foreground="{StaticResource OnboardingDimBrush}" />
                     </StackPanel>
-                    <Button x:Name="TryAgainButton" Classes="frPrimary" Content="Try again" HorizontalAlignment="Left"
+                    <Button x:Name="TryAgainButton" Classes="onboardingPrimary" Content="Try again" HorizontalAlignment="Left"
                             Command="{Binding TryAgainCommand}" IsVisible="{Binding TryAgainVisible}" />
                 </StackPanel>
             </Grid>

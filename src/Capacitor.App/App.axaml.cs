@@ -209,7 +209,7 @@ public partial class App : Application {
     Window? _wizardWindow;
     // The onboarding window once its flow has finished, waiting for BuildAndShowMainWindow to take
     // it over so the main surface opens in place rather than in a second window.
-    MainWindow? _adoptableWindow;
+    (MainWindow Window, AppState State)? _adoptableWindow;
     // Steady-state re-auth dialog, one at a time — a second Sign in click focuses it. The settle
     // task is FinishSignInAsync for the most recent close; shutdown awaits it so a live attempt is
     // cancelled (or a commit past the boundary finishes) before the process exits — the dialog's
@@ -349,7 +349,7 @@ public partial class App : Application {
             // No orphan wizard beside the error window: it is a dead shell once startup has failed,
             // and its own close path (the handoff) is exactly what did not run.
             if (_wizardWindow is { IsVisible: true } wizard) wizard.Close();
-            if (TakeAdoptableWindow() is { } adoptable) adoptable.Close();
+            if (TakeAdoptableWindow() is { } adoptable) adoptable.Window.Close();
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
@@ -1146,7 +1146,7 @@ public partial class App : Application {
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
-        var window = ShowWizardWindow(desktop, graph.ViewModel, _appState, graph.Install, () => _shutdown.IsCancellationRequested, _uiScale);
+        var window = ShowWizardWindow(desktop, graph.ViewModel, graph.Install, () => _shutdown.IsCancellationRequested, _uiScale);
         _wizardWindow = window;
 
         // The SAME consumer function, over the wizard's own surface: outcome presentation stays
@@ -1161,14 +1161,18 @@ public partial class App : Application {
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
         _wizardAuth = null;
-        _wizardWindow = null;
         // A finished onboarding leaves its window up for the main surface to take over; a window the
         // user closed is gone, and the main surface builds its own.
         if (window.IsVisible) {
             // A pending setup reopens a fresh wizard, so this one is not left beside it.
             if (_shutdown.IsCancellationRequested || LocalSetupState.Pending(_localRoot)) window.Close();
-            else _adoptableWindow = window;
+            else {
+                var state = await Task.Run(_appState.LoadAsync);
+                if (_shutdown.IsCancellationRequested) window.Close();
+                else if (window.IsVisible) _adoptableWindow = (window, state);
+            }
         }
+        _wizardWindow = null;
 
         return quiesced;
     }
@@ -1219,13 +1223,12 @@ public partial class App : Application {
     // closing the window mid-onboarding abandons it and hands over to the normal graph, it never
     // exits the app.
     internal static MainWindow ShowWizardWindow(
-            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard, IAppStateStore? appState = null,
+            IClassicDesktopStyleApplicationLifetime desktop, OnboardingViewModel wizard,
             LocalInstallController? install = null, Func<bool>? shuttingDown = null, UiScaleSetting? uiScale = null) {
-        var window = new MainWindow { Onboarding = wizard, ContentScale = uiScale };
-        if (appState is not null) {
-            WindowSizeMemory.Restore(window, appState);
-            WindowSizeMemory.Attach(window, appState);
-        }
+        var window = new MainWindow {
+            Onboarding = wizard, ContentScale = uiScale,
+            Width = 760, Height = 760, WindowStartupLocation = WindowStartupLocation.CenterScreen,
+        };
 
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
@@ -1449,7 +1452,8 @@ public partial class App : Application {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
-            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null, MainWindow? adopt = null,
+            Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null,
+            (MainWindow Window, AppState State)? adopt = null,
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
@@ -1508,15 +1512,14 @@ public partial class App : Application {
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon) {
             LocalStack = localStack,
         };
-        var window = adopt ?? new MainWindow();
+        var window = adopt?.Window ?? new MainWindow();
         window.DataContext = vm;
         window.Notifier = notifier;
         window.ContentScale = uiScale;
         window.Onboarding = null;
-        if (adopt is null) {
-            WindowSizeMemory.Restore(window, appState);
-            WindowSizeMemory.Attach(window, appState);
-        }
+        if (adopt is { } handover) WindowSizeMemory.Apply(window, handover.State);
+        else WindowSizeMemory.Restore(window, appState);
+        WindowSizeMemory.Attach(window, appState);
         window.Show();
         return window;
     }
@@ -1893,10 +1896,10 @@ public partial class App : Application {
         Dispatcher.UIThread.InvokeAsync(() => ShowLifecyclePromptDialogAsync(DialogOwner(), prompt, ct));
 
     // Once only: a later rebuild (after a real close) must not reach for a window that is gone.
-    MainWindow? TakeAdoptableWindow() {
+    (MainWindow Window, AppState State)? TakeAdoptableWindow() {
         var window = _adoptableWindow;
         _adoptableWindow = null;
-        return window is { IsVisible: true } ? window : null;
+        return window is { Window.IsVisible: true } ? window : null;
     }
 
     // The wizard owns dialogs while wizard-first mode is up — no main window exists yet.
