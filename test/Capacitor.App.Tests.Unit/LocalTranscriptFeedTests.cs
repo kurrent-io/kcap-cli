@@ -68,4 +68,21 @@ public class LocalTranscriptFeedTests {
         await File.WriteAllTextAsync(path, "");
         await Assert.That(feed.ReadAppended().Runs.Count).IsEqualTo(1);
     }
+
+    /// A read the chat does not apply must not use up a subagent's one report.
+    [Test]
+    public async Task A_subagent_seen_on_a_missing_read_is_reported_once_the_file_reads() {
+        var path = Tmp.PathTo("t.jsonl");
+        var dir = Capacitor.Cli.Core.Harness.Claude.ClaudeSubagentFiles.DirectoryOf(path);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "agent-s1.meta.json"), """{"toolUseId":"toolu_1"}""");
+        using var feed = new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", new FakeTimeProvider(), _ => { });
+
+        var missing = feed.ReadAppended();
+        await Assert.That(missing.Status).IsEqualTo(FeedStatus.Missing);
+        await Assert.That(missing.Runs).IsEmpty();
+
+        await File.WriteAllTextAsync(path, UserLine + "\n");
+        await Assert.That(feed.ReadAppended().Runs.Count).IsEqualTo(1);
+    }
 }

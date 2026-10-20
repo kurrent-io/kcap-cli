@@ -54,7 +54,8 @@ internal sealed class LocalTranscriptFeed(
         var snapshot = status == FeedStatus.Reset
             ? Math.Max(result.SnapshotLength ?? 0, CurrentOffset ?? 0)
             : result.SnapshotLength;
-        return new(status, lines, snapshot, result.Failure) { Runs = SubagentStarts() };
+        // The chat applies a read's run signals only when it applies its lines, so only those reads report them.
+        return new(status, lines, snapshot, result.Failure) { Runs = status is FeedStatus.Ok or FeedStatus.Reset ? SubagentStarts() : [] };
     }
 
     // A running foreground subagent is named nowhere in the parent's file until its result arrives.

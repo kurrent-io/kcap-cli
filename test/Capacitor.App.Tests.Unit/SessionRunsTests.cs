@@ -573,21 +573,33 @@ public class SessionRunsTests {
         await Assert.That(changes).IsEqualTo(1);
     }
 
-    /// Every way a subagent row learns its agent id: the launch acknowledgement, the result, an id
-    /// read by call, and a start with no call paired to the oldest unnamed subagent.
+    /// A start with no call names a subagent only when it is the one running subagent still unnamed: with
+    /// two, the records' order says nothing about which is which. A command row is never named.
     [Test]
-    public async Task A_subagent_row_learns_its_agent_id_and_only_then_opens() {
+    public async Task A_start_with_no_call_names_only_a_lone_unnamed_subagent() {
         var s = new SessionRuns(Clock());
-        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Started("c3", T0.AddSeconds(2)), Shell("c4")));
-        s.Apply(Signals(Detached("c4", "b4")));
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Shell("c4")));
+        s.Apply(Signals(Detached("c4", "b4"), Identified(null, "a1")));
         await Assert.That(s.Rows.All(row => !row.CanOpen)).IsTrue();
 
-        s.Apply(Signals(Identified(null, "a1")));
-        s.Apply(Signals(Identified(null, "a2")));
-        s.Apply(Signals(Identified("c3", "a3")));
+        s.Apply(Signals(Identified("c2", "a2"), Identified(null, "a1")));
 
-        await Assert.That(string.Join(",", s.Rows.Select(row => row.AgentId ?? "-"))).IsEqualTo("a1,a2,a3,-");
-        await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,True,False");
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.AgentId ?? "-"))).IsEqualTo("a1,a2,-");
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,False");
+    }
+
+    /// The call's own id outranks a paired guess, and the agent's end then finds the right row.
+    [Test]
+    public async Task An_id_by_call_replaces_a_paired_guess_and_its_end_follows() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Identified(null, "guess"), Started("c2", T0.AddSeconds(1))));
+        s.Apply(Signals(Identified("c1", "a1"), Identified("c2", "guess")));
+
+        s.Apply(Signals(Finished(null, "guess")));
+
+        await Assert.That(s.Rows[0].AgentId).IsEqualTo("a1");
+        await Assert.That(s.Rows[0].IsEnded).IsFalse();
+        await Assert.That(s.Rows[1].IsEnded).IsTrue();
     }
 
     [Test]

@@ -32,6 +32,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
     readonly SubagentEventsReader? _readSubagent;
+    readonly SessionRuns _runs;
     // Never disposed, so a row revision landing after teardown cannot throw; the chat and its
     // cards unsubscribe from these when the pane is torn down.
     readonly BehaviorSubject<string?> _sessionIds;
@@ -240,7 +241,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 if (!show && IsArtefactsActive) ActiveTab = RemoteTab.Chat;
             }).DisposeWith(_disposables);
         var input = new ServerChatInput(row.Id, lane, _accessStates, _session, HostedHarnessCatalog.ShowsTerminal(null, row.Vendor));
-        var runs = new SessionRuns(time);
+        var runs = _runs = new SessionRuns(time);
         commands?.Track($"remote:{row.Id}", runs).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
@@ -420,10 +421,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     void OpenSubagent(RunRow row) {
         if (row.AgentId is not { } subagentId || _sessionIds.Value is not { } sessionId || _readSubagent is not { } read) return;
         var vendor = _row.Vendor;
-        ReplaceSubagent(new SubagentPaneViewModel(
-            row, Title, AgentOrigin.Remote, AgentId, vendor, $"{sessionId}/{subagentId}",
-            _ => new RemoteSubagentFeed(sessionId, subagentId, vendor, read, () => row.IsRunning, _time, Log),
-            _opener, _time, _permissions, CloseSubagent));
+        SubagentPaneViewModel? pane = null;
+        pane = new SubagentPaneViewModel(
+            _runs, row, Title, AgentOrigin.Remote, AgentId, vendor, $"{sessionId}/{subagentId}",
+            _ => new RemoteSubagentFeed(sessionId, subagentId, vendor, read, () => pane?.IsRunning ?? false, _time, Log),
+            _opener, _time, _permissions, CloseSubagent);
+        ReplaceSubagent(pane);
         ActiveTab = RemoteTab.Chat;
     }
 

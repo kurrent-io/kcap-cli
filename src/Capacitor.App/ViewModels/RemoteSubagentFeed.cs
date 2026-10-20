@@ -17,6 +17,9 @@ internal sealed class RemoteSubagentFeed(
     long _next;
     long? _position;
     DateTimeOffset? _fetchedAt;
+    /// Reads made since the subagent was last seen running. Its last events can reach the server after
+    /// the parent hears it ended, so one more read follows before the feed stops.
+    int _readsSinceEnded;
     bool _complete;
 
     public long? CurrentOffset => _position;
@@ -35,8 +38,8 @@ internal sealed class RemoteSubagentFeed(
             for (var page = 0; page < MaxPagesPerRead; page++) {
                 var fetch = read(sessionId, agentId, _next, token).GetAwaiter().GetResult();
                 if (fetch.NotFound) return new(lines.Count > 0 ? FeedStatus.Ok : FeedStatus.Missing, lines);
-                if (fetch.Unauthorized) return new(FeedStatus.Failed, lines, Failure: "not authorized to read this subagent");
-                if (fetch.Page is not { } dto) return new(FeedStatus.Failed, lines, Failure: "could not reach the server");
+                if (fetch.Unauthorized) return Failed(lines, "not authorized to read this subagent");
+                if (fetch.Page is not { } dto) return Failed(lines, "could not reach the server");
                 foreach (var evt in dto.Events ?? []) {
                     if (evt.EventNumber < _next) continue;
                     _next     = evt.EventNumber + 1;
@@ -45,7 +48,8 @@ internal sealed class RemoteSubagentFeed(
                         lines.Add(line);
                 }
                 if (dto.NextFrom is not { } nextFrom) {
-                    _complete = ended;
+                    _readsSinceEnded = ended ? _readsSinceEnded + 1 : 0;
+                    _complete = _readsSinceEnded > 1;
                     break;
                 }
                 _next = Math.Max(_next, nextFrom);
@@ -54,10 +58,15 @@ internal sealed class RemoteSubagentFeed(
             return new(FeedStatus.Ok, []);
         } catch (Exception ex) {
             log($"subagent read: {ex.Message}");
-            return new(FeedStatus.Failed, lines, Failure: "could not read this subagent");
+            return Failed(lines, "could not read this subagent");
         }
         return new(FeedStatus.Ok, lines);
     }
+
+    // A failure past a page already read keeps that page: the chat drops a failed read's lines, and the
+    // next poll resumes after them.
+    static FeedRead Failed(List<ProjectedLine> lines, string failure) =>
+        lines.Count > 0 ? new(FeedStatus.Ok, lines) : new(FeedStatus.Failed, lines, Failure: failure);
 
     ProjectedLine? Project(string eventType, string json, long offset, DateTimeOffset? timestamp) {
         var payload = CanonicalEventJson.TryParse(eventType, json);

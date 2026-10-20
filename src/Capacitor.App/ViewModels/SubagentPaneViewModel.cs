@@ -1,22 +1,34 @@
+using System.Collections.Specialized;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
 /// One subagent's own transcript, shown in place of its session's chat until the user goes back. It
-/// reads through its own feed and run rows, so the parent's are untouched while it is open.
+/// reads through its own feed and run rows, so the parent's are untouched while it is open. A reset of
+/// the parent's feed rebuilds its rows, so the pane follows its row by call id rather than by reference.
 public sealed class SubagentPaneViewModel : ReactiveObject {
     internal const string Notice = "this is a subagent's own transcript";
 
+    readonly SessionRuns _runs;
+    readonly BehaviorSubject<bool> _running;
+    RunRow _row;
+    IDisposable? _rowWatch;
+
     public SubagentPaneViewModel(
-            RunRow row, string parentTitle, AgentOrigin origin, string parentAgentId, string vendor, string feedKey,
-            Func<string, IChatTranscriptFeed> openFeed, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
-            Action back) {
-        Row         = row;
+            SessionRuns runs, RunRow row, string parentTitle, AgentOrigin origin, string parentAgentId, string vendor,
+            string feedKey, Func<string, IChatTranscriptFeed> openFeed, IUrlOpener opener, TimeProvider time,
+            IPermissionService permissions, Action back) {
+        _runs       = runs;
+        _row        = row;
+        _running    = new BehaviorSubject<bool>(row.IsRunning);
         ParentTitle = parentTitle;
-        var session = row.WhenAnyValue(r => r.IsRunning)
+        Watch(row);
+        _runs.Rows.CollectionChanged += OnRowsChanged;
+        var session = _running.DistinctUntilChanged()
             .Select(running => new ChatSessionInfo(
                 running ? "running" : "ended", running ? "Running" : "Finished", vendor, null, null, null, !running, Notice, feedKey));
         // Its own key keeps the parent's pending cards, which are keyed by the parent, out of this pane.
@@ -26,12 +38,33 @@ public sealed class SubagentPaneViewModel : ReactiveObject {
         BackCommand = ReactiveCommand.Create(back);
     }
 
-    public RunRow Row { get; }
+    public RunRow Row {
+        get => _row;
+        private set => this.RaiseAndSetIfChanged(ref _row, value);
+    }
+
+    /// Readable from any thread: the remote feed asks it from the chat's worker.
+    public bool IsRunning => _running.Value;
+
     public string ParentTitle { get; }
     public ChatTabViewModel Chat { get; }
     public ReactiveCommand<Unit, Unit> BackCommand { get; }
 
+    void OnRowsChanged(object? sender, NotifyCollectionChangedEventArgs e) {
+        if (_runs.Rows.FirstOrDefault(r => r.CallId == _row.CallId) is { } current && !ReferenceEquals(current, _row)) {
+            Row = current;
+            Watch(current);
+        }
+    }
+
+    void Watch(RunRow row) {
+        _rowWatch?.Dispose();
+        _rowWatch = row.WhenAnyValue(r => r.IsRunning).Subscribe(_running.OnNext);
+    }
+
     public Task TeardownAsync() {
+        _runs.Rows.CollectionChanged -= OnRowsChanged;
+        _rowWatch?.Dispose();
         BackCommand.Dispose();
         return Chat.TeardownAsync();
     }

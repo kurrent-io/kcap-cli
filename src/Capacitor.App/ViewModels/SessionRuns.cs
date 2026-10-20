@@ -117,13 +117,21 @@ public sealed class SessionRuns(TimeProvider time) {
     /// Names the subagent a call started, from a source that reads it outside the projected lines.
     public void Identify(string callId, string agentId) => Identify(new RunSignal.Identified(callId, agentId));
 
+    /// An id with no call names a subagent only when one running subagent is still unnamed: parallel calls
+    /// and their start records arrive in no fixed order, so with two candidates either could be the one.
     void Identify(RunSignal.Identified identified) {
-        var row = identified.CallId is { } callId
-            ? _byCall.GetValueOrDefault(callId)
-            : _rows.FirstOrDefault(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false });
+        RunRow? row;
+        if (identified.CallId is { } callId) row = _byCall.GetValueOrDefault(callId);
+        else {
+            var unnamed = _rows.Where(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false }).Take(2).ToList();
+            row = unnamed.Count == 1 ? unnamed[0] : null;
+        }
         if (row is not { Kind: RunKind.Agent }) return;
+        if (row.AgentId is { } previous && previous != identified.AgentId
+            && _byAgent.TryGetValue(previous, out var held) && ReferenceEquals(held, row))
+            _byAgent.Remove(previous);
         row.Identify(identified.AgentId);
-        _byAgent.TryAdd(identified.AgentId, row);
+        _byAgent[identified.AgentId] = row;
     }
 
     /// A known call id decides alone and never falls through to the agent id: a repeated

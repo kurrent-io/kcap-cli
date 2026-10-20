@@ -159,6 +159,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly IUrlOpener _opener;
     readonly TimeProvider _time;
     readonly IPermissionService _permissions;
+    readonly SessionRuns _runs;
 
     // Read by StopCommand at click time -- the DTO's own Kind decides protected-ness
     // (AgentActionService.IsProtectedKind), so Stop must see whatever the LATEST resolved dto
@@ -190,7 +191,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Replay(1)
             .RefCount();
 
-        var runs = new SessionRuns(time);
+        var runs = _runs = new SessionRuns(time);
         commands?.Track($"local:{agentId}", runs).DisposeWith(_disposables);
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
@@ -374,7 +375,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             || TranscriptChat.ForSubagent(dto.Vendor) is not { } projection) return;
         var path = ClaudeSubagentFiles.TranscriptPath(parentPath, subagentId);
         ReplaceSubagent(new SubagentPaneViewModel(
-            row, Title, AgentOrigin.Local, AgentId, dto.Vendor, path,
+            _runs, row, Title, AgentOrigin.Local, AgentId, dto.Vendor, path,
             key => new LocalTranscriptFeed(key, projection, subagentId, _time, _ => { }),
             _opener, _time, _permissions, CloseSubagent));
         ActiveTab = WorkspaceTab.Chat;

@@ -20,9 +20,11 @@ public class RemoteSubagentFeedTests {
         public readonly List<long> Requests = [];
         public int PageSize = 100;
         public bool Missing;
+        public int? FailRequest;
 
         public Task<SubagentEventsFetch> Read(string sessionId, string agentId, long from, CancellationToken ct) {
             Requests.Add(from);
+            if (FailRequest == Requests.Count) return Task.FromResult(new SubagentEventsFetch(null));
             if (Missing) return Task.FromResult(new SubagentEventsFetch(null, NotFound: true));
             var page = Events.Where(e => e.EventNumber >= from).Take(PageSize).ToArray();
             int? next = page.Length == PageSize && Events.Any(e => e.EventNumber > page[^1].EventNumber) ? (int)page[^1].EventNumber + 1 : null;
@@ -53,6 +55,11 @@ public class RemoteSubagentFeedTests {
         clock.Advance(RemoteSubagentFeed.PollInterval);
         await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("e");
 
+        // Its last events can land after the parent hears it ended, so one more read follows.
+        server.Events.Add(Text(5, "f"));
+        clock.Advance(RemoteSubagentFeed.PollInterval);
+        await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("f");
+
         var requests = server.Requests.Count;
         clock.Advance(RemoteSubagentFeed.PollInterval);
         await Assert.That(feed.ReadAppended().Lines).IsEmpty();
@@ -65,5 +72,22 @@ public class RemoteSubagentFeedTests {
         using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => true, new FakeTimeProvider(), _ => { });
 
         await Assert.That(feed.ReadAppended().Status).IsEqualTo(FeedStatus.Missing);
+    }
+
+    /// The chat drops a failed read's lines, so a failure past a page already read keeps that page and
+    /// the next poll resumes after it.
+    [Test]
+    public async Task A_failure_after_a_page_keeps_that_page() {
+        var server = new Server { PageSize = 2, FailRequest = 2 };
+        server.Events.AddRange([Text(0, "a"), Text(1, "b"), Text(2, "c")]);
+        var clock = new FakeTimeProvider();
+        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => true, clock, _ => { });
+
+        var first = feed.ReadAppended();
+        await Assert.That(first.Status).IsEqualTo(FeedStatus.Ok);
+        await Assert.That(Texts(first)).IsEqualTo("a,b");
+
+        clock.Advance(RemoteSubagentFeed.PollInterval);
+        await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("c");
     }
 }
