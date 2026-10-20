@@ -1,0 +1,102 @@
+using System.Text;
+using Capacitor.Cli.Core.Auth;
+using DotNet.Testcontainers.Builders;
+using DotNet.Testcontainers.Configurations;
+using DotNet.Testcontainers.Containers;
+
+namespace Capacitor.Cli.Tests.Integration;
+
+/// <summary>
+/// WorkOS Emulate in a container, run without <c>--interactive</c> so its authorize endpoint
+/// redirects straight back with a code for the first seeded user.
+/// </summary>
+public sealed class WorkOSEmulator : IAsyncDisposable {
+    public const string ClientId       = "client_kcapdev";
+    public const string OwnerId        = "user_01K0000000000000000000000A";
+    public const string OrganizationId = "org_01K0000000000000000000000K";
+
+    const string Image     = "ghcr.io/workos/emulate:0.15.0";
+    const int    Port      = 4100;
+    const string SeedPath  = "/app/workos-emulate.config.yaml";
+
+    const string Seed = """
+        users:
+          - id: user_01K0000000000000000000000A
+            email: owner@kcap.test
+            first_name: Olive
+            last_name: Owner
+            email_verified: true
+          - id: user_01K0000000000000000000000B
+            email: member@kcap.test
+            first_name: Max
+            last_name: Member
+            email_verified: true
+        organizations:
+          - id: org_01K0000000000000000000000K
+            name: Kcap Dev
+            memberships:
+              - email: owner@kcap.test
+                role: owner
+              - email: member@kcap.test
+                role: member
+        """;
+
+    readonly IContainer _container;
+
+    WorkOSEmulator(IContainer container, int hostPort) {
+        _container = container;
+        BaseUrl    = $"http://127.0.0.1:{hostPort}";
+    }
+
+    /// <summary>Where the emulator answers on this machine; loopback, as the CLI requires.</summary>
+    public string BaseUrl { get; }
+
+    /// <summary>Why no container can run here, or null when an engine answers.</summary>
+    public static async Task<string?> UnavailableReasonAsync() {
+        try {
+            if (TestcontainersSettings.OS.DockerEndpointAuthConfig is not { } endpoint) return "no container engine is configured";
+
+            using var client  = endpoint.GetDockerClientBuilder(Guid.Empty).Build();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+            await client.System.PingAsync(timeout.Token);
+
+            return null;
+        } catch (Exception e) {
+            return $"no container engine answers ({e.GetType().Name})";
+        }
+    }
+
+    public static async Task<WorkOSEmulator> StartAsync(CancellationToken ct) {
+        // A fixed host port, so a restart keeps the base a stored token names. Passing any argument
+        // replaces the image's defaults, and without --host 0.0.0.0 it listens on its own loopback.
+        var hostPort  = OAuthLoginFlow.GetAvailablePort();
+        var container = new ContainerBuilder(Image)
+            .WithPortBinding(hostPort, Port)
+            .WithResourceMapping(Encoding.UTF8.GetBytes(Seed), SeedPath)
+            .WithCommand("--host", "0.0.0.0", "--seed", SeedPath)
+            .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(Port).ForPath("/health")))
+            .Build();
+
+        var emulator = new WorkOSEmulator(container, hostPort);
+
+        try {
+            await container.StartAsync(ct);
+        } catch {
+            await emulator.DisposeAsync();
+
+            throw;
+        }
+
+        return emulator;
+    }
+
+    /// <summary>Stops and starts the same container: the emulator keeps all state in memory, so every
+    /// token it issued is forgotten.</summary>
+    public async Task RestartAsync(CancellationToken ct) {
+        await _container.StopAsync(ct);
+        await _container.StartAsync(ct);
+    }
+
+    public ValueTask DisposeAsync() => _container.DisposeAsync();
+}

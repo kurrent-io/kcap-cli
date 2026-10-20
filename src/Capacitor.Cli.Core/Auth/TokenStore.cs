@@ -33,6 +33,12 @@ public record StoredTokens {
     [JsonPropertyName("server_url")]
     public string? ServerUrl { get; init; }
 
+    /// <summary>The WorkOS API base the sign-in used, null for production. Omitted when null, so a
+    /// production file is unchanged; read only through <see cref="WorkOSApiBaseRule.ForTokens"/>.</summary>
+    [JsonPropertyName("workos_api_base")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WorkOSApiBase { get; init; }
+
     /// <summary>Expired, or close enough that a request started now would arrive after expiry.</summary>
     public bool IsExpiredAt(DateTimeOffset now) => now >= ExpiresAt - TimeSpan.FromSeconds(30);
 }
@@ -857,7 +863,7 @@ public sealed class TokenStore(
             return null;
         }
 
-        var result = await workos.RefreshAsync(clientId, refreshToken, ct);
+        var result = await workos.RefreshAsync(WorkOSApiBaseRule.ForTokens(tokens), clientId, refreshToken, ct);
 
         onOutcome?.Invoke(result.Outcome);
 
