@@ -1,4 +1,5 @@
 using System.Text;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -133,6 +134,34 @@ public class AgentOrchestratorCloudSinkTests {
 
         await Assert.That(server.TerminalSendStarts).IsEqualTo(0);
         await Assert.That(agent.CloudSink).IsNull();
+    }
+
+    /// <summary>A reconnect the server answers with a refusal ends the agent's mirror: output after it stays local.</summary>
+    [Test]
+    public async Task A_reconnect_refusal_stops_the_agents_mirror() {
+        var server = new CaptureServerConnection();
+
+        await using var orch = Build(server);
+
+        var pty   = new ScriptedPtyProcess();
+        var agent = orch.SeedAgentForTest("refused", status: "Running", pty: pty);
+        var local = AttachLocal(agent);
+        var loop  = orch.ReadAgentOutputForTest(agent);
+
+        pty.Emit("before;");
+        await WaitHarness.PollUntilAsync(() => server.TerminalSends.Any(s => s.AgentId == "refused"));
+
+        server.RegistrationResponse = _ => new AgentRegisteredResponse(false, "superseded");
+        await server.ReRegisterAgentsHook!();
+        var sendsAtRefusal = server.TerminalSendStarts;
+
+        pty.Emit("after;");
+        await WaitHarness.PollUntilAsync(() => local.Chunks.Count == 2);
+        pty.Exit();
+        await loop.WaitAsync(WaitHarness.Bounded);
+
+        await Assert.That(server.TerminalSendStarts).IsEqualTo(sendsAtRefusal);
+        await Assert.That(string.Concat(MirrorOf(server, "refused"))).DoesNotContain("after;");
     }
 
     [Test]

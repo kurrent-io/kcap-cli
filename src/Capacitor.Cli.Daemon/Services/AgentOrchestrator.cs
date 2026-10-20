@@ -5434,6 +5434,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     if (!registration.Registered) {
                         agent.RegistrationRefused = true;
                         LogRegistrationRefused(agent.Id, registration.RefusedReason);
+
+                        // Readiness returns once this pass ends, and a live sink would then mirror under the refused id.
+                        if (agent.CloudSink is { } cloud) {
+                            try {
+                                await cloud.StopAsync(TimeSpan.Zero);
+                            } catch (Exception ex) {
+                                LogCloudSinkStopFailed(ex, agent.Id);
+                            }
+                        }
+
                         break;
                     }
 
