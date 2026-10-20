@@ -736,7 +736,7 @@ public class WorkspaceViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_chat_and_the_pane_share_one_subagent_tracker() {
+    public async Task The_chat_exposes_active_subagents_from_the_transcript() {
         await RunOnUiAsync(async () => {
             var daemon = new FakeDaemonClientService();
             var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), new FakeTimeProvider());
@@ -747,9 +747,7 @@ public class WorkspaceViewModelTests {
             await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
 
             await Assert.That(vm.Chat.HasRunningRuns).IsTrue();
-            await Assert.That(vm.WorkContext.HasRuns).IsTrue();
-            await Assert.That(vm.WorkContext.RunsHeader).IsEqualTo("1 running");
-            await Assert.That(vm.WorkContext.Runs.Single().Name).IsEqualTo("Explore");
+            await Assert.That(vm.Chat.RunningRuns.Single().Name).IsEqualTo("Explore");
             await vm.TeardownAsync();
         });
     }

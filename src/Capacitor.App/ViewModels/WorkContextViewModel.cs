@@ -5,7 +5,6 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
-using Avalonia.Collections;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
@@ -101,43 +100,9 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public string SessionIdDisplay => MiddleTruncate(_sessionIdText);
     public bool CanCopySessionId => _sessionIdText.Length > 0 && _sessionIdText != "resolving…";
 
-    /// The session's subagents, shared with the chat tab; a session-local fact like the ones
-    /// under SESSION, so it renders in every pane phase.
-    public IAvaloniaReadOnlyList<RunRow> Runs => _runs.Rows;
-    public bool HasRuns => _runs.Rows.Count > 0;
-    /// What the collapsed section lists.
-    public IAvaloniaReadOnlyList<RunRow> RunningRuns => _runs.Running;
-    public bool HasRunningRuns => _runs.RunningCount > 0;
-    public string RunsHeader {
-        get {
-            var running = _runs.RunningCount;
-            var total = _runs.Rows.Count;
-            return running switch {
-                0                     => $"{total}",
-                var r when r == total => $"{r} running",
-                var r                 => $"{r} of {total} running",
-            };
-        }
-    }
-
-    static readonly RunState[] RunCountOrder =
-        [RunState.Running, RunState.Done, RunState.Failed, RunState.Stopped];
-
-    /// What the collapsed header shows: one entry per state something is in, so the numbers
-    /// add up to the list.
-    public IReadOnlyList<RunCount> RunCounts =>
-        [.. RunCountOrder.Select(state => new RunCount(state, _runs.Count(state))).Where(c => c.Count > 0)];
-
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
     public PlanSectionViewModel Plan { get; }
-
-    void RefreshRuns() {
-        this.RaisePropertyChanged(nameof(HasRuns));
-        this.RaisePropertyChanged(nameof(HasRunningRuns));
-        this.RaisePropertyChanged(nameof(RunsHeader));
-        this.RaisePropertyChanged(nameof(RunCounts));
-    }
 
     internal static string MiddleTruncate(string value, int head = 8, int tail = 8) {
         if (value.Length <= head + tail + 1) return value;
@@ -290,7 +255,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _time = time;
         _openWorkItem = openWorkItem;
         _runs = runs;
-        _runs.Changed += RefreshRuns;
         InitializeProjections();
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
@@ -435,7 +399,6 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public async Task TeardownAsync() {
         if (_tornDown) return;
         _tornDown = true;
-        _runs.Changed -= RefreshRuns;
         _timer?.Dispose();
         _timer = null;
         _disposables.Dispose();

@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -66,6 +67,14 @@ public class ChatTabViewSmokeTests {
     static Button Summary(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().Single(b => b.Classes.Contains("toolSummary") && b.DataContext is ToolGroupItem);
     static Button? SummaryOrNull(ChatTabView view) => view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Classes.Contains("toolSummary") && b.DataContext is ToolGroupItem);
     static ToolGroupItem OnlyGroup(Host host) => host.Chat.Items.OfType<ToolGroupItem>().Single();
+
+    static Button RunGroupToggle(Host host, RunGroupViewModel group) =>
+        host.View.FindControl<ItemsControl>("RunGroupHeaders")!.GetVisualDescendants().OfType<Button>()
+            .Single(button => ReferenceEquals(button.DataContext, group));
+
+    static ItemsControl RunGroupRows(Host host, RunGroupViewModel group) =>
+        host.View.GetVisualDescendants().OfType<ItemsControl>()
+            .Single(list => list.Name == "RunningRunsList" && ReferenceEquals(list.DataContext, group));
 
     /// A synthetic pointer event hit-tests the compositor's last committed scene, which layout alone
     /// does not refresh: a control shown since the last frame is invisible to the click until the
@@ -1978,14 +1987,96 @@ public class ChatTabViewSmokeTests {
             var path = Tmp.CreateFile("sub.jsonl", [AgentCallLine, AgentLaunchLine]);
             await host.LoadAsync(path);
             await Assert.That(banner.IsVisible).IsTrue();
+            await Assert.That(host.Chat.AgentRuns.IsExpanded).IsFalse();
+            await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.IsEffectivelyVisible && t.Text == "Explore")).IsFalse();
+            Click(host, RunGroupToggle(host, host.Chat.AgentRuns));
             var shown = banner.GetVisualDescendants().OfType<TextBlock>().Where(t => t.IsEffectivelyVisible).Select(t => t.Text).ToList();
             await Assert.That(shown).Contains("Explore");
-            await Assert.That(shown.Any(t => t!.StartsWith("running in background · ", StringComparison.Ordinal))).IsTrue();
-            await Assert.That(banner.GetVisualDescendants().OfType<Border>().Any(b => b.Classes.Contains("toolRunning") && b.IsEffectivelyVisible)).IsTrue();
+            await Assert.That(shown).Contains("Map desktop chat UI surfaces");
+            var row = host.Chat.RunningRuns.Single();
+            await Assert.That(shown).Contains(row.ElapsedText);
+            await Assert.That(shown.Any(t => t!.Contains("running", StringComparison.OrdinalIgnoreCase))).IsFalse();
+            var dot = banner.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolRunning") && b.DataContext is RunRow && b.IsEffectivelyVisible);
+            await Assert.That(ToolTip.GetTip(dot)).IsEqualTo(row.StateText);
+            var elapsed = banner.GetVisualDescendants().OfType<TextBlock>().Single(t => t.IsEffectivelyVisible && t.Text == row.ElapsedText);
+            await Assert.That(ToolTip.GetTip(elapsed)).IsEqualTo(row.StateText);
+            var name = banner.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "Explore");
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(name)!.GetHelpText()).IsEqualTo(row.StateText);
             await Assert.That(queued.IsVisible).IsFalse();
 
             await host.AppendLinesAndTickAsync(path, AgentFinishLine);
             await Assert.That(banner.IsVisible).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_active_runs_list_scrolls_without_taking_focus_from_the_composer() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("runs.jsonl", [UserLine]));
+            var now = host.Time.GetUtcNow();
+            host.Runs.Apply(new([], [], [.. Enumerable.Range(1, 20).Select(i =>
+                new RunSignal.Started($"c{i}", $"Agent {i}", $"Task {i}", now)),
+                .. Enumerable.Range(1, 3).Select(i => new RunSignal.Started($"shell{i}", $"Run checks {i}", "dotnet test", now, RunKind.Shell))]));
+            host.Settle();
+            var agents = RunGroupToggle(host, host.Chat.AgentRuns);
+            var commands = RunGroupToggle(host, host.Chat.CommandRuns);
+            var scroll = host.View.FindControl<ScrollViewer>("ExpandedRunsScroll")!;
+            await Assert.That(scroll.IsVisible).IsFalse();
+            await Assert.That(host.Chat.AgentRuns.Count).IsEqualTo(20);
+            await Assert.That(host.Chat.CommandRuns.Count).IsEqualTo(3);
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(agents)!.GetName()).IsEqualTo("Agents, 20 running, collapsed");
+
+            Click(host, agents);
+            var list = RunGroupRows(host, host.Chat.AgentRuns);
+            await Assert.That(list.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Chat.CommandRuns.IsExpanded).IsFalse();
+            await Assert.That(host.Chat.CommandRuns.HasTopDivider).IsFalse();
+            Click(host, commands);
+            var commandList = RunGroupRows(host, host.Chat.CommandRuns);
+            await Assert.That(list.IsEffectivelyVisible).IsTrue();
+            await Assert.That(commandList.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Chat.CommandRuns.HasTopDivider).IsTrue();
+            var commandTop = commandList.TranslatePoint(new Point(0, 0), scroll)!.Value.Y;
+            await Assert.That(commandTop).IsGreaterThanOrEqualTo(0);
+            await Assert.That(commandTop + commandList.Bounds.Height).IsLessThanOrEqualTo(scroll.Viewport.Height + 1);
+            Click(host, agents);
+            await Assert.That(list.IsEffectivelyVisible).IsFalse();
+            await Assert.That(commandList.IsEffectivelyVisible).IsTrue();
+            await Assert.That(host.Chat.CommandRuns.HasTopDivider).IsFalse();
+            Click(host, agents);
+            await Assert.That(host.Chat.CommandRuns.HasTopDivider).IsTrue();
+            await Assert.That(ControlAutomationPeer.CreatePeerForElement(agents)!.GetName()).IsEqualTo("Agents, 20 running, expanded");
+            host.Composer.Focus();
+            var point = PresentAndLocate(host, scroll);
+            host.Window.MouseWheel(point, new Vector(0, -100));
+            host.Settle();
+
+            await Assert.That(scroll.Offset.Y).IsGreaterThan(0);
+            await Assert.That(host.Composer.IsFocused).IsTrue();
+            host.Type("keep typing");
+            await Assert.That(host.Chat.ComposerText).IsEqualTo("keep typing");
+            await Assert.That(list.ItemCount).IsEqualTo(20);
+
+            host.Runs.Apply(new([], [], [
+                new RunSignal.Finished("c1", null, RunOutcome.Done, now),
+                new RunSignal.Finished("c2", null, RunOutcome.Failed, now),
+                new RunSignal.Finished("c3", null, RunOutcome.Stopped, now),
+            ]));
+            host.Settle();
+            await Assert.That(list.ItemCount).IsEqualTo(17);
+            await Assert.That(host.Chat.AgentRuns.Count).IsEqualTo(17);
+            host.Runs.Apply(new([], [], [.. Enumerable.Range(1, 3).Select(i => new RunSignal.Finished($"shell{i}", null, RunOutcome.Done, now))]));
+            host.Settle();
+            await Assert.That(commands.IsEffectivelyVisible).IsFalse();
+            await Assert.That(host.Chat.CommandRuns.IsExpanded).IsFalse();
+            await Assert.That(host.Chat.AgentRuns.IsExpanded).IsTrue();
+            host.Runs.SessionOver = true;
+            host.Settle();
+            await Assert.That(host.View.FindControl<Border>("SubagentsBanner")!.IsVisible).IsFalse();
+            await Assert.That(host.Chat.HasExpandedRunGroups).IsFalse();
             await host.CloseAsync();
         });
     }
@@ -2008,10 +2099,11 @@ public class ChatTabViewSmokeTests {
             var launch = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
             await host.LoadAsync(Tmp.CreateFile("sh.jsonl", [call, launch]));
             host.Settle();
+            Click(host, RunGroupToggle(host, host.Chat.CommandRuns));
 
             var banner = host.View.FindControl<Border>("SubagentsBanner")!;
             var state = banner.GetVisualDescendants().OfType<TextBlock>()
-                .Single(t => t.IsEffectivelyVisible && t.Text!.StartsWith("running in background · ", StringComparison.Ordinal));
+                .Single(t => t.IsEffectivelyVisible && t.Text == host.Chat.RunningRuns.Single().ElapsedText);
             var right = state.TranslatePoint(new Point(state.Bounds.Width, 0), banner)!.Value.X;
             await Assert.That(right).IsLessThanOrEqualTo(banner.Bounds.Width);
             await Assert.That(state.Bounds.Width).IsGreaterThan(0);

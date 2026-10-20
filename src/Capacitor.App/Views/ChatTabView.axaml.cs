@@ -266,6 +266,19 @@ public partial class ChatTabView : UserControl {
         ToolTip.SetIsOpen(control, true);
     }
 
+    void OnRunGroupToggleClick(object? sender, RoutedEventArgs e) {
+        if (sender is not Button { DataContext: RunGroupViewModel group }) return;
+        // Click precedes the command; reveal the newly expanded category after its layout settles.
+        Dispatcher.UIThread.Post(() => {
+            if (!group.IsExpanded) return;
+            ExpandedRunsScroll.UpdateLayout();
+            var list = ExpandedRunsScroll.GetVisualDescendants().OfType<ItemsControl>()
+                .FirstOrDefault(control => control.Name == "RunningRunsList" && ReferenceEquals(control.DataContext, group));
+            if (list is null) return;
+            list.BringIntoView(new Rect(0, 0, list.Bounds.Width, Math.Min(list.Bounds.Height, ExpandedRunsScroll.Viewport.Height)));
+        }, DispatcherPriority.Loaded);
+    }
+
     // Click is raised before the command flips the group, so a keyboard toggle (no pointer press
     // ahead of it) can still take its anchor here.
     void OnToolSummaryClick(object? sender, RoutedEventArgs e) {

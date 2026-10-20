@@ -143,15 +143,6 @@
         <Style Selector="Button.toggle:pointerover Border.card">
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
         </Style>
-        <!-- The state word, never only the dot: failed is painted danger through the class, so a
-             local Foreground must not be set on it. -->
-        <Style Selector="TextBlock.subagentState">
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
-        </Style>
-        <Style Selector="TextBlock.subagentState.failed">
-            <Setter Property="Foreground" Value="{StaticResource KcapDangerBrush}" />
-        </Style>
         <!-- A settled task steps back through the class, so a local Foreground must not be set on it. -->
         <Style Selector="TextBlock.planTask">
             <Setter Property="FontSize" Value="13" />
@@ -176,27 +167,6 @@
                     </StackPanel>
                 </Border>
             </Button>
-        </DataTemplate>
-        <!-- Shared Lucide status marks for subagent rows and collapsed counts. -->
-        <DataTemplate x:Key="SubagentMark" x:DataType="vm:RunState">
-            <Panel Width="12" Height="12">
-                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Running}}">
-                    <views:AppIcon Kind="Circle" Size="12" Foreground="{StaticResource KcapWarningBrush}" />
-                    <!-- 5px in a 12px disc starts at 3.5px; rounding that snaps the dot off centre. -->
-                    <Border Classes="toolRunning" Width="5" Height="5" CornerRadius="2.5" Background="{StaticResource KcapWarningBrush}"
-                            HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False"
-                            views:PulseClock.IsActive="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Running}}" />
-                </Panel>
-                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Done}}">
-                    <views:AppIcon Kind="CircleCheck" Size="12" Foreground="{StaticResource KcapSuccessBrush}" />
-                </Panel>
-                <Panel IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Failed}}">
-                    <views:AppIcon Kind="CircleX" Size="12" Foreground="{StaticResource KcapDangerBrush}" />
-                </Panel>
-                <views:AppIcon Kind="Circle" Size="12"
-                               IsVisible="{Binding Converter={x:Static ObjectConverters.Equal}, ConverterParameter={x:Static vm:RunState.Stopped}}"
-                               Foreground="{StaticResource KcapBorderBrush}" />
-            </Panel>
         </DataTemplate>
         <!-- One template for the rows and the folded counts alike, so the two cannot drift apart. -->
         <DataTemplate x:Key="PlanMark" x:DataType="vm:PlanTaskState">
@@ -231,25 +201,6 @@
                     <TextBlock Text="{Binding Note}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapFaintBrush}"
                                TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Note}"
                                IsVisible="{Binding Note, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                </StackPanel>
-            </Grid>
-        </DataTemplate>
-        <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
-                </Panel>
-                <StackPanel Grid.Column="1" Spacing="2">
-                    <Grid ColumnDefinitions="Auto,*">
-                        <views:AppIcon x:Name="ShellGlyph" Kind="Terminal" Size="12" Margin="0,0,5,0"
-                                       Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
-                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                    </Grid>
-                    <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
-                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
                 </StackPanel>
             </Grid>
         </DataTemplate>
@@ -655,65 +606,6 @@
                         </Border.IsVisible>
                         <ItemsControl x:Name="PlanInProgressList" ItemsSource="{Binding Plan.InProgressTasks}"
                                       ItemTemplate="{StaticResource PlanTaskItem}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Spacing="10" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                        </ItemsControl>
-                    </Border>
-                </StackPanel>
-
-                <!-- Agents and commands: read from the transcript, so it renders in every pane phase. -->
-                <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasRuns}" Margin="0,18,0,0">
-                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleRunsCommand}" Classes="sectionHeader expandable">
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                            <TextBlock Text="AGENTS &amp; COMMANDS" Classes="eyebrow" />
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                <TextBlock x:Name="SubagentsHeaderText" Text="{Binding RunsHeader}" Classes="sectionMeta"
-                                           IsVisible="{Binding RunsExpanded}" />
-                                <!-- ItemsControl clips by default, and the marks' nudge lifts them past its top. -->
-                                <ItemsControl x:Name="SubagentsSummary" ItemsSource="{Binding RunCounts}" VerticalAlignment="Center"
-                                              ClipToBounds="False" IsVisible="{Binding !RunsExpanded}">
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Orientation="Horizontal" Spacing="10" />
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:RunCount">
-                                            <StackPanel Orientation="Horizontal" Spacing="5" Background="Transparent" ToolTip.Tip="{Binding Label}">
-                                                <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center"
-                                                                RenderTransform="translateY(-1.5px)" />
-                                                <TextBlock Text="{Binding Count}" Classes="sectionMeta" />
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                                <Panel Classes="chevronBox" Width="12" Height="12">
-                                    <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding RunsExpanded}" />
-                                    <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !RunsExpanded}" />
-                                </Panel>
-                            </StackPanel>
-                        </Grid>
-                    </Button>
-                    <Border Classes="sectionBody" IsVisible="{Binding RunsExpanded}">
-                        <ItemsControl x:Name="SubagentList" ItemsSource="{Binding Runs}" ItemTemplate="{StaticResource RunItem}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <StackPanel Spacing="10" />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                        </ItemsControl>
-                    </Border>
-                    <Border x:Name="RunningSubagentsBody" Classes="sectionBody">
-                        <Border.IsVisible>
-                            <MultiBinding Converter="{x:Static BoolConverters.And}">
-                                <Binding Path="!RunsExpanded" />
-                                <Binding Path="HasRunningRuns" />
-                            </MultiBinding>
-                        </Border.IsVisible>
-                        <ItemsControl x:Name="RunningSubagentList" ItemsSource="{Binding RunningRuns}" ItemTemplate="{StaticResource RunItem}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
                                     <StackPanel Spacing="10" />
