@@ -86,6 +86,28 @@ public class MarkdownViewTests {
         });
     }
 
+    /// Pins long-line readability in a code block: the viewer's horizontal scrollbar is off, so a
+    /// line wider than the column must wrap onto multiple visual lines instead of clipping at the
+    /// right border, while copying still hands back the single logical line.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_line_in_a_code_block_wraps_instead_of_clipping() {
+        await RunOnUiAsync(async () => {
+            const string line = "chat shows:    Your instructions for this session are in the file /Users/example/.config/kcap/daemons/state/prompts/prompt.md";
+            var (window, root, _, _) = ShowRunnable($"```\n{line}\n```");
+            try {
+                var border = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
+                var code = All<TextBlock>(border).Single();
+                await Assert.That(code.TextWrapping).IsEqualTo(TextWrapping.Wrap);
+                await Assert.That(code.TextLayout.TextLines.Count).IsGreaterThan(1);
+
+                Click(window, Reveal(window, Hosts(root)[0], "markdown-code-copy"));
+                var clipboard = TopLevel.GetTopLevel(root)!.Clipboard!;
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(line);
+            } finally { window.Close(); }
+        });
+    }
+
     /// Pins the link affordance: a policy-approved link is an inline hyperlink that opens through
     /// the command on a pointer click, never through a self-navigating control.
     [Test]

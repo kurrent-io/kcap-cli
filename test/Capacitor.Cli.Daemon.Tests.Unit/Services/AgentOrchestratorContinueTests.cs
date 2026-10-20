@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
@@ -95,7 +96,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
         return new Fixture(orch, server, factory, captured!, repo);
     }
 
-    ResumeLedgerEntry Entry(Fixture f, bool isPrivate = false, bool standalone = false) {
+    ResumeLedgerEntry Entry(Fixture f, bool isPrivate = false, bool standalone = false, string? vendorSession = null) {
         var stamp    = TimeProvider.System.GetUtcNow();
         var worktree = Tmp.CreateDir("wt-old");
         if (standalone) Directory.CreateDirectory(Path.Combine(worktree, ".git"));
@@ -109,7 +110,7 @@ public class AgentOrchestratorContinueTests : IDisposable {
             WorktreeBranch: "capacitor/custom-old", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, OldAgent, "daemon-1", stamp, stamp, "cursor", "acp",
-            OldSession, VendorSession: null, launch, ResumeState.Resuming, Attempts: 0, LastError: null,
+            OldSession, vendorSession, launch, ResumeState.Resuming, Attempts: 0, LastError: null,
             PredecessorInstanceId: "instance-old", ResumingAt: stamp, DaemonInstanceId: null);
         f.Orch.ResumeLedger!.Write(entry);
 
@@ -221,6 +222,70 @@ public class AgentOrchestratorContinueTests : IDisposable {
         await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
             .IsEquivalentTo(new[] { (OldAgent, "Completed", "superseded") });
         await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)).IsNull();
+    }
+
+    /// <summary>A refused same-id registration leaves the server no live entry for the resumed agent: the
+    /// resume goes on under a new agent id, and nothing further is sent under the refused one.</summary>
+    [Test]
+    public async Task A_native_resume_whose_registration_is_refused_continues_under_a_new_agent_id() {
+        var f = Build(resumeSupported: true);
+        await using var _ = f.Orch;
+        f.Server.RegistrationResponse = id => id == OldAgent ? new AgentRegisteredResponse(false, "recorded_failure") : null;
+        var entry = Entry(f, vendorSession: "vendor-session-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var starts = f.Factory.Starts.Select(s => s.Ctx).ToList();
+        await Assert.That(starts.Count).IsEqualTo(2);
+        await Assert.That(starts[0].AgentId).IsEqualTo(OldAgent);
+        await Assert.That(starts[0].ResumeSessionId).IsEqualTo("vendor-session-1");
+
+        var successor = starts[1].AgentId;
+        await Assert.That(successor).IsNotEqualTo(OldAgent);
+        await Assert.That(starts[1].Prompt).Contains("(registration_refused)");
+        await Assert.That(starts[1].Worktree.Path).IsEqualTo(entry.Launch.WorktreePath);
+
+        await Assert.That(f.Server.AgentRegisteredCalls.Select(c => c.AgentId)).IsEquivalentTo([OldAgent, successor]);
+        await Assert.That(f.Server.StatusChangedCalls.Any(c => c.AgentId == OldAgent)).IsFalse();
+        await Assert.That(f.Server.AgentUnregisteredCalls).DoesNotContain(OldAgent);
+        await Assert.That(f.Server.RunEvents.Any(e => e.AgentId == OldAgent)).IsFalse();
+        await Assert.That(f.Server.AcpSessionStartedCalls.Any(c => c.AgentId == OldAgent)).IsFalse();
+        await Assert.That(f.Server.ShutdownReports).IsEmpty();
+
+        await Assert.That(f.Orch.GetAgentForTest(OldAgent)).IsNull();
+        await Assert.That(f.Orch.GetAgentForTest(successor)).IsNotNull();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(OldAgent)).IsNull();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead(successor)!.State).IsEqualTo(ResumeState.Running);
+    }
+
+    /// <summary>A stop that lands while the registration is still unanswered gives up the worktree, so the
+    /// refusal that follows must not start a successor in it.</summary>
+    [Test]
+    public async Task A_stop_while_a_refused_registration_is_pending_starts_no_successor() {
+        var f = Build(resumeSupported: true);
+        await using var _ = f.Orch;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        f.Server.AgentRegisteredEntered = entered;
+        f.Server.AgentRegisteredGate    = gate;
+        f.Server.RegistrationResponse   = _ => new AgentRegisteredResponse(false, "recorded_failure");
+        Entry(f, vendorSession: "vendor-session-1");
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.WaitBoundedAsync(entered.Task, "the resumed registration");
+
+        var stop = f.Orch.HandleStopAgent(OldAgent);
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest(OldAgent) is not { StopRequested: false });
+        gate.SetResult();
+
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await WaitHarness.WaitBoundedAsync(stop, "the stop");
+
+        await Assert.That(f.Factory.Starts.Count).IsEqualTo(1);
+        await Assert.That(f.Orch.GetAgentForTest(OldAgent)).IsNull();
+        await Assert.That(f.Server.ShutdownReports.Any(r => r.Reason.StartsWith("resume_failed", StringComparison.Ordinal))).IsFalse();
     }
 
     [Test]

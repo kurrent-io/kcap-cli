@@ -267,7 +267,7 @@ public sealed class UpdateCommand(
     /// Per-channel cache path so a <c>beta</c> check doesn't clobber the
     /// cached <c>latest</c> result (and vice versa).
     /// </summary>
-    static string CachePathFor(string channel, ConfigRoot root) =>
+    internal static string CachePathFor(string channel, ConfigRoot root) =>
         root.Path($"update-check-{channel}.json");
 
     /// <summary>

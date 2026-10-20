@@ -783,8 +783,6 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task A_list_refresh_alone_does_not_delay_the_stale_snapshot_indicator() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
-        // A read's settle job re-arms the tick after the job that reveals it; the advance below must follow it.
-        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial reads settled");
         var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
         var list = new TaskCompletionSource();
         h.Source.ListGate = list;
@@ -1056,6 +1054,19 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// The reader draws a mailto because the policy accepts it, so the body command opens that same URL.
+    [Test]
+    public Task A_body_mailto_opens_and_a_script_link_does_not() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        await h.Show();
+        h.Vm.SetReaderVisible(true);
+        await h.Vm.OpenBodyLinkCommand.Execute("mailto:test@example.com");
+        await h.Vm.OpenBodyLinkCommand.Execute("javascript:alert(1)");
+        await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "mailto:test@example.com" });
+        await h.Dispose();
+    });
+
     [Test]
     [Arguments("https://example.com/example/repo/pull/1", false)]
     [Arguments("https://github.com/example/repo/pull/99", false)]
@@ -1109,7 +1120,12 @@ public class PullRequestContextViewModelTests {
                 snapshots: snapshots, linksChanged: linksChanged);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
-        internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
+        /// Returns once the initial reads have settled, not just once the overview is admitted: a read's settle
+        /// job re-arms the tick after the job that reveals it, and a clock advance made before that re-arm fires nothing.
+        internal async Task Show() {
+            Vm.SetForeground(true);
+            await WaitUntilAsync(() => Vm.CanReveal && !Vm.IsReading, what: "PR overview admitted and settled");
+        }
         internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); SignIn.Dispose(); }
     }
 

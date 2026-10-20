@@ -39,6 +39,7 @@
              assets (the product-mark bitmap) need an explicit AvaloniaResource entry
              to ship inside the assembly's avares:// resource set. -->
         <AvaloniaResource Include="Assets\kcap-icon.png" />
+        <AvaloniaResource Include="Assets\kcap-tray-icon.png" />
         <!-- Embed icon licenses so they also travel with the single-file macOS bundle. -->
         <AvaloniaResource Include="Assets\Lucide*-LICENSE.txt" />
         <AvaloniaResource Include="Assets\LobeHub-Icons-LICENSE.txt" />

@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Markdig.Syntax;
 using MarkView.Avalonia.Rendering;
@@ -27,6 +28,9 @@ public sealed class CodeBlockActionRenderer(MarkdownView view, CodeBlockActions 
         var block = scratch.Children[0];
         // A control carries one parent: the scratch panel has to let go before the host adopts it.
         scratch.Children.Clear();
+        // MarkView sets NoWrap as a local value, which a style cannot override, and the viewer's
+        // horizontal scrollbar is off: without wrapping here, a long line clips at the border.
+        if (block is Border { Child: TextBlock code }) code.TextWrapping = TextWrapping.Wrap;
         // The line group puts its newlines between lines and none after the last, so the text is
         // already what the block displays: trimming the end would drop a blank line it shows.
         renderer.WriteBlock(Host(block, obj.Lines.ToString()));
