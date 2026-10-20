@@ -269,6 +269,12 @@ jobs:
           if cmp -s "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib" "$APP/Contents/MacOS/libAvaloniaNative.dylib"; then
             echo "::error::libAvaloniaNative.patched.dylib is the stock library"; exit 1
           fi
+          # This bundle is unsigned, but the release signs it, and codesign refuses any file under
+          # Contents/MacOS that is not code.
+          not_code="$(find "$APP/Contents/MacOS" -type f -exec file {} + | grep -v 'Mach-O' || true)"
+          if [ -n "$not_code" ]; then
+            echo "::error::Contents/MacOS holds files codesign cannot sign:"; echo "$not_code"; exit 1
+          fi
           # Pins the manifest field names the alias-promotion script depends on. Captured rather
           # than piped: grep -q closes the pipe at its first match, and a stable candidate prints a
           # second line after it.
