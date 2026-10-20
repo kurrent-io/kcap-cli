@@ -396,6 +396,55 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A startup dialog holds the session back and only the terminal can show it, but a normal start
+    /// has no session for a few seconds too: the terminal is offered rather than switched to, opening
+    /// it asks the server, and the session's start leaves a live terminal as it is.
+    [Test]
+    public async Task Before_the_session_the_terminal_is_offered_and_carries_on_when_it_starts() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row(sessionId: null, vendor: "claude");
+            var vm = h.Build(row);
+            await Assert.That(vm.IsChatActive).IsTrue();
+            await Assert.That(vm.ShowsTerminalButton).IsTrue();
+            await Assert.That(vm.ShowsTerminalPane).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start — the terminal shows what the agent is doing");
+            await Task.Delay(50);
+            await Assert.That(h.Lane.TerminalSubscribes).IsEmpty();
+
+            await vm.ShowTerminalCommand.Execute();
+            await Assert.That(vm.ShowsTerminalPane).IsTrue();
+            await Assert.That(vm.ShowsTerminalButton).IsFalse();
+            await WaitUntilAsync(() => vm.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
+            var surface = vm.Terminal!.Surface;
+
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = "s1" });
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await Assert.That(vm.ShowsTerminalPane).IsTrue();
+            await Assert.That(vm.Terminal!.Phase).IsEqualTo(RemoteTerminalPhase.Live);
+            await Assert.That(vm.Terminal!.Surface).IsSameReferenceAs(surface);
+            await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(1);
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// Whether the viewer may see the terminal is the server's answer, so a refusal shows in the
+    /// pane rather than being guessed in advance.
+    [Test]
+    public async Task Before_the_session_a_viewer_the_server_refuses_sees_why_in_the_terminal() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Lane.TerminalSubscribeHandler = _ => Task.FromResult(HubCallOutcome.Denied("not admitted to the terminal"));
+            var vm = h.Build(Harness.Row(sessionId: null, vendor: "claude"));
+
+            await vm.ShowTerminalCommand.Execute();
+            await WaitUntilAsync(() => vm.Terminal!.Phase == RemoteTerminalPhase.Refused, what: "refused");
+            await Assert.That(vm.ShowsTerminalPane).IsTrue();
+            await Assert.That(vm.Terminal!.PhaseNote).IsEqualTo(RemoteTerminalViewModel.RefusedNote);
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A session id that only arrives with a later row revision still gets its lease, a change of
     /// id moves the lease with it, and a terminal status gives it back.
     [Test]

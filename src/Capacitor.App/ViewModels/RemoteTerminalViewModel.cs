@@ -14,11 +14,14 @@ public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended, Ref
 /// A read-only view of a terminal on another machine: the server replays its buffer, then
 /// streams. The pane takes the source's size, and reports a viewport back only while it is on
 /// screen — the server takes the minimum across viewers, so a hidden pane would clamp the live
-/// agent's PTY for everyone. Every access establishment subscribes again onto a fresh surface, so
-/// a replay never stacks on scrollback. Subscribing waits for the pane's first showing, so a
-/// workspace kept on its Chat tab costs the server no replay or stream, and for access to stand. A
-/// server that refuses the terminal says so, and the pane reads Refused; a server that does not
-/// report refusals leaves an empty pane that only looks like "no output yet".
+/// agent's PTY for everyone. Each subscribe lands on a fresh surface, so a replay never stacks on
+/// scrollback. It asks the server on the pane's first showing, so a workspace kept on its Chat tab
+/// costs the server no replay or stream, and asks again only when the answer could have changed:
+/// the lane reconnects, session access is established or denied, or an ended session returns.
+/// Whether the viewer may see the terminal is the server's answer, never the app's guess, so it
+/// holds before any session as much as during one; a live terminal carries on when the session
+/// starts. A refusal reads as Refused; a server too old to answer leaves an empty pane that
+/// only looks like "no output yet".
 public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
     const int MaxCols = 500, MaxRows = 200;
@@ -42,7 +45,6 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     // starts the subscribe call, not from the moment it resolves.
     bool _receiving;
     bool _ended;
-    SessionAccessState? _access;
     bool _visible;
     bool _everShown;
     /// A superseded subscribe that the hub took while a newer one was in flight: membership is the
@@ -98,7 +100,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             if (!shown) { _ = ReleaseViewportAsync(); return; }
             if (!_everShown) {
                 _everShown = true;
-                if (!_ended) Follow(_access);
+                Ask();
                 return;
             }
             if (Surface is { } surface) ReportViewport(surface.CurrentSize);
@@ -113,12 +115,22 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             }
             if (!_ended) return;
             _ended = false;
-            Follow(_access);
+            Ask();
         }).DisposeWith(_disposables);
+        // A live terminal carries on when access is established: the subscription is the agent's,
+        // not the session's, and the server keeps re-checking it. It ends a revoked viewer's stream
+        // without a word, so a denial is the cue to ask again — but only for a terminal it could end.
         access.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(state => {
-            _access = state;
-            if (!_ended) Follow(state);
+            var held = Phase is RemoteTerminalPhase.Live or RemoteTerminalPhase.Connecting;
+            if (state == SessionAccessState.Denied ? held : state == SessionAccessState.Established && !held)
+                Ask();
         }).DisposeWith(_disposables);
+        // The server forgets a connection's subscriptions when it drops.
+        lane.Status.Select(s => s.State == ServerLaneState.Connected).DistinctUntilChanged().Skip(1)
+            .ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(connected => {
+                if (connected) Ask();
+                else if (!_ended) Detach(RemoteTerminalPhase.Offline);
+            }).DisposeWith(_disposables);
         lane.TerminalOutput.Where(f => f.AgentId == agentId).ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(f => {
             if (!_receiving || Surface is not { } surface || _decoder is not { } decoder) return;
             byte[] bytes;
@@ -132,13 +144,10 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         }).DisposeWith(_disposables);
     }
 
-    /// Establishing is the pre-verdict handshake, not a refusal.
-    void Follow(SessionAccessState? state) {
-        if (state == SessionAccessState.Established) {
-            if (_everShown) Attach();
-            return;
-        }
-        Detach(state is null or SessionAccessState.Establishing ? RemoteTerminalPhase.Waiting : RemoteTerminalPhase.Offline);
+    void Ask() {
+        if (!_everShown || _ended) return;
+        if (_subscribed || _strayMembership) Detach(RemoteTerminalPhase.Connecting);
+        Attach();
     }
 
     void Attach() {

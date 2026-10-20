@@ -57,8 +57,13 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,10"
                 IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
-                       FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
+                           FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                <Button x:Name="AccessOpenTerminal" Grid.Column="1" Classes="kcapChip" Content="Open Terminal"
+                        Command="{Binding ShowTerminalCommand}" Margin="12,0,0,0" VerticalAlignment="Center"
+                        IsVisible="{Binding ShowsTerminalButton}" />
+            </Grid>
         </Border>
 
         <Grid Grid.Row="2">
