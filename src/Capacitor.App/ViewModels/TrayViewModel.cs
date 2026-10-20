@@ -353,14 +353,17 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         return string.Join(", ", parts);
     }
 
+    // kcap login signs in whichever profile it resolves, so the variable that names one goes first.
+    internal static string LoginHint(string profile) => OperatingSystem.IsWindows()
+        ? $"set KCAP_PROFILE={profile}, then run kcap login"
+        : $"run KCAP_PROFILE={profile} kcap login";
+
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
     // share the neutral fallback; reconnecting and disconnected get their own copy.
     static string AttentionBody(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Connected && snap is not null) {
             if (snap.Daemon is { Credential: not null } daemon && daemon.Connection != "connected")
-                return daemon.Profile is { Length: > 0 } profile && !string.Equals(profile, "default", StringComparison.OrdinalIgnoreCase)
-                    ? $"signed out of {profile}: run kcap login --profile {profile}"
-                    : "signed out: run kcap login";
+                return daemon.Profile is { Length: > 0 } profile ? $"signed out of {profile}: {LoginHint(profile)}" : "signed out";
 
             return snap.Daemon.Connection switch {
                 "reconnecting" => "reconnecting to server",

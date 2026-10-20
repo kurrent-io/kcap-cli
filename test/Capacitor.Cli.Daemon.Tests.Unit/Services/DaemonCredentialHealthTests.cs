@@ -41,4 +41,12 @@ public class DaemonCredentialHealthTests {
         await Assert.That(health.Problem).IsNull();
         await Assert.That(changes).IsEqualTo(4).Because("only real changes pulse the status stream");
     }
+
+    [Test]
+    public async Task A_refusal_of_a_request_with_no_bearer_leaves_signed_out_in_place() {
+        var health = new DaemonCredentialHealth(() => { });
+        health.Observe(State(AuthStatus.NotAuthenticated));
+        health.ObserveRejection();
+        await Assert.That(health.Problem).IsEqualTo(DaemonCredentialHealth.SignedOut);
+    }
 }

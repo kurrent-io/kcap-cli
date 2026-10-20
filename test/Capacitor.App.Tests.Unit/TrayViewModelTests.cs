@@ -437,10 +437,11 @@ public class TrayViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    [Arguments("work", "daemon-a: signed out of work: run kcap login --profile work")]
-    [Arguments("default", "daemon-a: signed out: run kcap login")]
-    [Arguments(null, "daemon-a: signed out: run kcap login")]
-    public async Task Header_names_the_profile_a_signed_out_daemon_needs(string? profile, string header) {
+    [Arguments("work")]
+    [Arguments("default")]
+    [Arguments(null)]
+    public async Task Header_names_the_profile_a_signed_out_daemon_needs(string? profile) {
+        var header = profile is null ? "daemon-a: signed out" : $"daemon-a: signed out of {profile}: {TrayViewModel.LoginHint(profile)}";
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var service = new FakeDaemonClientService();
             using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService());

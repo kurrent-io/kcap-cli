@@ -32,8 +32,12 @@ sealed class DaemonCredentialHealth(Action changed) {
         }
     }
 
-    /// <summary>A refusal of the hub's own negotiate or socket; the caller reports no other lane's.</summary>
-    public void ObserveRejection() => Set(Rejected);
+    /// <summary>A refusal of the hub's own negotiate or socket; the caller reports no other lane's. It
+    /// never replaces <see cref="SignedOut"/>: a hub refusing a request that carried no bearer says
+    /// nothing new about the credential.</summary>
+    public void ObserveRejection() {
+        if (Interlocked.CompareExchange(ref _problem, Rejected, null) is null) changed();
+    }
 
     public void ObserveConnected() => Set(null);
 

@@ -784,13 +784,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     internal const string SignedOutDisplay = "Signed out";
 
     /// Whether the daemon reports its own sign-in as what keeps its hub from connecting, and whether
-    /// signing the app in repairs that: true when the daemon runs on the app's profile, or either
-    /// side does not say which.
+    /// signing the app in repairs that: only with a resolved app profile, and the daemon on it or not
+    /// saying which.
     internal static (bool SignedOut, bool OursToRepair) DaemonSignInFor(
             AttachStatus status, DaemonInfoDto? daemon, string? appProfile) =>
         status.State == AttachState.Connected && daemon is { Credential: not null } && daemon.Connection != "connected"
-            ? (true, daemon.Profile is null || appProfile is null
-                     || string.Equals(daemon.Profile, appProfile, StringComparison.OrdinalIgnoreCase))
+            ? (true, appProfile is not null
+                     && (daemon.Profile is null || string.Equals(daemon.Profile, appProfile, StringComparison.OrdinalIgnoreCase)))
             : (false, false);
 
     // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub

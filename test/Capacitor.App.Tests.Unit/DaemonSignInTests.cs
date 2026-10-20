@@ -16,10 +16,11 @@ public class DaemonSignInTests {
     [Arguments("reconnecting", "rejected", "work", "WORK", true, true)]
     [Arguments("reconnecting", "signed_out", "old", "work", true, false)]
     [Arguments("reconnecting", "signed_out", null, "work", true, true)]
+    [Arguments("reconnecting", "signed_out", "work", null, true, false)]
     [Arguments("reconnecting", null, "work", "work", false, false)]
     [Arguments("connected", "rejected", "work", "work", false, false)]
     public async Task Signed_out_only_while_the_hub_is_down_and_repairable_only_on_the_apps_profile(
-            string connection, string? credential, string? daemonProfile, string appProfile, bool signedOut, bool ours) {
+            string connection, string? credential, string? daemonProfile, string? appProfile, bool signedOut, bool ours) {
         var daemon = Snap(connection: connection, credential: credential, profile: daemonProfile).Daemon;
 
         await Assert.That(MainWindowViewModel.DaemonSignInFor(Attached, daemon, appProfile)).IsEqualTo((signedOut, ours));
@@ -59,11 +60,13 @@ public class DaemonSignInTests {
     }
 
     [Test]
-    [Arguments("work", "work", true)]
-    [Arguments("work", "WORK", true)]
-    [Arguments("work", "other", false)]
-    [Arguments("work", null, false)]
-    public async Task Removing_the_daemons_profile_warns_it_will_be_signed_out(string name, string? daemonProfile, bool warns) =>
-        await Assert.That(ProfilesSettingsViewModel.RemovePrompt(name, daemonProfile).Contains("local daemon runs on this profile"))
-            .IsEqualTo(warns);
+    [Arguments("work", "work", "The local daemon runs on this profile")]
+    [Arguments("work", "WORK", "The local daemon runs on this profile")]
+    [Arguments("work", null, "If the local daemon runs on this profile")]
+    public async Task Removing_the_daemons_profile_or_an_unknown_one_warns_of_the_sign_out(string name, string? daemonProfile, string warning) =>
+        await Assert.That(ProfilesSettingsViewModel.RemovePrompt(name, daemonProfile)).Contains(warning);
+
+    [Test]
+    public async Task Removing_another_profile_says_nothing_about_the_daemon() =>
+        await Assert.That(ProfilesSettingsViewModel.RemovePrompt("work", "other")).DoesNotContain("daemon");
 }

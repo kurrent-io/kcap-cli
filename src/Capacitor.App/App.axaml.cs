@@ -1365,11 +1365,14 @@ public partial class App : Application {
     // ShowMainWindow() exactly once, right after Start, while desktop.MainWindow is still null
     // because startup awaits (the gate's config read, and in wizard-first mode the whole wizard).
     // Show() on an already-visible window is a no-op.
-    /// The profile the attached daemon last reported. Snapshots replay their latest value on subscribe.
+    /// The profile the attached daemon reports, or null when no daemon is attached now or it does not
+    /// say. Both streams replay their latest value on subscribe, and a snapshot outlives a detach.
     static string? LatestDaemonProfile(IDaemonClientService service) {
         string? profile = null;
+        var attached = false;
+        using (service.Status.Subscribe(s => attached = s.State == AttachState.Connected)) { }
         using (service.Snapshots.Subscribe(s => profile = s.Daemon.Profile)) { }
-        return profile;
+        return attached ? profile : null;
     }
 
     internal static MainWindow BuildAndShowMainWindow(
