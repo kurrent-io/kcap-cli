@@ -21,6 +21,8 @@ public sealed class SessionRuns(TimeProvider time) {
     /// order. The local meta file and the server's start record can both beat the call's own line.
     readonly Dictionary<string, string> _earlyByCall = new(StringComparer.Ordinal);
     readonly List<string> _earlyUnpaired = [];
+    /// Within one projection, the unnamed running rows as they stood when an id was first held.
+    List<RunRow>? _candidates;
     const int MaxEarly = 16;
     /// Rows per presented state, indexed by the state's value.
     readonly int[] _counts = new int[Enum.GetValues<RunState>().Length];
@@ -52,7 +54,7 @@ public sealed class SessionRuns(TimeProvider time) {
 
     public void Apply(ChatProjectionResult projection) {
         HashSet<string>? detachedHere = null;
-        var candidates = _earlyUnpaired.Count == 0 ? null : UnnamedRunning().ToList();
+        _candidates = _earlyUnpaired.Count == 0 ? null : UnnamedRunning().ToList();
         foreach (var signal in projection.Runs) {
             switch (signal) {
                 case RunSignal.Started started:
@@ -64,7 +66,7 @@ public sealed class SessionRuns(TimeProvider time) {
                     break;
                 case RunSignal.Finished finished:
                     Finish(finished);
-                    DropHeldIfACandidateEnded(candidates);
+                    DropHeldIfACandidateEnded();
                     break;
                 case RunSignal.Identified identified:
                     Identify(identified);
@@ -79,8 +81,9 @@ public sealed class SessionRuns(TimeProvider time) {
             _pending.Remove(callId);
             if (_byCall.TryGetValue(callId, out var row))
                 row.End(envelope.ToolIsError ? RunState.Failed : RunState.Done, Stamp(envelope.TimestampIso));
-            DropHeldIfACandidateEnded(candidates);
+            DropHeldIfACandidateEnded();
         }
+        _candidates = null;
         Refresh();
     }
 
@@ -145,6 +148,7 @@ public sealed class SessionRuns(TimeProvider time) {
         // An agent already placed by its own call stays there: a guess never moves it.
         if (_byAgent.ContainsKey(identified.AgentId) || _rows.Any(r => r.AgentId == identified.AgentId)) return;
         if (!_earlyUnpaired.Contains(identified.AgentId)) {
+            _candidates ??= UnnamedRunning().ToList();
             if (_earlyUnpaired.Count == MaxEarly) _earlyUnpaired.RemoveAt(0);
             _earlyUnpaired.Add(identified.AgentId);
         }
@@ -160,8 +164,8 @@ public sealed class SessionRuns(TimeProvider time) {
 
     // A candidate that ends could have been the held ids' own, so they can no longer be placed on whoever is left —
     // dropped at once, before a later signal in the same projection pairs them.
-    void DropHeldIfACandidateEnded(List<RunRow>? candidates) {
-        if (candidates?.Any(row => row.IsEnded) == true) _earlyUnpaired.Clear();
+    void DropHeldIfACandidateEnded() {
+        if (_candidates?.Any(row => row.IsEnded) == true) _earlyUnpaired.Clear();
     }
 
     IEnumerable<RunRow> UnnamedRunning() =>
