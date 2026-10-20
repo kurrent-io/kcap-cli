@@ -23,7 +23,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// and bundle are fakes. Console, the Spectre singleton, <c>KCAP_URL</c> and the interrupt seam are process-global.
 /// </summary>
 [NotInParallel, ExcludeOn(OS.Windows)]
-internal sealed class SetupLocalArmTests {
+internal sealed class SetupLocalArmTests : IDisposable {
     const string Version = "1.3.0";
 
     static readonly LocalPlatform MacArm = new(true, false, false, Architecture.Arm64);
@@ -42,6 +42,15 @@ internal sealed class SetupLocalArmTests {
 
     FakeBundle Bundle => field ??= new(Tmp.PathTo("bundle.tar.gz"), Version);
 
+    FakeOllama? _ollama;
+
+    /// <summary>Answers nothing until a test makes it run, so no test reaches a real Ollama on this machine.</summary>
+    FakeOllama Ollama => _ollama ??= new();
+
+    FakeLocalServerService? _service;
+
+    public void Dispose() => _ollama?.Dispose();
+
     [Before(Test)]
     public void WriteConfig() =>
         File.WriteAllText(AppConfig.GetConfigPath(Config.Root), """{"version":2,"active_profile":"default","profiles":{"default":{}}}""");
@@ -49,13 +58,14 @@ internal sealed class SetupLocalArmTests {
     /// <param name="wrap">Wraps <see cref="Server"/> as the installer's transport.</param>
     SetupCommand Command(Func<HttpMessageHandler, HttpMessageHandler>? wrap) {
         var factory = new FakeLocalInstallerFactory(() => {
-            var service = new FakeLocalServerService(_log, Home);
+            var service = _service = new FakeLocalServerService(_log, Home);
             var local   = new HttpClient(wrap?.Invoke(Server) ?? Server);
 
             return new LocalInstaller(Root, Config.Root, Home, service, Bundle.Client(), local, Bundle.Key, MacArm, TimeProvider.System,
                 installer => [new LocalSetupRecovery(service, Home, local, TimeProvider.System, installer.Progress, installer.RolledForward)]) {
                 Version     = Version,
                 SocketLimit = int.MaxValue,
+                Ollama      = Ollama.Client(),
             };
         });
 
@@ -111,7 +121,7 @@ internal sealed class SetupLocalArmTests {
     public async Task Json_without_single_user_fails_with_answer_required_line() {
         var (exit, stdout, spectre, _) = await Run("setup", "--local", "--json", "--yes");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await AssertAllJson(stdout);
         await Assert.That(spectre).IsEmpty();
 
@@ -138,6 +148,10 @@ internal sealed class SetupLocalArmTests {
         await Assert.That(events[0]).IsEqualTo("preflight_passed");
         await Assert.That(events).Contains("committing");
 
+        var skipped = stdout.Select(l => JsonNode.Parse(l)!).Single(n => n["event"]!.GetValue<string>() == "embeddings_skipped");
+        await Assert.That(skipped["code"]?.GetValue<string>()).IsEqualTo("ollama_not_found");
+        await Assert.That(Array.IndexOf(events, "embeddings_skipped")).IsLessThan(Array.IndexOf(events, "starting"));
+
         var last = JsonNode.Parse(stdout[^1])!;
         await Assert.That(last["event"]?.GetValue<string>()).IsEqualTo("committed");
         await Assert.That(last["version"]?.GetValue<string>()).IsEqualTo(Version);
@@ -149,10 +163,29 @@ internal sealed class SetupLocalArmTests {
     }
 
     [Test]
+    public async Task Json_with_no_prompt_reports_the_install_and_every_later_step() {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(stderr);
+        await AssertAllJson(stdout);
+        await Assert.That(spectre).IsEmpty();
+        await Assert.That(stderr).Contains("Step 2/6");
+
+        var events = Events(stdout);
+        await Assert.That(events[0]).IsEqualTo("step_started");
+        await Assert.That(events).Contains("committed");
+        await Assert.That(Array.IndexOf(events, "committed")).IsLessThan(Array.LastIndexOf(events, "step_started"));
+        await Assert.That(events[^1]).IsEqualTo("done");
+        await Assert.That(JsonNode.Parse(stdout[^1])!["server_url"]?.GetValue<string>()).IsEqualTo(ActiveProfile().ServerUrl);
+    }
+
+    [Test]
     public async Task Json_with_discover_fails_with_invalid_arguments_line() {
         var (exit, stdout, _, _) = await Run("setup", "--local", "--discover", "--json");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stdout.Length).IsEqualTo(1);
 
         var line = JsonNode.Parse(stdout[0])!;
@@ -221,7 +254,7 @@ internal sealed class SetupLocalArmTests {
     public async Task No_prompt_without_yes_fails() {
         var (exit, _, _, stderr) = await Run("setup", "--local", "--single-user", "--no-prompt");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stderr).Contains("Pass --yes");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(ActiveProfile().ServerUrl).IsNull();
@@ -243,11 +276,103 @@ internal sealed class SetupLocalArmTests {
         await Assert.That(string.Join('\n', stdout) + spectre).Contains("No sign-in needed for a local installation.");
     }
 
+    /// <summary>A local installation has one user, so its sessions default to private, as the app's local path does.</summary>
+    [Test]
+    [Arguments(null, "private")]
+    [Arguments("org_public", "org_public")]
+    public async Task No_prompt_local_visibility_defaults_to_private(string? flag, string expected) {
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+            .. flag is null ? Array.Empty<string>() : ["--default-visibility", flag],
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Done).Because(string.Join('\n', stdout) + spectre + stderr);
+        await Assert.That(ActiveProfile().DefaultVisibility).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Json_with_ollama_running_configures_the_default_model_before_the_first_start() {
+        Ollama.Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
+
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--json", "--single-user", "--yes");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await AssertAllJson(stdout);
+
+        var events = Events(stdout);
+        await Assert.That(events).Contains("embeddings_ollama_found");
+        await Assert.That(events).Contains("embeddings_model_ready");
+        await Assert.That(Array.IndexOf(events, "embeddings_configured")).IsLessThan(Array.IndexOf(events, "starting"));
+
+        var configured = stdout.Select(l => JsonNode.Parse(l)!).Single(n => n["event"]!.GetValue<string>() == "embeddings_configured");
+        await Assert.That(configured["provider"]?.GetValue<string>()).IsEqualTo("ollama");
+        await Assert.That(configured["model"]?.GetValue<string>()).IsEqualTo(OllamaClient.DefaultModel);
+
+        await Assert.That(_service!.Installed!.Environment).Contains(new KeyValuePair<string, string>("Embedding__Provider", "ollama"));
+        await Assert.That(_service.Installed.Environment)
+            .Contains(new KeyValuePair<string, string>("Embedding__Ollama__Model", OllamaClient.DefaultModel));
+    }
+
+    [Test]
+    public async Task Json_no_embeddings_leaves_ollama_alone() {
+        Ollama.Running();
+
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings");
+
+        await Assert.That(exit).IsEqualTo(0);
+
+        var skipped = stdout.Select(l => JsonNode.Parse(l)!).Single(n => n["event"]!.GetValue<string>() == "embeddings_skipped");
+        await Assert.That(skipped["code"]?.GetValue<string>()).IsEqualTo("declined");
+        await Assert.That(Ollama.Requests("/api/version")).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Json_rerun_after_no_embeddings_keeps_search_by_keyword() {
+        Ollama.Running().Pulls("""{"status":"success"}""").Embeds(1024);
+        await Assert.That((await Run("setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings")).Exit).IsEqualTo(0);
+
+        var (exit, stdout, _, _) = await Run("setup", "--local", "--json", "--single-user");
+
+        await Assert.That(exit).IsEqualTo(0);
+        var skipped = stdout.Select(l => JsonNode.Parse(l)!).Single(n => n["event"]!.GetValue<string>() == "embeddings_skipped");
+        await Assert.That(skipped["code"]?.GetValue<string>()).IsEqualTo("declined");
+        await Assert.That(Ollama.Requests("/api/pull")).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task No_prompt_with_ollama_running_and_no_embedding_answer_fails_before_installing() {
+        Ollama.Running();
+
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--single-user", "--yes", "--no-prompt", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(stderr).Contains("--embedding-model mxbai-embed-large");
+        await Assert.That(stderr).Contains("--no-embeddings");
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(string.Join('\n', stdout) + spectre).DoesNotContain("No sign-in needed");
+    }
+
+    [Test]
+    public async Task No_prompt_with_an_embedding_model_flag_pulls_and_configures_it() {
+        Ollama.Running().Pulls("""{"status":"success"}""").Embeds(768);
+
+        var (exit, stdout, spectre, stderr) = await Run([
+            "setup", "--local", "--single-user", "--yes", "--no-prompt", "--embedding-model", "nomic-embed-text", "--skip-import",
+            .. SetupCommandTests.SkipAllAgentInstallFlags,
+        ]);
+
+        await Assert.That(exit).IsEqualTo(0).Because(string.Join('\n', stdout) + spectre + stderr);
+        await Assert.That(string.Join('\n', stdout) + spectre).Contains("Semantic search uses nomic-embed-text through Ollama");
+        await Assert.That(LocalEmbeddingFile.ReadModel(Root)).IsEqualTo("nomic-embed-text");
+    }
+
     [Test]
     public async Task Plain_setup_refuses_json() {
         var (exit, stdout, spectre, _) = await Run("setup", "--json");
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(stdout.Length).IsEqualTo(1);
         await Assert.That(spectre).IsEmpty();
         await Assert.That(JsonNode.Parse(stdout[0])!["code"]?.GetValue<string>()).IsEqualTo("invalid_arguments");
@@ -288,7 +413,7 @@ internal sealed class SetupLocalArmTests {
             AnsiConsole.Console = original;
         }
 
-        await Assert.That(run.Exit).IsEqualTo(1);
+        await Assert.That(run.Exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(run.Stderr).Contains("--yes");
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(Directory.Exists(Path.Combine(Root.Directory, "bin"))).IsFalse();
@@ -328,6 +453,38 @@ internal sealed class SetupLocalArmTests {
         await Assert.That(run.Spectre).Contains("Committed");
         await Assert.That(run.Spectre).DoesNotContain("Step 2/6");
         await Assert.That(ActiveProfile().AuthProvider).IsEqualTo(new AuthProviderStamp(AuthProvider.None, ActiveProfile().ServerUrl!));
+    }
+
+    /// <summary>The process exits as the deferral is disposed, so the closing line has to be on stdout by then: read
+    /// at the moment <see cref="InteractiveLifetime.Exit"/> is called, not after the faked exit returns.</summary>
+    [Test]
+    public async Task Json_interrupt_after_the_commit_ends_with_cancelled_before_the_exit() {
+        using var noUrl   = EnvScope.Exclusive(ProfileOverrides.UrlVar, null);
+        using var spectre = new SpectreCapture();
+        using var capture = ConsoleOutput.StartFullCapture("\n");
+
+        string? atExit   = null;
+        var     original = InteractiveLifetime.Exit;
+        InteractiveLifetime.Exit = _ => atExit ??= capture.GetCapturedOutput();
+
+        try {
+            using var interrupt = FaultPoints.Arm(point => {
+                if (point == "setup:after-registry") InteractiveLifetime.Interrupt(InteractiveLifetime.InterruptSource.Signal);
+            });
+
+            await Command(null).HandleAsync([
+                "setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags,
+            ]);
+        } finally {
+            InteractiveLifetime.Exit = original;
+        }
+
+        var lines = atExit!.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        await Assert.That(Events(lines)).Contains("committed");
+
+        var last = JsonNode.Parse(lines[^1])!;
+        await Assert.That(last["event"]?.GetValue<string>()).IsEqualTo("failed");
+        await Assert.That(last["code"]?.GetValue<string>()).IsEqualTo("cancelled");
     }
 
     /// <summary>Interrupts at the first readiness probe and holds it until the interrupt has cancelled the install,

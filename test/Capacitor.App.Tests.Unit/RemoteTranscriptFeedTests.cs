@@ -178,6 +178,30 @@ public class RemoteTranscriptFeedTests {
         await Assert.That(h.Feed.ReadAppended().Status).IsEqualTo(FeedStatus.Ok);
     }
 
+    /// A failure is logged once per outage: a repeat stays quiet until the stream delivers again.
+    [Test]
+    public async Task A_repeated_failure_is_logged_once_per_outage() {
+        using var h = new Harness();
+        h.Lane.TailHandler = (_, _) => new InvalidOperationException("dropped");
+        h.Access.OnNext(SessionAccessState.Established);
+        await WaitUntilAsync(() => h.Feed.WaitingToRetryForTesting, what: "the first retry");
+        h.Time.Advance(RemoteTranscriptFeed.Retry[0]);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 2 && h.Feed.WaitingToRetryForTesting, what: "the second retry");
+        await Assert.That(h.Logged.Count).IsEqualTo(1);
+
+        h.Lane.TailHandler = (_, _) => null;
+        h.Time.Advance(RemoteTranscriptFeed.Retry[1]);
+        await WaitUntilAsync(() => h.Lane.Tails.Count == 3, what: "the stream back");
+        h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.AssistantTextGenerated, """{"content":"more"}"""));
+        await WaitUntilAsync(() => h.Feed.CurrentOffset == 3, what: "the live event");
+
+        h.Lane.TailHandler = (_, _) => new InvalidOperationException("dropped");
+        h.Lane.CloseTail(h.Stream);
+        await WaitUntilAsync(() => h.Feed.WaitingToRetryForTesting, what: "the retry after the stream delivered");
+        h.Time.Advance(RemoteTranscriptFeed.Retry[0]);
+        await WaitUntilAsync(() => h.Logged.Count == 2, what: "the reason logged again");
+    }
+
     [Test]
     public async Task A_tail_that_ends_while_access_stands_resumes_after_the_retry_gap() {
         using var h = new Harness();

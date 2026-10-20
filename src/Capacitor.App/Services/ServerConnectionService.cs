@@ -4,6 +4,7 @@ using System.Reactive.Subjects;
 using System.Runtime.CompilerServices;
 using System.Net.WebSockets;
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Http;
@@ -78,17 +79,20 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                 ? () => Task.FromResult<string?>(null)
                 : async () => (await credentials.ResolveAsync(default)).Bearer,
             localRoot: localRoot,
-            refusal: profiles is null ? null : LocalDestination.Refusal(profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint)) { }
+            refusal: profiles is null ? null : LocalDestination.Refusal(profiles.Resolution.ServerUrl, profiles.Resolution.Endpoint),
+            updateCheckOff: profiles?.Effective?.UpdateCheck == false) { }
 
     readonly LocalRoot? _localRoot;
     readonly string?    _refusal;
+    readonly bool       _updateCheckOff;
 
     internal ServerConnectionService(
             TimeProvider time, string? serverUrl, Func<Task<string?>> accessTokenProvider,
             TimeSpan[]? reconnectDelays = null, Action<ILoggingBuilder>? hubLogging = null,
-            LocalRoot? localRoot = null, string? refusal = null) {
-        _localRoot = localRoot;
-        _refusal   = refusal;
+            LocalRoot? localRoot = null, string? refusal = null, bool updateCheckOff = false) {
+        _localRoot      = localRoot;
+        _refusal        = refusal;
+        _updateCheckOff = updateCheckOff;
         _time = time;
         _serverUrl = string.IsNullOrEmpty(serverUrl) ? null : serverUrl.TrimEnd('/');
         _token = accessTokenProvider;
@@ -288,6 +292,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         var builder = new HubConnectionBuilder()
             .WithUrl($"{_serverUrl}/hubs/sessions", o => {
                 o.AccessTokenProvider = _token;
+                HttpClientExtensions.AddObservationHeaders(o.Headers, _updateCheckOff);
                 // Every negotiation and every WebSocket upgrade, reconnects included.
                 // The guard follows redirects itself, so it can check each hop; the handler under it follows none.
                 o.HttpMessageHandlerFactory = inner => new LocalDestinationHandler(_localRoot, _serverUrl, _refusal, followRedirects: true) {

@@ -69,6 +69,22 @@ public class LocalStatusReaderTests {
         string.Join("\n", [report.Headline, .. report.Fields.Select(f => $"{f.Key}: {f.Value}"), .. report.Notes]);
 
     [Test]
+    public async Task The_search_field_names_the_embedding_model_or_says_keyword_only() {
+        Running();
+
+        await Assert.That(Text(await Read())).Contains("Search: by keyword only");
+
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large"));
+
+        await Assert.That(Text(await Read())).Contains("Search: by meaning through Ollama with mxbai-embed-large while it answers, and by keyword");
+        await Assert.That(Text(await Read())).DoesNotContain("not yet applied");
+
+        LocalEmbeddingFile.Write(Root, new LocalEmbeddingSetting("mxbai-embed-large") { Pending = true });
+
+        await Assert.That(Text(await Read())).Contains("(not yet applied; kcap setup --local applies it)");
+    }
+
+    [Test]
     public async Task No_installation_says_how_to_make_one() {
         var report = await Read();
 

@@ -15,6 +15,42 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
     [Test]
+    public Task Link_changes_notify_the_rail_for_initial_discovery_attachments_and_removals() => RunOnUiAsync(async () => {
+        var notifications = new List<string>();
+        var h = new Harness(linksChanged: notifications.Add);
+        try {
+            h.Source.Links = [];
+            h.Source.AccessSeconds = 300;
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Vm.HasListed && !h.Vm.IsReading, what: "initial empty list");
+            await Assert.That(notifications.Count).IsEqualTo(1);
+
+            h.Source.Links = [Link(1)];
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Vm.HasPullRequest && !h.Vm.IsReading, what: "attachment discovered by poll");
+            await Assert.That(notifications.Count).IsEqualTo(2);
+
+            h.Source.Links = [Link(1), Link(2)];
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Vm.Choices.Count == 2 && !h.Vm.IsReading, what: "second attachment");
+            await Assert.That(notifications.Count).IsEqualTo(3);
+
+            h.Source.Links = [Link(2) with { Title = "Updated title" }, Link(1)];
+            var lists = h.Source.Lists;
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Source.Lists > lists && !h.Vm.IsReading, what: "same links reordered");
+            await Assert.That(notifications.Count).IsEqualTo(3);
+
+            h.Source.Links = [];
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+            h.Vm.Refresh();
+            await WaitUntilAsync(() => !h.Vm.HasPullRequest && !h.Vm.IsReading, what: "removal discovered by manual refresh");
+            await Assert.That(notifications).IsEquivalentTo(new[] { "session", "session", "session", "session" });
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     public Task A_repository_updated_during_branch_lookup_is_described_to_the_registry(bool initiallyKnown) => RunOnUiAsync(async () => {
@@ -235,6 +271,21 @@ public class PullRequestContextViewModelTests {
             await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
             if (duringLookup) await Assert.That(h.Source.Descriptions.Single().Branch).IsEqualTo("another");
         } finally { release.Set(); h.Source.ListGate?.TrySetResult(); await h.Dispose(); }
+    });
+
+    /// A body's GitHub references link only into a github.com repository; elsewhere they stay text.
+    [Test]
+    [Arguments("github", "github.com", "https://github.com/example/repo")]
+    [Arguments("github", "ghe.example", null)]
+    [Arguments("gitlab", "gitlab.com", null)]
+    public Task References_read_against_the_selected_github_repository(string provider, string host, string? expected) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [FakePullRequestSource.Link(1) with { Provider = provider, Host = host }];
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected is not null, what: "a selected PR");
+        await Assert.That(h.Vm.ReferenceBase).IsEqualTo(expected);
+        await h.Dispose();
     });
 
     [Test]
@@ -924,6 +975,8 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task A_default_that_merges_while_shown_hands_over_on_its_next_overview() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
+        // Settling the read arms its renewal timer after the overview becomes visible.
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial overview settled");
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
         h.Source.Lifecycles[2] = "merged";
         h.Time.Advance(TimeSpan.FromSeconds(26)); Dispatcher.UIThread.RunJobs();
@@ -1049,11 +1102,11 @@ public class PullRequestContextViewModelTests {
         internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
         internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null,
-                LastReads<PullRequestSnapshot>? snapshots = null) {
+                LastReads<PullRequestSnapshot>? snapshots = null, Action<string>? linksChanged = null) {
             Source = new(Time);
             Clock = new(Time);
             Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch,
-                snapshots: snapshots);
+                snapshots: snapshots, linksChanged: linksChanged);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }

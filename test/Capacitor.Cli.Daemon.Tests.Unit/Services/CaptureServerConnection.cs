@@ -237,7 +237,8 @@ sealed class CaptureServerConnection() : ServerConnection(
 
         AcpEventsCallSignal.Writer.TryWrite(callCount);
 
-        return AcpEventsAckOverride?.Invoke(envelopes) ?? new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq);
+        return AcpEventsAckOverride?.Invoke(envelopes)
+            ?? (envelopes.Length == 0 ? new AcpBatchAck(-1, -1) : new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq));
     }
 
     // ── §2.5 source-claim / confirm seams ───────────────────────────────────────────────

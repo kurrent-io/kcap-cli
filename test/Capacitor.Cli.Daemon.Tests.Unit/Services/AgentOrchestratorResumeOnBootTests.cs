@@ -34,6 +34,8 @@ public class AgentOrchestratorResumeOnBootTests {
         public bool ExitBeforeHandshake { get; init; }
         public bool PtyStyle { get; init; }
         public string? ResumeToken { get; init; }
+        public bool ReopensSession { get; init; }
+        public FakeAcpRuntime? LastAcpRuntime { get; private set; }
         public int? ExitImmediatelyWith { get; init; }
         public int InFlight => Volatile.Read(ref _inFlight);
         public int MaxInFlight => Volatile.Read(ref _maxInFlight);
@@ -57,7 +59,10 @@ public class AgentOrchestratorResumeOnBootTests {
                 if (PtyStyle)
                     return new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null);
 
-                var runtime = new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path, VendorResumeToken = ResumeToken };
+                var runtime = ReopensSession && ctx.ResumeSessionId is { } reopened
+                    ? new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path, AcpSessionId = reopened, Reopened = true }
+                    : new FakeAcpRuntime { Vendor = Vendor, Cwd = ctx.Worktree.Path, VendorResumeToken = ResumeToken };
+                LastAcpRuntime = runtime;
 
                 return new HostedRuntimeStart(runtime, McpConfigPath: null, Transcript: runtime);
             } finally {
@@ -73,9 +78,10 @@ public class AgentOrchestratorResumeOnBootTests {
 
     sealed record Fixture(AgentOrchestrator Orch, CaptureServerConnection Server, ResumableFactory Factory, DaemonConfig Config, string Repo);
 
-    Fixture Build(ResumableFactory? factory = null, Action<DaemonConfig>? configure = null, TimeProvider? time = null) {
+    Fixture Build(ResumableFactory? factory = null, Action<DaemonConfig>? configure = null, TimeProvider? time = null,
+                  CaptureServerConnection? server = null) {
         var repo   = Tmp.CreateDir("repo");
-        var server = new CaptureServerConnection();
+        server ??= new CaptureServerConnection();
         factory ??= new ResumableFactory();
         DaemonConfig? captured = null;
         var orch = AgentOrchestratorHarness.BuildOrchestrator(
@@ -782,6 +788,80 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
             .Contains(("exits-1", "Failed", "resume_failed:runtime_exited"));
         await Assert.That(f.Server.ShutdownReportExitCodes).Contains(("exits-1", (int?)3));
+    }
+
+    /// <summary>The server already holds the reopened session's events through its cursor, so the first
+    /// new event must land after it: numbered from 0 it would be deduplicated away. The held first turn
+    /// goes out only once the server has accepted that event.</summary>
+    [Test]
+    public async Task A_reopened_acp_session_forwards_from_the_servers_cursor_and_then_releases_its_first_turn() {
+        var server = new CaptureServerConnection {
+            AcpEventsAckOverride = batch => batch.Length == 0 ? new AcpBatchAck(41, 41) : new AcpBatchAck(batch[^1].Seq, batch[^1].Seq)
+        };
+        var f = Build(new ResumableFactory { ReopensSession = true }, c => c.ResumeReadinessWindow = TimeSpan.FromSeconds(3), server: server);
+        await using var _ = f.Orch;
+        Entry(f, "reopen-1");
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("reopen-1")?.AcpForwarder is not null);
+        var runtime = f.Factory.LastAcpRuntime!;
+        await Assert.That(runtime.ReleaseFirstTurnCalls).IsEqualTo(0);
+
+        runtime.EnvelopesWriter.TryWrite(new AcpEventEnvelope { Kind = AcpEventKind.SystemNote, Text = "reopened" });
+        await WaitHarness.PollUntilAsync(() => runtime.ReleaseFirstTurnCalls == 1);
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        var sent = server.AcpEventsCalls.Where(c => c.Envelopes.Length > 0).SelectMany(c => c.Envelopes).ToArray();
+        await Assert.That(server.AcpEventsCalls[0].Envelopes).IsEmpty();
+        await Assert.That(server.AcpEventsCalls[0].AcpSessionId).IsEqualTo("vendor-session-1");
+        await Assert.That(sent.Select(e => e.Seq)).IsEquivalentTo([42L]);
+        await Assert.That(sent.Any(e => e.Kind == AcpEventKind.SessionStarted)).IsFalse();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("reopen-1")!.State).IsEqualTo(ResumeState.Running);
+    }
+
+    /// <summary>A server that takes nothing the reopened session says — a rejected cursor, a terminal
+    /// binding dropping its first event, or no answer inside the readiness window — fails the native resume
+    /// before its first turn is sent, so kcap continue cannot repeat anything it did.</summary>
+    [Test]
+    [Arguments("rejected")]
+    [Arguments("terminal")]
+    [Arguments("silent")]
+    public async Task A_reopened_session_the_server_takes_no_events_for_falls_through_to_continue_without_its_first_turn(string refusal) {
+        using var silence = new CancellationTokenSource();
+        var server = new CaptureServerConnection {
+            AcpEventsAckOverride = batch => refusal == "rejected"
+                ? new AcpBatchAck(-1, -1, Rejected: true)
+                : new AcpBatchAck(41, 41),
+            AcpEventsBlockUntil = refusal == "silent" ? silence : null
+        };
+        var window = refusal == "silent" ? TimeSpan.FromMilliseconds(500) : TimeSpan.FromSeconds(30);
+        var f = Build(new ResumableFactory { ReopensSession = true }, c => c.ResumeReadinessWindow = window, server: server);
+        await using var _ = f.Orch;
+        var entry = Entry(f, "terminal-1");
+        var continued = new ConcurrentQueue<string>();
+        f.Orch.ContinueEntry = (_, reason, _) => {
+            continued.Enqueue(reason);
+            return Task.FromResult(ResumeOutcome.Interrupted);
+        };
+
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        if (refusal == "terminal") {
+            await WaitHarness.PollUntilAsync(() => f.Orch.GetAgentForTest("terminal-1")?.AcpForwarder is not null);
+            f.Factory.LastAcpRuntime!.EnvelopesWriter.TryWrite(
+                new AcpEventEnvelope { Kind = AcpEventKind.SystemNote, Text = "reopened" });
+        }
+
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await silence.CancelAsync();
+
+        await Assert.That(continued.Single()).IsEqualTo("acp_binding_unavailable");
+        await Assert.That(f.Factory.LastAcpRuntime!.HasExited).IsTrue();
+        await Assert.That(f.Factory.LastAcpRuntime!.ReleaseFirstTurnCalls).IsEqualTo(0);
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsTrue();
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("terminal-1")!.LastError).IsEqualTo("acp_binding_unavailable");
     }
 
     [Test]

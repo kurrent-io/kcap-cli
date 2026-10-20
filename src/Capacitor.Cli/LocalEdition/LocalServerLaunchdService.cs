@@ -20,6 +20,9 @@ sealed partial class LocalServerLaunchdService(
 
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _run = run ?? ServiceProcess.Run;
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding, durable: true, home: home));
+
+    // As in LaunchdServiceManager: the writer's checks, before anything is unloaded.
+    readonly Action<string> _requireSafeAncestors = writeUnit is null ? ServiceFiles.RequireSafeAncestors : _ => { };
     readonly int _uid = uid ?? (int)getuid();
 
     [LibraryImport("libc", EntryPoint = "getuid")]
@@ -45,6 +48,7 @@ sealed partial class LocalServerLaunchdService(
     }
 
     public void Install(LocalServerUnit unit) {
+        _requireSafeAncestors(LocalServerLaunchdUnit.PlistPath(home, unit));
         unit.PrepareLogDirectory();
 
         // launchd keeps the definition it loaded, so a rewritten plist takes effect only through a reload.

@@ -1,0 +1,215 @@
+{
+  "vendor": "gemini",
+  "argv": [
+    "gemini",
+    "--experimental-acp",
+    "--skip-trust",
+    "--allowed-mcp-server-names",
+    "__kcap_probe_unmatchable__"
+  ],
+  "started": "2026-10-19T13:13:53.566753+00:00",
+  "notes": [
+    "initialize ok; loadSession=True",
+    "session/new ok; sessionId=f896b754-d815-455d-bc6e-a68cd01706d2",
+    "turns A/B/C stopReasons: end_turn/end_turn/end_turn",
+    "SIGKILL fired after 3 live chunks of turn D",
+    "session/load ok=True err=None",
+    "post-load prompt ok=True"
+  ],
+  "load_session_advertised": true,
+  "agent_capabilities": {
+    "loadSession": true,
+    "promptCapabilities": {
+      "image": true,
+      "audio": true,
+      "embeddedContext": true
+    },
+    "mcpCapabilities": {
+      "http": true,
+      "sse": true
+    }
+  },
+  "session_id": "f896b754-d815-455d-bc6e-a68cd01706d2",
+  "turn_a_stop": "end_turn",
+  "turn_b_stop": "end_turn",
+  "turn_c_stop": "end_turn",
+  "kill_fired_after_chunks": 3,
+  "turn_d_response_after_kill": false,
+  "load_response": {
+    "modes": {
+      "availableModes": [
+        {
+          "id": "default",
+          "name": "Default",
+          "description": "Prompts for approval"
+        },
+        {
+          "id": "autoEdit",
+          "name": "Auto Edit",
+          "description": "Auto-approves edit tools"
+        },
+        {
+          "id": "yolo",
+          "name": "YOLO",
+          "description": "Auto-approves all tools"
+        },
+        {
+          "id": "plan",
+          "name": "Plan",
+          "description": "Read-only mode"
+        }
+      ],
+      "currentModeId": "default"
+    },
+    "models": {
+      "availableModels": [
+        {
+          "modelId": "auto",
+          "name": "Auto",
+          "description": "Let Gemini CLI decide the best model for the task: gemini-3.1-pro-preview, gemini-3.8-flash"
+        },
+        {
+          "modelId": "gemini-3.1-pro-preview",
+          "name": "gemini-3.1-pro-preview"
+        },
+        {
+          "modelId": "gemini-3.8-flash",
+          "name": "gemini-3.8-flash"
+        },
+        {
+          "modelId": "gemini-2.5-pro",
+          "name": "gemini-2.5-pro"
+        },
+        {
+          "modelId": "gemini-3.8-flash",
+          "name": "gemini-3.8-flash"
+        },
+        {
+          "modelId": "gemini-3.5-flash-lite",
+          "name": "gemini-3.5-flash-lite"
+        }
+      ],
+      "currentModelId": "auto"
+    }
+  },
+  "post_load_prompt_ok": true,
+  "replay_load_ok": true,
+  "replay_load_error": null,
+  "ended": "2026-10-19T13:15:19.062240+00:00",
+  "interrupted_turn_replay_shape": "user_only",
+  "live_analysis": {
+    "kinds": {
+      "available_commands_update": 1,
+      "agent_thought_chunk": 5,
+      "agent_message_chunk": 3,
+      "usage_update": 4,
+      "tool_call": 1,
+      "tool_call_update": 1
+    },
+    "keys_by_kind": {
+      "available_commands_update": [
+        "availableCommands",
+        "sessionUpdate"
+      ],
+      "agent_thought_chunk": [
+        "content",
+        "sessionUpdate"
+      ],
+      "agent_message_chunk": [
+        "content",
+        "sessionUpdate"
+      ],
+      "usage_update": [
+        "sessionUpdate",
+        "size",
+        "used"
+      ],
+      "tool_call": [
+        "content",
+        "kind",
+        "locations",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ],
+      "tool_call_update": [
+        "content",
+        "kind",
+        "locations",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ]
+    },
+    "msgid_values": {},
+    "tool_call_ids": [
+      "run_shell_command__call_565003"
+    ]
+  },
+  "replay_analysis": {
+    "kinds": {
+      "user_message_chunk": 6,
+      "agent_thought_chunk": 2,
+      "agent_message_chunk": 3,
+      "tool_call": 1,
+      "available_commands_update": 1
+    },
+    "keys_by_kind": {
+      "user_message_chunk": [
+        "content",
+        "sessionUpdate"
+      ],
+      "agent_thought_chunk": [
+        "content",
+        "sessionUpdate"
+      ],
+      "agent_message_chunk": [
+        "content",
+        "sessionUpdate"
+      ],
+      "tool_call": [
+        "content",
+        "kind",
+        "sessionUpdate",
+        "status",
+        "title",
+        "toolCallId"
+      ],
+      "available_commands_update": [
+        "availableCommands",
+        "sessionUpdate"
+      ]
+    },
+    "msgid_values": {},
+    "tool_call_ids": [
+      "run_shell_command__call_565003"
+    ],
+    "user_chunks": [
+      "<session_context>\nThis is the Gemini CLI. We are setting up the context for our ",
+      "Reply with exactly: alpha",
+      "Reply with exactly: alpha",
+      "Run the shell command `echo kcap-probe-c0` and then reply with exactly: tool-don",
+      "[Function Response: run_shell_command]",
+      "Count from 1 to 40, one number per line. Do not use any tools for the counting. "
+    ],
+    "after_response_conversation": 11,
+    "trailer_kinds_after_response": [
+      "user_message_chunk",
+      "agent_thought_chunk",
+      "agent_message_chunk",
+      "user_message_chunk",
+      "agent_message_chunk",
+      "user_message_chunk",
+      "agent_thought_chunk",
+      "tool_call",
+      "user_message_chunk",
+      "agent_message_chunk",
+      "user_message_chunk",
+      "available_commands_update"
+    ]
+  },
+  "live_vs_replay_msgid_overlap": {},
+  "tool_call_id_overlap": 1
+}

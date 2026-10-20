@@ -811,6 +811,11 @@ public static partial class DaemonRunner {
 
                 if (ledgerReadable) orchestrator.AttachmentStore.SweepOrphans(orchestrator.IsLiveAttachmentStem, logger);
 
+                // Before connecting: a launch the server sends during the sweep would create a worktree
+                // the sweep does not know is live.
+                var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
+                if (ledgerReadable) await worktreeManager.CleanupOrphanedAsync(orchestrator.LedgerWorktreePaths());
+
                 try {
                     await connection.ConnectAsync(lifetime.ApplicationStopping);
                     LogStartupPhase(logger, "server connected");
@@ -825,8 +830,6 @@ public static partial class DaemonRunner {
                     return NameInUseExit(IsSupervised(config.Name));
                 }
 
-                var worktreeManager = host.Services.GetRequiredService<WorktreeManager>();
-                if (ledgerReadable) await worktreeManager.CleanupOrphanedAsync(orchestrator.LedgerWorktreePaths());
                 _ = orchestrator.ResumeOnBootAsync(lifetime.ApplicationStopping);
 
                 // Instantiate EvalRunner so it wires the per-phase eval handlers

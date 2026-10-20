@@ -11,6 +11,9 @@
     <UserControl.DataTemplates>
         <DataTemplate DataType="vm:EditionStepViewModel">
             <StackPanel Spacing="12">
+                <Border Classes="frCallout" IsVisible="{Binding NoticeVisible}">
+                    <TextBlock x:Name="EditionNoticeText" Classes="frBody" Text="{Binding Notice}" />
+                </Border>
                 <Button x:Name="LocalEditionButton" Classes="frEditionCard" Command="{Binding ChooseLocalCommand}"
                         AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="14">
@@ -21,9 +24,9 @@
                         </StackPanel>
                     </Grid>
                 </Button>
-                <Border Classes="frCallout" IsVisible="{Binding LocalPending}">
+                <Border Classes="frCallout" IsVisible="{Binding LocalUnavailableVisible}">
                     <TextBlock x:Name="LocalUnavailableText" Classes="frBody"
-                               Text="{x:Static vm:EditionStepViewModel.LocalUnavailable}" />
+                               Text="{Binding LocalUnavailableReason}" />
                 </Border>
 
                 <Button x:Name="CloudEditionButton" Classes="frEditionCard" Command="{Binding ChooseCloudCommand}"
@@ -46,9 +49,13 @@
 
                 <TextBlock Classes="frNote" Margin="0,6,0,0">
                     <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource FrMonoFont}"
-                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor, or run kcap setup in your terminal." />
+                        Foreground="{StaticResource FrMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in Capacitor." />
                 </TextBlock>
             </StackPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="vm:InstallStepViewModel">
+            <views:InstallPaneView />
         </DataTemplate>
 
         <DataTemplate DataType="vm:SignInStepViewModel">

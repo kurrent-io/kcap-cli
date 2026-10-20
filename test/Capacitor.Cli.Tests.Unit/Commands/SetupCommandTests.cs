@@ -1602,7 +1602,7 @@ public class SetupCommandTests {
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
             .HandleAsync(["setup", "--muse-assistant"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--muse-assistant");
         await Assert.That(capture.GetCapturedError()).Contains("<tenant>");
     }
@@ -1926,7 +1926,7 @@ public class SetupCommandTests {
 
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
     }
 
@@ -1938,7 +1938,7 @@ public class SetupCommandTests {
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url");
     }
 
@@ -1949,7 +1949,7 @@ public class SetupCommandTests {
 
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
     }
 
@@ -1960,9 +1960,45 @@ public class SetupCommandTests {
 
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");
         await Assert.That(capture.GetCapturedError()).Contains("--org");
+    }
+
+    /// <summary>Both values are only read after sign-in, so a bad one must stop the run before the server is
+    /// even contacted, or the script is told "refused" after a login was committed.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility", "everyone")]
+    [Arguments("--use-provider-api-key", "maybe")]
+    public async Task HandleAsync_refuses_an_invalid_answer_before_contacting_the_server(string flag, string value) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt", flag, value));
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains(flag);
+        await Assert.That(server.LogEntries).IsEmpty();
+    }
+
+    /// <summary>A flag left as the last argument has no value; reading that as absent would apply the default the
+    /// script never chose.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility")]
+    [Arguments("--use-provider-api-key")]
+    public async Task HandleAsync_refuses_an_answer_flag_with_no_value(string flag) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync([.. BuildArgs("--server-url", server.Url!, "--no-prompt"), flag]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains($"{flag} needs a value");
+        await Assert.That(server.LogEntries).IsEmpty();
     }
 
     // Presence, not value: a valueless --server-url parses as absent, and taking that as "no conflict"

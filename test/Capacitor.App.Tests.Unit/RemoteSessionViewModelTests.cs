@@ -606,17 +606,18 @@ public class RemoteSessionViewModelTests {
     }
 
     [Test]
-    public async Task A_pty_harness_offers_a_terminal_tab_that_subscribes_once_access_stands_and_a_frame_harness_does_not() {
+    public async Task A_pty_harness_offers_a_terminal_tab_that_subscribes_when_first_shown_and_a_frame_harness_does_not() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
             var pty = h.Build(Harness.Row(vendor: "claude"));
             await Assert.That(pty.ShowsTerminalTab).IsTrue();
             await Assert.That(pty.IsChatActive).IsTrue();
             await WaitUntilAsync(() => pty.Access == RemoteSessionAccess.Ready, what: "ready");
-            await WaitUntilAsync(() => pty.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
-            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
+            await Assert.That(h.Lane.TerminalSubscribes).IsEmpty();
 
             await pty.ShowTerminalCommand.Execute();
+            await WaitUntilAsync(() => pty.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
+            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
             await Assert.That(pty.IsTerminalActive).IsTrue();
             await Assert.That(pty.ShowsTerminalPane).IsTrue();
             await Assert.That(pty.ShowsChatPane).IsFalse();

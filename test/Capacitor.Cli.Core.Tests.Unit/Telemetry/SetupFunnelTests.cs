@@ -140,4 +140,23 @@ public class SetupFunnelTests {
         await Assert.That(probe.Names).IsEquivalentTo(
             new[] { "cli_setup_signin_completed", "cli_setup_tenant_none" }, CollectionOrdering.Matching);
     }
+
+    [Test]
+    public async Task Local_install_events_carry_their_plan_code_and_lock() {
+        var probe = StartCapturing();
+
+        probe.Telemetry.Funnel.LocalInstallStarted();
+        probe.Telemetry.Funnel.LocalInstallFailed("lifecycle_busy", locked: true);
+        probe.Telemetry.Funnel.LocalInstallRetried();
+        probe.Telemetry.Funnel.LocalInstallCommitted("recovered");
+
+        await Assert.That(probe.Names).IsEquivalentTo(new[] {
+            "cli_setup_local_install_started", "cli_setup_local_install_failed",
+            "cli_setup_local_install_retried", "cli_setup_local_install_committed",
+        }, CollectionOrdering.Matching);
+        var failed = probe.Only("cli_setup_local_install_failed").Properties;
+        await Assert.That(failed["code"]!.GetValue<string>()).IsEqualTo("lifecycle_busy");
+        await Assert.That(failed["locked"]!.GetValue<bool>()).IsTrue();
+        await Assert.That(probe.Only("cli_setup_local_install_committed").Properties["plan"]!.GetValue<string>()).IsEqualTo("recovered");
+    }
 }

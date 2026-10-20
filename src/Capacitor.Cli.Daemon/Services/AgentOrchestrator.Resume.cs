@@ -481,6 +481,9 @@ internal partial class AgentOrchestrator {
 
     const string NativeResumeUnsupported = "native_resume_unsupported";
     const string StoppedDuringResume     = "stopped";
+    const string TranscriptRefusedReason = "acp_binding_unavailable";
+
+    static bool TranscriptRefused(AgentInstance agent) => agent.ReopenedTranscript == ReopenedTranscript.Refused;
 
     static readonly TimeSpan ReadinessPoll = TimeSpan.FromMilliseconds(50);
 
@@ -663,7 +666,7 @@ internal partial class AgentOrchestrator {
     async Task RemoveDiscardedResourcesAsync(ResumeLedgerEntry entry) {
         if (entry.Launch.Work == WorkLocation.OwnedWorktree) {
             try {
-                await WorktreeManager.RemoveAsync(ResumedWorktree(entry), _time);
+                await RemoveOwnedWorktreeAsync(ResumedWorktree(entry), entry.AgentId);
             } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "removing a discarded resume's worktree", entry.AgentId);
             }
@@ -864,7 +867,7 @@ internal partial class AgentOrchestrator {
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
-        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume);
+        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
@@ -873,9 +876,18 @@ internal partial class AgentOrchestrator {
 
         if (resume.Agent is not { } agent) return ("runtime_exited", null);
 
-        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct);
+        var survived = outcome.Kind == CommandOutcomeKind.LaunchExecuted && await SurvivesReadinessAsync(agent, ct, judgeTranscript: true);
 
         if (agent.StopRequested) return (StoppedDuringResume, null);
+
+        if (!survived && TranscriptRefused(agent)) {
+            // Its first turn was never sent, so kcap continue repeats nothing; still pending its resume,
+            // the teardown this starts keeps the worktree for it.
+            await agent.Runtime.TerminateAsync(ShutdownTerminateGrace);
+
+            return (TranscriptRefusedReason, null);
+        }
+
         if (!survived) return ("runtime_exited", agent.Runtime.ExitCode);
 
         lock (_ledgerLock) {
@@ -887,13 +899,15 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Whether the resumed runtime is still running, and still this agent, once the readiness
-    /// window has passed since it published.</summary>
-    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct) {
+    /// window has passed since it published. <paramref name="judgeTranscript"/> also fails it unless the
+    /// server has accepted the session it reopened by then.</summary>
+    async Task<bool> SurvivesReadinessAsync(AgentInstance agent, CancellationToken ct, bool judgeTranscript = false) {
         var started = _time.GetTimestamp();
 
-        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)) {
+        while (!agent.Runtime.HasExited && _agents.TryGetValue(agent.Id, out var live) && ReferenceEquals(live, agent)
+            && !(judgeTranscript && TranscriptRefused(agent))) {
             var left = _config.ResumeReadinessWindow - _time.GetElapsedTime(started);
-            if (left <= TimeSpan.Zero) return true;
+            if (left <= TimeSpan.Zero) return !(judgeTranscript && agent.TryRefuseReopenedTranscript());
 
             await Task.Delay(left < ReadinessPoll ? left : ReadinessPoll, _time, ct);
         }
@@ -1018,7 +1032,7 @@ internal partial class AgentOrchestrator {
         };
         var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
         var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
-        var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch);
+        var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch, cancel: CancellationToken.None); // the resume's own token ends its start
 
         return launch.Agent is not null && outcome.Kind == CommandOutcomeKind.LaunchExecuted ? launch : null;
     }
@@ -1103,7 +1117,8 @@ internal partial class AgentOrchestrator {
             path,
             launch.WorktreeBranch ?? $"capacitor/{Path.GetFileName(path)}",
             launch.WorktreeSourceRepo ?? launch.RepoPath,
-            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git"))) {
+            IsStandalone: launch.WorktreeIsStandalone ?? Directory.Exists(Path.Combine(path, ".git")),
+            FetchedRef: WorktreeManager.FetchedRefFor(Path.GetFileName(path))) {
             GitRelativeCwd = launch.GitRelativeCwd
         };
     }

@@ -209,7 +209,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
-            LastReads<PullRequestSnapshot>? pullRequestSnapshots = null) {
+            LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null) {
         _drafts = drafts;
         _row = row;
         _opener = opener;
@@ -235,7 +235,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
-            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository, snapshots: pullRequestSnapshots);
+            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository, snapshots: pullRequestSnapshots,
+            linksChanged: pullRequestLinksChanged);
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
                 .Subscribe(state => {
@@ -389,7 +390,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _lease.Disposable = new CompositeDisposable(states, lease);
     }
 
-    void PublishSession(bool ended) => _session.OnNext(ChatSessionInfo.FromRemote(_row, ended));
+    /// An unchanged row republishes nothing, so the pane's session handling runs only on a change.
+    void PublishSession(bool ended) {
+        var info = ChatSessionInfo.FromRemote(_row, ended);
+        if (info != _session.Value) _session.OnNext(info);
+    }
 
     void Release() {
         _leasedSession = null;

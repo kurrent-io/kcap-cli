@@ -1656,6 +1656,25 @@ sealed class FakeKcapCli : IKcapCli {
         ImportRequests.Add(request);
         return ImportBehavior(request, onLine, ct);
     }
+
+    public int SetupLocalCallCount;
+    public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> SetupLocalBehavior =
+        (_, _, _) => Task.FromResult(new StreamingResult(0, false, []));
+    public Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        SetupLocalCallCount++;
+        return SetupLocalBehavior(onLine, interrupt, ct);
+    }
+
+    public int LocalUpgradeCallCount;
+    public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> LocalUpgradeBehavior =
+        (_, _, _) => Task.FromResult(new StreamingResult(3, false, []));
+    public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        LocalUpgradeCallCount++;
+        return LocalUpgradeBehavior(onLine, interrupt, ct);
+    }
+
+    public Task<ProcessResult> LocalStartAsync(CancellationToken ct) =>
+        Task.FromResult(new ProcessResult(0, "", "", false));
 }
 
 // FakeLoginShellProbe is shared via Capacitor.Tests.Helpers (the controller only ever calls

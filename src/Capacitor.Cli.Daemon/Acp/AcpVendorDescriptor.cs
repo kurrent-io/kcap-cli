@@ -146,7 +146,7 @@ internal sealed record AcpVendorDescriptor {
     /// capability — all four registered vendors advertise it, and two measurably cannot honor it
     /// across a crashed owner (<c>docs/probes/2026-08-04-acp-reconnect-c0/</c>): Kiro refuses with a
     /// durable stale-owner lock ("Session is active in another process", identical at 0/15/60s), and
-    /// Gemini never persists a crash-killed session ("No previous sessions found"). Flipping a
+    /// Gemini answers session/load before most of its replay. Flipping a
     /// vendor to <see langword="true"/> requires a passing re-run of that probe, because the resume
     /// path additionally relies on the vendor honoring the ACP session/load response-after-replay
     /// barrier — a violation would duplicate transcript content. Runtime eligibility is conjunctive
@@ -154,6 +154,12 @@ internal sealed record AcpVendorDescriptor {
     /// launch, and the <c>KCAP_ACP_RECONNECT</c> kill switch.
     /// </summary>
     public bool                        SupportsReconnectResume { get; }
+
+    /// <summary>Whether a daemon restart may reopen this vendor's session with <c>session/load</c>
+    /// instead of falling back to kcap continue. Set only for a vendor that passes the graceful-stop probe
+    /// in <c>docs/probes/2026-10-19-acp-restart-resume/</c>: a vendor persists its session differently on a
+    /// graceful stop than on a crash, so this is decided apart from <see cref="SupportsReconnectResume"/>.</summary>
+    public bool                        SupportsRestartResume { get; }
 
     /// <summary>Builds the <c>_meta</c> sent on <c>session/new</c> for an interactive (false) or review
     /// (true) launch, fresh per launch so no launch can alter another's. Null sends none.</summary>
@@ -184,6 +190,7 @@ internal sealed record AcpVendorDescriptor {
             AcpUnattendedInteractionPolicy UnattendedInteractionPolicy = AcpUnattendedInteractionPolicy.Disabled,
             AcpBorrowedReviewContainment BorrowedReviewContainment = AcpBorrowedReviewContainment.None,
             bool                        SupportsReconnectResume = false,
+            bool                        SupportsRestartResume = false,
             Func<IReadOnlyList<Core.Acp.AcpMcpServerSpec>, LaunchIdentity, ImmutableArray<string>>?
                                         UnattendedTrustArgvBuilder = null,
             Func<bool, JsonObject>?     SessionNewMeta = null,
@@ -247,6 +254,7 @@ internal sealed record AcpVendorDescriptor {
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
         this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.SupportsReconnectResume = SupportsReconnectResume;
+        this.SupportsRestartResume   = SupportsRestartResume;
         this.SessionNewMeta = SessionNewMeta;
         this.ToolAdmitter   = ToolAdmitter;
         this.TurnUsageReader = TurnUsageReader;
@@ -290,7 +298,9 @@ internal static class AcpVendorDescriptors {
         // prompts normally. Note the same probe found Cursor's replay REWRITES toolCallIds and
         // drops the interrupted turn — both irrelevant to the suppress-the-replay resume, but they
         // are why per-envelope replay matching stays impossible for this vendor.
-        SupportsReconnectResume: true
+        SupportsReconnectResume: true,
+        // Ignores stdin EOF, so a restart always SIGKILLs it after the grace; session/load works across that.
+        SupportsRestartResume: true
     );
 
     /// <summary>GitHub Copilot CLI as an ACP hosted agent (<c>copilot --acp --stdio</c>).
@@ -332,7 +342,8 @@ internal static class AcpVendorDescriptors {
         // across a SIGKILLed owner, the barrier holds, toolCallIds are stable, and — unlike
         // Cursor — Copilot PERSISTS a mid-turn-killed prompt agent-side, which is why the
         // interrupted-turn disposition keys on local send facts, never on replay content.
-        SupportsReconnectResume: true
+        SupportsReconnectResume: true,
+        SupportsRestartResume: true
     );
 
     /// <summary>AWS Kiro CLI as an ACP hosted agent (<c>kiro-cli acp</c>). Hosted interactively and as
@@ -495,7 +506,8 @@ internal static class AcpVendorDescriptors {
         // Borrowed review is deliberately NOT declared: nothing here has established a containment
         // boundary for a reviewer running in the caller's live checkout. The default fails closed to an
         // owned worktree, which is the safe direction.
-        SupportsReconnectResume: false
+        SupportsReconnectResume: false,
+        SupportsRestartResume: true
     );
 
     /// <summary>
@@ -617,12 +629,13 @@ internal static class AcpVendorDescriptors {
         // so receiving one means the launch contract regressed (a dropped flag, a vendor change) and the
         // honest response is to reap the reviewer rather than auto-approve whatever it asked for (§3.4).
         UnattendedInteractionPolicy: AcpUnattendedInteractionPolicy.Fail,
-        // Measured INELIGIBLE 2026-08-04 (docs/probes/2026-08-04-acp-reconnect-c0/): Gemini
-        // advertises loadSession but a crash-killed session is never persisted — session/load
-        // refuses with "No previous sessions found for this project", so there is nothing to
-        // resume. Gemini also self-re-execs (a sandbox wrapper spawns an inner process with
-        // identical argv), so "the spawned pid exited" and "the agent died" are different events;
-        // any future enablement must re-probe BOTH persistence and process-tree semantics.
+        // Ineligible: Gemini answers session/load before most of its replay, and replay suppression
+        // ends once that response is in, so the rest would reach the transcript as live output.
+        // Gemini also self-re-execs, so "the spawned pid exited" and "the agent died" are different
+        // events.
+        // TODO: enable once a gemini-cli release fixes google-gemini/gemini-cli#29707 and the probe
+        // in docs/probes/2026-08-04-acp-reconnect-c0/ passes on it, with that release as a version
+        // floor.
         SupportsReconnectResume: false
     );
 }

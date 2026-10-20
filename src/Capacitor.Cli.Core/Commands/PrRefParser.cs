@@ -14,28 +14,16 @@ public static partial class PrRefParser {
         if (string.IsNullOrWhiteSpace(input)) return false;
         input = input.Trim();
 
-        var gh = GitHubUrlPattern().Match(input);
-        if (gh.Success) {
-            owner = gh.Groups[1].Value; repo = gh.Groups[2].Value;
-            prNumber = int.Parse(gh.Groups[3].Value, CultureInfo.InvariantCulture);
-            return true;
-        }
+        var match = GitHubUrlPattern().Match(input);
+        if (!match.Success) match = GitLabUrlPattern().Match(input);
+        if (!match.Success) match = ShorthandPattern().Match(input);
+        // A number too large for an int names no PR.
+        if (!match.Success || !int.TryParse(match.Groups[3].Value, NumberStyles.None, CultureInfo.InvariantCulture, out prNumber))
+            return false;
 
-        var gl = GitLabUrlPattern().Match(input);
-        if (gl.Success) {
-            owner = gl.Groups[1].Value; repo = gl.Groups[2].Value;
-            prNumber = int.Parse(gl.Groups[3].Value, CultureInfo.InvariantCulture);
-            return true;
-        }
-
-        var shortMatch = ShorthandPattern().Match(input);
-        if (shortMatch.Success) {
-            owner = shortMatch.Groups[1].Value; repo = shortMatch.Groups[2].Value;
-            prNumber = int.Parse(shortMatch.Groups[3].Value, CultureInfo.InvariantCulture);
-            return true;
-        }
-
-        return false;
+        owner = match.Groups[1].Value;
+        repo  = match.Groups[2].Value;
+        return true;
     }
 
     // GitHub-style PR URL on ANY host (github.com or GitHub Enterprise). owner/repo are

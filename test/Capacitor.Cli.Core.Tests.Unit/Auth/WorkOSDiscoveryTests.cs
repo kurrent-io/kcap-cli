@@ -495,4 +495,35 @@ public class WorkOSDiscoveryTests {
         await Assert.That(seen.Bearer).IsEqualTo("orgless-token");
         await Assert.That(seen.CanPickInBrowser).IsEqualTo(expectLoopback);
     }
+
+    /// <summary>
+    /// A browser sign-up's new workspace is left out until it is live, so the one workspace discovery
+    /// still finds may be another the account already belongs to: a confirmed pick shows it rather
+    /// than signing in to it unasked.
+    /// </summary>
+    [Test]
+    [Arguments(true, 1)]
+    [Arguments(false, 0)]
+    public async Task DiscoverAsync_asks_the_picker_about_a_single_workspace_only_when_told_to_confirm(bool confirm, int picks) {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant[] tenants = [
+            new() { Provider = "WorkOS", OrganizationId = "org_a", Slug = "acme", Origin = "https://acme.kcap.ai" }
+        ];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var picker = Substitute.For<ITenantPicker>();
+        picker.PickAsync(Arg.Any<DiscoveredTenant[]>(), Arg.Any<TenantPickContext>(), Arg.Any<CancellationToken>())
+              .Returns(Task.FromResult<DiscoveredTenant?>(tenants[0]));
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" }, proxy, picker, NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
+            time: TimeProvider.System,
+            confirmPick: confirm);
+
+        await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Ready>();
+        await Assert.That(picker.ReceivedCalls().Count()).IsEqualTo(picks);
+    }
 }

@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Capacitor.Cli.Core.LocalIpc;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
@@ -176,6 +177,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// "" when absent or when the name is the literal built-in "default" (hiding that segment
     /// so the rail footer does not read as a second "Default" next to connection state).
     public string TenantName { get; }
+
+    /// The local stack's rail row beside the daemon's; null unless the server is this machine's local installation.
+    public LocalStackViewModel? LocalStack { get; init; }
 
     /// The launch auto-open's staleness token — see NavigationGate. Read from the SHARED gate, not
     /// a per-window counter, so a window built after shutdown began sees the latch too.
@@ -440,16 +444,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DistinctUntilChanged()
                 .ObserveOn(RxSchedulers.MainThreadScheduler);
 
+            // The daemon's own sign-in explains a hub that will not connect, so the footer says
+            // Signed out instead of reconnecting forever. The app's Sign in repairs it only when the
+            // daemon runs on the app's own profile.
+            var daemonSignIn = status
+                .CombineLatest(snapshots.Select(s => (DaemonInfoDto?)s.Daemon).StartWith((DaemonInfoDto?)null),
+                    (st, daemon) => DaemonSignInFor(st, daemon, tenantName))
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+            var signedOut = signInExpired.CombineLatest(daemonSignIn, (app, daemon) => app || daemon.SignedOut)
+                .DistinctUntilChanged();
+
             _signInVisible = signInExpired
-                .Select(expired => expired && offersSignIn)
+                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn)
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, signInExpired, ConnectionDisplayFor)
+            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusBrush = status.CombineLatest(daemonConnection, signInExpired, StatusBrushFor)
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -774,6 +789,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             : profileName;
 
     internal const string SignedOutDisplay = "Signed out";
+
+    /// Whether the daemon reports its own sign-in as what keeps its hub from connecting, and whether
+    /// signing the app in repairs that: only with a resolved app profile, and the daemon on it or not
+    /// saying which.
+    internal static (bool SignedOut, bool OursToRepair) DaemonSignInFor(
+            AttachStatus status, DaemonInfoDto? daemon, string? appProfile) =>
+        status.State == AttachState.Connected && daemon is { Credential: not null } && daemon.Connection != "connected"
+            ? (true, appProfile is not null
+                     && (daemon.Profile is null || string.Equals(daemon.Profile, appProfile, StringComparison.Ordinal)))
+            : (false, false);
 
     // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub
     // will not restore a session. Otherwise local attach State is checked FIRST — the daemon's

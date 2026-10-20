@@ -120,13 +120,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
     public IAvaloniaReadOnlyList<QueuedChatMessage> QueuedMessages => _queuedMessages;
     public bool HasQueuedMessages => _queuedMessages.Count > 0;
+    /// Other people's prompts are counted apart, so the strip never reads as the viewer's own.
     public string QueueSummary {
         get {
+            var foreign     = _queuedMessages.Count(q => q.IsForeign);
             var unconfirmed = _queuedMessages.Count(q => q.IsUnconfirmed);
-            var queued = _queuedMessages.Count - unconfirmed;
-            return unconfirmed == 0 ? $"{MessageCount(queued)} queued"
-                : queued == 0 ? $"{MessageCount(unconfirmed)} unconfirmed"
-                : $"{MessageCount(queued)} queued · {unconfirmed} unconfirmed";
+            (int Count, string Word)[] segments =
+                [(_queuedMessages.Count - unconfirmed - foreign, "queued"), (unconfirmed, "unconfirmed"), (foreign, "from others")];
+
+            return string.Join(" · ", segments.Where(s => s.Count > 0)
+                .Select((s, i) => i == 0 ? $"{MessageCount(s.Count)} {s.Word}" : $"{s.Count} {s.Word}"));
         }
     }
 
@@ -198,6 +201,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     readonly ObservableAsPropertyHelper<bool> _hasPendingCards;
     public bool HasPendingCards => _hasPendingCards.Value;
+
+    bool _hasSeed;
+    /// Whether the current feed has delivered its first Reset. A remote send made before it has no
+    /// baseline, and its echo can land inside the history that Reset replays, where nothing acknowledges it.
+    public bool HasSeed {
+        get => _hasSeed;
+        private set {
+            if (_hasSeed == value) return;
+            this.RaiseAndSetIfChanged(ref _hasSeed, value);
+            RefreshQueuedSend();
+        }
+    }
 
     ChatTabPhase _phase;
     public ChatTabPhase Phase {
@@ -395,6 +410,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// hides them and leaves the hint — a greyed empty box is the wrong affordance.
     public bool ShowsComposer => _showsComposer.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _showsInterrupt;
+    public bool ShowsInterrupt => _showsInterrupt.Value;
+
     string _vendor = "";
     IReadOnlyList<HarnessOption> _options = HostedHarnessCatalog.Build(null);
 
@@ -482,7 +500,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// A send still uploading keeps CanAcceptText true, so the busy flag closes that window too.
     bool AgentCanTakeQueuedNow =>
         AgentIsIdle && !IsReadOnlyParticipant && !HasTerminalMenu && _input.CanAcceptText
-        && !_sendCommandExecuting && !_queuedSendBusy.Value;
+        && !_sendCommandExecuting && !_queuedSendBusy.Value && CanSendBeforeSeed;
+
+    /// A remote send needs the transcript's seed to be acknowledged against; a local one does not.
+    bool CanSendBeforeSeed => HasSeed || _origin != AgentOrigin.Remote;
 
     void RefreshQueuedSend() {
         var idle = AgentIsIdle;
@@ -671,6 +692,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
+        _showsInterrupt = Observable.CombineLatest(
+                _input.WhenAnyValue(i => i.CanInterrupt),
+                this.WhenAnyValue(x => x.IsReadOnlyParticipant),
+                this.WhenAnyValue(x => x.HasTerminalMenu),
+                this.WhenAnyValue(x => x.AgentStatus),
+                (can, readOnly, menu, status) => can && !readOnly && !menu
+                    && (status.Kind == AgentStatusKind.Working || status.IsRunningUnknownTurn))
+            .ToProperty(this, x => x.ShowsInterrupt,
+                initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasTerminalMenu
+                    && (AgentStatus.Kind == AgentStatusKind.Working || AgentStatus.IsRunningUnknownTurn))
+            .DisposeWith(_disposables);
+
         // The banner carries the read-only explanation for a flow participant, so the hint
         // goes blank there instead of offering a reply that can never be sent.
         _composerHint = Observable.CombineLatest(
@@ -728,7 +761,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             this.WhenAnyValue(x => x.IsReadOnlyParticipant),
             this.WhenAnyValue(x => x.HasTerminalMenu),
             _queuedSendBusy,
-            (text, can, readOnly, menu, busy) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text));
+            this.WhenAnyValue(x => x.HasSeed),
+            (text, can, readOnly, menu, busy, _) => can && !readOnly && !menu && !busy && !string.IsNullOrWhiteSpace(text)
+                && CanSendBeforeSeed);
         // The composer keeps whatever the user typed while the channel was deciding: only the
         // snapshot that was actually sent is cleared, and only once the channel commits it. The
         // edit count is what the text alone cannot say — an edit that lands back on the sent text
@@ -784,11 +819,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         });
         _disposables.Add(SendQueuedCommand);
 
-        var canInterrupt = Observable.CombineLatest(
-            _input.WhenAnyValue(i => i.CanInterrupt),
-            this.WhenAnyValue(x => x.IsReadOnlyParticipant),
-            (can, readOnly) => can && !readOnly);
-        InterruptCommand = ReactiveCommand.CreateFromTask(() => _input.InterruptAsync(_lifetimeToken), canInterrupt);
+        InterruptCommand = ReactiveCommand.CreateFromTask(
+            () => _input.InterruptAsync(_lifetimeToken), this.WhenAnyValue(x => x.ShowsInterrupt));
         _disposables.Add(InterruptCommand);
 
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
@@ -952,6 +984,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _feedKey = key;
         var previous = _lease;
         _lease = new FeedLease(open(key), Interlocked.Increment(ref _generation), SignalFeedRead);
+        HasSeed = false;
         previous?.Dispose();
         RebaseQueuedMessages(CurrentOffset);
         _failureNote = null;
@@ -1084,8 +1117,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
         }
         // The upload can finish after the menu is on screen. The text would be typed into
-        // that menu, so the draft and the chips stay where they are.
-        if (HasTerminalMenu) return null;
+        // that menu, so the draft and the chips stay where they are. Or after the pane moved to a
+        // feed not yet seeded; the draft waits for Send to open again.
+        if (HasTerminalMenu || !CanSendBeforeSeed) return null;
         var chipIds = files.Select(f => f.Id).ToList();
         var queued = new QueuedChatMessage(snapshot, ownsDraft ? edits : -1, _inputGeneration, CurrentOffset, chipIds) {
             SendOrder = ++_nextSendOrder,
@@ -1217,6 +1251,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
                 return;
             case FeedStatus.Reset:
+                HasSeed = true;
                 // Skip everything the new source replays: it may be history, not receipts. The feed
                 // names where that history ends — anything past it arrived after and can acknowledge.
                 RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);

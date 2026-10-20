@@ -7,7 +7,7 @@ namespace Capacitor.Cli.LocalEdition;
 /// <summary>The setup operation's journal vocabulary: its phases, the details it records, and the check that an
 /// entry is one this build wrote.</summary>
 static class LocalSetupJournal {
-    public const string Operation = "setup";
+    public const string Operation = LocalSetupState.Operation;
 
     public const string Pending    = "pending";
     public const string Unit       = "unit";

@@ -90,6 +90,144 @@ public class AgentSessionsTests {
         await Assert.That(Sessions.Liveness(SessionId.Parse("reused")!)).IsEqualTo(SessionLiveness.Exited);
     }
 
+    static readonly ClaimOrigin Here = new("claude", "https://kcap.example", "/t/x.jsonl", "/repo");
+
+    void DeadNoteWithOrigin(int pid, string session, string server) {
+        DeadNote(pid, session);
+        File.WriteAllText(Note(pid) + ".origin", $"lx:another-boot:1\nclaude\n{server}\n/t/x.jsonl\n/repo");
+    }
+
+    /// <summary>Where a claim recorded its session comes back once the process is gone, so its end can be
+    /// sent where the session lives.</summary>
+    [Test]
+    public async Task A_reaped_claim_returns_where_its_session_was_recorded() {
+        DeadNoteWithOrigin(Shell, "traced", "https://kcap.example");
+
+        var exited = Sessions.ReapExited("https://kcap.example/");
+
+        await Assert.That(exited).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("traced")!, Here) });
+        await Assert.That(File.Exists(Note(Shell) + ".origin")).IsFalse();
+        await Assert.That(File.Exists(Note(Shell))).IsFalse();
+    }
+
+    /// <summary>An end for a session recorded against another server is set aside per session, so a later
+    /// process reusing the pid cannot erase it, and a pass on that server takes it.</summary>
+    [Test]
+    public async Task An_end_for_another_server_waits_for_that_server_whatever_reuses_the_pid() {
+        DeadNoteWithOrigin(Shell, "away", "https://other.example");
+
+        await Assert.That(Sessions.ReapExited("https://kcap.example")).IsEmpty();
+        await Assert.That(File.Exists(Note(Shell))).IsFalse().Because("the pid is free for the next claim");
+        await Assert.That(Sessions.Liveness(SessionId.Parse("away")!)).IsEqualTo(SessionLiveness.Exited);
+
+        DeadNoteWithOrigin(Shell, "next", "https://kcap.example");
+        await Assert.That(Sessions.ReapExited("https://kcap.example").Select(e => e.Session.Value)).IsEquivalentTo(new[] { "next" });
+
+        var taken = Sessions.ReapExited("https://other.example/");
+        await Assert.That(taken).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("away")!, Here with { Server = "https://other.example" }) });
+        await Assert.That(Sessions.ReapExited("https://other.example")).IsEmpty().Because("taken once");
+    }
+
+    /// <summary>A session whose end was set aside, then resumed and gone again, is ended once.</summary>
+    [Test]
+    public async Task A_deferred_end_and_a_fresh_reap_of_the_same_session_end_it_once() {
+        DeadNoteWithOrigin(Shell, "twice", "https://other.example");
+        Sessions.ReapExited("https://kcap.example");
+        DeadNoteWithOrigin(Git, "twice", "https://other.example");
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value)).IsEquivalentTo(new[] { "twice" });
+    }
+
+    /// <summary>A claim writes its origin under its own start token; a repeat claim keeps the first one.</summary>
+    [Test]
+    public async Task A_repeat_claim_keeps_the_first_origin() {
+        Sessions.Claim(Agent, Session, Here);
+        Sessions.Claim(Agent, Session, new ClaimOrigin("claude", null, null, null));
+
+        await Assert.That(AgentOrigin()).IsEqualTo(Here);
+    }
+
+    ClaimOrigin? AgentOrigin() => Sessions.ReadOrigin(Agent, ProcessStartToken.ForPid(Agent)!);
+
+    /// <summary>A claim made before the server was known leaves its end nowhere to go, so a later claim
+    /// that knows the server fills it in.</summary>
+    /// <remarks>What the first claim recorded and the later one leaves out is kept.</remarks>
+    [Test]
+    public async Task A_repeat_claim_fills_in_a_server_the_first_lacked() {
+        Sessions.Claim(Agent, Session, Here with { Server = null });
+        Sessions.Claim(Agent, Session, new ClaimOrigin(null, "https://kcap.example", null, null));
+
+        await Assert.That(AgentOrigin()).IsEqualTo(Here);
+    }
+
+    /// <summary>A claim that knows the server but not yet the transcript or folder leaves those for a later
+    /// claim to fill, as a watcher armed after the first hook does.</summary>
+    [Test]
+    public async Task A_repeat_claim_fills_in_a_path_the_first_lacked() {
+        Sessions.Claim(Agent, Session, Here with { TranscriptPath = null, Cwd = null });
+        Sessions.Claim(Agent, Session, Here with { Server = "https://later.example" });
+
+        await Assert.That(AgentOrigin()).IsEqualTo(Here);
+    }
+
+    /// <summary>A path may hold a newline on Unix; the origin still reads back whole.</summary>
+    [Test]
+    public async Task An_origin_with_a_newline_in_a_path_reads_back_whole() {
+        var origin = Here with { Cwd = "/re\npo%41" };
+        Sessions.Claim(Agent, Session, origin);
+
+        await Assert.That(AgentOrigin()).IsEqualTo(origin);
+    }
+
+    /// <summary>A session id may hold a dot, which no unfinished write may be mistaken for.</summary>
+    [Test]
+    public async Task A_deferred_end_for_a_dotted_session_is_taken() {
+        DeadNoteWithOrigin(Shell, "a.b", "https://other.example");
+        Sessions.ReapExited("https://kcap.example");
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value))
+            .IsEquivalentTo(new[] { "a.b" });
+    }
+
+    /// <summary>A deferred end is filed under a case-folded name, but the server is told the id as claimed.</summary>
+    [Test]
+    public async Task A_deferred_end_keeps_the_sessions_case() {
+        DeadNoteWithOrigin(Shell, "AwayMiXed", "https://other.example");
+        Sessions.ReapExited("https://kcap.example");
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value))
+            .IsEquivalentTo(new[] { "AwayMiXed" });
+    }
+
+    /// <summary>Scheme and host fold case and a trailing slash is ignored, but a path names a tenant as written.</summary>
+    [Test]
+    [Arguments("https://KCAP.example/t/", "https://kcap.example/t", true)]
+    [Arguments("https://kcap.example/Tenant", "https://kcap.example/tenant", false)]
+    [Arguments("https://kcap.example", null, false)]
+    public async Task Servers_match_as_server_identities(string a, string? b, bool same) =>
+        await Assert.That(AgentSessions.SameServer(a, b)).IsEqualTo(same);
+
+    /// <summary>A resumed session runs under a new process before the old claim is reaped; ending it then
+    /// would close a running session.</summary>
+    [Test]
+    public async Task A_session_another_live_process_claims_is_not_returned() {
+        Sessions.Claim(Agent, SessionId.Parse("resumed")!, Here);
+        DeadNoteWithOrigin(Shell, "resumed", "https://kcap.example");
+
+        await Assert.That(Sessions.ReapExited("https://kcap.example")).IsEmpty();
+    }
+
+    /// <summary>A reused pid's new claim writes its own origin; the reaped claim must not take it.</summary>
+    [Test]
+    public async Task An_origin_from_another_claim_of_the_pid_is_not_used_or_deleted() {
+        DeadNote(Shell, "old");
+        var origin = Note(Shell) + ".origin";
+        File.WriteAllText(origin, "lx:new-boot:2\nclaude\nhttps://new.example\n\n");
+
+        await Assert.That(Sessions.ReapExited("https://new.example")).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("old")!, null) });
+        await Assert.That(File.Exists(origin)).IsTrue();
+    }
+
     void UncomparableNote(string session) {
         Directory.CreateDirectory(Path.GetDirectoryName(Note(Agent))!);
         File.WriteAllText(Note(Agent), $"{session}\nlegacy-token-without-scheme");

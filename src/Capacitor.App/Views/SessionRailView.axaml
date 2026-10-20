@@ -74,7 +74,10 @@
             <Setter Property="Text" Value="·" />
             <Setter Property="RenderTransform" Value="scale(1.5)" />
         </Style>
-        <Style Selector="WrapPanel#RailDaemonRow > TextBlock">
+        <Style Selector="TextBlock.footerMeta.attention">
+            <Setter Property="Foreground" Value="{StaticResource KcapWarningBrush}" />
+        </Style>
+        <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailLocalStackRow > TextBlock">
             <Setter Property="Margin" Value="0,0,5,0" />
         </Style>
         <!-- Centred on the 11px line, the glyph lands a pixel under the word. The same
@@ -190,6 +193,22 @@
                             </ToolTip.Tip>
                         </TextBlock>
                     </StackPanel>
+                    <Panel IsVisible="{Binding LocalStack, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <WrapPanel x:Name="RailLocalStackRow" DataContext="{Binding LocalStack}" x:DataType="vm:LocalStackViewModel">
+                            <TextBlock Text="Capacitor local" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:LocalStackViewModel.NameTip}" />
+                            <TextBlock Classes="footerDot"
+                                       IsVisible="{Binding Version, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock x:Name="RailLocalStackVersionText" Text="{Binding Version}" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:LocalStackViewModel.VersionTip}"
+                                       IsVisible="{Binding Version, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock Classes="footerDot"
+                                       IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            <TextBlock x:Name="RailLocalStackStateText" Text="{Binding StateText}" Classes="footerMeta"
+                                       Classes.attention="{Binding Attention}"
+                                       IsVisible="{Binding StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        </WrapPanel>
+                    </Panel>
                     <!-- ClipToBounds plus WrapPanel: a horizontal StackPanel sizes children
                          unbounded, so a long daemon line paints into the help chip. -->
                     <DockPanel ClipToBounds="True">

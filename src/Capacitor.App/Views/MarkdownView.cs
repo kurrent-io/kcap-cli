@@ -23,6 +23,11 @@ public sealed class MarkdownView : ContentControl {
     public static readonly StyledProperty<MarkdownFlavor> FlavorProperty =
         AvaloniaProperty.Register<MarkdownView, MarkdownFlavor>(nameof(Flavor));
 
+    /// The repository a GitHub-flavoured body belongs to, as its `https://host/owner/repo` URL: its
+    /// references in text link into it. Unset, they stay text.
+    public static readonly StyledProperty<string?> ReferenceBaseProperty =
+        AvaloniaProperty.Register<MarkdownView, string?>(nameof(ReferenceBase));
+
     /// Takes a code block's text. Left unset on a surface with nowhere to run it, which is what
     /// withdraws the offer from the block.
     public static readonly StyledProperty<ICommand?> RunCodeProperty =
@@ -36,6 +41,8 @@ public sealed class MarkdownView : ContentControl {
     readonly DetailsState _details = new();
     readonly DetailsExtension _detailsExtension;
     readonly CodeBlockActions _codeActions;
+    readonly ReferenceLinks _referenceLinks;
+    readonly MarkdownLinkKeys _linkKeys;
 
     static MarkdownView() {
         TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
@@ -44,11 +51,14 @@ public sealed class MarkdownView : ContentControl {
         });
         RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._codeActions.ApplyRunCode());
         FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
+        ReferenceBaseProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
     }
 
     public MarkdownView() {
         _detailsExtension = new(_details, OnDetailsToggled);
         _codeActions = new(this);
+        _referenceLinks = new(this);
+        _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -87,6 +97,7 @@ public sealed class MarkdownView : ContentControl {
     /// catch; that text shows as plain source, and the viewer is left holding nothing so a pipeline
     /// change cannot re-throw.
     void Render() {
+        _linkKeys.Clear();
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
             _viewer.Markdown = Text;
@@ -96,6 +107,8 @@ public sealed class MarkdownView : ContentControl {
             Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
     }
+
+    internal string? KeyboardLinkUrl => _linkKeys.CurrentUrl;
 
     public string? Text {
         get => GetValue(TextProperty);
@@ -112,16 +125,23 @@ public sealed class MarkdownView : ContentControl {
         set => SetValue(FlavorProperty, value);
     }
 
+    public string? ReferenceBase {
+        get => GetValue(ReferenceBaseProperty);
+        set => SetValue(ReferenceBaseProperty, value);
+    }
+
     public ICommand? RunCode {
         get => GetValue(RunCodeProperty);
         set => SetValue(RunCodeProperty, value);
     }
 
     void ApplyFlavor() {
+        _linkKeys.Clear();
         _details.Clear();
         _viewer.Extensions.Clear();
         if (Flavor == MarkdownFlavor.GitHub) {
             _viewer.Extensions.Add(KcapMarkdownExtension.GitHub);
+            _viewer.Extensions.Add(_referenceLinks);
             _viewer.Extensions.Add(_detailsExtension);
         } else {
             _viewer.Extensions.Add(KcapMarkdownExtension.Chat);

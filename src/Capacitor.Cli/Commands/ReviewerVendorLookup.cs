@@ -58,9 +58,9 @@ public static class ReviewerVendorLookup {
     /// (transport/auth/API) — distinct from an empty list, which is "connected zero daemons".</param>
     /// <param name="repoRoot">The session's local repo root. Matched both as given and collapsed to
     /// its main repository, because a daemon's <c>RepoPaths</c> carries either shape: what
-    /// <see cref="Core.Config.RepoPathStore"/> persists is collapsed, while a configured
-    /// <c>AllowedRepoPaths</c> entry is advertised as written. Collapsing one side alone loses a
-    /// session in a linked worktree, or an operator who allowlisted that worktree by hand.</param>
+    /// <see cref="Core.Config.RepoPathStore"/> persists is collapsed, while an allowlist entry, and a
+    /// repository found under a wildcard entry, is advertised as it is. Collapsing one side alone loses
+    /// a session in a linked worktree, or an operator who allowlisted that worktree by hand.</param>
     /// <param name="repoIdentity">A non-sensitive, stable id for the repo (e.g. owner/repo), surfaced
     /// as <c>repo.identity</c>. Never the local path.</param>
     /// <param name="schemaSkew">Set when the server response could not be parsed at all (client too

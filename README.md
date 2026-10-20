@@ -68,7 +68,7 @@ Windows (PowerShell):
 irm https://www.kurrent.io/install.ps1 | iex
 ```
 
-The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
+The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). On macOS and Windows the [desktop app](#desktop-app) is the easier way in; `kcap setup` is for the terminal, and for scripts — see [Unattended setup](#unattended-setup) for both editions' recipes. Setup asks whether you want Capacitor locally on this Mac or for your team in the cloud (sign-up opens in your browser), signs you in, finds your workspace, offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
 
 ### 2. Start a new agent session
 
@@ -85,13 +85,13 @@ kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt
 - **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
 - **npm:** `npm install -g @kurrent/kcap`, then `kcap setup`. This needs Node.js; see [npm installs and upgrades](#npm-installs-and-upgrades) for npm 11's install-script gate.
 - **Desktop app:** on macOS or Windows the [desktop app](#desktop-app) bundles `kcap` and the daemon.
-- **Run the server on this machine:** `kcap setup --local` installs a Capacitor server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
+- **Run the server on this machine:** `kcap setup --local` installs a Capacitor server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. With [Ollama](https://ollama.com) running, it also sets up search by meaning. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
 
 ## Desktop app
 
 ### Desktop app on macOS
 
-Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/mac (Apple silicon, macOS 15 or later), open it and drag **Kurrent Capacitor** to **Applications**. The app bundles its own `kcap` CLI and daemon: you do not need the npm install as well, and the first run offers to link `kcap` onto your terminal PATH. Signing in installs the daemon as a background service and starts it without asking, named after this machine (with `-1`, `-2`, … when another machine of yours already uses that name), and removes the service of the name it replaced — it asks only before replacing a daemon service that belongs to another workspace. Whenever the app finds the daemon not running, it starts the service again. Sessions running on your other machines' daemons open in the app too — their chat, their prompts, and for a terminal harness a read-only view of the terminal — over the server, without a local daemon.
+Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/mac (Apple silicon, macOS 15 or later), open it and drag **Kurrent Capacitor** to **Applications**. The app bundles its own `kcap` CLI and daemon: you do not need the npm install as well, and the first run offers to link `kcap` onto your terminal PATH. On the first run, the cloud edition opens kcap.ai's sign-up in your browser, where the invite code, organization, workspace address and trial are handled; once the page says your workspace is ready, **Continue** in the app finds it and setup carries on. Signing in installs the daemon as a background service and starts it without asking, named after this machine (with `-1`, `-2`, … when another machine of yours already uses that name), and removes the service of the name it replaced — it asks only before replacing a daemon service that belongs to another workspace. Whenever the app finds the daemon not running, it starts the service again. Sessions running on your other machines' daemons open in the app too — their chat, their prompts, and for a terminal harness a read-only view of the terminal — over the server, without a local daemon.
 
 When a Claude Code session spawns subagents, the chat shows a strip above the composer while any of them run ("2 subagents running"), and the work-context pane lists them under **SUBAGENTS** — the agent type, a *background* tag for one launched in the background, and its state: running with its elapsed time, done, failed or stopped. The section starts collapsed, its header showing how many subagents are running, completed, failed and stopped and its list holding the ones still running; click the header to open the full list. Both are read from the transcript; a session on another machine's daemon shows the strip alone, since the work-context pane is not part of the remote session view. Rows are not links.
 
@@ -207,12 +207,15 @@ At a glance — each links to its section below:
 ### Initial setup
 
 ```bash
-kcap setup                                   # interactive wizard (discovers your tenant)
+kcap setup                                   # interactive wizard (local, cloud, or a workspace you have)
 kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.ai
 kcap setup --server-url <url> --no-prompt    # CI / scripted
+kcap setup --local --single-user --yes --no-prompt   # local edition, unattended
+kcap setup --server-url <url> --no-prompt --json     # …with JSON progress for a wrapper
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 kcap setup --local                           # run a Capacitor server on this machine
+kcap setup --local --embedding-model <model> # …embedding with this Ollama model
 kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
@@ -235,7 +238,7 @@ SSO discovery signs in through a `127.0.0.1` browser callback, which a browser o
 
 The setup wizard walks you through the steps below. Re-run it any time to update the configuration.
 
-1. **Server** — with no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and discovery finds no Capacitor tenant, `kcap setup` asks how to continue: create one for you (name, workspace URL and plan, with the 30-day Team trial offered first; provisioned and waited for until it's live), point at a workspace you already belong to (enter its slug or URL — the same as `kcap setup <tenant>`), or cancel. That middle choice matters because SSO discovery only lists workspaces that use org SSO: a workspace whose members sign in with the GitHub App shows up here as "no tenant", so pick **I already have a workspace**, or re-run with `--github`.
+1. **Server** — a bare `kcap setup` in a terminal first asks the desktop app's question, how you want to run Capacitor: **For you, locally** runs the [local edition](#local-edition) (offered on macOS only); **For your team, cloud** opens kcap-web's sign-up in your browser, where you create the workspace, and once you press Enter carries on to discovery, which finds it; **Already have a workspace?** goes straight to discovery. With no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and discovery finds no Capacitor tenant, `kcap setup` asks how to continue: create one for you (name, workspace URL and plan, with the 30-day Team trial offered first; provisioned and waited for until it's live), point at a workspace you already belong to (enter its slug or URL — the same as `kcap setup <tenant>`), or cancel. That middle choice matters because SSO discovery only lists workspaces that use org SSO: a workspace whose members sign in with the GitHub App shows up here as "no tenant", so pick **I already have a workspace**, or re-run with `--github`.
 2. **Login** — authenticates via your tenant's configured sign-in method; discovery completes the sign-in inline
 
    **Finishing in the browser.** Once you are signed in, if that server offers browser setup, kcap creates a setup link, opens your browser on it, and waits while you work through the screens there:
@@ -293,23 +296,37 @@ everyone:
 
 The first version is for a machine with one user: on a shared machine, other OS users can open the web UI and act as its admin. Setup therefore asks you to confirm that (`--single-user`) and to confirm the install itself (`--yes`); `--no-prompt` and `--json` cannot ask, so they require both for an install. Re-running `kcap setup --local` reuses the existing installation, which needs no confirmation beyond `--single-user`.
 
+**Search by meaning.** When [Ollama](https://ollama.com) is running on `http://localhost:11434`, setup offers it as the server's embedding provider, suggesting `mxbai-embed-large` (1024 dimensions, about 670 MB). It pulls the model if Ollama does not have it, checks that it embeds text, and writes the choice to `data/embedding.json` under the installation, which the server's service passes to it as `Embedding__Provider=ollama`, `Embedding__Ollama__Model` and `Embedding__Ollama__BaseUrl`. A new installation starts with it; on an existing one a changed model restarts the server. The model fixes the width of the stored vectors, so changing it later means embedding everything again, which the server does in the background.
+
+- `--embedding-model <model>` picks the model without asking. `--no-embeddings` stops setup configuring Ollama, removing a model an earlier setup configured, and is remembered: a later setup without either flag, `--json` included, leaves search by keyword. An embedding provider set in the web UI's settings still applies.
+- `--no-prompt` asks nothing: with Ollama running and nothing recorded yet, it needs one of those two flags. A recorded model or decline is kept.
+- Without Ollama, setup carries on and search works by keyword; re-run `kcap setup --local` once Ollama runs. A failed pull or a model that cannot embed is reported the same way and never fails the install.
+
 - A machine that already has a profile for another server is refused for now.
+- Every kcap that talks to the local server must be newer than 1.3.0, which does not keep to its rules. Setup asks the `kcap` on `PATH` and the desktop app's bundled one (in `/Applications` or `~/Applications`) for their versions, and stops if either is 1.3.0 or older, or does not report one: update it, or remove the one on `PATH`. The local server refuses an older kcap too, so its hooks and watcher record nothing there.
 - Builds of kcap for musl Linux are not supported.
 - `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
 
-`--json` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. It accepts only `--single-user`, `--yes` and `--no-update-check`:
+`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model` and `--no-embeddings`, and uses a running Ollama with the configured model, or `mxbai-embed-large`, unless a flag says otherwise:
 
 ```json
 {"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
 {"v":1,"event":"port_chosen","port":9473}
 {"v":1,"event":"downloading","url":"https://…","bytes":84213760}
 {"v":1,"event":"verified","sha256":"…"}
+{"v":1,"event":"embeddings_ollama_found","version":"0.12.3","url":"http://localhost:11434"}
+{"v":1,"event":"embeddings_model_pulling","model":"mxbai-embed-large"}
+{"v":1,"event":"embeddings_model_progress","received":335544320,"bytes":669603840,"model":"mxbai-embed-large"}
+{"v":1,"event":"embeddings_model_ready","model":"mxbai-embed-large","dimensions":1024}
+{"v":1,"event":"embeddings_configured","provider":"ollama","model":"mxbai-embed-large"}
 {"v":1,"event":"starting","unit":"…"}
 {"v":1,"event":"ready","server_url":"http://localhost:9473"}
 {"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"…","port":9473,"version":"0.13.0"}
 ```
 
-A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed`, or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed` (2 when the code is `answer_required` or `invalid_arguments`: nothing was attempted), or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+
+The `embeddings_*` events come after `unpacked` for an install and after `preflight_passed` for a reuse, before `starting`. `embeddings_model_pulling` and `embeddings_model_progress` (one per whole percent) appear only when Ollama lacks the model, and `embeddings_configured` carries `replaced_model` when it replaced a different one. When the step does not end in `embeddings_configured`, it ends in `{"v":1,"event":"embeddings_skipped","code":"…","message":"…"}`, which never fails the install; `code` is `declined` (`--no-embeddings`, now or in an earlier setup), `ollama_not_found`, `pull_failed`, `model_unusable` (the model cannot embed text) or `write_failed`. Unless it is `declined`, a model configured earlier stays configured.
 
 For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
 
@@ -326,15 +343,80 @@ kcap local uninstall --purge    # also delete its data and retire its URL
 
 #### Unattended setup
 
+`kcap setup --no-prompt` is the path for a provisioning script, an agent sandbox or a fleet of developer machines; everyone else is better served by the [desktop app](#desktop-app). It never asks a question: every prompt has a flag, a question with a safe default takes it, and one without (the local edition's consents) is refused with exit code 2 before anything changes.
+
+The local edition, on a Mac:
+
 ```bash
+kcap setup --local --single-user --yes --no-embeddings --no-prompt
+```
+
+The cloud edition, against a workspace that exists, with a [machine credential](#machine-credentials-headless-recording) in the environment:
+
+```bash
+export KCAP_CLIENT_ID=client_01ABC… KCAP_CLIENT_SECRET=…
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-`--no-prompt` requires a workspace (`<tenant>` or `--server-url`), unless you are creating the workspace as part of the run — `--org "<name>" --slug <slug>` supply the two answers the creation prompts would have collected, so those replace it:
+`--no-prompt` requires a workspace (`<tenant>` or `--server-url`), `--local`, or `--org "<name>" --slug <slug>` to create the workspace as part of the run — those two supply the answers the creation prompts would have collected:
 
 ```bash
 kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public --no-prompt
 ```
+
+**Signing in with no one at the machine.** Against a server that needs a sign-in, `--no-prompt` tries, in order:
+
+1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If the server refuses it, or does not confirm it (no response, or any status but 2xx), the run fails (exit 1) rather than falling back to a person. A 404 is the exception: a server without the check endpoint cannot be asked, so setup carries on. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
+2. A token already stored for that server, from an earlier `kcap login` on this machine (`kcap login --device` signs in from a browser elsewhere).
+3. Otherwise the sign-in as today: a device code (or the browser, on a machine that has one) that someone has to approve.
+
+**Every question and its flag.** Under `--no-prompt` each takes the default shown.
+
+| Question | Flag | `--no-prompt` |
+|---|---|---|
+| How do you want to run Capacitor? | `<tenant>`, `--server-url`, `--local`, `--org`/`--slug` | required |
+| Re-run setup on a configured machine? | — | yes |
+| Workspace to create (name, slug, plan, invite) | `--org`, `--slug`, `--tier`, `--invite-code` | — |
+| This machine has one user (local) | `--single-user` | required |
+| Install Capacitor local (local) | `--yes` | required, except to reuse an installation |
+| Ollama for search by meaning (local) | `--embedding-model <model>`, `--no-embeddings` | required while Ollama runs and nothing is recorded |
+| Default session visibility | `--default-visibility` | `org_public`; `private` with `--local` |
+| Install kcap for the detected agents? | `--skip-harnesses`, `--skip-<agent>-hooks` and friends | yes |
+| Let Codex's sandbox reach the server? | `--skip-codex-network-access` | yes |
+| Record another Claude/Codex config directory? | — (`kcap accounts add` afterwards) | no; the command is printed |
+| Keep `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in headless calls? | `--use-provider-api-key` | the profile's setting |
+| Daemon name | `--daemon-name` | the suggestion; a held `--daemon-name` fails |
+| Import past sessions? | `--skip-import` | yes |
+| Open an agent to follow the import? | — | not offered |
+
+**Exit codes.** `kcap setup` exits:
+
+| Code | Meaning |
+|---|---|
+| 0 | Done. |
+| 1 | Failed: setup did not finish. What it changed before stopping stays, and re-running it carries on. |
+| 2 | Refused: nothing was attempted — an argument was wrong, or a run that cannot ask was missing an answer. |
+| 130 | Interrupted (Ctrl+C or SIGTERM). |
+
+**Progress as JSON.** `--json` with `--no-prompt` writes one JSON object per line to stdout for the whole run, for a wrapper to render, and moves the usual narration to stderr. Each step opens with `step_started` and closes with `step_completed`, and the run ends with `done` or `failed`:
+
+```json
+{"v":1,"event":"step_started","step":"server"}
+{"v":1,"event":"step_completed","step":"server","server_url":"https://acme.kcap.ai","provider":"WorkOS"}
+{"v":1,"event":"step_started","step":"sign_in"}
+{"v":1,"event":"step_completed","step":"sign_in","provider":"WorkOS","credential":"machine"}
+{"v":1,"event":"step_started","step":"visibility"}
+{"v":1,"event":"step_completed","step":"visibility","visibility":"org_public"}
+{"v":1,"event":"step_started","step":"harnesses"}
+{"v":1,"event":"step_completed","step":"harnesses","harnesses":["claude","codex"]}
+{"v":1,"event":"step_started","step":"daemon"}
+{"v":1,"event":"step_completed","step":"daemon","name":"laptop","outcome":"skipped"}
+{"v":1,"event":"step_started","step":"import"}
+{"v":1,"event":"step_completed","step":"import","outcome":"ran"}
+{"v":1,"event":"done","server_url":"https://acme.kcap.ai"}
+```
+
+The steps are `server`, `sign_in`, `visibility`, `harnesses`, `daemon` and `import`. `credential` is `machine`, `stored`, `sign_in` or `none`; the daemon's `outcome` is `enabled`, `enabled_unverified`, `already_enabled`, `refused` or `failed` for its service, or `skipped` when none was set up; the import's is `ran` or `skipped`. With `--local`, the [install's own events](#local-edition) come inside the `server` step. A `failed` line names the step it stopped in and carries a `code`: the local install's codes, or `answer_required`, `invalid_arguments`, `server_unreachable`, `workspace_unavailable`, `sign_in_failed`, `machine_credential_rejected`, `daemon_name_held`, `cancelled`, or `setup_failed` for anything else, with the last error setup printed as its `message`. A refusal found before any step starts is a `failed` line alone; the local edition's consents are checked inside the `server` step, so their `answer_required` line follows its `step_started`.
 
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, `--skip-opencode-hooks`, `--skip-antigravity-hooks`, `--skip-mistral-vibe-hooks`, `--skip-grok-hooks`, and/or `--skip-muse-hooks` (with `--skip-muse-mcp` to leave Muse's MCP block alone). When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
 
@@ -400,7 +482,7 @@ kcap local upgrade         # move it forward to this kcap's version
 kcap local uninstall       # remove it, keeping its data; --purge deletes it (see Removing the local edition)
 ```
 
-`kcap local status` reports the installation's version, port and root, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup or upgrade that was interrupted. It also says when the stack is older than this `kcap`, and names `kcap local upgrade`, or newer than it. It changes nothing, and exits 0 only when the server is running and ready.
+`kcap local status` reports the installation's version, port and root, whether search is configured to work by meaning through Ollama (and with which model) or by keyword only, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup or upgrade that was interrupted. It also says when the stack is older than this `kcap`, and names `kcap local upgrade`, or newer than it. It changes nothing, and exits 0 only when the server is running and ready.
 
 `start`, `stop`, `restart` and `upgrade` wait for any other `kcap` that is changing the installation, and first finish or undo an interrupted setup or upgrade. A stop persists: the server does not come back at the next login until `kcap local start`. The port is part of the installation's identity, so a server whose port another process holds cannot move to another one; stop that process instead. The logs are under `~/.config/kcap/local/logs`.
 
@@ -1127,7 +1209,7 @@ kcap daemon stop --yes              # stop all running daemons unattended (other
 kcap daemon restart --name laptop              # restart now, stopping its agents and resuming them on the new daemon; refuses while an eval, a launch or a flow round is in progress
 kcap daemon restart --name laptop --when-idle  # queue the restart until the daemon hosts no agents at all and no eval or launch is in progress
 kcap daemon restart --name laptop --force      # restart without waiting for a flow round (a participant mid-round is parked or ended); an eval or a launch still holds it
-kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory
+kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory (on macOS/Linux: group-writable directories, and directories owned by an account other than you or root)
 kcap daemon doctor --clean          # also remove a stale entry's pid/marker files, dropping it from the list (held entries are never touched; the inert lock file is left in place)
 ```
 
@@ -1155,7 +1237,7 @@ Daemon 'laptop': running (PID 12345, starting — not yet serving)
 `kcap daemon start -d` runs only until the process dies — a crash, or an OS memory-pressure kill (macOS **jetsam** / Linux **OOM killer**) that sends an uncatchable `SIGKILL`. To have the daemon auto-restart and start at login, install it as a **per-user** OS service:
 
 ```bash
-kcap daemon service install                # launchd (macOS) / systemd --user (Linux) / Scheduled Task (Windows)
+kcap daemon service install                # launchd (macOS) / systemd --user (Linux) / Scheduled Task (Windows); on macOS/Linux, refuses a unit path through a world-writable directory or one owned by an account other than you or root
 kcap daemon service install --name laptop  # a service per daemon name
 kcap daemon service install --verify       # install, then verify version/readiness/ownership before exiting 0
 kcap daemon service install --replace --verify  # take over a foreign/loaded unit, then verify
@@ -1228,7 +1310,7 @@ That message names the wrong cause — the same text appears for a missing proje
 
 The middle column is secret-*capable* — a credential path says where your credential lives, and a base URL can carry a token in userinfo or a query string. On macOS and Linux that is bounded by a guarantee kcap enforces: unit files are written `0600`, the mode is re-checked on the open handle, and the unit directory is created `0700`. A unit directory that already grants group or world write has those bits removed; `install` refuses only when they cannot be removed, which means the directory belongs to another account.
 
-That guarantee covers the unit and the directory holding it. It does **not** extend to the directories above them, which kcap does not own: write permission on a directory is permission to rename what is inside it, so an account that can write `~/.config` can replace the unit directory whole, whatever mode the unit carries. `install` refuses when something on that path is *world*-writable — no umask produces that and it is never deliberate — but not when it is merely group-writable, because umask 002 against a user-private group produces exactly that for a group of one, and it is the default on Debian and Ubuntu. `kcap daemon doctor` lists the group-writable directories on the path so you can judge whether that group is shared. Both walk the path with symlinks resolved, and both read **mode bits only** — a directory owned by another unprivileged account can be `0755` and still let its owner rename what it holds, so read a clean result as "no mode bit grants it", not as "no other account can". On Windows the wrapper inherits your user profile's ACL, which kcap neither sets nor verifies, so those three are excluded there — the same reason `GH_TOKEN` is never carried. If you need Vertex-with-ADC on a Windows daemon, set it in the service's own environment yourself.
+That guarantee covers the unit and the directory holding it. It does **not** extend to the directories above them, which kcap does not own: write permission on a directory is permission to rename what is inside it, so an account that can write `~/.config` can replace the unit directory whole, whatever mode the unit carries. `install` refuses when something on that path is *world*-writable — no umask produces that and it is never deliberate — but not when it is merely group-writable, because umask 002 against a user-private group produces exactly that for a group of one, and it is the default on Debian and Ubuntu. `kcap daemon doctor` lists the group-writable directories on the path so you can judge whether that group is shared. Both also refuse or report a directory on that path owned by another account other than root, since its owner can rename what it holds whatever its mode. Both walk the path with symlinks resolved. On Windows the wrapper inherits your user profile's ACL, which kcap neither sets nor verifies, so those three are excluded there — the same reason `GH_TOKEN` is never carried. If you need Vertex-with-ADC on a Windows daemon, set it in the service's own environment yourself.
 
 ⚠️ **Capture happens at install time.** Exporting the project *after* `kcap daemon service install` leaves a unit without it. Set it first, or re-run `install` afterwards — and restart the daemon.
 
@@ -2271,7 +2353,7 @@ kcap agent stop --all -y   # stop the listed non-review agents, no prompt
 
 Agent ids are long, so `attach`, `stop` and `resume` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
 
-**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one (refused, with the reason, while its previous process could not be proven gone or a newer daemon wrote its entry), `kcap agent stop <id>` discards it, and `stop --all` leaves them out; one left alone for 30 days is discarded at the next daemon start. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. The desktop app does the same: its rows show **Resuming** and **Interrupted** with the reason, and an open terminal tab re-attaches once the agent is back or says why it was not. A starting daemon resumes at most `KCAP_RESUME_CONCURRENCY` agents at once (default 2), leaves one last alive more than `KCAP_RESUME_MAX_AGE_SECONDS` ago (default 86400; 0 removes the bound) `interrupted (too_old)`, and counts a resume as failed when the agent does not stay up for `KCAP_RESUME_READINESS_SECONDS` (default 10). `kcap config set daemon.auto_resume false` turns the resume off.
+**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. Claude, Codex, Pi, Muse, Antigravity, Cursor, Copilot and OpenCode agents resume their vendor session; Gemini, Grok and Kiro agents come back through kcap continue. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one (refused, with the reason, while its previous process could not be proven gone or a newer daemon wrote its entry), `kcap agent stop <id>` discards it, and `stop --all` leaves them out; one left alone for 30 days is discarded at the next daemon start. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. The desktop app does the same: its rows show **Resuming** and **Interrupted** with the reason, and an open terminal tab re-attaches once the agent is back or says why it was not. A starting daemon resumes at most `KCAP_RESUME_CONCURRENCY` agents at once (default 2), leaves one last alive more than `KCAP_RESUME_MAX_AGE_SECONDS` ago (default 86400; 0 removes the bound) `interrupted (too_old)`, and counts a resume as failed when the agent does not stay up for `KCAP_RESUME_READINESS_SECONDS` (default 10). `kcap config set daemon.auto_resume false` turns the resume off.
 
 **Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two:
 

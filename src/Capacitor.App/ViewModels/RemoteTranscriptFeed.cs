@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Remote.Models;
@@ -20,7 +19,8 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
     readonly IServerLane _lane;
     readonly TimeProvider _time;
     readonly Action<string> _log;
-    readonly ConcurrentDictionary<string, byte> _logged = new(StringComparer.Ordinal);
+    /// Under <see cref="_lock"/>, so a superseded attempt cannot clear what the current one logged.
+    readonly HashSet<string> _logged = new(StringComparer.Ordinal);
     readonly Lock _lock = new();
     readonly List<ProjectedLine> _pending = new();
     readonly IDisposable _access;
@@ -137,7 +137,7 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
                     : ex.Message);
                 return;
             } catch (Exception ex) {
-                LogOnce($"remote transcript: {ex.Message}");
+                LogOnce(attempt, $"remote transcript: {ex.Message}");
             }
             // The tail ended without a cancel: the connection dropped, or a newer subscribe on the
             // same stream replaced it. A superseded attempt stops; the current one waits and resumes.
@@ -186,10 +186,12 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         lock (_lock) from = _position is >= 0 ? (ulong)_position : null;
         var received = false;
         await foreach (var envelope in _lane.TailStreamAsync(StreamNames.AgentSession(_sessionId), from, ct).ConfigureAwait(false)) {
-            received = true;
             var line = Project(envelope.EventType, envelope.JsonPayload, (long)envelope.StreamPosition, envelope.Timestamp);
             lock (_lock) {
                 if (_attempt != attempt) return received;
+                // Once per outage: the stream delivering again ends it, however this tail later ends.
+                if (!received) _logged.Clear();
+                received = true;
                 _position = (long)envelope.StreamPosition;
                 if (line is { } l) _pending.Add(l);
             }
@@ -217,8 +219,11 @@ internal sealed class RemoteTranscriptFeed : IChatTranscriptFeed {
         Changed?.Invoke();
     }
 
-    void LogOnce(string reason) {
-        if (_logged.TryAdd(reason, 0)) _log(reason);
+    /// A superseded attempt's failure would mark a reason the current attempt has not hit.
+    void LogOnce(int attempt, string reason) {
+        bool first;
+        lock (_lock) first = _attempt == attempt && _logged.Add(reason);
+        if (first) _log(reason);
     }
 
     public void Dispose() {

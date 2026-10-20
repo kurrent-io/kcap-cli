@@ -20,8 +20,11 @@ sealed record LocalServerUnit(string ServerBinary, LocalRoot Root, int Port) {
 
     public string SystemdName { get; init; } = ProductionSystemdName;
 
+    /// <summary>The Ollama model the server embeds with, or null to search by keyword.</summary>
+    public string? EmbeddingModel { get; init; }
+
     public static LocalServerUnit ForInstallation(LocalRoot root, int port) =>
-        new(Path.Combine(root.Directory, "bin", "current", "kcap-server"), root, port);
+        new(Path.Combine(root.Directory, "bin", "current", "kcap-server"), root, port) { EmbeddingModel = LocalEmbeddingFile.ReadModel(root) };
 
     public string BaseUrl => $"http://localhost:{Port}";
 
@@ -44,8 +47,17 @@ sealed record LocalServerUnit(string ServerBinary, LocalRoot Root, int Port) {
         File.SetUnixFileMode(logs, ownerOnly);
     }
 
+    /// <summary>The embedding settings are environment because environment outranks what the web UI saves: the
+    /// model fixes the stored vectors' width, so only setup changes it.</summary>
     public IReadOnlyList<KeyValuePair<string, string>> Environment => [
         new(LocalRoot.EnvVar, Root.Directory),
         new("Local__Port", Port.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        .. EmbeddingModel is { } model
+            ? new KeyValuePair<string, string>[] {
+                new("Embedding__Provider", "ollama"),
+                new("Embedding__Ollama__Model", model),
+                new("Embedding__Ollama__BaseUrl", OllamaClient.DefaultUrl.ToString().TrimEnd('/')),
+            }
+            : [],
     ];
 }

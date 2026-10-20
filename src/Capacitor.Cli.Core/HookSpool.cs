@@ -375,6 +375,13 @@ public sealed partial class HookSpool(string spoolDir, TimeProvider time, int ca
         } catch { }
     }
 
+    /// <summary>Lifts <see cref="MarkEnded"/> for a session known to have run again, so its next end is
+    /// delivered rather than discarded as a straggler.</summary>
+    public void ClearEnded(string sessionId) {
+        if (!SafeSessionId.IsMatch(sessionId)) return;
+        try { File.Delete(EndedMarkerPath(sessionId)); } catch { }
+    }
+
     /// <summary>
     /// Deletes any lifecycle entries remaining for a session already <see cref="MarkEnded"/> —
     /// a post-end straggler (e.g. a subagent-stop that arrived after session-end was already

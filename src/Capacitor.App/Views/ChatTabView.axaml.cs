@@ -159,8 +159,13 @@ public partial class ChatTabView : UserControl {
             return;
         }
         _smoothFrameQueued = true;
-        top.RequestAnimationFrame(OnSmoothScrollFrame);
+        RequestSmoothFrame(top, OnSmoothScrollFrame);
     }
+
+    /// The render loop stamps frames with wall-clock time and ticks on its own timer, so a test
+    /// that asserts on the curve supplies the frames and their timestamps itself.
+    internal Action<TopLevel, Action<TimeSpan>> RequestSmoothFrame { get; set; } =
+        static (top, frame) => top.RequestAnimationFrame(frame);
 
     void OnSmoothScrollFrame(TimeSpan timestamp) {
         _smoothFrameQueued = false;
@@ -418,8 +423,7 @@ public partial class ChatTabView : UserControl {
     void OnComposerKeyDown(object? sender, KeyEventArgs e) {
         if (e.Key == Key.Escape && e.KeyModifiers == KeyModifiers.None) {
             e.Handled = true;
-            if (DataContext is ChatTabViewModel chat && ((ICommand)chat.InterruptCommand).CanExecute(null))
-                chat.InterruptCommand.Execute().Subscribe();
+            TryInterrupt();
             return;
         }
         if (e.Key is Key.Up or Key.Down && e.KeyModifiers == KeyModifiers.None) {
@@ -435,6 +439,18 @@ public partial class ChatTabView : UserControl {
         e.Handled = true;
         if (DataContext is ChatTabViewModel vm && ((ICommand)vm.SendCommand).CanExecute(null))
             vm.SendCommand.Execute().Subscribe();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e) {
+        base.OnKeyDown(e);
+        if (e.Handled || e.Key != Key.Escape || e.KeyModifiers != KeyModifiers.None || OriginatesFromPendingCard(e)) return;
+        if (TryInterrupt()) e.Handled = true;
+    }
+
+    bool TryInterrupt() {
+        if (DataContext is not ChatTabViewModel chat || !((ICommand)chat.InterruptCommand).CanExecute(null)) return false;
+        chat.InterruptCommand.Execute().Subscribe();
+        return true;
     }
 
     public void FocusComposer() => ComposerInput.Focus();

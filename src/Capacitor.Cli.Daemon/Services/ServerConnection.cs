@@ -232,31 +232,43 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
+        CredentialHealth = new DaemonCredentialHealth(_statusNotifier.Pulse);
         void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+        // Only the hub's own negotiate and socket say why the hub cannot connect; an event post's
+        // refusal is logged alone, whatever the hub is doing when it returns.
+        void ReportHubRejection(string report) {
+            ReportRejection(report);
+            CredentialHealth.ObserveRejection();
+        }
 
         // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
         // to anything.
         var refusal = config.DestinationRefusal;
         // It follows redirects itself, so it can check each hop; the handler under it follows none.
-        DelegatingHandler Guarded(HttpMessageHandler inner) =>
+        DelegatingHandler Guarded(HttpMessageHandler inner, Action<string> report) =>
             new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal, followRedirects: true) {
-                InnerHandler = new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = NoRedirects(inner) },
+                InnerHandler = new BearerRejectionReportHandler(time, report) { InnerHandler = NoRedirects(inner) },
             };
 
         _eventQueue = new(
-            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler())));
+            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler(), ReportRejection)));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
-                    options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
-                    options.HttpMessageHandlerFactory = Guarded;
+                    options.AccessTokenProvider = async () => {
+                        var state = await credentials.ResolveAsync(default);
+                        CredentialHealth.Observe(state);
+                        return state.Bearer;
+                    };
+                    options.HttpMessageHandlerFactory = inner => Guarded(inner, ReportHubRejection);
+                    HttpClientExtensions.AddObservationHeaders(options.Headers, config.UpdateCheckOff);
                     options.WebSocketFactory = (context, ct) => {
                         LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
 
                         return BearerRejectionReportHandler.ConnectWebSocketAsync(
-                            context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                            context.Uri, context.Options.AccessTokenProvider, time, ReportHubRejection, ct);
                     };
                 }
             )
@@ -515,6 +527,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// without a live SignalR transport.</summary>
     internal virtual HubConnectionState HubState => _hub.State;
 
+    /// <summary>Whether the daemon's sign-in is why the hub cannot connect.</summary>
+    internal DaemonCredentialHealth CredentialHealth { get; }
+
     /// <summary>The heartbeat's gate: only a <c>Connected</c> hub is pinged and, on a hung ping,
     /// force-reconnected. Any other state means automatic reconnect owns recovery.</summary>
     public bool IsConnected => HubState == HubConnectionState.Connected;
@@ -559,6 +574,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                         // RegisterDaemonAsync too.
                         _statusNotifier.Pulse();
                     }
+
+                    // A connected hub has accepted the bearer, whatever registration then makes of it.
+                    if (HubState == HubConnectionState.Connected) CredentialHealth.ObserveConnected();
 
                     await RegisterDaemonAsync();
                     _connectedTimestamp = _time.GetTimestamp();
@@ -766,22 +784,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     // change afterwards.
     RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot, _time).Fingerprint();
 
-    async Task<string[]> MergeRepoPathsAsync() {
-        var persisted = await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync();
-
-        if (_config.AllowedRepoPaths.Length == 0)
-            return persisted;
-
-        // Union: persisted paths first (sorted by last_used desc), then config-only paths
-        var comparer = RepoPathStore.PathComparison == StringComparison.Ordinal
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
-        var seen = new HashSet<string>(persisted, comparer);
-        var merged = new List<string>(persisted);
-        merged.AddRange(_config.AllowedRepoPaths.Select(p => p.TrimEnd('/', '*')).Where(seen.Add));
-
-        return [..merged];
-    }
+    async Task<string[]> MergeRepoPathsAsync() =>
+        AdvertisedRepoPaths.Merge(await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync(), _config.AllowedRepoPaths);
 
     /// <summary>
     /// Auto-reconnect started: the transport is no longer Connected and the
@@ -815,6 +819,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         LogReconnected();
         await RegisterDaemonAsync();
         _connectedTimestamp = _time.GetTimestamp();
+        CredentialHealth.ObserveConnected();
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
@@ -19,7 +20,7 @@ namespace Capacitor.App.Tests.Unit;
 /// models and the REAL OnboardingViewModel — only externals (HTTP, process spawns, the daemon
 /// socket) are scripted. WizardStartupTests already pins the composition SEAMS in isolation
 /// (adoptServer:true on Paste via <c>A_pasted_server_is_adopted_and_the_arming_hook_runs_before_the_commit</c>,
-/// the provisioner armed for Create/Discover-WorkOS via <c>Create_and_workos_discovery_route_through_the_auth_proxy</c>,
+/// discovery through the auth proxy via <c>Workos_discovery_routes_through_the_auth_proxy</c>,
 /// and beforeCommit==ArmingHook via <c>The_facades_beforeCommit_hook_arms_a_durable_claim_per_identity</c>
 /// plus WizardAuthServiceTests) — those are not duplicated here.
 /// </summary>
@@ -151,7 +152,7 @@ public class WizardCompositionHappyPathTests {
             Proxy       = new AuthProxyClient(new HttpClient(authHandler, disposeHandler: false), TimeProvider.System),
             Operation = spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints, TimeProvider.System,
+                new RecordingBrowser(), spec.Picker, null, spec.Telemetry, spec.Endpoints, TimeProvider.System,
                 spec.BeforeCommit), spec.Profile),
         };
 
@@ -299,7 +300,7 @@ public class WizardCompositionAbandonTests {
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
+                    graph.Auth, graph.Install, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(harness.Claims.Pending()).IsEmpty();
