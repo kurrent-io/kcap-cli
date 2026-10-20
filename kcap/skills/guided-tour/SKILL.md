@@ -6,8 +6,9 @@ description: >-
   kcap", "is this thing doing anything", "what can kcap do", "just installed
   kcap, now what", "give me a tour", "Start kcap guided tour" (the prompt
   `kcap setup` tells them to type) — or when they invoke this skill directly by
-  its listed name. Seven short cards, one per reply: welcome, capture,
-  investigate, collaborate, review, use, reuse — each a handful of questions to
+  its listed name. Also recognizes the former name Capacitor, including
+  "what is Capacitor" and "Start Capacitor guided tour". Seven short cards, one
+  per reply: welcome, capture, investigate, collaborate, review, use, reuse — each a handful of questions to
   ask the coding agent. Offers to install kcap if it is not set up. Not for
   general session recall on an established user — that is the recap skill.
 ---

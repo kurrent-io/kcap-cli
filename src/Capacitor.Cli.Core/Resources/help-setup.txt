@@ -200,7 +200,7 @@ Options:
                               approve in the chat before each stage contacts
                               them, and reads "cannot reach server" as "not yet
                               approved" with a retry hint. Run from the
-                              connect-capacitor skill; see README → Unattended
+                              connect-kcap skill; see README → Unattended
                               setup → Muse Assistant.
 
 Unattended setup: --no-prompt never asks. Each question has a flag; one with

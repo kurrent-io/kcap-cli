@@ -119,6 +119,21 @@ Download `kcap-<version>-win-x64-Setup.exe` from the [GitHub release](https://gi
 
 Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
 
+### Rebrand compatibility
+
+kcap keeps existing configuration filenames, data directories, worktree locations,
+and branch prefixes. Internal app and package IDs also stay unchanged, including
+`io.kurrent.capacitor` and `KurrentCapacitor`. These conventions apply to new
+installations too; no data-directory migration or manual reinstall is required
+for the rebrand.
+
+The connection skill is now `connect-kcap` (`kcap-connect-kcap` in the shared
+agent skill tree), and the Muse recording skill is `kcap-recording`. Refreshing
+agent skills replaces the former `kcap-connect-capacitor` installation. Muse
+setup replaces the old skill names and reuses existing scheduled tasks while
+keeping their data and consent in place. Existing integration matchers continue
+to recognize legacy names.
+
 ## What it records
 
 Once set up, kcap runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
@@ -430,7 +445,7 @@ kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-cursor-hook
 kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-codex-hooks   # only Cursor
 ```
 
-**Muse Assistant.** Muse runs kcap inside its own VM, where the only persistent place is `~` and the image ships a Codex that Muse itself never uses. `kcap setup <tenant> --muse-assistant` is the posture for that machine: it implies `--no-prompt`, `--device` and `--skip-import`, installs nothing for any harness (no Codex hooks, no `~/.codex/config.toml` MCP or network allowlist, no `~/.agents/skills`), defaults visibility to `private` (an explicit `--default-visibility` still wins), and prints — before its first network call — the hosts Muse's egress filter will ask the user to approve in the chat: the server's host and `phog.kurrent.io` first, then, once the server names its sign-in provider, `api.workos.com` and `signin.kcap.ai` (WorkOS) or `github.com` (GitHub). Choose **Always allow this site** on each card. Until a host is approved it resolves to a placeholder address, so a "cannot reach server" from this run means "not yet approved": approve the cards and run the same command again. The whole connection — install under `~/workspace`, this sign-in, the kcap MCP servers as a Muse custom connector, a `capacitor` skill and an hourly `kcap status` cron — is driven by the `connect-capacitor` skill (`kcap/skills/connect-capacitor/SKILL.md`): paste it into Muse, or ask Muse to read it from `https://raw.githubusercontent.com/kurrent-io/kcap-cli/main/kcap/skills/connect-capacitor/SKILL.md`, and say "Connect kcap".
+**Muse Assistant.** Muse runs kcap inside its own VM, where the only persistent place is `~` and the image ships a Codex that Muse itself never uses. `kcap setup <tenant> --muse-assistant` is the posture for that machine: it implies `--no-prompt`, `--device` and `--skip-import`, installs nothing for any harness (no Codex hooks, no `~/.codex/config.toml` MCP or network allowlist, no `~/.agents/skills`), defaults visibility to `private` (an explicit `--default-visibility` still wins), and prints — before its first network call — the hosts Muse's egress filter will ask the user to approve in the chat: the server's host and `phog.kurrent.io` first, then, once the server names its sign-in provider, `api.workos.com` and `signin.kcap.ai` (WorkOS) or `github.com` (GitHub). Choose **Always allow this site** on each card. Until a host is approved it resolves to a placeholder address, so a "cannot reach server" from this run means "not yet approved": approve the cards and run the same command again. The whole connection — install under `~/workspace`, this sign-in, the kcap MCP servers as a Muse custom connector, a `kcap` skill and an hourly `kcap status` cron — is driven by the `connect-kcap` skill (`kcap/skills/connect-kcap/SKILL.md`): paste it into Muse, or ask Muse to read it from `https://raw.githubusercontent.com/kurrent-io/kcap-cli/main/kcap/skills/connect-kcap/SKILL.md`, and say "Connect kcap".
 
 ```bash
 npm install --prefix ~/workspace/kcap @kurrent/kcap
@@ -1169,7 +1184,7 @@ After discovery, the import surfaces a one-shot report of any transcript working
 
 ### Muse Assistant
 
-Muse Assistant (Meta's consumer agent) runs in a Meta-hosted VM with no transcript file, no local gateway and no lifecycle hook; its chat store is reachable only by Muse itself, through `chat.list` and `chat.read_messages`. `kcap muse-assistant` records it from inside that VM with Muse as the recorder: the `capacitor-recording` skill (`kcap/muse-assistant/capacitor-recording/SKILL.md`, installed by the connect-capacitor skill when the user asks to record) states the consent scope, grants it with `kcap muse-assistant scope add` in the user's own turn, and installs a 15-minute cron that pages each granted chat into files and runs `kcap muse-assistant ingest` on them.
+Muse Assistant (Meta's consumer agent) runs in a Meta-hosted VM with no transcript file, no local gateway and no lifecycle hook; its chat store is reachable only by Muse itself, through `chat.list` and `chat.read_messages`. `kcap muse-assistant` records it from inside that VM with Muse as the recorder: the `kcap-recording` skill (`kcap/muse-assistant/kcap-recording/SKILL.md`, installed by the connect-kcap skill when the user asks to record) states the consent scope, grants it with `kcap muse-assistant scope add` in the user's own turn, and installs a 15-minute cron that pages each granted chat into files and runs `kcap muse-assistant ingest` on them.
 
 - **What is recorded.** `user`, `assistant` and `commentary` items (Muse narrating its own work, shown as thinking), verbatim, as private sessions owned by the signed-in kcap user. `developer` items — runtime instructions — are never sent. Tool calls, browser actions and files are not in `chat.read_messages` and are not recorded. No model or usage is available, so cost stays empty.
 - **Sessions.** A new session starts at every gap of two hours or more between recorded items; an idle session is closed only by an ingest whose walk was fetched at least 2 h 30 m after the last item, at that item's time. A VM clock more than 30 minutes ahead of Muse's store can close early, splitting one conversation in two; nothing is lost.
@@ -1725,7 +1740,7 @@ Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--c
 | `kcap-plans` | `kcap mcp plans` | Declare the plan document and task list a session executes |
 | `kcap-guided-tour` | analytics + sessions + flows MCP | Card-by-card onboarding tour of what kcap does |
 | `kcap-start-agents` | `kcap mcp flows` | Hand tasks to separate hosted agents that run on their own: check this machine's daemon, ask which harness, one `start_agent` call each |
-| `kcap-connect-capacitor` | `kcap setup` / `kcap login` | Install and sign in kcap for the agent asking; on a Muse Assistant VM also registers the kcap MCP servers as a custom connector, writes the `capacitor` skill and an hourly `kcap status` cron |
+| `kcap-connect-kcap` | `kcap setup` / `kcap login` | Install and sign in kcap for the agent asking; on a Muse Assistant VM also registers the kcap MCP servers as a custom connector, writes the `kcap` skill and an hourly `kcap status` cron |
 
 The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows`; only the two status tools fall back to the session (from `CODEX_THREAD_ID`, or an explicit `session_id`) when no flow ID is passed; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-start-agents` also goes through `kcap mcp flows`; its tools take the calling session from the harness, or from an explicit `session_id`. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics`, `kcap-sessions` and `kcap-flows` MCP servers, so it needs those registered (setup does it) rather than a session id. On a plan without Insights its team table falls back to the user's own session count.
 

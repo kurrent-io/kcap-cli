@@ -205,8 +205,8 @@ kcap/
     guided-tour/
       SKILL.md           — /kcap:guided-tour onboarding tour
   muse-assistant/
-    capacitor-recording/
-      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-capacitor)
+    kcap-recording/
+      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-kcap)
 ```
 
 The two MCP files exist because Claude requires top-level `mcpServers` (camelCase) while Codex accepts only `mcp_servers` (snake_case) or a bare server map — the schemas don't overlap. Keep them in sync when adding or removing servers.

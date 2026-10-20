@@ -1,12 +1,13 @@
 ---
-name: connect-capacitor
+name: connect-kcap
 description: >-
   This skill should be used when the user asks to "connect kcap", "set up
-  kcap", "set up kcap", "install kcap", "log in to kcap", "reconnect
-  kcap", or pastes the npm package name @kurrent/kcap; and when a kcap tool
+  kcap", "install kcap", "log in to kcap", "reconnect kcap", or pastes the
+  npm package name @kurrent/kcap. Also recognizes the former name Capacitor,
+  including "connect Capacitor" and "log in to Capacitor". Use when a kcap tool
   or skill fails because `kcap` is not installed or not signed in. Installs the
   kcap CLI and signs it in. On a Muse Assistant VM it also registers kcap's
-  MCP servers as a custom connector, writes the `capacitor` skill and keeps the
+  MCP servers as a custom connector, writes the `kcap` skill and keeps the
   sign-in warm with an hourly cron.
 ---
 
@@ -203,7 +204,7 @@ Six stdio MCP servers over the team's kcap workspace. Call a tool with
 This VM is not a git checkout: pass `"repo": "all"` to `search_sessions` and
 `list_repo_sessions`, or they search nothing. Sign-in is `kcap`'s own
 (`~/.config/kcap/`); if a call returns 401, run `kcap status` and follow the
-capacitor skill's reconnect step.
+kcap skill's reconnect step.
 ```
 
 Verify with a real call (keyword queries, one to three terms):
@@ -217,13 +218,16 @@ python3 mcp_call.py kcap-sessions search_sessions '{"query":"setup","repo":"all"
 A hit list with `hit_kind`, `session_id` and `title` fields means the connector
 works.
 
-### B5. Write the `capacitor` skill
+### B5. Write the `kcap` skill
 
-Create `~/workspace/skills/capacitor/SKILL.md` with this content:
+Create `~/workspace/skills/kcap/SKILL.md` with this content:
+
+When upgrading, replace the former `capacitor` skill rather than keeping both.
+Keep `~/workspace/capacitor` and its logs and recording data in place.
 
 ```markdown
 ---
-name: capacitor
+name: kcap
 description: >-
   Use kcap — the team's recorded coding-agent sessions, team
   memory, analytics, work items, plans and curated knowledge — through the
@@ -263,13 +267,13 @@ kcap's tools are the `kcap` custom connector
 6. **Never paste `~/.config/kcap/` or any token** into the chat or a file.
 7. **Never start `kcap daemon`**, run `kcap import`, or install hooks. This VM
    records only the chats the user puts in scope through the
-   `capacitor-recording` skill: if the user asks to record their chats, copy
-   `~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/capacitor-recording/SKILL.md`
-   to `~/workspace/skills/capacitor-recording/SKILL.md` and follow its
+   `kcap-recording` skill: if the user asks to record their chats, copy
+   `~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/kcap-recording/SKILL.md`
+   to `~/workspace/skills/kcap-recording/SKILL.md` and follow its
    "Granting" section.
 8. **A 401 or "token" error:** run `~/workspace/kcap/node_modules/.bin/kcap
    status`. If the sign-in has lapsed, tell the user to say "reconnect
-   kcap"; the connect-capacitor skill runs `kcap login --device` and shows
+   kcap"; the connect-kcap skill runs `kcap login --device` and shows
    them the code.
 9. Cite what you found: session title, date, author, and the `session_id`, so
    the user can open it in kcap.
@@ -282,7 +286,9 @@ kcap sign-in to refresh it, appends to `~/workspace/capacitor/cron.log`,
 and survives a VM replacement. Create it only once they agree; without it the
 sign-in can lapse on a VM left idle, and "reconnect kcap" restores it.
 
-Create a cron (title `kcap-hourly-status`, every hour) whose instruction is:
+Create a cron (title `kcap-hourly-status`, every hour) whose instruction is below.
+If `kcap-hourly-status` or the former `capacitor-hourly-status` already exists,
+update that cron in place instead of creating a second one.
 
 > Run `~/workspace/kcap/node_modules/.bin/kcap status --no-update-check >> ~/workspace/capacitor/cron.log 2>&1`,
 > then keep only the last 500 lines of that file. Do nothing else and do not
@@ -300,15 +306,18 @@ unattended run has no one to approve.
 Connecting records nothing. If the user asks to record their chats — now or later —
 install the recording skill and follow it; never grant recording from this skill:
 
+When upgrading, replace the former `capacitor-recording` skill with `kcap-recording`;
+keep existing recording data and consent unchanged.
+
 ```bash
-mkdir -p ~/workspace/skills/capacitor-recording
-cp ~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/capacitor-recording/SKILL.md ~/workspace/skills/capacitor-recording/SKILL.md
+mkdir -p ~/workspace/skills/kcap-recording
+cp ~/workspace/kcap/node_modules/@kurrent/kcap/kcap/muse-assistant/kcap-recording/SKILL.md ~/workspace/skills/kcap-recording/SKILL.md
 ```
 
 If that file does not exist, the installed kcap predates recording: run B2's
 `npm install` again to update it, then copy.
 
-Then follow `~/workspace/skills/capacitor-recording/SKILL.md` from its "Granting"
+Then follow `~/workspace/skills/kcap-recording/SKILL.md` from its "Granting"
 section: it reads the consent scope back to the user, runs
 `kcap muse-assistant scope add` in that same turn, and installs the 15-minute cron.
 
