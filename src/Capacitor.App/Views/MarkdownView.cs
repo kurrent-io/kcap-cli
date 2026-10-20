@@ -8,6 +8,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia;
+using MarkView.Avalonia.Rendering.Inlines;
 using MarkView.Avalonia.SyntaxHighlighting;
 
 namespace Capacitor.App.Views;
@@ -42,6 +43,7 @@ public sealed class MarkdownView : ContentControl {
     readonly DetailsExtension _detailsExtension;
     readonly CodeBlockActions _codeActions;
     readonly ReferenceLinks _referenceLinks;
+    readonly MarkdownLinkKeys _linkKeys;
 
     static MarkdownView() {
         TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
@@ -66,6 +68,7 @@ public sealed class MarkdownView : ContentControl {
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
+        _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
@@ -95,6 +98,7 @@ public sealed class MarkdownView : ContentControl {
     /// catch; that text shows as plain source, and the viewer is left holding nothing so a pipeline
     /// change cannot re-throw.
     void Render() {
+        _linkKeys.Clear();
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
             _viewer.Markdown = Text;
@@ -104,6 +108,9 @@ public sealed class MarkdownView : ContentControl {
             Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
         }
     }
+
+    /// The link the keyboard is on.
+    internal MarkdownHyperlink? KeyboardLink => _linkKeys.Current;
 
     public string? Text {
         get => GetValue(TextProperty);

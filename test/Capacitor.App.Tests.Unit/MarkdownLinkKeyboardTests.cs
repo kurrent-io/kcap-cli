@@ -1,0 +1,93 @@
+using System.Windows.Input;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Headless;
+using Avalonia.Input;
+using Avalonia.Threading;
+using Capacitor.App.Views;
+using ReactiveUI.Reactive;
+using static Capacitor.App.Tests.Unit.AvaloniaSession;
+
+namespace Capacitor.App.Tests.Unit;
+
+/// Links in rendered markdown are inline spans that take no focus, so the viewer itself walks them:
+/// Tab steps from link to link and then leaves, Enter or Space opens the current one through the
+/// view's command, as a click does.
+[NotInParallel("AvaloniaSession")]
+public class MarkdownLinkKeyboardTests {
+    const string Text = "See [first](https://example.com/a) and [second](https://example.com/b).";
+
+    static (Window Window, MarkdownView View, Button Before, Button After, List<string> Opened) Show() {
+        var opened = new List<string>();
+        ICommand open = ReactiveCommand.Create<string>(opened.Add);
+        var before = new Button { Content = "before" };
+        var after  = new Button { Content = "after" };
+        var view   = new MarkdownView { Text = Text, OpenLink = open, Width = 400 };
+        var window = new Window { Content = new StackPanel { Children = { before, view, after } }, Width = 500, Height = 300 };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        before.Focus();
+        Dispatcher.UIThread.RunJobs();
+        return (window, view, before, after, opened);
+    }
+
+    static void Press(Window window, PhysicalKey key, RawInputModifiers modifiers = RawInputModifiers.None) {
+        window.KeyPressQwerty(key, modifiers);
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    static string? Url(MarkdownView view) => view.KeyboardLink?.NavigateUri?.ToString();
+
+    [Test]
+    public Task Tab_walks_the_links_in_order_then_leaves_and_enter_or_space_opens_the_current_one() => RunOnUiAsync(async () => {
+        var (window, view, _, after, opened) = Show();
+        try {
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(Url(view)).IsEqualTo("https://example.com/a");
+            var block = MarkdownViewHarness.AllLinks(view).First().Block;
+            await Assert.That(AdornerLayer.GetAdorner(block)).IsTypeOf<LinkFocusRing>()
+                .Because("the current link is marked where it is drawn");
+
+            Press(window, PhysicalKey.Enter);
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(Url(view)).IsEqualTo("https://example.com/b");
+
+            Press(window, PhysicalKey.Space);
+            await Assert.That(string.Join(",", opened)).IsEqualTo("https://example.com/a,https://example.com/b");
+
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(AdornerLayer.GetAdorner(block)).IsNull();
+            await Assert.That(after.IsFocused).IsTrue().Because("past the last link, Tab moves on");
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task Shift_tab_enters_on_the_last_link_and_walks_back() => RunOnUiAsync(async () => {
+        var (window, view, _, after, _) = Show();
+        try {
+            after.Focus();
+            Dispatcher.UIThread.RunJobs();
+
+            Press(window, PhysicalKey.Tab, RawInputModifiers.Shift);
+            await Assert.That(Url(view)).IsEqualTo("https://example.com/b");
+
+            Press(window, PhysicalKey.Tab, RawInputModifiers.Shift);
+            await Assert.That(Url(view)).IsEqualTo("https://example.com/a");
+        } finally { window.Close(); }
+    });
+
+    [Test]
+    public Task A_pointer_focus_selects_no_link_and_enter_opens_nothing() => RunOnUiAsync(async () => {
+        var (window, view, _, _, opened) = Show();
+        try {
+            MarkdownViewHarness.Viewer(view).Focus(NavigationMethod.Pointer);
+            Dispatcher.UIThread.RunJobs();
+            Press(window, PhysicalKey.Enter);
+
+            await Assert.That(view.KeyboardLink).IsNull();
+            await Assert.That(opened).IsEmpty();
+        } finally { window.Close(); }
+    });
+}
