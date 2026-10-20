@@ -106,6 +106,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int _baselineVersion;
     int _readInFlight;
     string? _feedKey;
+    bool _feedReleased;
     /// The session the listed foreign rows belong to.
     string? _queueKey;
     string? _root;
@@ -972,6 +973,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
+        // A released tab's runs belong to the monitor that took its feed; this tab reads nothing more.
+        if (_feedReleased) return;
         _items.Clear();
         _history.Clear();
         _literalInputHistory.Clear();
@@ -1559,6 +1562,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (_lease is not { Feed: LocalTranscriptFeed } lease || _feedKey is not { } key) return null;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return null;
         Interlocked.Increment(ref _generation);
+        _feedReleased = true;
         _lease = null;
         return new TranscriptFeedHandoff(lease.Feed, key, _runs);
     }

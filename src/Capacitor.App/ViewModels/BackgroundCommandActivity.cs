@@ -50,11 +50,19 @@ public sealed class BackgroundCommandActivity(
             if (_disposed) return;
             if (watch is not null && ReferenceEquals(registrations[^1], registration)) {
                 registration.Detached = true;
-                registration.Watch.Disposable = watch(rowKey, count => {
-                    if (_disposed || !registrations.Contains(registration)) return;
-                    registration.Count = count;
-                    Publish();
-                }, Remove, handOff?.Invoke());
+                var handoff = handOff?.Invoke();
+                try {
+                    registration.Watch.Disposable = watch(rowKey, count => {
+                        if (_disposed || !registrations.Contains(registration)) return;
+                        registration.Count = count;
+                        Publish();
+                    }, Remove, handoff);
+                } catch {
+                    // The handed feed is owned by the monitor that failed to start; nothing else will close it.
+                    handoff?.Feed.Dispose();
+                    Remove();
+                    throw;
+                }
                 return;
             }
             Remove();

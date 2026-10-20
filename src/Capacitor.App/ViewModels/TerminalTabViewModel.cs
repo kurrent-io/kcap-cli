@@ -312,7 +312,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
     }
 
-    // The text itself, not a builder: a held ring replay is megabytes, and copying it in and out of one doubles that.
+    // Held ring replays are megabytes; kept as strings so holding them adds no copy.
     readonly List<string> _held = [];
     ITerminalSurface? _heldSurface;
     int _heldGeneration;
