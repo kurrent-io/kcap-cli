@@ -46,7 +46,9 @@ static class AdvertisedRepoPaths {
     internal static IEnumerable<string> RepositoriesUnder(string prefix) {
         // Trimmed but never past a filesystem root: "/" and "C:\" stay roots.
         var root = Path.TrimEndingDirectorySeparator(prefix);
-        if (root.Length == 0 || !Directory.Exists(root)) return [];
+        // The allowlist compares a launch's absolute path with the entry as written, so a relative
+        // entry admits nothing that could be found under it.
+        if (!Path.IsPathFullyQualified(root) || !Directory.Exists(root)) return [];
         if (IsRepository(root)) return [root];
 
         var found = new List<string>();
@@ -71,7 +73,8 @@ static class AdvertisedRepoPaths {
         try {
             foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos()) {
                 if (--budget < 0) return [];
-                if (entry is DirectoryInfo && !entry.Name.StartsWith('.')) children.Add(entry.FullName);
+                // A launch is authorized on its resolved path, which a link leads out of the prefix.
+                if (entry is DirectoryInfo && !entry.Attributes.HasFlag(FileAttributes.ReparsePoint) && !entry.Name.StartsWith('.')) children.Add(entry.FullName);
             }
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             return [];

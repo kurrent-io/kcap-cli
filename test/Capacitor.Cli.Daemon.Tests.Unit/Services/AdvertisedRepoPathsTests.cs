@@ -84,6 +84,30 @@ public class AdvertisedRepoPathsTests {
     public async Task No_allowlist_advertises_the_persisted_paths_alone() =>
         await Assert.That(AdvertisedRepoPaths.Merge(["/a", "/b"], [])).IsEquivalentTo(new[] { "/a", "/b" });
 
+    /// The allowlist compares a launch's path with the entry as written, so a relative entry admits no
+    /// absolute path and nothing found under it could be launched.
+    [Test]
+    public async Task A_relative_wildcard_advertises_nothing() {
+        Repo("repos", "a");
+#pragma warning disable RS0030 // the entry is relative to whatever this process runs in, which is the point
+        var relative = Path.GetRelativePath(Environment.CurrentDirectory, Tmp.GetResolvedPath("repos"));
+#pragma warning restore RS0030
+
+        await Assert.That(AdvertisedRepoPaths.Merge([], [relative + "/*"])).IsEmpty();
+    }
+
+    /// A launch is authorized on its resolved path, which a link under the prefix leads out of.
+    [Test]
+    public async Task A_linked_child_is_not_advertised() {
+        Skip.When(OperatingSystem.IsWindows(), "symlinks need a privilege on Windows");
+
+        var outside = Repo("outside", "r");
+        var allowed = Tmp.CreateDir("allowed").Path;
+        Directory.CreateSymbolicLink(Tmp.PathTo("allowed", "link"), outside);
+
+        await Assert.That(AdvertisedRepoPaths.Merge([], [allowed + "/*"])).IsEmpty();
+    }
+
     [Test]
     public async Task A_missing_prefix_advertises_nothing() =>
         await Assert.That(AdvertisedRepoPaths.Merge([], [Tmp.PathTo("absent") + "/*"])).IsEmpty();
