@@ -92,6 +92,7 @@ public class AdvertisedRepoPathsTests {
 #pragma warning disable RS0030 // the entry is relative to whatever this process runs in, which is the point
         var relative = Path.GetRelativePath(Environment.CurrentDirectory, Tmp.GetResolvedPath("repos"));
 #pragma warning restore RS0030
+        Skip.When(Path.IsPathRooted(relative), "the temp folder is on another volume than the working directory");
 
         await Assert.That(AdvertisedRepoPaths.Merge([], [relative + "/*"])).IsEmpty();
     }
