@@ -178,7 +178,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .RefCount();
 
         var runs = new SessionRuns(time);
-        commands?.Track($"local:{agentId}", runs).DisposeWith(_disposables);
+        commands?.Track($"local:{agentId}", runs, () => Chat?.ReleaseFeed()).DisposeWith(_disposables);
         var planActivity = new PlanActivity();
         Artefacts = new ArtefactsTabViewModel(planArtifacts, planActivity, time, opener: opener);
         Artefacts.OpenRequested += ShowArtefacts;

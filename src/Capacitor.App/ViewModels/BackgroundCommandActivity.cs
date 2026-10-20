@@ -7,7 +7,7 @@ namespace Capacitor.App.ViewModels;
 /// Running commands by source-scoped row key. Closing a workspace hands its live commands to a
 /// transcript monitor until the session ends or the workspace reopens. Every call is on the UI thread.
 public sealed class BackgroundCommandActivity(
-        Func<string, Action<int>, Action, IDisposable>? watch = null) : IDisposable {
+        Func<string, Action<int>, Action, TranscriptFeedHandoff?, IDisposable>? watch = null) : IDisposable {
     readonly BehaviorSubject<IReadOnlyDictionary<string, int>> _running = new(FrozenDictionary<string, int>.Empty);
     readonly Dictionary<string, List<Registration>> _byKey = new(StringComparer.Ordinal);
     bool _disposed;
@@ -28,7 +28,8 @@ public sealed class BackgroundCommandActivity(
 
     /// The newest registration for a key is the one counted: a reopened session's workspace is
     /// built before the outgoing one is torn down, and that teardown drops only its own entry.
-    public IDisposable Track(string rowKey, SessionRuns runs) {
+    /// <paramref name="handOff"/> is asked only when a monitor takes over, for the feed to carry on from.
+    public IDisposable Track(string rowKey, SessionRuns runs, Func<TranscriptFeedHandoff?>? handOff = null) {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var registration = new Registration();
         if (!_byKey.TryGetValue(rowKey, out var registrations)) _byKey[rowKey] = registrations = [];
@@ -53,7 +54,7 @@ public sealed class BackgroundCommandActivity(
                     if (_disposed || !registrations.Contains(registration)) return;
                     registration.Count = count;
                     Publish();
-                }, Remove);
+                }, Remove, handOff?.Invoke());
                 return;
             }
             Remove();

@@ -40,7 +40,7 @@ public class BackgroundCommandActivityTests {
         Action<int>? report = null;
         Action? ended = null;
         var stopped = false;
-        using var activity = new BackgroundCommandActivity((_, changed, finished) => {
+        using var activity = new BackgroundCommandActivity((_, changed, finished, _) => {
             report = changed;
             ended = finished;
             return Disposable.Create(() => stopped = true);
@@ -66,7 +66,7 @@ public class BackgroundCommandActivityTests {
     public async Task Reopening_stops_the_old_monitor_and_ignores_its_late_result() {
         Action<int>? report = null;
         var stopped = false;
-        using var activity = new BackgroundCommandActivity((_, changed, _) => {
+        using var activity = new BackgroundCommandActivity((_, changed, _, _) => {
             report = changed;
             return Disposable.Create(() => stopped = true);
         });
@@ -82,7 +82,7 @@ public class BackgroundCommandActivityTests {
     [Test]
     public async Task Synchronous_completion_disposes_the_monitor() {
         var stopped = false;
-        using var activity = new BackgroundCommandActivity((_, _, ended) => {
+        using var activity = new BackgroundCommandActivity((_, _, ended, _) => {
             ended();
             return Disposable.Create(() => stopped = true);
         });

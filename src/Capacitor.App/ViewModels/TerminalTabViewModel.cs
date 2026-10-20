@@ -1,6 +1,5 @@
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
-using System.Text;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
@@ -313,7 +312,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
     }
 
-    readonly StringBuilder _held = new();
+    // The text itself, not a builder: a held ring replay is megabytes, and copying it in and out of one doubles that.
+    readonly List<string> _held = [];
     ITerminalSurface? _heldSurface;
     int _heldGeneration;
     ITimer? _heldTimer;
@@ -329,7 +329,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             _heldSurface = surface;
             _heldGeneration = generation;
         }
-        _held.Append(text);
+        _held.Add(text);
         if (_heldArmed) return;
         _heldArmed = true;
         // Off-thread in production, synchronous under a fake clock: the scheduler keeps the feed
@@ -340,8 +340,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     void FeedHeld() {
         _heldArmed = false;
-        if (_held.Length == 0) return;
-        var text = _held.ToString();
+        if (_held.Count == 0) return;
+        var text = _held.Count == 1 ? _held[0] : string.Concat(_held);
         _held.Clear();
         if (_heldSurface is not { } surface || Retired(_heldGeneration)) return;
         surface.Feed(text);
