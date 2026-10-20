@@ -963,7 +963,7 @@ public class SignInStepViewModelTests {
 
         await Assert.That(workAccount).IsNotNull();
         await Assert.That(urlBox).IsNotNull();
-        await Assert.That(urlBox!.Classes.Contains("frField")).IsTrue();
+        await Assert.That(urlBox!.Classes.Contains("onboardingField")).IsTrue();
         await Assert.That(urlBoxShown).IsFalse(); // behind "I have a workspace URL"
         await Assert.That(statusShown).IsFalse(); // the ready line only restates the button
     }

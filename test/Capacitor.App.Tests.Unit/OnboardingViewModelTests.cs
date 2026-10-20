@@ -369,7 +369,7 @@ public class OnboardingViewModelTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (title?.Text, title?.Classes.Contains("frHeadline"), eyebrow?.Text);
+            return (title?.Text, title?.Classes.Contains("onboardingHeadline"), eyebrow?.Text);
         });
 
         await Assert.That(rendered.Item1).IsEqualTo("Connect to kcap");

@@ -38,7 +38,7 @@
                                 IsVisible="{Binding ShowInstalledVersion}"
                                 Background="{StaticResource KcapSurfaceBrush}"
                                 BorderBrush="{StaticResource KcapBorderBrush}">
-                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
+                            <TextBlock Text="{Binding InstalledVersion}" FontSize="12" FontFamily="{StaticResource OnboardingMonoFont}"
                                        Foreground="{StaticResource KcapMutedBrush}" />
                         </Border>
                         <views:AppIcon Kind="ArrowRight" Size="12" VerticalAlignment="Center" IsVisible="{Binding ShowInstalledVersion}"
@@ -46,7 +46,7 @@
                         <Border Padding="10,3" CornerRadius="999" BorderThickness="1"
                                 Background="{StaticResource KcapPurpleDimBrush}"
                                 BorderBrush="{StaticResource KcapPurpleBrush}">
-                            <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="{StaticResource FrMonoFont}"
+                            <TextBlock Text="{Binding UpdateVersion}" FontSize="12" FontFamily="{StaticResource OnboardingMonoFont}"
                                        Foreground="{StaticResource KcapPurpleBrush}" />
                         </Border>
                     </StackPanel>
