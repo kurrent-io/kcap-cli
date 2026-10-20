@@ -152,6 +152,16 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         return count;
     }
 
+    // The protobuf parser refuses some JSON System.Text.Json accepts (an out-of-range number, a lone
+    // surrogate); the text still stands without its raw copy.
+    static Value? RawValue(JsonElement element) {
+        try {
+            return Value.Parser.ParseJson(element.GetRawText());
+        } catch (Exception ex) when (ex is InvalidJsonException or InvalidProtocolBufferException) {
+            return null;
+        }
+    }
+
     static ClaudeCodeExtension.Origin OriginOf(JsonElement line) =>
         new(line.Obj("origin")?.Bool("handback") == true, line.Str("promptSource"),
             line.Obj("turnPosition")?.Num("promptIndex") is { } index and >= int.MinValue and <= int.MaxValue ? (int)index : null);
@@ -163,13 +173,15 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         var attachments = new List<TranscriptAttachment>();
         foreach (var block in blocks.EnumerateArray()) {
             switch (block.Str("type")) {
+                // A text block counts even when empty or null, as the server counts it.
                 case "text":
-                    if (block.Str("text") is { } t) texts.Add(t);
+                    if (block.Prop("text") is not null) texts.Add(block.Str("text") ?? "");
                     break;
                 case "image":
                     if (block.Obj("source") is { } source && source.Str("type") == "base64"
-                     && source.Str("data") is { } data && source.Str("media_type") is { } mediaType
+                     && source.Str("data") is { } data && source.Prop("media_type") is not null
                      && Decode(data) is { } bytes) {
+                        var mediaType = source.Str("media_type") ?? "application/octet-stream";
                         var id = TranscriptIds.ClaudeAttachment(record.IdScope, record.Id, attachments.Count);
                         attachments.Add(new TranscriptAttachment(id, $"attachment-{id.ToString()[..8]}{Extension(mediaType)}", mediaType, bytes));
                     }
@@ -203,10 +215,10 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         if (root.Obj("attachment") is not { } attachment || attachment.Str("type") != "queued_command") return null;
         switch (attachment.Str("commandMode")) {
             case "task-notification":
-                return attachment.Prop("prompt") is { ValueKind: JsonValueKind.String or JsonValueKind.Array } notification
+                return attachment.Prop("prompt") is { } notification && (notification.IsString || notification.IsArray)
                     ? (notification, "task-notification", attachment.Obj("origin")?.Str("kind") ?? "task-notification") : null;
             case "prompt":
-                return attachment.Prop("prompt") is { ValueKind: JsonValueKind.String or JsonValueKind.Array } prompt
+                return attachment.Prop("prompt") is { } prompt && (prompt.IsString || prompt.IsArray)
                     ? (prompt, "prompt", attachment.Obj("origin")?.Str("kind")) : null;
             default:
                 return null;
@@ -214,10 +226,18 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
     }
 
     static IReadOnlyList<CanonicalEvent> ProjectAttachment((JsonElement Prompt, string Mode, string? OriginKind) queued, JsonElement root, Record record) {
-        var (text, attachments) = queued.Prompt.ValueKind == JsonValueKind.String
-            ? (queued.Prompt.GetString() ?? "", new List<TranscriptAttachment>())
-            : Joined(Content(queued.Prompt, record));
-        if (text.Length == 0 && attachments.Count == 0) return [];
+        string text;
+        List<TranscriptAttachment> attachments;
+        if (queued.Prompt.IsString) {
+            text        = queued.Prompt.GetString() ?? "";
+            attachments = [];
+            if (text.Length == 0) return [];
+        } else {
+            var content = Content(queued.Prompt, record);
+            if (content.Texts.Count == 0 && content.Attachments.Count == 0) return [];
+            text        = string.Join("\n", content.Texts);
+            attachments = content.Attachments;
+        }
 
         // Who wrote a queued command is recorded on the attachment itself, as the server reads it.
         var attachment = root.Obj("attachment")!.Value;
@@ -228,9 +248,6 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
                 isCompactSummary: attachment.Bool("isCompactSummary") == true, origin: origin),
             attachments);
         return emitter.Events;
-
-        static (string, List<TranscriptAttachment>) Joined((List<string> Texts, List<TranscriptAttachment> Attachments) content) =>
-            (string.Join("\n", content.Texts), content.Attachments);
     }
 
     static (ToolResultReceived Result, Value? Raw) ToolResult(JsonElement block, Record record) {
@@ -244,11 +261,11 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
     // when it has none; anything else verbatim; nothing for an absent or null one. Whatever was not a
     // string is also kept whole as the raw output.
     static (string? Text, Value? Raw) ResultText(JsonElement? content) {
-        if (content is not { } c || c.ValueKind == JsonValueKind.Null) return (null, null);
-        if (c.ValueKind == JsonValueKind.String) return (c.GetString(), null);
+        if (content is not { } c || c.IsNull) return (null, null);
+        if (c.IsString) return (c.GetString(), null);
 
-        var raw = Value.Parser.ParseJson(c.GetRawText());
-        if (c.ValueKind != JsonValueKind.Array) return (c.GetRawText(), raw);
+        var raw = RawValue(c);
+        if (!c.IsArray) return (c.GetRawText(), raw);
 
         var texts = new List<string>();
         foreach (var block in c.EnumerateArray())

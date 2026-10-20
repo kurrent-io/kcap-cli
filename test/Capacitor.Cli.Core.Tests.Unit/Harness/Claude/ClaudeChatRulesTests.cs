@@ -139,6 +139,15 @@ public class ClaudeChatRulesTests {
         await Assert.That(shown.Single().Text).IsEqualTo(opens + " tail");
     }
 
+    /// <summary>An empty block adds no separator ahead of the first text kept, as the chat always joined.</summary>
+    [Test]
+    [Arguments("""[{"type":"text","text":""},{"type":"text","text":"a"}]""", "a")]
+    [Arguments("""[{"type":"text","text":"a"},{"type":"text","text":""}]""", "a\n")]
+    public async Task Empty_result_blocks_join_as_the_chat_always_joined(string content, string expected) {
+        var e = P($$$"""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":{{{content}}}}]}}""");
+        await Assert.That(e[0].ToolResult).IsEqualTo(expected);
+    }
+
     [Test]
     public async Task Tool_results_carry_string_or_block_content_capped_and_flag_errors() {
         var str = P("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"done","is_error":true}]}}""");

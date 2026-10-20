@@ -89,11 +89,16 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     static string? ChatResultText(Google.Protobuf.WellKnownTypes.Struct? slug) {
         if (slug is null || !slug.Fields.TryGetValue(ClaudeCodeExtension.OutputRaw, out var raw) || raw.ListValue is not { } blocks) return null;
 
-        var texts = blocks.Values
-            .Where(v => v.StructValue is { } b && SchemaExtensions.Text(b, "type") == "text" && SchemaExtensions.Text(b, "text") is not null)
-            .Select(v => SchemaExtensions.Text(v.StructValue, "text")!)
-            .ToList();
-        return texts.Count == 0 ? null : TranscriptEnvelopes.Cap(string.Join("\n", texts));
+        // The chat's own join: no separator ahead of the first text it has kept.
+        var sb    = new System.Text.StringBuilder();
+        var found = false;
+        foreach (var v in blocks.Values) {
+            if (v.StructValue is not { } b || SchemaExtensions.Text(b, "type") != "text" || SchemaExtensions.Text(b, "text") is not { } t) continue;
+            found = true;
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(t);
+        }
+        return found ? TranscriptEnvelopes.Cap(sb.ToString()) : null;
     }
 
     /// A sidechain event is a subagent's own record, and a nested subagent is not the parent's

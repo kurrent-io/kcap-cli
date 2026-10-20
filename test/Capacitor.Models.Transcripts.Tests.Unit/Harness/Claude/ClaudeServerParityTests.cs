@@ -152,4 +152,30 @@ public class ClaudeServerParityTests {
         await Assert.That(((UserMessageReceived)e[0].Payload).Content).IsEqualTo("<task-notification>done</task-notification>");
         await Assert.That(SchemaExtensions.Slug(e[0].Payload, ClaudeCodeExtension.Slug)!.Fields[ClaudeCodeExtension.OriginKind].StringValue).IsEqualTo("task-notification");
     }
+
+    /// <summary>The server counts text blocks, not text: an array of empty ones is still a message.</summary>
+    [Test]
+    public async Task An_array_of_empty_text_blocks_is_an_empty_message() {
+        var user   = E("""{"type":"user","message":{"content":[{"type":"text","text":""}]}}""");
+        var queued = E("""{"type":"attachment","attachment":{"type":"queued_command","commandMode":"prompt","prompt":[{"type":"text","text":null}]}}""");
+
+        await Assert.That(((UserMessageReceived)user[0].Payload).Content).IsEqualTo("");
+        await Assert.That(((UserMessageReceived)queued[0].Payload).Content).IsEqualTo("");
+    }
+
+    [Test]
+    public async Task An_image_with_a_null_media_type_is_an_octet_stream() {
+        var e = E($$$"""{"type":"user","message":{"content":[{"type":"image","source":{"type":"base64","media_type":null,"data":"{{{Png}}}"}}]}}""");
+
+        await Assert.That(e[0].Attachments![0].ContentType).IsEqualTo("application/octet-stream");
+        await Assert.That(e[0].Attachments![0].FileName).EndsWith(".bin");
+    }
+
+    [Test]
+    public async Task A_result_the_protobuf_parser_refuses_keeps_its_text_without_a_raw_copy() {
+        var e = E("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t","content":{"n":1e400}}]}}""");
+
+        await Assert.That(((ToolResultReceived)e[0].Payload).Result).IsEqualTo("""{"n":1e400}""");
+        await Assert.That(SchemaExtensions.Slug(e[0].Payload, ClaudeCodeExtension.Slug)).IsNull();
+    }
 }
