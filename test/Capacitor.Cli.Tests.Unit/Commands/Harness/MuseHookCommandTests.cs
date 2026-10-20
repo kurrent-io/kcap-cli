@@ -601,7 +601,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(written).Contains("## Work items");
         await Assert.That(written).Contains("## Plans");
         await Assert.That(written).Contains("Flows you may offer");
-        await Assert.That(written).Contains("## Kurrent Capacitor is set up");
+        await Assert.That(written).Contains("## kcap is set up");
     }
 
     /// <summary>Muse runs a hook with a cleared environment, so the daemon's marker file is the only
@@ -613,8 +613,8 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(written).DoesNotContain("## Team memory");
         await Assert.That(written).DoesNotContain("## Work items");
         await Assert.That(written).DoesNotContain("## Plans");
-        await Assert.That(written).DoesNotContain("Kurrent Capacitor session id:");
-        await Assert.That(written).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(written).DoesNotContain("kcap session id:");
+        await Assert.That(written).DoesNotContain("## kcap is set up");
         await Assert.That(written).DoesNotContain("Flows you may offer");
     }
 
@@ -628,7 +628,7 @@ public class MuseHookCommandTests : IDisposable {
         await Assert.That(written).Contains("## Team memory");
         await Assert.That(written).Contains("## Work items");
         await Assert.That(written).Contains("## Plans");
-        await Assert.That(written).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(written).DoesNotContain("## kcap is set up");
         await Assert.That(new FirstRunNoticeStore(Config.Root).TryClaim()).IsTrue();
     }
 

@@ -53,7 +53,7 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public bool         PassThrough       => _locked();
 
     public string Lede =>
-        "Capacitor records the sessions your coding agents run on this machine and gives them tools to search " +
+        "kcap records the sessions your coding agents run on this machine and gives them tools to search " +
         "that history, so what you already worked out is there the next time you need it.";
 
     public EditionChoice? Choice {

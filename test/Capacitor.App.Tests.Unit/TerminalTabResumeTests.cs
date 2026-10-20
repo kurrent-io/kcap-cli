@@ -265,7 +265,9 @@ public class TerminalTabResumeTests {
             var phases = new List<TerminalSessionPhase>();
             rig.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(TerminalTabViewModel.State)) phases.Add(rig.Vm.State.Phase); };
             release.Set();
-            for (var i = 0; i < 200 && !phases.Contains(TerminalSessionPhase.Interrupted); i++) { Dispatcher.UIThread.RunJobs(); await Task.Delay(5); }
+            // The re-arm to Resuming is a second dispatch queued off the UI thread after Interrupted publishes.
+            bool Rearmed() => phases.Contains(TerminalSessionPhase.Interrupted) && rig.Vm.State.Phase == TerminalSessionPhase.Resuming;
+            for (var i = 0; i < 200 && !Rearmed(); i++) { Dispatcher.UIThread.RunJobs(); await Task.Delay(5); }
 
             await Assert.That(phases).Contains(TerminalSessionPhase.Interrupted);
 

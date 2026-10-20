@@ -11,7 +11,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         "changing it later means everything is embedded again in the background.";
     public const string DefaultLabel  = $"Use Ollama with {LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
     public const string DefaultDetail = "Downloaded into Ollama if it doesn't have it yet. Without Ollama running, search works by keyword.";
-    public const string KeywordDetail = "Search by meaning can be turned on later from Capacitor local in the sidebar.";
+    public const string KeywordDetail = "Search by meaning can be turned on later from kcap local in the sidebar.";
 
     bool _useDefault = true, _useOther, _useKeyword;
     string _otherModel = "";

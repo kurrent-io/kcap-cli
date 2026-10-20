@@ -82,7 +82,7 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.Upgrading).IsTrue();
             await Assert.That(h.Vm.BannerVisible).IsTrue();
-            await Assert.That(h.Vm.Headline).IsEqualTo("Upgrading Capacitor local 1.2.0 to 1.3.0");
+            await Assert.That(h.Vm.Headline).IsEqualTo("Upgrading kcap local 1.2.0 to 1.3.0");
             await Assert.That(h.Vm.Detail).IsEqualTo("Downloading 1.3.0… 25%");
             await Assert.That(h.Vm.DownloadFraction).IsEqualTo(0.25);
             await Assert.That(h.Vm.StateText).IsEqualTo("upgrading");
@@ -127,16 +127,16 @@ public class LocalStackViewModelTests {
             using var h = new Harness();
 
             await h.RunAsync(1, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Failed("download_failed",
-                "The download was interrupted. Capacitor local 1.2.0 was left as it was. Run kcap local upgrade to try again.", false));
+                "The download was interrupted. kcap local 1.2.0 was left as it was. Run kcap local upgrade to try again.", false));
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.Attention).IsTrue();
-            await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local could not be upgraded to 1.3.0");
-            await Assert.That(h.Vm.Detail).IsEqualTo("The download was interrupted. Capacitor local 1.2.0 was left as it was.");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local could not be upgraded to 1.3.0");
+            await Assert.That(h.Vm.Detail).IsEqualTo("The download was interrupted. kcap local 1.2.0 was left as it was.");
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
             await Assert.That(h.Vm.StateText).IsEqualTo("upgrade failed");
             await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
-            foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap ");
+            foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap local upgrade");
 
             h.Cli.LocalUpgradeBehavior = UpgradeScript.Prints(0, UpgradeScript.Upgraded("1.2.0", "1.3.0"));
             h.Registry = "1.3.0";
@@ -163,7 +163,7 @@ public class LocalStackViewModelTests {
             await Assert.That(h.Vm.IsNote).IsTrue();
             await Assert.That(h.Vm.Attention).IsFalse();
             await Assert.That(h.Vm.StateText).IsEqualTo("running");
-            await Assert.That(h.Vm.Headline).IsEqualTo("The upgrade to Capacitor local 1.3.0 is waiting");
+            await Assert.That(h.Vm.Headline).IsEqualTo("The upgrade to kcap local 1.3.0 is waiting");
             await Assert.That(h.Vm.Detail).IsEqualTo(LocalStackViewModel.BusyDetail);
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
         });
@@ -224,7 +224,7 @@ public class LocalStackViewModelTests {
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
                 "{\"v\":1,\"event\":\"ready\",\"server_url\":\"http://localhost:5123\"}",
-                UpgradeScript.Failed("start_failed", "Capacitor local 1.3.0 is selected, but the upgrade journal could not be cleared (busy). Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.", true));
+                UpgradeScript.Failed("start_failed", "kcap local 1.3.0 is selected, but the upgrade journal could not be cleared (busy). Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.", true));
             h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
             h.Status.OnNext(new(ServerLaneState.Connected));
 
@@ -248,7 +248,7 @@ public class LocalStackViewModelTests {
             using var h = new Harness();
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
-                UpgradeScript.Failed("start_failed", "Capacitor local 1.3.0 did not start.", true));
+                UpgradeScript.Failed("start_failed", "kcap local 1.3.0 did not start.", true));
 
             await Assert.That(h.Vm.DismissVisible).IsFalse();
 
@@ -263,15 +263,15 @@ public class LocalStackViewModelTests {
     public async Task A_failed_start_after_the_switch_keeps_the_failure_and_says_why_without_terminal_advice() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness();
-            h.StartResult = () => new ProcessResult(1, "", "Capacitor local 1.3.0 did not become ready. kcap local logs shows why.\n", false);
+            h.StartResult = () => new ProcessResult(1, "", "kcap local 1.3.0 did not become ready. kcap local logs shows why.\n", false);
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"),
-                UpgradeScript.Failed("start_failed", "Capacitor local 1.3.0 did not start.", true));
+                UpgradeScript.Failed("start_failed", "kcap local 1.3.0 did not start.", true));
             await h.Vm.StartCommand.Execute().ToTask();
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.StartVisible).IsTrue();
-            await Assert.That(h.Vm.StartMessage).IsEqualTo("Capacitor local 1.3.0 did not become ready.");
+            await Assert.That(h.Vm.StartMessage).IsEqualTo("kcap local 1.3.0 did not become ready.");
             await Assert.That(h.Reconnects).IsEqualTo(0);
         });
     }
@@ -285,15 +285,18 @@ public class LocalStackViewModelTests {
             h.Registry = "1.3.0";
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"), UpgradeScript.Switched("1.3.0"), UpgradeScript.Failed("start_failed",
-                "Capacitor local 1.3.0 did not start: not ready. It stays selected and stopped. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.", true));
+                "kcap local 1.3.0 did not start: not ready. It stays selected and stopped. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.", true));
             h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));
 
             await Assert.That(h.Vm.Version).IsEqualTo("1.3.0");
-            await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local 1.3.0 did not start after the upgrade");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 did not start after the upgrade");
             await Assert.That(h.Vm.Guidance).IsEqualTo(LocalStackViewModel.StartGuidance);
             await Assert.That(h.Vm.TryAgainVisible).IsFalse();
             await Assert.That(h.Vm.StartVisible).IsTrue();
-            foreach (var text in ShownText(h.Vm)) await Assert.That(text ?? "").DoesNotContain("kcap ");
+            foreach (var text in ShownText(h.Vm)) {
+                await Assert.That(text ?? "").DoesNotContain("kcap local logs");
+                await Assert.That(text ?? "").DoesNotContain("kcap local start");
+            }
 
             h.Status.OnNext(new(ServerLaneState.Connected));
 
@@ -309,7 +312,7 @@ public class LocalStackViewModelTests {
             using var h = new Harness();
 
             await h.RunAsync(2, UpgradeScript.Planned("1.2.0", "1.3.0"),
-                UpgradeScript.Failed("commit_failed", "The switch to Capacitor local 1.3.0 could not be confirmed (disk full).", true));
+                UpgradeScript.Failed("commit_failed", "The switch to kcap local 1.3.0 could not be confirmed (disk full).", true));
 
             await Assert.That(h.Vm.Version).IsEqualTo("1.2.0");
         });
@@ -342,7 +345,7 @@ public class LocalStackViewModelTests {
 
             await Assert.That(h.Vm.BannerVisible).IsTrue();
             await Assert.That(h.Vm.Attention).IsFalse();
-            await Assert.That(h.Vm.Headline).IsEqualTo("Capacitor local 1.3.0 is not available yet");
+            await Assert.That(h.Vm.Headline).IsEqualTo("kcap local 1.3.0 is not available yet");
             await Assert.That(h.Vm.TryAgainVisible).IsTrue();
             await Assert.That(h.Vm.StateText).IsEqualTo("running");
         });

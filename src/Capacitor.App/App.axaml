@@ -2,7 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.App"
-             Name="Kurrent Capacitor"
+             Name="kcap"
              RequestedThemeVariant="Dark">
     <Application.Resources>
         <!-- The app palette. Kcap-prefixed keys never shadow a FluentTheme resource. ThemeVariant
@@ -50,18 +50,18 @@
             <SolidColorBrush x:Key="ScrollBarButtonBackgroundPressed" Color="#00000000" />
             <SolidColorBrush x:Key="ScrollViewerScrollBarsSeparatorBackground" Color="#00000000" />
             <ResourceDictionary.MergedDictionaries>
-                <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
-                <ResourceInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingResources.axaml" />
+                <ResourceInclude Source="avares://kcap-desktop/Views/PendingCardTemplates.axaml" />
+                <ResourceInclude Source="avares://kcap-desktop/Views/Onboarding/OnboardingResources.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://MarkView.Avalonia/Themes/MarkdownTheme.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/MarkdownStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/PullRequestStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/ChatBubbleStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/MarkdownStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/PullRequestStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/ChatBubbleStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/Onboarding/OnboardingStyles.axaml" />
         <!-- Popup panels drawn on our tokens: the flyout presenter IS the panel (no inner Border
              fighting the theme's own chrome). Opted into per flyout via FlyoutPresenterClasses.
              Fluent's ControlTheme defaults ScrollViewer.HorizontalScrollBarVisibility=Auto on the
@@ -130,7 +130,7 @@
         </Style>
         <!-- Standalone fields (Settings, setup, sign-in prompts): pin the Fluent ring to our
              tokens. Fluent paints PART_BorderElement from TextControlBorderBrush, which reads as
-             a second white box on Kcap surfaces. -->
+             a second white box on kcap surfaces. -->
         <Style Selector="TextBox.kcapField">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
@@ -741,6 +741,6 @@
             <Setter Property="Opacity" Value="1" />
             <Setter Property="RenderTransform" Value="scale(0.97, 0.72)" />
         </Style>
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/SectionStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/SectionStyles.axaml" />
     </Application.Styles>
 </Application>

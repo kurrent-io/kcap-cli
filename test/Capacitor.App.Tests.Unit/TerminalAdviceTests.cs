@@ -138,6 +138,15 @@ public class TerminalAdviceTests {
     }
 
     [Test]
+    [Arguments("kcap local 1.2.0 was left as it was.")]
+    [Arguments("kcap local could not be upgraded.")]
+    [Arguments("kcap local is already at 1.2.0.")]
+    public async Task Local_product_names_are_kept_while_command_advice_is_removed(string status) {
+        await Assert.That(TerminalAdvice.Strip(status + " Run kcap local upgrade to try again.")).IsEqualTo(status);
+        await Assert.That(TerminalAdvice.Strip(status + " kcap local logs shows why.")).IsEqualTo(status);
+    }
+
+    [Test]
     public async Task A_message_that_is_only_advice_leaves_nothing() {
         await Assert.That(TerminalAdvice.Strip("Fix the configuration, then run kcap setup --local again.")).IsNull();
     }

@@ -296,7 +296,7 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        await Assert.That(rendered).Contains("Kurrent Capacitor");
+        await Assert.That(rendered).Contains("kcap");
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 
@@ -1545,7 +1545,7 @@ public class MainWindowSmokeTests {
             await Assert.That(items.IsVisible).IsEqualTo(inWindow);
             await Assert.That(settingsButton.Content).IsEqualTo("Settings…");
             await Assert.That(changelogButton.Content).IsEqualTo("Changelog");
-            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Kurrent Capacitor ");
+            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("kcap ");
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
 
             settings.OnNext(() => opened++);

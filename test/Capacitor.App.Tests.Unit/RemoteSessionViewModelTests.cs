@@ -541,7 +541,8 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Reading, "the empty seed");
+            // Reading alone is not the seed: a poll before the detail fetch lands reads empty and still sets it.
+            await h.UntilAsync(vm, () => vm.Chat.HasSeed, "the empty seed");
             await WaitUntilAsync(() => vm.Chat.ShowsComposer && vm.Chat.ComposerHint.StartsWith("Enter sends", StringComparison.Ordinal), what: "the composer");
 
             vm.Chat.ComposerText = "do it";

@@ -409,7 +409,10 @@ public class HarnessesStepViewModelTests {
             return (new[] { l.Vm.SavedNote, l.Vm.CliMissingNote, l.Vm.ProviderKeyDetail }, c.Vm.SavedNote);
         });
 
-        foreach (var text in local) await Assert.That(text).DoesNotContain("kcap ");
+        foreach (var text in local) {
+            await Assert.That(text).DoesNotContain("kcap plugin");
+            await Assert.That(text).DoesNotContain("kcap config");
+        }
         await Assert.That(cloud).Contains("kcap plugin remove");
     }
 

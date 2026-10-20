@@ -1,5 +1,5 @@
 {
-  "description": "Kurrent Capacitor — automatic capture, search, and recall sessions",
+  "description": "kcap — automatic capture, search, and recall sessions",
   "hooks": {
     "SessionStart": [
       {

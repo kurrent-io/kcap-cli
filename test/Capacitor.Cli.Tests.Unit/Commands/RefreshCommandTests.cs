@@ -45,7 +45,7 @@ public class RefreshCommandTests {
         var vendors = RefreshCommand.Steps.Where(s => s[0] == "plugin").Select(s => s.Length == 4 ? s[2] : "claude").ToArray();
 
         await Assert.That(vendors).IsEquivalentTo(
-            ["--skills", "--codex", "--cursor", "--copilot", "--pi", "--opencode", "--gemini", "--kiro", "--antigravity", "--grok", "--muse", "claude"]);
+            ["--skills", "--codex", "--cursor", "--copilot", "--pi", "--opencode", "--gemini", "--kiro", "--antigravity", "--grok", "--mistral-vibe", "--muse", "claude"]);
         await Assert.That(RefreshCommand.Steps.Where(s => s[0] == "plugin").All(s => s[^1] == "--if-installed")).IsTrue();
     }
 
@@ -62,6 +62,18 @@ public class RefreshCommandTests {
         await Assert.That(runner.Calls.Count).IsEqualTo(RefreshCommand.Steps.Count);
         await Assert.That(stderr.ToString()).Contains("kcap plugin install --codex --if-installed: exit 2 (boom)");
         await Assert.That(stderr.ToString()).Contains("kcap plugin install --kiro --if-installed: timed out");
+    }
+
+    [Test]
+    public async Task App_migration_refresh_reports_errors_without_restarting_daemon_services() {
+        var runner = new RecordingRunner(args => args.Contains("--mistral-vibe")
+            ? new ProcessResult(1, "", "MCP write failed", false) : new ProcessResult(0, "", "", false));
+        var stderr = new StringWriter();
+        var exit = await new RefreshCommand(runner).RunAsync("/app/kcap", InstallKind.Unknown, () => null,
+            TextWriter.Null, stderr, appMigration: true);
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(runner.Calls.All(c => c.Args.Contains("--strict-refresh") && c.Args[0] == "plugin")).IsTrue();
+        await Assert.That(stderr.ToString()).Contains("MCP write failed");
     }
 
     [Test]

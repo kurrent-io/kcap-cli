@@ -54,7 +54,7 @@ public static class AntigravityHooks {
         new() {
             ["name"]        = BlockName,
             ["version"]     = PluginVersion,
-            ["description"] = "Kurrent Capacitor — session capture for Antigravity"
+            ["description"] = "kcap — session capture for Antigravity"
         };
 
     /// <summary>Builds kcap's block: every event mapped to its (shape-correct) entries.</summary>

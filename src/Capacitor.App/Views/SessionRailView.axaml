@@ -195,7 +195,7 @@
                     </StackPanel>
                     <Panel IsVisible="{Binding LocalStack, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <WrapPanel x:Name="RailLocalStackRow" DataContext="{Binding LocalStack}" x:DataType="vm:LocalStackViewModel">
-                            <TextBlock Text="Capacitor local" Classes="footerMeta"
+                            <TextBlock Text="kcap local" Classes="footerMeta"
                                        ToolTip.Tip="{x:Static vm:LocalStackViewModel.NameTip}" />
                             <TextBlock Classes="footerDot"
                                        IsVisible="{Binding Version, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -289,7 +289,7 @@
                                 <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
                                         FlyoutPresenterClasses="kcapPanel">
                                     <StackPanel Spacing="2" Margin="6" MinWidth="188">
-                                        <Button x:Name="RailHelpSetupButton" Classes="kcapGhost" Content="Set up Capacitor…"
+                                        <Button x:Name="RailHelpSetupButton" Classes="kcapGhost" Content="Set up kcap…"
                                                 Command="{Binding SetupCommand}" Click="OnHelpFlyoutItemClick"
                                                 IsVisible="{Binding CanOpenSetup}" HorizontalAlignment="Stretch"
                                                 HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
@@ -317,7 +317,7 @@
                                                 Padding="10,8" FontSize="13.5" />
                                         <StackPanel x:Name="RailAppMenuItems" Spacing="2" IsVisible="{Binding AppMenuInWindow}">
                                             <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
-                                            <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About Kurrent Capacitor"
+                                            <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About kcap"
                                                     Click="OnAboutClick" IsVisible="{Binding ShowsAbout}"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                     Padding="10,8" FontSize="13.5" />

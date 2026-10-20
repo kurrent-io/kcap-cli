@@ -284,7 +284,7 @@ public static class OAuthLoginFlow {
 
     /// <summary>
     /// GitHub authorization-code-with-PKCE via OidcClient's front-channel (authorize URL + PKCE +
-    /// state) over a 127.0.0.1 loopback, then the proxy-mediated JSON code-exchange to the Capacitor
+    /// state) over a 127.0.0.1 loopback, then the proxy-mediated JSON code-exchange to the kcap
     /// server (GitHub Apps need client_secret on the token POST, which the server adds). Returns the
     /// GitHub access token, or <c>null</c> on cancel/timeout/state-mismatch/error — a null is a hard
     /// failure (the caller does NOT fall back to device flow on null, only on a loopback bind exception
@@ -405,7 +405,7 @@ public static class OAuthLoginFlow {
     }
 
     /// <summary>
-    /// Exchanges a GitHub access token for a Capacitor JWT and returns the tokens WITHOUT saving —
+    /// Exchanges a GitHub access token for a kcap JWT and returns the tokens WITHOUT saving —
     /// persistence belongs to the caller's commit boundary. <c>null</c> means the exchange failed and
     /// the reason has already been reported through <paramref name="progress"/>. <paramref name="profile"/>
     /// only names the profile in that error text.
@@ -456,7 +456,7 @@ public static class OAuthLoginFlow {
     }
 
     /// <summary>
-    /// Reports the server's <c>/auth/token</c> error. When the server reports that the Capacitor
+    /// Reports the server's <c>/auth/token</c> error. When the server reports that the kcap
     /// GitHub App isn't installed on the user's org, appends a troubleshooting checklist — the most
     /// common cause is the device-flow consent being completed under a different GitHub account than
     /// the one with org membership.
@@ -476,7 +476,7 @@ public static class OAuthLoginFlow {
 
         progress.Error($"{prefix}: {serverMessage}");
         progress.Error("");
-        progress.Error("This usually means the Capacitor GitHub App isn't visible to your GitHub user.");
+        progress.Error("This usually means the kcap GitHub App isn't visible to your GitHub user.");
         progress.Error("Common fixes:");
         progress.Error("  1. Authorize as the right GitHub account. The device-flow page authorizes");
         progress.Error("     whoever is signed in to your browser — sign in to https://github.com as");
@@ -837,7 +837,7 @@ public static class OAuthLoginFlow {
             Provider       = AuthProvider.WorkOS,
             ClientId       = clientId,
             // The kcap server we authenticated FOR — not api.workos.com, which issued the
-            // token but says nothing about which Capacitor server will accept it.
+            // token but says nothing about which kcap server will accept it.
             ServerUrl      = canonical
         }, username);
     }
