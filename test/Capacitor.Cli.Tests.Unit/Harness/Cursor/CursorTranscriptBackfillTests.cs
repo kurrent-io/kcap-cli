@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
@@ -18,7 +19,7 @@ public class CursorTranscriptBackfillTests {
             (_, body) => { posted.Add(body); return new HttpResponseMessage(HttpStatusCode.OK); });
         using var client = new HttpClient(handler);
         var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(), path,
-            () => posted.Count > 0, TimeProvider.System, CancellationToken.None, finalDrain: finalDrain);
+            () => posted.Count > 0, Frozen, CancellationToken.None, finalDrain: finalDrain);
         await Assert.That(stats.LinesPosted).IsEqualTo(expectedLines);
         await Assert.That(stats.Failed).IsFalse();
     }
@@ -34,7 +35,7 @@ public class CursorTranscriptBackfillTests {
         using var client = new HttpClient(handler);
 
         var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(),
-            path, () => false, TimeProvider.System, CancellationToken.None);
+            path, () => false, Frozen, CancellationToken.None);
 
         await Assert.That(stats.LinesPosted).IsEqualTo(3);
         await Assert.That(posted.Count).IsEqualTo(2);
@@ -46,6 +47,10 @@ public class CursorTranscriptBackfillTests {
     }
 
     CursorMarkers Markers => new(Config.Root, TimeProvider.System);
+
+    /// For the multi-megabyte runs: the watermark and per-chunk HTTP caps run on the clock passed in, and
+    /// encoding these lines on a starved runner can outlast them in real time.
+    static FakeTimeProvider Frozen => new();
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
