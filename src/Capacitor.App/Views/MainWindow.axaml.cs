@@ -4,6 +4,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
+using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -57,8 +58,25 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    UiScaleSetting? _contentScale;
+    IDisposable? _contentScaleSubscription;
+
+    /// Magnifies everything in the window. Assigned by App; left null on a plainly-constructed
+    /// window, whose zoom shortcuts then do nothing.
+    public UiScaleSetting? ContentScale {
+        get => _contentScale;
+        set {
+            _contentScale = value;
+            _contentScaleSubscription?.Dispose();
+            _contentScaleSubscription = value?.Changes
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(scale => ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale));
+        }
+    }
+
     public MainWindow() {
         InitializeComponent();
+        KeyBindings.AddRange(ZoomShortcut.For(this));
         BindRefreshShortcuts();
         BindSettingsShortcut();
         KeepContentClearOfCaptionButtons();
