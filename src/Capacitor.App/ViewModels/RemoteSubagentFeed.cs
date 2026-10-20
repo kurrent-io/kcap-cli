@@ -17,8 +17,12 @@ internal sealed class RemoteSubagentFeed(
 
     readonly IChatDisplayRules? _rules = TranscriptChat.SubagentRulesFor(vendor);
     readonly CancellationTokenSource _lifetime = new();
+    /// The server's `from` counts the events already received, not an event number: a stream whose oldest
+    /// events have aged out starts above zero.
     long _next;
+    long _lastEvent = -1;
     long? _position;
+    string? _loggedFailure;
     DateTimeOffset? _fetchedAt;
     /// Reads made since the subagent was last seen running. Its last events can reach the server after
     /// the parent hears it ended, so one more read follows before the feed stops.
@@ -56,19 +60,28 @@ internal sealed class RemoteSubagentFeed(
                     return new(lines.Count > 0 || !ended ? FeedStatus.Ok : FeedStatus.Missing, lines);
                 }
                 if (fetch.Unauthorized) return Failed(lines, "not authorized to read this subagent");
-                if (fetch.Page is not { } dto) return Failed(lines, "could not reach the server");
+                if (fetch.Page is not { } dto) {
+                    if (fetch.Failure is { } why && why != _loggedFailure) log($"subagent read: {why}");
+                    _loggedFailure = fetch.Failure;
+                    return Failed(lines, fetch.Failure is null ? "could not reach the server" : "could not read this subagent");
+                }
+                _loggedFailure = null;
+                var from = _next;
+                var received = 0;
                 foreach (var evt in dto.Events ?? []) {
-                    if (evt.EventNumber < _next) continue;
-                    _next     = evt.EventNumber + 1;
-                    _position = evt.EventNumber;
+                    received++;
+                    if (evt.EventNumber <= _lastEvent) continue;
+                    _lastEvent = evt.EventNumber;
+                    _position  = evt.EventNumber;
                     if (evt.Body is { } body && Project(evt.EventType, body.GetRawText(), evt.EventNumber, evt.Timestamp) is { } line)
                         lines.Add(line);
                 }
                 if (dto.NextFrom is not { } nextFrom) {
+                    _next = from + received;
                     Settle(ended);
                     break;
                 }
-                _next = Math.Max(_next, nextFrom);
+                _next = Math.Max(from + received, nextFrom);
             }
         } catch (OperationCanceledException) when (token.IsCancellationRequested) {
             return new(FeedStatus.Ok, []);

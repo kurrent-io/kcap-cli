@@ -26,9 +26,10 @@ public class RemoteSubagentFeedTests {
             Requests.Add(from);
             if (FailRequest == Requests.Count) return Task.FromResult(new SubagentEventsFetch(null));
             if (Missing) return Task.FromResult(new SubagentEventsFetch(null, NotFound: true));
-            var page = Events.Where(e => e.EventNumber >= from).Take(PageSize).ToArray();
-            int? next = page.Length == PageSize && Events.Any(e => e.EventNumber > page[^1].EventNumber) ? (int)page[^1].EventNumber + 1 : null;
-            return Task.FromResult(new SubagentEventsFetch(new SubagentEventsDto { Events = page, NextFrom = next, LastEventNumber = Events.Count - 1 }));
+            // As the server pages: `from` counts events already received, from the oldest one still kept.
+            var page = Events.Skip((int)from).Take(PageSize).ToArray();
+            int? next = from + page.Length < Events.Count ? (int)from + page.Length : null;
+            return Task.FromResult(new SubagentEventsFetch(new SubagentEventsDto { Events = page, NextFrom = next, LastEventNumber = Events.Count == 0 ? -1 : Events[^1].EventNumber }));
         }
     }
 
@@ -115,6 +116,21 @@ public class RemoteSubagentFeedTests {
         clock.Advance(RemoteSubagentFeed.EndedPollInterval);
         feed.ReadAppended();
         await Assert.That(server.Requests.Count).IsEqualTo(3);
+    }
+
+    /// A stream whose oldest events have aged out numbers its first kept event above zero; the feed still pages
+    /// by how many it has received, so nothing after it is skipped.
+    [Test]
+    public async Task A_stream_that_starts_above_zero_is_read_whole() {
+        var server = new Server { PageSize = 2 };
+        server.Events.AddRange([Text(100, "a"), Text(101, "b"), Text(102, "c")]);
+        var clock = new FakeTimeProvider();
+        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => true, clock, _ => { });
+
+        await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("a,b,c");
+        server.Events.Add(Text(103, "d"));
+        clock.Advance(RemoteSubagentFeed.PollInterval);
+        await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("d");
     }
 
     /// The chat drops a failed read's lines, so a failure past a page already read keeps that page and

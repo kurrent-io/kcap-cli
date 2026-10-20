@@ -70,13 +70,13 @@ public static class ServerSessionHttp {
                 using var response = await client.GetAsync(url, ct).ConfigureAwait(false);
                 if (response.StatusCode == HttpStatusCode.NotFound) return new(null, NotFound: true);
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden) return new(null, Unauthorized: true);
-                if (!response.IsSuccessStatusCode) return new(null);
+                if (!response.IsSuccessStatusCode) return new(null, Failure: $"HTTP {(int)response.StatusCode}");
                 return new(await response.Content.ReadFromJsonAsync(RemoteModelsJsonContext.Default.SubagentEventsDto, ct).ConfigureAwait(false));
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
-        } catch (Exception) {
-            return new(null);
+        } catch (Exception ex) {
+            return new(null, Failure: ex.Message);
         }
     };
 
