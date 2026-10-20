@@ -110,17 +110,22 @@ public class AgentSessionsTests {
         await Assert.That(File.Exists(Note(Shell))).IsFalse();
     }
 
-    /// <summary>A dead claim recorded against another server waits, note and origin intact, for a pass on
-    /// that server, while its exit is still recorded for the takeover.</summary>
+    /// <summary>An end for a session recorded against another server is set aside per session, so a later
+    /// process reusing the pid cannot erase it, and a pass on that server takes it.</summary>
     [Test]
-    public async Task A_claim_recorded_against_another_server_is_kept_for_that_server() {
+    public async Task An_end_for_another_server_waits_for_that_server_whatever_reuses_the_pid() {
         DeadNoteWithOrigin(Shell, "away", "https://other.example");
 
         await Assert.That(Sessions.ReapExited("https://kcap.example")).IsEmpty();
-        await Assert.That(File.Exists(Note(Shell))).IsTrue();
+        await Assert.That(File.Exists(Note(Shell))).IsFalse().Because("the pid is free for the next claim");
         await Assert.That(Sessions.Liveness(SessionId.Parse("away")!)).IsEqualTo(SessionLiveness.Exited);
 
-        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value)).IsEquivalentTo(new[] { "away" });
+        DeadNoteWithOrigin(Shell, "next", "https://kcap.example");
+        await Assert.That(Sessions.ReapExited("https://kcap.example").Select(e => e.Session.Value)).IsEquivalentTo(new[] { "next" });
+
+        var taken = Sessions.ReapExited("https://other.example/");
+        await Assert.That(taken).IsEquivalentTo(new[] { new ExitedSession(SessionId.Parse("away")!, Here with { Server = "https://other.example" }) });
+        await Assert.That(Sessions.ReapExited("https://other.example")).IsEmpty().Because("taken once");
     }
 
     /// <summary>A claim writes its origin under its own start token; a repeat claim keeps the first one.</summary>

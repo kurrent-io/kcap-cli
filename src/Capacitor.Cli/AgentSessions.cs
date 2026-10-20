@@ -82,9 +82,10 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     /// </summary>
     public void Reap() => ReapExited(currentServer: null);
 
-    /// <summary><see cref="Reap"/>, returning the sessions it found gone. A dead claim recorded against a
-    /// server other than <paramref name="currentServer"/> keeps its note and origin, up to the exit
-    /// retention, so a later pass on that server can still end the session there.</summary>
+    /// <summary><see cref="Reap"/>, returning the sessions it found gone. An end for a session recorded
+    /// against a server other than <paramref name="currentServer"/> is set aside per session, away from
+    /// the pid a later process can reuse, and returned by a later pass on that server within the exit
+    /// retention.</summary>
     public IReadOnlyList<ExitedSession> ReapExited(string? currentServer) {
         var gone = new List<ExitedSession>();
         foreach (var pid in Claimants()) {
@@ -97,12 +98,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
                     var origin = ReadOrigin(pid, token);
                     if (SessionId.Parse(session) is { } exited) {
                         RecordExit(exited);
-                        if (origin is { Server: { } server } && !SameServer(server, currentServer)
-                         && _time.GetUtcNow() - File.GetLastWriteTimeUtc(Note(pid)) < ExitRetention)
-                            continue;
-
+                        if (origin is { Server: { } server } && !SameServer(server, currentServer)) DeferEnd(exited, origin);
                         // A session resumed under another process is running again: no end for it.
-                        if (LiveClaimant(exited) is null) gone.Add(new ExitedSession(exited, origin));
+                        else if (LiveClaimant(exited) is null) gone.Add(new ExitedSession(exited, origin));
                     }
 
                     DeleteOrigin(pid, token);
@@ -112,9 +110,45 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             } catch { }
         }
 
+        gone.AddRange(TakeDeferredEnds(currentServer));
         PruneExitRecords();
         return gone;
     }
+
+    void DeferEnd(SessionId session, ClaimOrigin origin) {
+        var path = DeferredEnd(session);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temp = $"{path}.{Environment.ProcessId}";
+        File.WriteAllText(temp, string.Join('\n', origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.Move(temp, path, overwrite: true);
+    }
+
+    /// <summary>The ends set aside for <paramref name="currentServer"/>, removed as they are returned; one
+    /// older than the exit retention is dropped, and one whose session is running again is dropped too.</summary>
+    IEnumerable<ExitedSession> TakeDeferredEnds(string? currentServer) {
+        var taken = new List<ExitedSession>();
+        try {
+            foreach (var path in Directory.EnumerateFiles(config.Path("agent-sessions", "deferred-ends"))) {
+                try {
+                    if (Path.GetFileName(path).Contains('.')) continue; // an unfinished write's temp
+                    var stale = _time.GetUtcNow() - File.GetLastWriteTimeUtc(path) >= ExitRetention;
+                    if (SessionId.Parse(Path.GetFileName(path)) is not { } session
+                     || File.ReadAllText(path).Split('\n') is not [var vendor, var server, var transcript, var cwd]) {
+                        File.Delete(path);
+                        continue;
+                    }
+                    if (!stale && !SameServer(server, currentServer)) continue;
+
+                    File.Delete(path);
+                    if (!stale && LiveClaimant(session) is null)
+                        taken.Add(new ExitedSession(session, new ClaimOrigin(NullIfEmpty(vendor), server, NullIfEmpty(transcript), NullIfEmpty(cwd))));
+                } catch { }
+            }
+        } catch { }
+        return taken;
+    }
+
+    static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
 
     internal static bool SameServer(string a, string? b) =>
         b is not null && string.Equals(a.TrimEnd('/'), b.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
@@ -208,6 +242,8 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
     string Note(int pid) => config.Path("agent-sessions", pid.ToString(CultureInfo.InvariantCulture));
 
+    string DeferredEnd(SessionId session) => config.Path("agent-sessions", "deferred-ends", session.Value.ToLowerInvariant());
+
     // Beside the note rather than in it, so a reader of the two-line note is unchanged. Its name is not
     // a pid, so Claimants passes over it.
     string Origin(int pid) => config.Path("agent-sessions", $"{pid.ToString(CultureInfo.InvariantCulture)}.origin");
@@ -241,7 +277,5 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         } catch {
             return null;
         }
-
-        static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
     }
 }
