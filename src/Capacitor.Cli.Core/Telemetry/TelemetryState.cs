@@ -27,15 +27,19 @@ public static class TelemetryState {
 
     static string StatePath(ConfigRoot config) => config.Path(StateFileName);
 
-    public static TelemetryStateFile Read(ConfigRoot config) {
+    public static TelemetryStateFile Read(ConfigRoot config) => TryRead(config) ?? default;   // corrupt or locked → defaults, never throw
+
+    /// <summary>The saved state, defaults when nothing is saved, or null when a saved file cannot be read:
+    /// for a caller that must not mistake an opt-out it cannot read for no choice at all.</summary>
+    public static TelemetryStateFile? TryRead(ConfigRoot config) {
         var path = StatePath(config);
-        if (!File.Exists(path)) return default;
+        if (!File.Exists(path)) return default(TelemetryStateFile);
 
         try {
             var json = File.ReadAllText(path);
             return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.TelemetryStateFile);
         } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
-            return default;   // corrupt or transiently locked → defaults, never throw
+            return null;
         }
     }
 
@@ -58,7 +62,8 @@ public static class TelemetryState {
         return saved;
     }
 
-    public static void MarkNoticeShown(ConfigRoot config) =>
+    /// <returns>Whether the marker was written.</returns>
+    public static bool MarkNoticeShown(ConfigRoot config) =>
         Mutate(config, state => state with { NoticeShown = true });
 
     /// <summary>

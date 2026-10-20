@@ -31,9 +31,17 @@ public sealed class TelemetryClient(
     /// waiting its turn from sending or spilling. A request already on the wire cannot be recalled,
     /// but if it fails its events are dropped rather than parked for a later run to send.
     /// </summary>
-    public void Discard() {
+    public void Discard() => Drop(latch: true);
+
+    /// <summary>
+    /// A consent another process withdrew: what is queued or spooled goes, but the client is not shut, so
+    /// events captured after the choice goes back on are sent as usual.
+    /// </summary>
+    void Withdraw() => Drop(latch: false);
+
+    void Drop(bool latch) {
         lock (_discardLock) {
-            _discarded = true;
+            if (latch) _discarded = true;
             // First, and inside the lock: a send registered but not yet begun then fails its token check
             // instead of going out. The flush unregisters under this lock before disposing, so the
             // source is live here; its callbacks never take this lock.
@@ -43,8 +51,13 @@ public sealed class TelemetryClient(
         }
     }
 
-    // Under the lock, so a spill can never land after the discard cleared the spool.
+    // Under the lock, so a spill can never land after the discard cleared the spool. A consent withdrawn
+    // since the capture keeps the events off the disk as well as off the wire.
     void Spill(List<TelemetryEvent> queued) {
+        if (consent?.Invoke() == false) {
+            Withdraw();
+            return;
+        }
         lock (_discardLock)
             if (!_discarded) spool.Append(queued);
     }
@@ -133,7 +146,7 @@ public sealed class TelemetryClient(
             }
 
             if (withdrawn) {
-                Discard();
+                Withdraw();
                 return false;
             }
 

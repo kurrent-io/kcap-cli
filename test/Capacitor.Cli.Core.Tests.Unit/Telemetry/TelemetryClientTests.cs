@@ -312,6 +312,27 @@ public class TelemetryClientTests {
         await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsFalse();
         await Assert.That(handler.Calls).IsEqualTo(0);
         await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+
+        // Withdrawn, not shut: once the choice is back on, what is captured after goes out.
+        consent = true;
+        client.Enqueue(Event("captured_after_reconsent"));
+        await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(handler.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>A consent withdrawn after a failed send keeps its events off the disk too.</summary>
+    [Test]
+    public async Task A_failed_send_does_not_spill_events_whose_consent_was_withdrawn() {
+        var handler = new StubHandler(HttpStatusCode.ServiceUnavailable);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool   = new TelemetrySpool(spoolPath);
+        var asked   = 0;
+        var client  = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System, () => ++asked == 1);
+        client.Enqueue(Event("captured_with_consent"));
+
+        await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsFalse();
+        await Assert.That(handler.Calls).IsEqualTo(1);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
     }
 
     sealed class GatedHandler(HttpStatusCode status) : HttpMessageHandler {

@@ -89,6 +89,33 @@ public class DesktopTelemetryTests {
         await Assert.That(telemetry.Enabled).IsFalse();
     }
 
+    /// <summary>A saved file it cannot read may hold an opt-out, so the app treats it as one.</summary>
+    [Test]
+    public async Task An_unreadable_saved_choice_stops_the_app_sending() {
+        var (telemetry, sink) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+
+        await File.WriteAllTextAsync(Config.Root.Path("telemetry.json"), "{not json");
+        telemetry.Capture("after", new JsonObject());
+
+        await Assert.That(sink.Events).IsEmpty();
+        await Assert.That(telemetry.Enabled).IsFalse();
+    }
+
+    /// <summary>The once-per-device event goes only with the marker that says it went; an unsaved marker shows
+    /// the notice again, which would otherwise send it twice.</summary>
+    [Test]
+    public async Task An_acknowledgement_that_cannot_be_saved_sends_no_first_run() {
+        var (telemetry, sink) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+        Directory.CreateDirectory(Config.Root.Path("telemetry.json"));
+
+        telemetry.AcknowledgeNotice(Config.Root);
+
+        await Assert.That(sink.Names).DoesNotContain("cli_first_run");
+        await Assert.That(telemetry.NoticeDue(Config.Root)).IsTrue();
+    }
+
     [Test]
     public async Task The_console_announcement_never_runs_for_the_desktop_app() {
         var (telemetry, sink) = Start(new RecordingTelemetrySink());

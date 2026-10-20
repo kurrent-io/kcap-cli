@@ -94,7 +94,9 @@ public sealed class CliTelemetry {
             () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time,
                 consent: startup.Source == TelemetryStartup.DesktopSource ? () => SavedConsent(config) : null));
 
-    static bool SavedConsent(ConfigRoot config) => TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Enabled;
+    // A saved file that cannot be read may hold an opt-out, so it counts as one.
+    static bool SavedConsent(ConfigRoot config) =>
+        TelemetryState.TryRead(config) is { } state && TelemetrySettings.Resolve(state.Enabled).Enabled;
 
     /// <param name="sink">
     /// Invoked only when the facade comes up live, so a run that is opted out builds no HTTP
@@ -308,8 +310,8 @@ public sealed class CliTelemetry {
                 "Opt out: kcap config set telemetry off (or DO_NOT_TRACK=1).");
             Console.Error.WriteLine("https://capacitor.kurrent.io/privacy");
 
-            TelemetryState.MarkNoticeShown(config);
-            Capture("cli_first_run", new JsonObject());
+            // Once per device only if the marker that says so was saved; otherwise the next run shows it again.
+            if (TelemetryState.MarkNoticeShown(config)) Capture("cli_first_run", new JsonObject());
         } catch { }
     }
 
@@ -328,10 +330,9 @@ public sealed class CliTelemetry {
         try {
             if (!NoticeDue(config)) return;
 
-            TelemetryState.MarkNoticeShown(config);
             // Sent now: the marker is already saved, so an app killed before its next flush would
-            // otherwise lose the once-per-device event for good.
-            CaptureNow("cli_first_run", new JsonObject());
+            // otherwise lose the once-per-device event for good. An unsaved marker shows the notice again.
+            if (TelemetryState.MarkNoticeShown(config)) CaptureNow("cli_first_run", new JsonObject());
         } catch { }
     }
 
