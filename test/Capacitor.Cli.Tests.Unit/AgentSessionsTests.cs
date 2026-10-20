@@ -144,19 +144,39 @@ public class AgentSessionsTests {
         Sessions.Claim(Agent, Session, Here);
         Sessions.Claim(Agent, Session, new ClaimOrigin("claude", null, null, null));
 
-        await Assert.That(File.ReadAllText(Note(Agent) + ".origin"))
-            .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example\n/t/x.jsonl\n/repo");
+        await Assert.That(AgentOrigin()).IsEqualTo(Here);
     }
+
+    ClaimOrigin? AgentOrigin() => Sessions.ReadOrigin(Agent, ProcessStartToken.ForPid(Agent)!);
 
     /// <summary>A claim made before the server was known leaves its end nowhere to go, so a later claim
     /// that knows the server fills it in.</summary>
+    /// <remarks>What the first claim recorded and the later one leaves out is kept.</remarks>
     [Test]
     public async Task A_repeat_claim_fills_in_a_server_the_first_lacked() {
-        Sessions.Claim(Agent, Session, new ClaimOrigin("claude", null, null, null));
-        Sessions.Claim(Agent, Session, Here);
+        Sessions.Claim(Agent, Session, Here with { Server = null });
+        Sessions.Claim(Agent, Session, new ClaimOrigin(null, "https://kcap.example", null, null));
 
-        await Assert.That(File.ReadAllText(Note(Agent) + ".origin"))
-            .IsEqualTo($"{ProcessStartToken.ForPid(Agent)}\nclaude\nhttps://kcap.example\n/t/x.jsonl\n/repo");
+        await Assert.That(AgentOrigin()).IsEqualTo(Here);
+    }
+
+    /// <summary>A path may hold a newline on Unix; the origin still reads back whole.</summary>
+    [Test]
+    public async Task An_origin_with_a_newline_in_a_path_reads_back_whole() {
+        var origin = Here with { Cwd = "/re\npo%41" };
+        Sessions.Claim(Agent, Session, origin);
+
+        await Assert.That(AgentOrigin()).IsEqualTo(origin);
+    }
+
+    /// <summary>A session id may hold a dot, which no unfinished write may be mistaken for.</summary>
+    [Test]
+    public async Task A_deferred_end_for_a_dotted_session_is_taken() {
+        DeadNoteWithOrigin(Shell, "a.b", "https://other.example");
+        Sessions.ReapExited("https://kcap.example");
+
+        await Assert.That(Sessions.ReapExited("https://other.example").Select(e => e.Session.Value))
+            .IsEquivalentTo(new[] { "a.b" });
     }
 
     /// <summary>A deferred end is filed under a case-folded name, but the server is told the id as claimed.</summary>

@@ -317,6 +317,8 @@ internal sealed class AgentHookPoster(
                 ["reason"]          = "parent_exited",
                 ["ended_at"]        = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
             }.ToJsonString();
+            // An earlier end of a session since resumed left a marker that would discard this one.
+            spool.ClearEnded(session.Session.Value);
             if (spool.Append(session.Session.Value, $"session-end/{vendor}", body)) spooled++;
         }
 

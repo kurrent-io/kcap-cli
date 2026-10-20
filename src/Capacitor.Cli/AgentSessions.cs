@@ -39,7 +39,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
             var note = Note(agentPid);
             var text = $"{session}\n{token}";
             if (File.Exists(note) && File.ReadAllText(note) == text) {
-                if (origin is not null && ReadOrigin(agentPid, token) is not { Server: not null }) WriteOrigin(agentPid, token, origin);
+                if (origin is not null && ReadOrigin(agentPid, token) is var known and not { Server: not null })
+                    WriteOrigin(agentPid, token, known is null ? origin : new ClaimOrigin(
+                        origin.Vendor ?? known.Vendor, origin.Server, origin.TranscriptPath ?? known.TranscriptPath, origin.Cwd ?? known.Cwd));
                 return;
             }
 
@@ -122,8 +124,11 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     void DeferEnd(SessionId session, ClaimOrigin origin) {
         var path = DeferredEnd(session);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var temp = $"{path}.{Environment.ProcessId}";
-        File.WriteAllText(temp, string.Join('\n', session, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        // Staged outside the folder TakeDeferredEnds lists, since a session id may itself hold a dot.
+        var staging = config.Path("agent-sessions", "deferred-ends-staging");
+        Directory.CreateDirectory(staging);
+        var temp = Path.Combine(staging, $"{Path.GetFileName(path)}.{Environment.ProcessId}");
+        File.WriteAllText(temp, Fields(session.Value, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
         File.Move(temp, path, overwrite: true);
     }
 
@@ -134,10 +139,9 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
         try {
             foreach (var path in Directory.EnumerateFiles(config.Path("agent-sessions", "deferred-ends"))) {
                 try {
-                    if (Path.GetFileName(path).Contains('.')) continue; // an unfinished write's temp
                     var stale = _time.GetUtcNow() - File.GetLastWriteTimeUtc(path) >= ExitRetention;
                     // Named case-folded so one session is set aside once; the id as claimed is inside.
-                    if (File.ReadAllText(path).Split('\n') is not [var id, var vendor, var server, var transcript, var cwd]
+                    if (ReadFields(path) is not [var id, var vendor, var server, var transcript, var cwd]
                      || SessionId.Parse(id) is not { } session) {
                         File.Delete(path);
                         continue;
@@ -154,6 +158,11 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
     }
 
     static string? NullIfEmpty(string value) => value.Length > 0 ? value : null;
+
+    // One field per line, each escaped: a path may hold a newline, and a missing field is empty.
+    static string Fields(params string?[] fields) => string.Join('\n', fields.Select(f => Uri.EscapeDataString(f ?? "")));
+
+    static string[] ReadFields(string path) => [.. File.ReadAllText(path).Split('\n').Select(Uri.UnescapeDataString)];
 
     internal static bool SameServer(string a, string? b) => ServerIdentity.SameServer(a, b);
 
@@ -263,19 +272,19 @@ sealed class AgentSessions(ConfigRoot config, Func<int, int?> parentOf, TimeProv
 
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temp = $"{path}.{Environment.ProcessId}";
-        File.WriteAllText(temp, string.Join('\n', token, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
+        File.WriteAllText(temp, Fields(token, origin.Vendor, origin.Server, origin.TranscriptPath, origin.Cwd));
         File.Move(temp, path, overwrite: true);
     }
 
     void DeleteOrigin(int pid, string token) {
         try {
-            if (File.ReadAllText(Origin(pid)).Split('\n') is [var owner, ..] && owner == token) File.Delete(Origin(pid));
+            if (ReadFields(Origin(pid)) is [var owner, ..] && owner == token) File.Delete(Origin(pid));
         } catch { }
     }
 
-    ClaimOrigin? ReadOrigin(int pid, string token) {
+    internal ClaimOrigin? ReadOrigin(int pid, string token) {
         try {
-            return File.ReadAllText(Origin(pid)).Split('\n') is [var owner, var vendor, var server, var transcript, var cwd] && owner == token
+            return ReadFields(Origin(pid)) is [var owner, var vendor, var server, var transcript, var cwd] && owner == token
                 ? new ClaimOrigin(NullIfEmpty(vendor), NullIfEmpty(server), NullIfEmpty(transcript), NullIfEmpty(cwd))
                 : null;
         } catch {

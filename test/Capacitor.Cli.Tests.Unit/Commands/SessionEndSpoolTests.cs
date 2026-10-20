@@ -47,6 +47,19 @@ public class SessionEndSpoolTests {
         await Assert.That(node["ended_at"]).IsNotNull();
     }
 
+    /// A session ended once and then resumed holds the spool's ended marker, which would discard its
+    /// next end unseen.
+    [Test]
+    public async Task A_resumed_sessions_earlier_end_does_not_swallow_this_one() {
+        var spool = new HookSpool(Config.Root, TimeProvider.System);
+        spool.MarkEnded("here");
+
+        AgentHookPoster.SpoolEnds([Exited("here")], "https://kcap.example", spool, TimeProvider.System);
+
+        await Assert.That(spool.IsMarkedEnded("here")).IsFalse();
+        await Assert.That(spool.HasBacklog("here")).IsTrue();
+    }
+
     [Test]
     public async Task Nothing_is_queued_without_a_server_to_post_to() =>
         await Assert.That(AgentHookPoster.SpoolEnds([Exited("here")], null, new HookSpool(Config.Root, TimeProvider.System), TimeProvider.System))
