@@ -116,8 +116,8 @@ public class PiHostedLaunchTests {
 
     [Test]
     [NotInParallel]
-    public async Task BuildPsi_OmitsDaemonIdAndEpoch_WhenContextCarriesNone() {
-        // Seeded so a dropped variable is as visible as a stamped one: unset, both read back null.
+    public async Task BuildPsi_PassesInheritedDaemonIdAndEpochThrough_WhenContextCarriesNone() {
+        // The values must be seeded: with nothing inherited, a dropped variable would match.
         using var id    = EnvScope.Exclusive("KCAP_DAEMON_ID", "inherited-id");
         using var epoch = EnvScope.Exclusive("KCAP_DAEMON_EPOCH", "inherited-epoch");
 
