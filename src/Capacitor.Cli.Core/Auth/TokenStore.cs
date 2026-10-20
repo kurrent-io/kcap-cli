@@ -33,8 +33,8 @@ public record StoredTokens {
     [JsonPropertyName("server_url")]
     public string? ServerUrl { get; init; }
 
-    /// <summary>The WorkOS API base the sign-in used, null for production. Omitted when null, so a
-    /// production file is unchanged; read only through <see cref="WorkOSApiBaseRule.ForTokens"/>.</summary>
+    /// <summary>The WorkOS API base the sign-in used, null for production and then omitted from the
+    /// file. Read only through <see cref="WorkOSApiBaseRule.ForTokens"/>.</summary>
     [JsonPropertyName("workos_api_base")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? WorkOSApiBase { get; init; }

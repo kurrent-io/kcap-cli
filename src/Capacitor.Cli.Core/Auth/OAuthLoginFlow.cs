@@ -602,7 +602,7 @@ public static class OAuthLoginFlow {
     }
 
     /// <summary>
-    /// RFC 8628 against AuthKit (<c>api.workos.com/user_management/*</c>), NOT Connect's
+    /// RFC 8628 against AuthKit at <paramref name="apiBase"/><c>/user_management/*</c>, NOT Connect's
     /// <c>{authkit-domain}/oauth2/*</c> — that one returns no organization and requires a client secret.
     /// Public client: no secret anywhere in this flow, so the proxy is not involved.
     /// </summary>
@@ -706,9 +706,7 @@ public static class OAuthLoginFlow {
         // injected test seam.
         //
         // Scoped to the whole ladder, not to the login task: the fall-through paths below still run
-        // with it alive. That gives the drain only Dispose's own bounded wait once login succeeds,
-        // rather than the longer tail the facade used to provide — enough in practice (the production
-        // round trip merged in under a second) but genuinely tighter, not equivalent.
+        // with it alive, and once login succeeds the drain gets only Dispose's own bounded wait.
         using LoopbackBrowser? created = browser is null
             ? new LoopbackBrowser(
                 launcher, time, progress, keys.CanWatch ? WorkOSBrowserHint() : null, join)

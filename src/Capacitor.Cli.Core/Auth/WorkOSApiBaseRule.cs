@@ -29,7 +29,7 @@ public static class WorkOSApiBaseRule {
     /// server so an edited token file cannot redirect its refresh token.</summary>
     public static string ForTokens(StoredTokens tokens) => Resolve(tokens.ServerUrl, tokens.WorkOSApiBase, out _);
 
-    /// <summary>What a token records: null for production, so its file reads as it always has.</summary>
+    /// <summary>What a token records: null for production, so the field is omitted from its file.</summary>
     public static string? Stamp(string apiBase) => apiBase == WorkOSClient.ApiBase ? null : apiBase;
 
     public static string RefusedWarning(string serverUrl, string advertised) =>

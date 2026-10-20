@@ -23,8 +23,8 @@ public sealed class WorkOSClient(
         TimeSpan?          replayBudget   = null,
         TimeSpan?          replayBackoff  = null) {
     /// <summary>
-    /// Production AuthKit's API host. Every sign-in call takes its base from
-    /// <see cref="WorkOSApiBaseRule"/>; the machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.
+    /// Production AuthKit's API host, and the only base tenant discovery uses. A known-server sign-in
+    /// takes its base from <see cref="WorkOSApiBaseRule"/>; the machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.
     /// </summary>
     public const string ApiBase = "https://api.workos.com";
 
