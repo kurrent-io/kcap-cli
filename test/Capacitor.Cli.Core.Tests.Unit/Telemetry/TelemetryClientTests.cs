@@ -243,4 +243,52 @@ public class TelemetryClientTests {
         await Assert.That(handler.LastBody!.Contains("organization")).IsTrue();
         await Assert.That(handler.LastBody!.Contains("acme")).IsTrue();
     }
+
+    /// <summary>An opt-out leaves nothing for a later flush to send: neither what was queued nor what an
+    /// earlier failure parked on disk.</summary>
+    [Test]
+    public async Task After_a_discard_a_flush_sends_nothing_and_the_spool_is_empty() {
+        var handler = new StubHandler(HttpStatusCode.OK);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var client  = Client(handler, spoolPath, out var spool);
+        spool.Append([Event("parked_event")]);
+        client.Enqueue(Event("queued_event"));
+
+        client.Discard();
+        await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(2));
+
+        await Assert.That(handler.Calls).IsEqualTo(0);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
+    /// <summary>A request already on the wire cannot be recalled, but if it fails it must not park its
+    /// events for a later run to send.</summary>
+    [Test]
+    public async Task A_flush_in_flight_at_the_discard_does_not_spool_its_events_on_failure() {
+        var handler = new GatedHandler(HttpStatusCode.ServiceUnavailable);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+        client.Enqueue(Event("in_flight_event"));
+
+        var flush = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10));
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        client.Discard();
+        handler.Release.SetResult();
+        await flush;
+
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
+    sealed class GatedHandler(HttpStatusCode status) : HttpMessageHandler {
+        public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Started.TrySetResult();
+            await Release.Task;
+
+            return new HttpResponseMessage(status);
+        }
+    }
 }

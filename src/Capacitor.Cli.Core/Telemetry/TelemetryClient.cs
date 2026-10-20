@@ -14,6 +14,7 @@ public sealed class TelemetryClient(
     readonly List<TelemetryEvent> _queue = [];
     readonly Lock                 _flushLock = new();
     Task<bool>                    _lastFlush = Task.FromResult(true);
+    volatile bool                 _discarded;
 
     readonly TimeProvider _clock = timeProvider;
 
@@ -22,12 +23,18 @@ public sealed class TelemetryClient(
     }
 
     /// <summary>
-    /// Drops the queue without spooling it. Nothing here has been shipped, and the caller is
-    /// turning telemetry off — spilling to disk would park events for a later run to send, which
-    /// is the opposite of what the opt-out asked for.
+    /// The caller is turning telemetry off: drops the queue and the spool, and stops any flush still
+    /// waiting its turn from sending or spilling. A request already on the wire cannot be recalled,
+    /// but if it fails its events are dropped rather than parked for a later run to send.
     /// </summary>
     public void Discard() {
+        _discarded = true;
         lock (_queue) _queue.Clear();
+        try { spool.Clear(); } catch { }
+    }
+
+    void Spill(List<TelemetryEvent> queued) {
+        if (!_discarded) spool.Append(queued);
     }
 
     /// <summary>Ships queued + previously spooled events. Returns false when nothing reached
@@ -59,6 +66,8 @@ public sealed class TelemetryClient(
             // An earlier flush's failure is its own; this one still runs and must not throw.
         }
 
+        if (_discarded) return false;
+
         List<TelemetryEvent> queued;
         lock (_queue) {
             queued = [.. _queue];
@@ -66,7 +75,7 @@ public sealed class TelemetryClient(
         }
 
         if (_clock.GetElapsedTime(start) >= budget) {
-            spool.Append(queued);
+            Spill(queued);
             return false;
         }
 
@@ -94,7 +103,7 @@ public sealed class TelemetryClient(
             // no chance of completing within budget.
             var remaining = budget - _clock.GetElapsedTime(start);
             if (remaining <= TimeSpan.Zero) {
-                spool.Append(queued);
+                Spill(queued);
                 return false;
             }
 
@@ -106,7 +115,7 @@ public sealed class TelemetryClient(
             var response = await http.PostAsync($"{endpoint.TrimEnd('/')}/batch/", content, cts.Token);
 
             if (!response.IsSuccessStatusCode) {
-                spool.Append(queued);
+                Spill(queued);
                 return false;
             }
 
@@ -116,7 +125,7 @@ public sealed class TelemetryClient(
             // Telemetry code must NEVER throw: under NativeAOT this becomes SIGABRT. Any exception —
             // whether from draining the spool, building the payload, setting the budget, network/serialization errors, or
             // anything else — spills the queued events for replay, exactly like a failed POST.
-            spool.Append(queued);
+            Spill(queued);
             return false;
         }
     }
