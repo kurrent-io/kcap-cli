@@ -18,8 +18,11 @@ public static class ClaudeSubagentFiles {
     /// runs; one still being written, or naming no call, is skipped until a later read.
     public static IReadOnlyList<(string ToolUseId, string AgentId)> Starts(string parentTranscriptPath, IReadOnlySet<string> known) {
         var found = new List<(string, string)>();
+        var directory = DirectoryOf(parentTranscriptPath);
+        // Most sessions have no subagents, and this runs on every poll.
+        if (!Directory.Exists(directory)) return found;
         try {
-            foreach (var file in Directory.EnumerateFiles(DirectoryOf(parentTranscriptPath), Prefix + "*" + MetaSuffix)) {
+            foreach (var file in Directory.EnumerateFiles(directory, Prefix + "*" + MetaSuffix)) {
                 var name    = Path.GetFileName(file);
                 var agentId = name[Prefix.Length..^MetaSuffix.Length];
                 if (agentId.Length == 0 || known.Contains(agentId)) continue;
@@ -32,9 +35,7 @@ public static class ClaudeSubagentFiles {
     static string? ToolUseId(string metaPath) {
         try {
             using var doc = JsonDocument.Parse(File.ReadAllBytes(metaPath));
-            return doc.RootElement.ValueKind == JsonValueKind.Object
-                && doc.RootElement.TryGetProperty("toolUseId", out var id) && id.ValueKind == JsonValueKind.String
-                && id.GetString() is { Length: > 0 } value ? value : null;
+            return doc.RootElement.Str("toolUseId") is { Length: > 0 } value ? value : null;
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) {
             return null;
         }

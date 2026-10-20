@@ -40,7 +40,8 @@ internal sealed class RemoteSubagentFeed(
         try {
             for (var page = 0; page < MaxPagesPerRead; page++) {
                 var fetch = read(sessionId, agentId, _next, token).GetAwaiter().GetResult();
-                if (fetch.NotFound) return new(lines.Count > 0 ? FeedStatus.Ok : FeedStatus.Missing, lines);
+                // The server admits the route once its subagent row projects, which can trail the start record.
+                if (fetch.NotFound) return new(lines.Count > 0 || !ended ? FeedStatus.Ok : FeedStatus.Missing, lines);
                 if (fetch.Unauthorized) return Failed(lines, "not authorized to read this subagent");
                 if (fetch.Page is not { } dto) return Failed(lines, "could not reach the server");
                 foreach (var evt in dto.Events ?? []) {

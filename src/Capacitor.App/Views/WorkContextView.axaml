@@ -140,6 +140,9 @@
             <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="13" />
         </Style>
+        <Style Selector="Button.toggle.openable">
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
         <Style Selector="Button.toggle:pointerover Border.card">
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
         </Style>
@@ -235,8 +238,8 @@
             </Grid>
         </DataTemplate>
         <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
-            <!-- Only a subagent whose id is known opens; any other row reads the same but takes no click. -->
-            <Button x:Name="RunRowButton" Classes="toggle" Cursor="Hand" IsHitTestVisible="{Binding CanOpen}"
+            <!-- Only a subagent whose id is known opens; any other row reads the same, and its click does nothing. -->
+            <Button x:Name="RunRowButton" Classes="toggle" Classes.openable="{Binding CanOpen}"
                     Command="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).OpenRunCommand}"
                     CommandParameter="{Binding}" AutomationProperties.Name="{Binding Name}">
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">

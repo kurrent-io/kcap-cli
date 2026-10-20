@@ -764,10 +764,8 @@ public class WorkspaceViewModelTests {
             var time = new FakeTimeProvider();
             var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time);
             var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
-            var subagents = Capacitor.Cli.Core.Harness.Claude.ClaudeSubagentFiles.DirectoryOf(path);
-            Directory.CreateDirectory(subagents);
-            await File.WriteAllTextAsync(Path.Combine(subagents, "agent-s1.meta.json"), """{"toolUseId":"toolu_A","requestShape":"foreground"}""");
-            await File.WriteAllTextAsync(Path.Combine(subagents, "agent-s1.jsonl"),
+            Tmp.CreateFile(["t", "subagents", "agent-s1.meta.json"], """{"toolUseId":"toolu_A","requestShape":"foreground"}""");
+            Tmp.CreateFile(["t", "subagents", "agent-s1.jsonl"],
                 """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found the chat surfaces"}]}}""" + "\n");
 
             daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });

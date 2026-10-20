@@ -25,7 +25,10 @@ public class SubagentPaneViewModelTests {
         // A reset replays the start before the id, as the feed reads them.
         runs.Clear();
         runs.Apply(Signals(new RunSignal.Started("c1", "Explore", "Map", time.GetUtcNow())));
-        runs.Apply(Signals(new RunSignal.Identified("c1", "s1"), new RunSignal.Finished("c1", null, RunOutcome.Done, time.GetUtcNow())));
+        runs.Apply(Signals(new RunSignal.Finished("c1", null, RunOutcome.Done, time.GetUtcNow())));
+        // The row is the same call, so its end shows before its id is replayed.
+        await Assert.That(pane.IsRunning).IsFalse();
+        runs.Apply(Signals(new RunSignal.Identified("c1", "s1")));
 
         await Assert.That(closed).IsEqualTo(0);
         await Assert.That(pane.Row).IsSameReferenceAs(runs.Rows.Single());

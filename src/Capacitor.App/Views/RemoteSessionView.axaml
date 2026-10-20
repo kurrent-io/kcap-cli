@@ -65,8 +65,14 @@
             <!-- The active-tab flag lives on this VM, which is not the pane's DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsChatPane}" />
-            <views:SubagentPaneView x:Name="SubagentHost" DataContext="{Binding Subagent}"
-                                    IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsSubagentPane}" />
+            <!-- Built only while a subagent is open, so the closed pane adds no second chat to the tree. -->
+            <ContentControl x:Name="SubagentHost" Content="{Binding Subagent}" IsVisible="{Binding ShowsSubagentPane}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:SubagentPaneViewModel">
+                        <views:SubagentPaneView />
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
 
             <Grid x:Name="TerminalPane" RowDefinitions="*,Auto" IsVisible="{Binding ShowsTerminalPane}">
                 <!-- FontFamily MUST be set: the control's default is "Cascadia Mono", which only

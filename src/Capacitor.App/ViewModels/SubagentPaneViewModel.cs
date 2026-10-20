@@ -68,8 +68,7 @@ public sealed class SubagentPaneViewModel : ReactiveObject {
         _rowWatch?.Dispose();
         _rowWatch = row.WhenAnyValue(r => r.IsRunning, r => r.AgentId, (running, agentId) => (Running: running, AgentId: agentId))
             .Subscribe(state => {
-                if (state.AgentId is null) return;
-                if (state.AgentId != _agentId) _back();
+                if (state.AgentId is not null && state.AgentId != _agentId) _back();
                 else _running.OnNext(state.Running);
             });
     }

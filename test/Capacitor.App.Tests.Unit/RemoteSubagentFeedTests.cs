@@ -71,12 +71,16 @@ public class RemoteSubagentFeedTests {
         await Assert.That(Texts(feed.ReadAppended())).IsEqualTo("g");
     }
 
+    /// The server admits the route once its subagent row projects, which can trail the start record: a running
+    /// subagent not there yet is still being waited for, an ended one is missing.
     [Test]
-    public async Task A_subagent_the_server_has_not_written_yet_reads_as_missing() {
+    [Arguments(true, FeedStatus.Ok)]
+    [Arguments(false, FeedStatus.Missing)]
+    public async Task A_subagent_the_server_has_not_written_yet(bool running, FeedStatus status) {
         var server = new Server { Missing = true };
-        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => true, new FakeTimeProvider(), _ => { });
+        using var feed = new RemoteSubagentFeed("s1", "a1", "claude", server.Read, () => running, new FakeTimeProvider(), _ => { });
 
-        await Assert.That(feed.ReadAppended().Status).IsEqualTo(FeedStatus.Missing);
+        await Assert.That(feed.ReadAppended().Status).IsEqualTo(status);
     }
 
     /// The chat drops a failed read's lines, so a failure past a page already read keeps that page and

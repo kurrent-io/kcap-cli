@@ -632,4 +632,18 @@ public class SessionRunsTests {
         await Assert.That(s.Rows[0].IsEnded).IsTrue();
         await Assert.That(s.Rows[1].IsEnded).IsFalse();
     }
+
+    /// An id can beat its call's own line: by call it waits for that row, without one it waits until one row
+    /// is the only candidate.
+    [Test]
+    public async Task An_id_that_arrives_before_its_row_names_it_once_it_starts() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Identified("c1", "a1"), Identified(null, "b")));
+
+        s.Apply(Signals(Started("c1")));
+        s.Apply(Signals(Started("c2", T0.AddSeconds(1))));
+
+        await Assert.That(s.Rows[0].AgentId).IsEqualTo("a1");
+        await Assert.That(s.Rows[1].AgentId).IsEqualTo("b");
+    }
 }

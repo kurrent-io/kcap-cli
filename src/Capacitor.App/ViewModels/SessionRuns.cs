@@ -17,6 +17,11 @@ public sealed class SessionRuns(TimeProvider time) {
     readonly Dictionary<string, RunSignal.Started> _pending = new(StringComparer.Ordinal);
     /// The row an agent id currently belongs to; the latest Detached wins.
     readonly Dictionary<string, RunRow> _byAgent = new(StringComparer.Ordinal);
+    /// Ids that arrived before the row they name: by call when the source knew it, otherwise in arrival
+    /// order. The local meta file and the server's start record can both beat the call's own line.
+    readonly Dictionary<string, string> _earlyByCall = new(StringComparer.Ordinal);
+    readonly List<string> _earlyUnpaired = [];
+    const int MaxEarly = 16;
     /// Rows per presented state, indexed by the state's value.
     readonly int[] _counts = new int[Enum.GetValues<RunState>().Length];
     int _runningBackground;
@@ -81,6 +86,8 @@ public sealed class SessionRuns(TimeProvider time) {
         _byCall.Clear();
         _byAgent.Clear();
         _pending.Clear();
+        _earlyByCall.Clear();
+        _earlyUnpaired.Clear();
         Refresh();
     }
 
@@ -100,6 +107,10 @@ public sealed class SessionRuns(TimeProvider time) {
         var row = new RunRow(started.CallId, started.Name, started.Description, started.At, started.Kind);
         _byCall[started.CallId] = row;
         _rows.Add(row);
+        if (row.Kind == RunKind.Agent) {
+            if (_earlyByCall.Remove(started.CallId, out var agentId)) Name(row, agentId);
+            else PairUnpaired();
+        }
         return row;
     }
 
@@ -110,8 +121,7 @@ public sealed class SessionRuns(TimeProvider time) {
         }
         if (row.IsEnded) return;
         row.MarkBackground();
-        row.Identify(detached.AgentId);
-        _byAgent[detached.AgentId] = row;
+        Name(row, detached.AgentId);
     }
 
     /// Names the subagent a call started, from a source that reads it outside the projected lines.
@@ -120,20 +130,39 @@ public sealed class SessionRuns(TimeProvider time) {
     /// An id with no call names a subagent only when one running subagent is still unnamed: parallel calls
     /// and their start records arrive in no fixed order, so with two candidates either could be the one.
     void Identify(RunSignal.Identified identified) {
-        RunRow? row;
-        if (identified.CallId is { } callId) row = _byCall.GetValueOrDefault(callId);
-        // An agent already placed by its own call stays there: a guess never moves it.
-        else if (_byAgent.ContainsKey(identified.AgentId) || _rows.Any(r => r.AgentId == identified.AgentId)) return;
-        else {
-            var unnamed = _rows.Where(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false }).Take(2).ToList();
-            row = unnamed.Count == 1 ? unnamed[0] : null;
+        if (identified.CallId is { } callId) {
+            if (_byCall.TryGetValue(callId, out var row)) {
+                if (row.Kind == RunKind.Agent) Name(row, identified.AgentId);
+                PairUnpaired();
+            } else if (_earlyByCall.Count < MaxEarly) {
+                _earlyByCall[callId] = identified.AgentId;
+            }
+            return;
         }
-        if (row is not { Kind: RunKind.Agent }) return;
-        if (row.AgentId is { } previous && previous != identified.AgentId
+        // An agent already placed by its own call stays there: a guess never moves it.
+        if (_byAgent.ContainsKey(identified.AgentId) || _rows.Any(r => r.AgentId == identified.AgentId)) return;
+        if (!_earlyUnpaired.Contains(identified.AgentId)) {
+            if (_earlyUnpaired.Count == MaxEarly) _earlyUnpaired.RemoveAt(0);
+            _earlyUnpaired.Add(identified.AgentId);
+        }
+        PairUnpaired();
+    }
+
+    /// One nameless id meets one running unnamed subagent: with more of either, the order says nothing.
+    void PairUnpaired() {
+        if (_earlyUnpaired.Count != 1) return;
+        var unnamed = _rows.Where(r => r is { Kind: RunKind.Agent, AgentId: null, IsEnded: false, IsBackground: false }).Take(2).ToList();
+        if (unnamed.Count == 1) Name(unnamed[0], _earlyUnpaired[0]);
+    }
+
+    /// The call's own id outranks an earlier guess, and the agent's end then finds this row.
+    void Name(RunRow row, string agentId) {
+        if (row.AgentId is { } previous && previous != agentId
             && _byAgent.TryGetValue(previous, out var held) && ReferenceEquals(held, row))
             _byAgent.Remove(previous);
-        row.Identify(identified.AgentId);
-        _byAgent[identified.AgentId] = row;
+        row.Identify(agentId);
+        _byAgent[agentId] = row;
+        _earlyUnpaired.Remove(agentId);
     }
 
     /// A known call id decides alone and never falls through to the agent id: a repeated

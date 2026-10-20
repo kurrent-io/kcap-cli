@@ -371,7 +371,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     /// A subagent's transcript sits beside its parent's on this machine, written as it runs.
     void OpenSubagent(RunRow row) {
-        if (row.AgentId is not { } subagentId || _latestDto is not { TranscriptPath: { } parentPath } dto
+        // Only Claude Code files a subagent's transcript beside its parent's.
+        if (row.AgentId is not { } subagentId || _latestDto is not { TranscriptPath: { } parentPath, Vendor: "claude" } dto
             || TranscriptChat.ForSubagent(dto.Vendor) is not { } projection) return;
         var path = ClaudeSubagentFiles.TranscriptPath(parentPath, subagentId);
         ReplaceSubagent(new SubagentPaneViewModel(

@@ -12,11 +12,10 @@ public class ClaudeSubagentFilesTests {
         await Assert.That(ClaudeSubagentFiles.Starts(parent, new HashSet<string>())).IsEmpty();
 
         var dir = ClaudeSubagentFiles.DirectoryOf(parent);
-        Directory.CreateDirectory(dir);
-        await File.WriteAllTextAsync(Path.Combine(dir, "agent-a1.meta.json"), """{"toolUseId":"toolu_1","requestShape":"foreground"}""");
-        await File.WriteAllTextAsync(Path.Combine(dir, "agent-a2.meta.json"), """{"toolUseId":"toolu_2"}""");
-        await File.WriteAllTextAsync(Path.Combine(dir, "agent-a3.meta.json"), """{"toolUse""");
-        await File.WriteAllTextAsync(Path.Combine(dir, "agent-a1.jsonl"), "{}\n");
+        Tmp.CreateFile(["s1", "subagents", "agent-a1.meta.json"], """{"toolUseId":"toolu_1","requestShape":"foreground"}""");
+        Tmp.CreateFile(["s1", "subagents", "agent-a2.meta.json"], """{"toolUseId":"toolu_2"}""");
+        Tmp.CreateFile(["s1", "subagents", "agent-a3.meta.json"], """{"toolUse""");
+        Tmp.CreateFile(["s1", "subagents", "agent-a1.jsonl"], "{}\n");
 
         var starts = ClaudeSubagentFiles.Starts(parent, new HashSet<string> { "a2" });
 
