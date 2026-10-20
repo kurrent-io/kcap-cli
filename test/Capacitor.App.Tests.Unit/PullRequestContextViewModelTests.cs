@@ -1027,6 +1027,19 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// The reader draws a mailto because the policy accepts it, so the body command opens that same URL.
+    [Test]
+    public Task A_body_mailto_opens_and_a_script_link_does_not() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        await h.Show();
+        h.Vm.SetReaderVisible(true);
+        await h.Vm.OpenBodyLinkCommand.Execute("mailto:test@example.com");
+        await h.Vm.OpenBodyLinkCommand.Execute("javascript:alert(1)");
+        await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "mailto:test@example.com" });
+        await h.Dispose();
+    });
+
     [Test]
     [Arguments("https://example.com/example/repo/pull/1", false)]
     [Arguments("https://github.com/example/repo/pull/99", false)]

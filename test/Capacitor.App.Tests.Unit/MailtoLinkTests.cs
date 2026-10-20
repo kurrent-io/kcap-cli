@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Threading;
 using Capacitor.App.Services;
+using Capacitor.App.Views;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
 
@@ -32,6 +33,41 @@ public class MailtoLinkTests {
                 window.MouseMove(point);
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(ToolTip.GetTip(Viewer(root)) as string).IsEqualTo("https://example.com/not-kurrent");
+            } finally { window.Close(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Hovering_a_linked_image_shows_its_destination() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _) = Show("[![badge](https://h/b.png)](https://outer.example)", MarkdownFlavor.GitHub);
+            try {
+                var image = Images(root).Single();
+                var point = image.TranslatePoint(new Point(4, image.Bounds.Height / 2), window)!.Value;
+                window.MouseMove(point);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(ToolTip.GetTip(Viewer(root)) as string).IsEqualTo("https://outer.example");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// A re-render replaces the link under a still pointer, so the previous destination must not stay up.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Changing_the_text_clears_the_link_tooltip() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _) = Show("See [kurrent](https://example.com/not-kurrent) now.");
+            try {
+                var paragraph = Paragraphs(root).Single();
+                var link = Links(root).Single();
+                var glyph = paragraph.TextLayout.HitTestTextPosition(StartOf(paragraph, link));
+                var point = paragraph.TranslatePoint(new Point(glyph.X + 2, glyph.Y + glyph.Height / 2), window)!.Value;
+                window.MouseMove(point);
+                Dispatcher.UIThread.RunJobs();
+                root.Text = "plain";
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(ToolTip.GetTip(Viewer(root)) as string).IsNull();
             } finally { window.Close(); }
         });
     }

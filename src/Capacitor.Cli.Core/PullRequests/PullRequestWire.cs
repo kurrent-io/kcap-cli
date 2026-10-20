@@ -25,8 +25,12 @@ public static class PullRequestWire {
     }
     public static string? CheckLink(string? value) => value is { Length: > 0 and <= 4096 } && Uri.TryCreate(value, UriKind.Absolute, out var uri)
         && uri.Scheme == "https" && uri.UserInfo.Length == 0 ? uri.AbsoluteUri : null;
-    public static string? BodyLink(string? value) => value is { Length: > 0 and <= 4096 } && Uri.TryCreate(value, UriKind.Absolute, out var uri)
-        && uri.Scheme is "https" or "http" && uri.UserInfo.Length == 0 ? uri.AbsoluteUri : null;
+    public static string? BodyLink(string? value) => value is { Length: > 0 and <= 4096 }
+        && Uri.TryCreate(value, UriKind.Absolute, out var uri) && PermittedBody(uri) ? uri.AbsoluteUri : null;
+
+    // System.Uri reports the mailbox as UserInfo, so the web-credential check would reject every mailto.
+    static bool PermittedBody(Uri uri) => uri.Scheme == "mailto"
+        || uri.Scheme is "https" or "http" && uri.UserInfo.Length == 0;
 
     internal static bool ValidJson(JsonElement root) {
         if (root.IsArray) return root.EnumerateArray().All(ValidJson);

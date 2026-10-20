@@ -84,10 +84,16 @@ public sealed class MarkdownView : ContentControl {
     }
 
     void OnPointerMoved(object? sender, PointerEventArgs e) {
-        var link = FindHyperlinkAt(_viewer, e.GetPosition(_viewer));
-        var tip = link?.NavigateUri?.ToString();
+        var tip = FindHyperlinkAt(_viewer, e.GetPosition(_viewer))?.NavigateUri?.ToString()
+            ?? ImageUnder(e.Source as Visual)?.Target;
         if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
             ToolTip.SetTip(_viewer, tip);
+    }
+
+    static MarkdownImage? ImageUnder(Visual? visual) {
+        for (; visual is not null && visual is not MarkdownViewer; visual = visual.GetVisualParent())
+            if (visual is MarkdownImage image) return image;
+        return null;
     }
 
     [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "FindHyperlinkAt")]
@@ -119,6 +125,7 @@ public sealed class MarkdownView : ContentControl {
     /// change cannot re-throw.
     void Render() {
         _linkKeys.Clear();
+        if (ToolTip.GetTip(_viewer) is not null) ToolTip.SetTip(_viewer, null);
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
         try {
             _viewer.Markdown = Text;
