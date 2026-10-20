@@ -71,11 +71,17 @@ public class DaemonSignInTests {
         await Assert.That(ProfilesSettingsViewModel.RemovePrompt("work", "other")).DoesNotContain("daemon");
 
     [Test]
-    [Arguments(false, false, HomeViewModel.DaemonSignedOutNotice)]
-    [Arguments(true, false, HomeViewModel.SignInExpiredNotice)]
-    [Arguments(false, true, null)]
-    public async Task The_launcher_says_the_daemon_is_signed_out_for_a_local_launch(bool appExpired, bool remote, string? notice) =>
-        await Assert.That(HomeViewModel.NoticeFor(Attached, HomeViewModel.DaemonSignedOutWord, appExpired, awaitingServer: false,
+    [Arguments(false, false, false, HomeViewModel.DaemonSignedOutNotice)]
+    [Arguments(true, false, false, HomeViewModel.SignInExpiredNotice)]
+    [Arguments(false, true, false, HomeViewModel.FinishingSignInNotice)]
+    [Arguments(false, false, true, null)]
+    public async Task The_launcher_says_the_daemon_is_signed_out_for_a_local_launch(bool appExpired, bool awaiting, bool remote, string? notice) =>
+        await Assert.That(HomeViewModel.NoticeFor(Attached, HomeViewModel.DaemonSignedOutWord, appExpired, awaitingServer: awaiting,
                 remoteSelected: remote, remote ? LaunchAvailability.Ready : LaunchAvailability.ServerDisconnected))
             .IsEqualTo(notice);
+
+    [Test]
+    public async Task The_posix_login_hint_quotes_the_profile() =>
+        await Assert.That(OperatingSystem.IsWindows() ? "" : TrayViewModel.LoginHint("it's work"))
+            .IsEqualTo(OperatingSystem.IsWindows() ? "" : "run KCAP_PROFILE='it'\\''s work' kcap login");
 }

@@ -824,14 +824,14 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             ServerLaneState lane = ServerLaneState.Dormant) {
         if (signInExpired) return SignInExpiredNotice;
 
-        if (!remoteSelected && status.State == AttachState.Connected && daemonConnection == DaemonSignedOutWord)
-            return DaemonSignedOutNotice;
-
         if (!remoteSelected && status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? DaemonIncompatibleNotice : DaemonDownNotice;
 
         if (awaitingServer && selectedAvailability is LaunchAvailability.ServerDisconnected or LaunchAvailability.Pending)
             return FinishingSignInNotice;
+
+        if (!remoteSelected && status.State == AttachState.Connected && daemonConnection == DaemonSignedOutWord)
+            return DaemonSignedOutNotice;
 
         if (!remoteSelected && selectedAvailability == LaunchAvailability.ServerDisconnected && LaneIsCatchingUp(lane))
             return ConnectingNotice;

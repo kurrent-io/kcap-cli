@@ -354,9 +354,10 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     }
 
     // kcap login signs in whichever profile it resolves, so the variable that names one goes first.
+    // Quoted for the shell, and scoped to the one command, so the variable does not outlive the login.
     internal static string LoginHint(string profile) => OperatingSystem.IsWindows()
-        ? $"run $env:KCAP_PROFILE=\"{profile}\"; kcap login"
-        : $"run KCAP_PROFILE={profile} kcap login";
+        ? $"run $env:KCAP_PROFILE='{profile.Replace("'", "''")}'; kcap login; Remove-Item Env:KCAP_PROFILE"
+        : $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
 
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
     // share the neutral fallback; reconnecting and disconnected get their own copy.
