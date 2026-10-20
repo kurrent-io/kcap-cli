@@ -29,6 +29,8 @@ public sealed class CliTelemetry {
     readonly TimeProvider   _time;
     readonly string         _command;
     readonly string?        _deviceId;
+    // Whether the id came off disk: an in-memory fallback id has no file to be replaced.
+    readonly bool           _deviceIdSaved;
     readonly string?        _orgGroup;
     readonly bool           _debug;
     readonly bool           _desktop;
@@ -59,6 +61,7 @@ public sealed class CliTelemetry {
         _time     = time;
         _command  = command;
         _deviceId = deviceId;
+        _deviceIdSaved = desktopConfig is not null && deviceId is not null && TelemetryDeviceId.ReadPersisted(desktopConfig) == deviceId;
         _orgGroup = orgGroup;
         _debug    = debug;
         _shared   = shared;
@@ -262,7 +265,10 @@ public sealed class CliTelemetry {
         if (_config is null) return true;
 
         switch (SavedConsent(_config)) {
-            case true:  return true;
+            // The id this process sends under is gone or replaced only if an opt-out came between; sending on
+            // would link the two sides of it.
+            case true when !_deviceIdSaved || TelemetryDeviceId.ReadPersisted(_config) == _deviceId:
+                return true;
             case null:  return false;
             default:
                 DiscardAndDisable();

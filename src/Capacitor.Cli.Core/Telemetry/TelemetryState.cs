@@ -56,7 +56,7 @@ public static class TelemetryState {
     /// <returns>Whether the choice was written: every write failure is swallowed, so a caller that must
     /// not report an unsaved choice as saved reads it here.</returns>
     public static bool SetEnabled(bool enabled, ConfigRoot config) {
-        var saved = Mutate(config, state => state with { Enabled = enabled });
+        var saved = Mutate(config, state => (state ?? default) with { Enabled = enabled });
         if (!enabled) {
             TelemetryDeviceId.Delete(config);
             // Events another process spooled before the opt-out would otherwise go out after a later opt-in.
@@ -70,10 +70,11 @@ public static class TelemetryState {
     /// past the notice only one sees true.</returns>
     public static bool MarkNoticeShown(ConfigRoot config) {
         var set = false;
+        // A file it cannot read may hold an opt-out, which writing defaults over it would erase.
         var saved = Mutate(config, state => {
-            if (state.NoticeShown) return null;
+            if (state is not { } current || current.NoticeShown) return null;
             set = true;
-            return state with { NoticeShown = true };
+            return current with { NoticeShown = true };
         });
         return saved && set;
     }
@@ -85,7 +86,7 @@ public static class TelemetryState {
     /// On lock-acquisition failure, falls back to unlocked read-modify-write to ensure changes
     /// like SetEnabled(false) are never silently dropped.
     /// </summary>
-    static bool Mutate(ConfigRoot config, Func<TelemetryStateFile, TelemetryStateFile?> apply) {
+    static bool Mutate(ConfigRoot config, Func<TelemetryStateFile?, TelemetryStateFile?> apply) {
         var path = StatePath(config);
         var dir = Path.GetDirectoryName(path)!;
 
@@ -105,7 +106,7 @@ public static class TelemetryState {
         }
     }
 
-    static bool MutateUnlocked(string path, string dir, Func<TelemetryStateFile, TelemetryStateFile?> apply) {
+    static bool MutateUnlocked(string path, string dir, Func<TelemetryStateFile?, TelemetryStateFile?> apply) {
         try {
             Directory.CreateDirectory(dir);
             var currentState = ReadLocked(path);
@@ -121,14 +122,14 @@ public static class TelemetryState {
         }
     }
 
-    static TelemetryStateFile ReadLocked(string path) {
-        if (!File.Exists(path)) return default;
+    /// Null when a saved file cannot be read, so a mutation can tell it from no file at all.
+    static TelemetryStateFile? ReadLocked(string path) {
         try {
-            var json = File.ReadAllText(path);
-            var deserialized = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.TelemetryStateFile);
-            return deserialized;
+            return JsonSerializer.Deserialize(File.ReadAllText(path), CapacitorJsonContext.Default.TelemetryStateFile);
+        } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
+            return default(TelemetryStateFile);
         } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
-            return default;
+            return null;
         }
     }
 

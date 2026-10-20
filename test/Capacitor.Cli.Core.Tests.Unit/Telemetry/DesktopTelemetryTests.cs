@@ -106,6 +106,22 @@ public class DesktopTelemetryTests {
         await Assert.That(sink.Events.Select(e => e.Name).ToList()).IsEquivalentTo(new List<string> { "readable" });
     }
 
+    /// <summary>An opt-out and an opt-in made elsewhere between two captures replace the device id; sending on
+    /// under the old one would link the two sides of the opt-out, so the app stops instead.</summary>
+    [Test]
+    public async Task A_device_id_replaced_while_the_app_runs_stops_it_sending() {
+        var (telemetry, sink) = Start(new RecordingTelemetrySink());
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
+
+        TelemetryState.SetEnabled(false, Config.Root);
+        TelemetryState.SetEnabled(true, Config.Root);
+        TelemetryDeviceId.GetOrCreate(Config.Root);
+        telemetry.Capture("after", new JsonObject());
+
+        await Assert.That(sink.Events).IsEmpty();
+        await Assert.That(telemetry.Enabled).IsFalse();
+    }
+
     /// <summary>The once-per-device event goes only with the marker that says it went; an unsaved marker shows
     /// the notice again, which would otherwise send it twice.</summary>
     [Test]

@@ -44,6 +44,15 @@ public class TelemetryStateTests {
         await Assert.That(TelemetryState.MarkNoticeShown(Config.Root)).IsFalse();
     }
 
+    /// Writing the marker over a file it cannot read would erase an opt-out held there.
+    [Test]
+    public async Task The_notice_marker_never_writes_over_an_unreadable_file() {
+        await File.WriteAllTextAsync(Config.Root.Path("telemetry.json"), "{not json");
+
+        await Assert.That(TelemetryState.MarkNoticeShown(Config.Root)).IsFalse();
+        await Assert.That(await File.ReadAllTextAsync(Config.Root.Path("telemetry.json"))).IsEqualTo("{not json");
+    }
+
     /// A choice the process cannot read is not taken for no choice, which would read as enabled.
     [Test]
     public async Task A_state_file_that_cannot_be_read_is_not_taken_for_no_choice() {
