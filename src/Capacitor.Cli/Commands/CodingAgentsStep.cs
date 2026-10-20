@@ -1389,7 +1389,7 @@ internal static class CodingAgentsStep {
 
     /// <summary>
     /// Codex runs the agent's shell tool in a network-blocked sandbox, so kcap
-    /// skills (which shell out to <c>kcap …</c>) can't reach the Capacitor server. After
+    /// skills (which shell out to <c>kcap …</c>) can't reach the kcap server. After
     /// Codex hooks install, offer to enable sandbox network access for the configured
     /// server(s) via <see cref="Installers.EnableCodexNetworkAccess"/>. Gated on hooks
     /// actually installing — there's nothing to fix if the Codex integration is off.
@@ -1413,7 +1413,7 @@ internal static class CodingAgentsStep {
         writeLine("  [dim]  kcap skills (recap, errors, …) run in Codex's sandbox, which blocks network by default.[/]");
 
         var shouldApply = options.NoPrompt
-            || prompt("Allow Codex's sandbox to reach your Capacitor server(s) so kcap skills work?");
+            || prompt("Allow Codex's sandbox to reach your kcap server(s) so kcap skills work?");
 
         if (!shouldApply) {
             writeLine("  [dim]· Codex sandbox network access not changed — kcap skills may prompt for escalation (see README)[/]");

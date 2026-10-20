@@ -10,7 +10,7 @@
 
   <text x="320" y="80" text-anchor="middle" fill="#F1F3F7"
         font-family="SF Pro Display, Helvetica Neue, Helvetica, sans-serif"
-        font-size="20" font-weight="600" letter-spacing="-0.2">Install Kurrent Capacitor</text>
+        font-size="20" font-weight="600" letter-spacing="-0.2">Install kcap</text>
   <text x="320" y="106" text-anchor="middle" fill="#B0B7C6"
         font-family="SF Pro Text, Helvetica Neue, Helvetica, sans-serif"
         font-size="13.5">Drag the app onto the Applications folder.</text>

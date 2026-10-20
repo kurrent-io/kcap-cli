@@ -322,9 +322,9 @@ public class OAuthFlowTests {
     [Test]
     public async Task Installation_message_extracted_from_not_installed_error() {
         var msg = OAuthLoginFlow.TryParseInstallationMessage(
-            """{"error":"The Kurrent Capacitor GitHub App is not installed on your organization."}""");
+            """{"error":"The kcap GitHub App is not installed on your organization."}""");
 
-        await Assert.That(msg).IsEqualTo("The Kurrent Capacitor GitHub App is not installed on your organization.");
+        await Assert.That(msg).IsEqualTo("The kcap GitHub App is not installed on your organization.");
     }
 
     [Test]

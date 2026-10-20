@@ -896,8 +896,8 @@ jobs:
         run: |
           set -euo pipefail
           cp trio/bin/kcap trio/bin/kcap-daemon trio/bin/libpty_shim.dylib publish/app/
-          chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/Kurrent Capacitor"
-          bash scripts/assemble-app-bundle.sh publish/app "publish/Kurrent Capacitor.app" "${{ steps.version.outputs.VERSION }}"
+          chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/kcap-desktop"
+          bash scripts/assemble-app-bundle.sh publish/app "publish/kcap.app" "${{ steps.version.outputs.VERSION }}"
 
       - name: Fetch the delta baseline
         shell: bash
@@ -911,8 +911,8 @@ jobs:
         shell: bash
         run: >
           vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
-          --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
-          --packDir "publish/Kurrent Capacitor.app"
+          --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop"
+          --packDir "publish/kcap.app"
           --channel osx-arm64 --noInst --outputDir releases
           --signAppIdentity "${{ secrets.APPLE_SIGNING_IDENTITY }}" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
           --signDisableDeep --notaryProfile kcap-notary --keychain "$KEYCHAIN"
@@ -923,7 +923,7 @@ jobs:
           set -euo pipefail
           mkdir -p extracted
           ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
-          APP="extracted/Kurrent Capacitor.app"
+          APP="extracted/kcap.app"
           bash scripts/assert-app-plugin.sh "$APP" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$APP" trio/bin/daemon.sha256
@@ -937,7 +937,7 @@ jobs:
           fi
           # JIT under hardened runtime: the signed app must still be alive after 15 s.
           SCRATCH="$(mktemp -d)"
-          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" "$APP/Contents/MacOS/Kurrent Capacitor" &
+          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" "$APP/Contents/MacOS/kcap-desktop" &
           APP_PID=$!
           sleep 15
           kill -0 "$APP_PID" || { echo "::error::the signed app exited within 15 s"; exit 1; }
@@ -947,10 +947,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          DMG="releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg"
+          DMG="releases/kcap-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg"
           python3 -m venv "$RUNNER_TEMP/dmgbuild"
           "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --only-binary :all: --require-hashes -r scripts/dmg/requirements.txt
-          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
+          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/kcap.app" "$DMG"
           codesign --force --timestamp --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" --keychain "$KEYCHAIN" "$DMG"
           xcrun notarytool submit "$DMG" --keychain-profile kcap-notary --keychain "$KEYCHAIN" --wait --timeout 45m
           xcrun stapler staple "$DMG"
@@ -1017,20 +1017,21 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.VERSION }}"
-          DMG="releases/Kurrent-Capacitor-$V-osx-arm64.dmg"
-          aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-$V-osx-arm64.dmg" --cache-control "public, max-age=31536000, immutable"
+          DMG="releases/kcap-$V-osx-arm64.dmg"
+          aws s3 cp $R2 "$DMG" "$DEST/kcap-$V-osx-arm64.dmg" --cache-control "public, max-age=31536000, immutable"
           aws s3 cp $R2 "$DEST/releases.osx-arm64.json" merged.json
+          # Keep legacy download links current while publishing the kcap names.
           for alias in $(bash scripts/promote-desktop-aliases.sh merged.json "$V"); do
             case "$alias" in
-              beta)   aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64-beta.dmg" --cache-control "public, max-age=300" ;;
-              stable) aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64.dmg" --cache-control "public, max-age=300" ;;
+              beta)   aws s3 cp $R2 "$DMG" "$DEST/kcap-osx-arm64-beta.dmg" --cache-control "public, max-age=300"; aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64-beta.dmg" --cache-control "public, max-age=300" ;;
+              stable) aws s3 cp $R2 "$DMG" "$DEST/kcap-osx-arm64.dmg" --cache-control "public, max-age=300"; aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64.dmg" --cache-control "public, max-age=300" ;;
             esac
           done
 
       - name: Attach the DMG to the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg" --clobber
+        run: gh release upload "${{ github.ref_name }}" "releases/kcap-${{ steps.version.outputs.VERSION }}-osx-arm64.dmg" --clobber
 
   app-windows:
     name: Build the Windows desktop app
@@ -1127,7 +1128,7 @@ jobs:
             echo "::warning::WINDOWS_CERTIFICATE_PFX is not configured; the Windows app ships unsigned"
           fi
           vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}" \
-            --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor.exe" \
+            --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop.exe" \
             --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico \
             --channel win-x64 --outputDir releases "${sign[@]}"
           rm -f "$RUNNER_TEMP/kcap-sign.pfx"
@@ -1145,7 +1146,7 @@ jobs:
           bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
           "$install/current/kcap-daemon.exe" --version
-          mv releases/KurrentCapacitor-win-x64-Setup.exe "releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe"
+          mv releases/KurrentCapacitor-win-x64-Setup.exe "releases/kcap-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe"
           cp trio/bin/daemon.sha256 trio/bin/kcap.sha256 releases/
 
       - name: Smoke the installed app
@@ -1154,7 +1155,7 @@ jobs:
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\Kurrent Capacitor.exe') -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\kcap-desktop.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force
@@ -1235,20 +1236,21 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.VERSION }}"
-          SETUP="releases/Kurrent-Capacitor-$V-win-x64-Setup.exe"
-          aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-$V-win-x64-Setup.exe" --cache-control "public, max-age=31536000, immutable"
+          SETUP="releases/kcap-$V-win-x64-Setup.exe"
+          aws s3 cp $R2 "$SETUP" "$DEST/kcap-$V-win-x64-Setup.exe" --cache-control "public, max-age=31536000, immutable"
           aws s3 cp $R2 "$DEST/releases.win-x64.json" merged.json
+          # Keep legacy download links current while publishing the kcap names.
           for alias in $(bash scripts/promote-desktop-aliases.sh merged.json "$V"); do
             case "$alias" in
-              beta)   aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-win-x64-beta-Setup.exe" --cache-control "public, max-age=300" ;;
-              stable) aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-win-x64-Setup.exe" --cache-control "public, max-age=300" ;;
+              beta)   aws s3 cp $R2 "$SETUP" "$DEST/kcap-win-x64-beta-Setup.exe" --cache-control "public, max-age=300"; aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-win-x64-beta-Setup.exe" --cache-control "public, max-age=300" ;;
+              stable) aws s3 cp $R2 "$SETUP" "$DEST/kcap-win-x64-Setup.exe" --cache-control "public, max-age=300"; aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-win-x64-Setup.exe" --cache-control "public, max-age=300" ;;
             esac
           done
 
       - name: Attach the installer to the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ github.ref_name }}" "releases/Kurrent-Capacitor-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe" --clobber
+        run: gh release upload "${{ github.ref_name }}" "releases/kcap-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe" --clobber
 
 
   # The local-edition bundle is built unsigned by kcap-server's local-bundle workflow on the same tag

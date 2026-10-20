@@ -7,8 +7,8 @@ using Capacitor.Cli.Core.Http;
 namespace Capacitor.App.Tests.Unit;
 
 public class FeedbackViewModelTests {
-    const string TrailerA = "Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d cli 1.0.3";
-    const string TrailerB = "Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3";
+    const string TrailerA = "Sent from kcap Desktop 1.0.3 · daemon d cli 1.0.3";
+    const string TrailerB = "Sent from kcap Desktop 1.0.3 · daemon d 1.0.3";
 
     sealed class ScriptedFeedbackApi : IFeedbackApi {
         readonly Queue<Func<FeedbackSubmission, FeedbackResult>> _script = new();

@@ -20,8 +20,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     internal const string BusyDetail    = "Another local setup, upgrade or uninstall is running on this Mac. The upgrade runs again once the local server is back.";
     internal const string StartGuidance = "Its data is kept. Start it to finish the upgrade.";
     const int StartMessageTailLines     = 12;
-    public const string NameTip         = "The local Capacitor server on this machine";
-    public const string VersionTip      = "Version of Capacitor local on this machine";
+    public const string NameTip         = "The local kcap server on this machine";
+    public const string VersionTip      = "Version of kcap local on this machine";
 
     static readonly string[] Derived = [
         nameof(Version), nameof(StateText), nameof(Attention), nameof(Upgrading), nameof(BannerVisible), nameof(Headline),
@@ -127,20 +127,20 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     public string? Headline => Upgrading
         ? (Progress.From, Progress.To) switch {
-            ({ } from, { } to) => $"Upgrading Capacitor local {from} to {to}",
-            (_, { } to)        => $"Upgrading Capacitor local to {to}",
-            _                  => "Upgrading Capacitor local",
+            ({ } from, { } to) => $"Upgrading kcap local {from} to {to}",
+            (_, { } to)        => $"Upgrading kcap local to {to}",
+            _                  => "Upgrading kcap local",
         }
         : Waiting ? Progress.To is { } waitingFor
-            ? $"The upgrade to Capacitor local {waitingFor} is waiting"
-            : "The upgrade of Capacitor local is waiting"
+            ? $"The upgrade to kcap local {waitingFor} is waiting"
+            : "The upgrade of kcap local is waiting"
         : _shown switch {
-            LocalUpgradeOutcome.Failed { Switched: true } f => $"Capacitor local {f.To ?? Version} did not start after the upgrade",
-            LocalUpgradeOutcome.Failed { To: { } to }       => $"Capacitor local could not be upgraded to {to}",
-            LocalUpgradeOutcome.Failed                      => "Capacitor local could not be upgraded",
+            LocalUpgradeOutcome.Failed { Switched: true } f => $"kcap local {f.To ?? Version} did not start after the upgrade",
+            LocalUpgradeOutcome.Failed { To: { } to }       => $"kcap local could not be upgraded to {to}",
+            LocalUpgradeOutcome.Failed                      => "kcap local could not be upgraded",
             LocalUpgradeOutcome.NotPublished                => Progress.To is { } to
-                ? $"Capacitor local {to} is not available yet"
-                : "This version of Capacitor local is not available yet",
+                ? $"kcap local {to} is not available yet"
+                : "This version of kcap local is not available yet",
             _ => null,
         };
 

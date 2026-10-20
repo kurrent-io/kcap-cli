@@ -264,7 +264,9 @@ public class WizardCompositionLocalPathTests {
             // delivered to the UI thread afterwards, so a direct read can still see the disabled value.
             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
-            return (before, during, await finishLater.CanExecute.FirstAsync());
+            // ReactiveCommand publishes CanExecute on its scheduler after the install settles.
+            // Wait for that notification rather than reading the cached busy value.
+            return (before, during, await finishLater.CanExecute.FirstAsync(enabled => enabled));
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(before).IsTrue();

@@ -41,6 +41,21 @@ public class LocalClientCopiesTests {
     }
 
     [Test]
+    public async Task Finds_both_rebranded_and_legacy_desktop_copies() {
+        var current = Kcap("Applications/kcap.app/Contents/MacOS");
+        var legacy = Kcap("Applications/Kurrent Capacitor.app/Contents/MacOS");
+        var runner = new FakeRunner(new() { [current] = Prints("1.3.0"), [legacy] = Prints("1.2.0") });
+
+        var copies = new LocalClientCopies(runner, searchPath: null, self: null,
+            LocalClientCopies.AppClis(Tmp.PathTo("Applications"))).Find();
+
+        await Assert.That(copies).IsEquivalentTo([
+            new ClientCopy(ClientCopyKind.DesktopApp, current, "1.3.0"),
+            new ClientCopy(ClientCopyKind.DesktopApp, legacy, "1.2.0")
+        ]);
+    }
+
+    [Test]
     public async Task The_running_kcap_is_not_asked_even_through_a_link() {
         var self = Kcap("real");
         Tmp.CreateDir("bin");

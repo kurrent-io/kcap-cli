@@ -190,7 +190,7 @@ are not re-run; a recovery sweep runs hourly. A `failed` session names its `fail
    when you were bound to one).
 2. Links: `<server_url>/sessions/<session_id>?tab=evaluation` per session; all results
    `<server_url>/sessions`. No valid file → `server_url` from `kcap whoami`; if that fails too, say
-   the results live in the Capacitor server UI and that `kcap whoami` prints the URL once logged
+   the results live in the kcap server UI and that `kcap whoami` prints the URL once logged
    in.
 3. When `unattributed_on_disk` > 0: "N sessions on disk had no repository match; any of them that
    imported show without one — `kcap remap` places them."

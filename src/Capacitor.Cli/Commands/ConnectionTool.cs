@@ -11,7 +11,7 @@ static class ConnectionTool {
 
     internal static McpTool Definition => new(
         Name,
-        "The Capacitor server URL and kcap profile this MCP server uses for every other tool. Makes no network call.",
+        "The kcap server URL and kcap profile this MCP server uses for every other tool. Makes no network call.",
         new("object", new(), []),
         McpToolAnnotations.Read
     );

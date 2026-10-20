@@ -530,7 +530,7 @@ public sealed class OnboardingFacade(
                                                         root, store, ready, progress, beforeCommit, time, ct),
             WorkOSDiscoveryFlow.Retarget retarget => new AuthResult.Retarget(retarget.ServerInput),
             WorkOSDiscoveryFlow.Failed failed     => Stop(failed.Message, ct, failed.Reason),
-            _                                     => Stop("No Capacitor tenants are linked to your account.", ct,
+            _                                     => Stop("No kcap tenants are linked to your account.", ct,
                                                           AuthFailureReason.NoTenantsFound)
         };
     }

@@ -28,7 +28,7 @@ public sealed class TrayIconManager : IDisposable {
         _app = app;
         _builder = new TrayMenuBuilder(vm);
 
-        _trayIcon = new TrayIcon { Menu = _menu, ToolTipText = "Kurrent Capacitor" };
+        _trayIcon = new TrayIcon { Menu = _menu, ToolTipText = "kcap" };
         TrayIcon.SetIcons(app, new TrayIcons { _trayIcon });
 
         if (rebuildEagerly) {

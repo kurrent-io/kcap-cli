@@ -365,9 +365,9 @@ public class SessionStartMemoryFoundationTests {
         // An older server ignores include=projects and answers with the bare array it always sent.
         var bareArray = await Provider($"[{entry}]").GetAsync(request);
         var withProjects = await Provider(
-            $"{{\"entries\":[{entry}],\"projects\":[{{\"slug\":\"capacitor\",\"name\":\"Kurrent Capacitor\"}}]}}").GetAsync(request);
+            $"{{\"entries\":[{entry}],\"projects\":[{{\"slug\":\"capacitor\",\"name\":\"kcap\"}}]}}").GetAsync(request);
         var projectsOnly = await Provider(
-            "{\"entries\":[],\"projects\":[{\"slug\":\"capacitor\",\"name\":\"Kurrent Capacitor\"}]}").GetAsync(request);
+            "{\"entries\":[],\"projects\":[{\"slug\":\"capacitor\",\"name\":\"kcap\"}]}").GetAsync(request);
         var neither = await Provider("{\"entries\":[],\"projects\":[]}").GetAsync(request);
 
         await Assert.That(bareArray.Fragment).Contains("- s: d");

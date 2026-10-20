@@ -32,7 +32,7 @@ public class InstallKindDetectionTests {
 
     [Test]
     public async Task The_app_bundle_wins() {
-        var kind = InstallProvenance.Detect("/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", Existing("/Contents/Info.plist"));
+        var kind = InstallProvenance.Detect("/Applications/kcap.app/Contents/MacOS/kcap", Existing("/Contents/Info.plist"));
 
         await Assert.That(kind).IsEqualTo(InstallKind.App);
     }

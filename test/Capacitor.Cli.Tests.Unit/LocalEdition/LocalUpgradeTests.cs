@@ -221,7 +221,7 @@ public class LocalUpgradeTests {
         var failure = await Failure();
 
         await Assert.That(failure.Switched).IsFalse();
-        await Assert.That(failure.Message).Contains($"Capacitor local {Old} was started again");
+        await Assert.That(failure.Message).Contains($"kcap local {Old} was started again");
         await Assert.That(_log.IndexOf("start")).IsGreaterThan(_log.IndexOf("stop"));
         await Assert.That(RegistryVersion()).IsEqualTo(Old);
         await Assert.That(LocalBin.Current(Root)).IsEqualTo(Old);

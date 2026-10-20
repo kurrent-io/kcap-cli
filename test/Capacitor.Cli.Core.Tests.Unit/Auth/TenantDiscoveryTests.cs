@@ -54,7 +54,7 @@ public class TenantDiscoveryTests {
         var outcome = await discovery.RunAsync("https://proxy", "gh");
 
         await Assert.That(outcome.Picked).IsNull();
-        await Assert.That(outcome.ErrorMessage!).Contains("No Capacitor tenants");
+        await Assert.That(outcome.ErrorMessage!).Contains("No kcap tenants");
         // The genuine "authenticated but has no tenant" case — this is what should count toward
         // the funnel's cli_setup_tenant_none denominator (see SetupCommand).
         await Assert.That(outcome.NoTenantsFound).IsTrue();

@@ -137,7 +137,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
     /// server it talks to is what the hover tells you.
-    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string ServerUrlTip = "kcap server for this organization";
     public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
     public const string AgentCountTip = "Agents running on this daemon";
 
@@ -208,7 +208,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
 
-    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
+    public string AppVersionLabel { get; } = $"kcap {AppVersion.Display}";
 
     /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
     /// flyout opens the app's own.

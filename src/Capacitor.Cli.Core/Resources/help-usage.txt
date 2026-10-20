@@ -1,4 +1,4 @@
-kcap — CLI companion for Kurrent Capacitor
+kcap — record and explore coding-agent sessions
 
 Usage: kcap <command> [options]
 

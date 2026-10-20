@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleName</key>
-  <string>Kurrent Capacitor</string>
+  <string>kcap</string>
   <key>CFBundleDisplayName</key>
-  <string>Kurrent Capacitor</string>
+  <string>kcap</string>
   <key>CFBundleExecutable</key>
-  <string>Kurrent Capacitor</string>
+  <string>kcap-desktop</string>
   <key>CFBundleIdentifier</key>
   <string>io.kurrent.capacitor</string>
   <key>CFBundlePackageType</key>
