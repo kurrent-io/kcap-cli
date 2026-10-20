@@ -129,7 +129,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     void PrefillComposer(string prompt) {
         if (Chat is not { } chat) return;
-        chat.ComposerText = prompt;
+        chat.ComposerText = PullRequestContextViewModel.WithFixPrompt(chat.ComposerText, prompt);
         ActiveTab = WorkspaceTab.Chat;
     }
 
@@ -193,7 +193,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer);
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: () => Chat is { IsReadOnlyParticipant: false });
         WorkContext.PullRequests = PullRequests;
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))

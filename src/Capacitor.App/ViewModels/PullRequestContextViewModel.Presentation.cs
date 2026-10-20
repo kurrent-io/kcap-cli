@@ -95,11 +95,12 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
-    /// Null until the server reports a count, which one that predates it never does.
+    /// Empty when the overview carries no thread summary, as a server without one sends, or when a zero is only
+    /// a lower bound, which says nothing about the threads it could not read.
     public PullRequestStatus ThreadsStatus =>
         CanDisplay && _overview?.Threads is { Availability.Status: "ready", Unresolved: { Value: { } count } unresolved }
             ? count == 0
-                ? new("No unresolved threads", "success", "Every review thread is resolved.")
+                ? unresolved.Kind == "exact" ? new("No unresolved threads", "success", "Every review thread is resolved.") : new("")
                 : new($"{count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}",
                       "warning", "Review threads are still waiting on a reply or a fix.")
             : new("");
@@ -118,7 +119,11 @@ public sealed partial class PullRequestContextViewModel {
             return asks.Count == 0 ? null : $"Get pull request {NumberLabel} ready to merge: {string.Join("; ", asks)}.";
         }
     }
-    public bool ShowsFix => FixPrompt is not null;
+    /// The draft the user has not sent stays, with the prompt after it.
+    internal static string WithFixPrompt(string draft, string prompt) =>
+        string.IsNullOrWhiteSpace(draft) ? prompt : draft.TrimEnd() + "\n\n" + prompt;
+
+    public bool ShowsFix => FixPrompt is not null && _canRequestFix();
 
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);

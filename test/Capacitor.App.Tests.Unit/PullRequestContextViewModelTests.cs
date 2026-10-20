@@ -842,10 +842,31 @@ public class PullRequestContextViewModelTests {
         } finally { await h.Dispose(); }
     });
 
+    /// A viewer who cannot send gets no Fix: its prompt would land in a composer that refuses it.
+    [Test]
+    public Task Fix_is_hidden_from_a_viewer_who_cannot_send() => RunOnUiAsync(async () => {
+        var h = new Harness { CanFix = false };
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 1));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ShowsFix).IsFalse();
+            await h.Vm.FixCommand.Execute();
+            await Assert.That(h.Fixes).IsEmpty();
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
+    public async Task Fix_keeps_an_unsent_draft_ahead_of_its_prompt() {
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("  ", "Fix it.")).IsEqualTo("Fix it.");
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
+    }
+
     [Test]
     [Arguments(true, 0, "exact", "success", "open", "No unresolved threads", false)]
     [Arguments(null, null, "exact", "success", "open", "", false)]
     [Arguments(true, 100, "lower_bound", "success", "open", "100+ unresolved threads", true)]
+    [Arguments(true, 0, "lower_bound", "success", "open", "", false)]
     [Arguments(null, 1, "exact", "success", "draft", "1 unresolved thread", true)]
     public Task Fix_shows_only_for_an_open_pull_request_with_outstanding_work(
             bool? mergeable, int? unresolved, string kind, string rollup, string lifecycle, string threads, bool fix) => RunOnUiAsync(async () => {
@@ -1132,11 +1153,12 @@ public class PullRequestContextViewModelTests {
         internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
         internal readonly List<string> Fixes = [];
+        internal bool CanFix = true;
         internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null, Action<string>? linksChanged = null) {
             Source = new(Time);
             Clock = new(Time);
             Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch,
-                linksChanged: linksChanged, requestFix: Fixes.Add);
+                linksChanged: linksChanged, requestFix: Fixes.Add, canRequestFix: () => CanFix);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
         /// Returns once the initial reads have settled, not just once the overview is admitted: a read's settle

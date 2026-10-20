@@ -82,9 +82,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public bool ShowsSurfaceSwitch => ShowsTerminalTab || ShowsPullRequestTab || ShowsArtefactsTab;
 
     void PrefillComposer(string prompt) {
-        Chat.ComposerText = prompt;
+        Chat.ComposerText = PullRequestContextViewModel.WithFixPrompt(Chat.ComposerText, prompt);
         ActiveTab = RemoteTab.Chat;
     }
+
+    bool CanPrefillComposer() => !Chat.IsReadOnlyParticipant;
 
     void ShowArtefacts() { if (ShowsArtefactsTab) ActiveTab = RemoteTab.Artefacts; }
 
@@ -234,7 +236,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
             requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer);
+            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: CanPrefillComposer);
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
                 .Subscribe(state => {
