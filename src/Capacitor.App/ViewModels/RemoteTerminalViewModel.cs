@@ -9,16 +9,16 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended }
+public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended, Refused }
 
 /// A read-only view of a terminal on another machine: the server replays its buffer, then
 /// streams. The pane takes the source's size, and reports a viewport back only while it is on
 /// screen — the server takes the minimum across viewers, so a hidden pane would clamp the live
 /// agent's PTY for everyone. Every access establishment subscribes again onto a fresh surface, so
 /// a replay never stacks on scrollback. Subscribing waits for the pane's first showing, so a
-/// workspace kept on its Chat tab costs the server no replay or stream, and for access to stand:
-/// the server refuses with silence, so an empty pane after that is "no output yet", never "not
-/// allowed".
+/// workspace kept on its Chat tab costs the server no replay or stream, and for access to stand. A
+/// server that refuses the terminal says so, and the pane reads Refused; an older one refuses in
+/// silence, which leaves an empty pane that only looks like "no output yet".
 public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
     const int MaxCols = 500, MaxRows = 200;
@@ -72,8 +72,11 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         RemoteTerminalPhase.Connecting => "Connecting…",
         RemoteTerminalPhase.Offline    => "Not connected to the session",
         RemoteTerminalPhase.Ended      => "This session has ended.",
+        RemoteTerminalPhase.Refused    => RefusedNote,
         _                              => "",
     };
+    internal const string RefusedNote = "You don't have access to this session's terminal.";
+
     public bool ShowsBanner => Phase != RemoteTerminalPhase.Live;
     public string SizeNote => _sourceSize is { } s ? $"{s.Cols}×{s.Rows} · sized by the source" : "";
     public IReadOnlyList<SpecialKeyChoice> Keys => SpecialKeyMapper.Choices;
@@ -182,7 +185,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             // A refused subscribe must not render frames meant for another viewer on the connection.
             if (outcome.Result != HubCallResult.Ok) {
                 _receiving = false;
-                Phase = RemoteTerminalPhase.Offline;
+                Phase = outcome.Result == HubCallResult.Denied ? RemoteTerminalPhase.Refused : RemoteTerminalPhase.Offline;
                 if (_strayMembership) {
                     _strayMembership = false;
                     _ = ReleaseAsync();
