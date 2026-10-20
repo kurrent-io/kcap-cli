@@ -43,6 +43,9 @@ static class MarkViewSelection {
         else if (Nearest(layer, point) is { } inside) MoveFocus(layer, inside);
     }
 
+    public static bool IsSelecting(MarkdownViewer viewer) =>
+        IsDragging(viewer) && LayerOf(viewer) is { } layer && Anchor(layer) is not null;
+
     public static bool HasSelection(MarkdownViewer viewer) =>
         LayerOf(viewer) is { } layer && Anchor(layer) is { } anchor && Focus(layer) is { } focus && anchor != focus;
 

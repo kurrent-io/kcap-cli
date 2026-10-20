@@ -62,6 +62,8 @@ public sealed class MarkdownView : ContentControl {
         Content = _viewer;
     }
 
+    internal bool IsSelecting => Content is MarkdownViewer && MarkViewSelection.IsSelecting(_viewer);
+
     internal void ExtendSelection(Point pointInView) {
         if (Content is MarkdownViewer) MarkViewSelection.Extend(_viewer, pointInView);
     }
