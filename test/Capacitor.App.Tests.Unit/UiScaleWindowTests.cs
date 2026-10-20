@@ -48,7 +48,7 @@ public class UiScaleWindowTests {
     });
 
     [Test]
-    public Task Shift_equals_keypad_keys_and_ctrl_zero_reach_the_scale() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Shift_equals_keypad_keys_and_zero_reach_the_scale() => AvaloniaSession.RunOnUiAsync(async () => {
         var setting = await NewSetting();
         var window = new MainWindow { ContentScale = setting };
         try {
@@ -62,10 +62,9 @@ public class UiScaleWindowTests {
             Dispatcher.UIThread.RunJobs();
             await Assert.That(setting.Current).IsEqualTo(1.1);
 
-            // ⌘0 belongs to the Window menu on macOS, so only Ctrl+0 resets.
             window.KeyPressQwerty(PhysicalKey.Digit0, Modifier);
             Dispatcher.UIThread.RunJobs();
-            await Assert.That(setting.Current).IsEqualTo(RefreshShortcut.UsesControl ? UiScale.Default : 1.1);
+            await Assert.That(setting.Current).IsEqualTo(UiScale.Default);
         } finally { window.Close(); }
     });
 
