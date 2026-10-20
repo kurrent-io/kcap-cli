@@ -106,11 +106,15 @@ sealed class MarkdownLinkKeys {
     List<Stop> Links() =>
         [.. _viewer.GetVisualDescendants().SelectMany(visual => visual switch {
             TextBlock { Inlines: { } inlines } block => Spans(inlines)
-                .Where(link => link.NavigateUri is not null && Length(link.Inlines) > 0)
+                .Where(link => link.NavigateUri is not null && HasText(link.Inlines))
                 .Select(link => new Stop(block, link, link.NavigateUri!.ToString())),
             MarkdownImage { Target: { } target } image => [new Stop(image, null, target)],
             _ => [],
         })];
+
+    /// A span holding only a linked image is that image's stop, not one of its own.
+    static bool HasText(InlineCollection inlines) =>
+        inlines.Any(inline => inline is Span span ? HasText(span.Inlines) : inline is Run { Text.Length: > 0 });
 
     static IEnumerable<MarkdownHyperlink> Spans(InlineCollection inlines) {
         foreach (var inline in inlines) {

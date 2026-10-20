@@ -165,13 +165,14 @@ public class MarkdownLinkKeyboardTests {
         } finally { window.Close(); }
     });
 
-    /// A linked image renders as an image control rather than a span, and is a keyboard stop like a link.
+    /// A linked image renders as an image control rather than a span, and is one keyboard stop like a link,
+    /// even inside a line of text where its hyperlink span holds nothing else.
     [Test]
-    public Task A_linked_image_is_a_stop_and_opens_its_target() => RunOnUiAsync(async () => {
+    public Task A_linked_image_is_one_stop_and_opens_its_target() => RunOnUiAsync(async () => {
         var opened = new List<string>();
         var before = new Button { Content = "before" };
         var view = new MarkdownView {
-            Text = "[![badge](https://h/b.png)](https://outer.example)", Flavor = MarkdownFlavor.GitHub,
+            Text = "See [![badge](https://h/b.png)](https://outer.example) here.", Flavor = MarkdownFlavor.GitHub,
             OpenLink = ReactiveCommand.Create<string>(opened.Add), Width = 400,
         };
         var window = new Window { Content = new StackPanel { Children = { before, view } }, Width = 500, Height = 300 };
@@ -184,6 +185,9 @@ public class MarkdownLinkKeyboardTests {
 
             Press(window, PhysicalKey.Enter);
             await Assert.That(opened).IsEquivalentTo(new[] { "https://outer.example" });
+
+            Press(window, PhysicalKey.Tab);
+            await Assert.That(Url(view)).IsNull();
         } finally { window.Close(); }
     });
 
