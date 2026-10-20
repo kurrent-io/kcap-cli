@@ -754,6 +754,41 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A running foreground subagent is named by its meta file, and its own transcript, every line of it a
+    /// sidechain record, opens in place of the chat.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_local_subagent_opens_its_own_transcript_in_place_of_the_chat() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+            var subagents = Capacitor.Cli.Core.Harness.Claude.ClaudeSubagentFiles.DirectoryOf(path);
+            Directory.CreateDirectory(subagents);
+            await File.WriteAllTextAsync(Path.Combine(subagents, "agent-s1.meta.json"), """{"toolUseId":"toolu_A","requestShape":"foreground"}""");
+            await File.WriteAllTextAsync(Path.Combine(subagents, "agent-s1.jsonl"),
+                """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found the chat surfaces"}]}}""" + "\n");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+            var row = vm.WorkContext.Runs.Single();
+            await Assert.That(row.AgentId).IsEqualTo("s1");
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            var pane = vm.Subagent!;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.ShowsSubagent).IsTrue();
+            await Assert.That(vm.ShowsChat).IsFalse();
+            await Assert.That(pane.Chat.Items.OfType<AssistantTextItem>().Single().Text).IsEqualTo("Found the chat surfaces");
+            await Assert.That(vm.Chat.Items.OfType<AssistantTextItem>()).IsEmpty();
+            await vm.TeardownAsync();
+        });
+    }
+
     const string ShellCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""";
     const string ShellLaunchLine = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
 

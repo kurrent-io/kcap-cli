@@ -626,6 +626,7 @@ public partial class App : Application {
         // After the directory, which feeds it the session→agent map: a server-lane item names a
         // session, and only that map turns it into the agent whose card it belongs on.
         var readDetail = ServerSessionHttp.DetailReader(sessionHttp, profiles);
+        var readSubagent = ServerSessionHttp.SubagentEventsReader(sessionHttp, profiles);
         var uploader = new ServerAttachmentUploader(sessionHttp, profiles);
         var permissions = new PermissionService(
             service, ops, ct => PermissionSubscription.RunAsync(_daemonStore, service.DaemonName, ct),
@@ -741,7 +742,7 @@ public partial class App : Application {
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
-                    pullRequestLinksChanged: pullRequestTones.Refresh)
+                    pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent)
                 : null;
 
         _coordinator = new MainWindowCoordinator(

@@ -41,9 +41,9 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -136,6 +136,48 @@ public class RemoteSessionViewModelTests {
             await WaitUntilAsync(() => h.WorkSource.InFlight == 1, what: "work context read started");
             await vm.TeardownAsync();
             await Assert.That(h.WorkSource.InFlight).IsEqualTo(0);
+        });
+    }
+
+    /// A subagent row opens that subagent's own events in place of the chat, read-only, and Back returns to the chat.
+    [Test]
+    public async Task A_subagent_row_opens_its_own_transcript_in_place_of_the_chat_until_back() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var requested = new List<(string Session, string Agent)>();
+            SubagentEventsReader read = (session, agent, _, _) => {
+                requested.Add((session, agent));
+                return Task.FromResult(new SubagentEventsFetch(new SubagentEventsDto {
+                    Events = [Event(0, CanonicalEventTypes.AssistantTextGenerated, """{"content":"Found the chat surfaces"}""")],
+                }));
+            };
+            var vm = h.Build(Harness.Row(vendor: "claude"), readSubagent: read);
+            await h.UntilAsync(vm, () => vm.WorkContext.Runs.Any(r => r.CanOpen), "subagent row named");
+            var row = vm.WorkContext.Runs.Single();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+
+            await Assert.That(vm.ShowsSubagentPane).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            var pane = vm.Subagent!;
+            await Assert.That(pane.Chat.IsReadOnlyParticipant).IsTrue();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!pane.Chat.Items.OfType<AssistantTextItem>().Any() && DateTime.UtcNow < deadline) {
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+            }
+            await Assert.That(pane.Chat.Items.OfType<AssistantTextItem>().Single().Text).IsEqualTo("Found the chat surfaces");
+            await Assert.That(requested[0]).IsEqualTo(("s1", "a9f262478e032f427"));
+            await Assert.That(vm.WorkContext.Runs.Single()).IsSameReferenceAs(row);
+
+            pane.BackCommand.Execute().Subscribe();
+
+            await Assert.That(vm.Subagent).IsNull();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await vm.TeardownAsync();
         });
     }
 

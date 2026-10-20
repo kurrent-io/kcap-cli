@@ -3,6 +3,8 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
 using Capacitor.Cli.Core.Resume;
@@ -55,6 +57,17 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     ChatTabViewModel? _chat;
     /// Built once, on the first dto; the reader comes from transcript_format and the input channel
     /// from has_terminal.
+    SubagentPaneViewModel? _subagent;
+    /// A subagent's own transcript, shown in place of the chat until the user goes back.
+    public SubagentPaneViewModel? Subagent {
+        get => _subagent;
+        private set {
+            this.RaiseAndSetIfChanged(ref _subagent, value);
+            this.RaisePropertyChanged(nameof(ShowsChat));
+            this.RaisePropertyChanged(nameof(ShowsSubagent));
+        }
+    }
+
     public ChatTabViewModel? Chat {
         get => _chat;
         private set {
@@ -93,6 +106,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             this.RaiseAndSetIfChanged(ref _activeTab, value);
             this.RaisePropertyChanged(nameof(IsChatActive));
             this.RaisePropertyChanged(nameof(ShowsChat));
+            this.RaisePropertyChanged(nameof(ShowsSubagent));
             this.RaisePropertyChanged(nameof(IsTerminalActive));
             this.RaisePropertyChanged(nameof(IsPullRequestActive));
             this.RaisePropertyChanged(nameof(ShowsPullRequestTab));
@@ -107,7 +121,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     public bool IsChatActive => ActiveTab == WorkspaceTab.Chat;
     /// A chat surface with no view model behind it fails every visibility binding open, drawing
     /// its banners and composer as empty shells.
-    public bool ShowsChat => IsChatActive && Chat is not null;
+    public bool ShowsChat => IsChatActive && Chat is not null && Subagent is null;
+    public bool ShowsSubagent => IsChatActive && Subagent is not null;
     public bool IsTerminalActive => ActiveTab == WorkspaceTab.Terminal;
     public bool IsPullRequestActive => ActiveTab == WorkspaceTab.PullRequest;
     public bool IsArtefactsActive => ActiveTab == WorkspaceTab.Artefacts;
@@ -142,6 +157,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _lease = new();
     readonly IUrlOpener _opener;
+    readonly TimeProvider _time;
+    readonly IPermissionService _permissions;
 
     // Read by StopCommand at click time -- the DTO's own Kind decides protected-ness
     // (AgentActionService.IsProtectedKind), so Stop must see whatever the LATEST resolved dto
@@ -161,6 +178,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
+        _time = time;
+        _permissions = permissions;
         Terminal = new TerminalTabViewModel(agentId, daemon, factory, surfaceFactory, time, resumeLedger) { SurfaceShown = IsTerminalActive };
         _disposables.Add(_lease);
 
@@ -185,6 +204,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 if (!show && IsArtefactsActive) ActiveTab = WorkspaceTab.Chat;
             }).DisposeWith(_disposables);
         WorkContext = new WorkContextViewModel(presence.Select(p => p.Dto), workContext, time, opener, runs, requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity, artefacts: Artefacts);
+        WorkContext.RunOpened += OpenSubagent;
+        _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
             linksChanged: pullRequestLinksChanged);
@@ -347,12 +368,33 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Local, origin, AgentId);
 
+    /// A subagent's transcript sits beside its parent's on this machine, written as it runs.
+    void OpenSubagent(RunRow row) {
+        if (row.AgentId is not { } subagentId || _latestDto is not { TranscriptPath: { } parentPath } dto
+            || TranscriptChat.ForSubagent(dto.Vendor) is not { } projection) return;
+        var path = ClaudeSubagentFiles.TranscriptPath(parentPath, subagentId);
+        ReplaceSubagent(new SubagentPaneViewModel(
+            row, Title, AgentOrigin.Local, AgentId, dto.Vendor, path,
+            key => new LocalTranscriptFeed(key, projection, subagentId, _time, _ => { }),
+            _opener, _time, _permissions, CloseSubagent));
+        ActiveTab = WorkspaceTab.Chat;
+    }
+
+    void CloseSubagent() => ReplaceSubagent(null);
+
+    void ReplaceSubagent(SubagentPaneViewModel? next) {
+        var previous = Subagent;
+        Subagent = next;
+        if (previous is not null) _ = previous.TeardownAsync();
+    }
+
     /// Disposes this workspace's own daemon-cache projections, then tears down Chat (if built), the
     /// work-context pane, and Terminal last -- the caller that closes a workspace tab calls this once.
     public async Task TeardownAsync() {
         _disposables.Dispose();
         if (PullRequests is { } pullRequests) await pullRequests.TeardownAsync();
         if (Chat is { } chat) await chat.TeardownAsync();
+        if (Subagent is { } subagent) await subagent.TeardownAsync();
         await WorkContext.TeardownAsync();
         await Artefacts.TeardownAsync();
         await Terminal.TeardownAsync();

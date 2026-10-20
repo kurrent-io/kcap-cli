@@ -155,6 +155,8 @@
                  DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsChat}" />
+            <views:SubagentPaneView x:Name="SubagentHost" DataContext="{Binding Subagent}"
+                                    IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsSubagent}" />
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
             <ContentControl x:Name="ArtefactsHost" IsVisible="{Binding IsArtefactsActive}" />
 

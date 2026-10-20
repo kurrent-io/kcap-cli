@@ -65,6 +65,8 @@
             <!-- The active-tab flag lives on this VM, which is not the pane's DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsChatPane}" />
+            <views:SubagentPaneView x:Name="SubagentHost" DataContext="{Binding Subagent}"
+                                    IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsSubagentPane}" />
 
             <Grid x:Name="TerminalPane" RowDefinitions="*,Auto" IsVisible="{Binding ShowsTerminalPane}">
                 <!-- FontFamily MUST be set: the control's default is "Cascadia Mono", which only

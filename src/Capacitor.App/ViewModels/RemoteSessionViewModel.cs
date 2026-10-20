@@ -29,6 +29,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly ComposerDrafts? _drafts;
     readonly SerialDisposable _lease = new();
     readonly IUrlOpener _opener;
+    readonly TimeProvider _time;
+    readonly IPermissionService _permissions;
+    readonly SubagentEventsReader? _readSubagent;
     // Never disposed, so a row revision landing after teardown cannot throw; the chat and its
     // cards unsubscribe from these when the pane is torn down.
     readonly BehaviorSubject<string?> _sessionIds;
@@ -163,7 +166,19 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     public bool ShowsPanes =>
         Access is RemoteSessionAccess.Ready or RemoteSessionAccess.Offline && !OriginChangedToLocal;
 
-    public bool ShowsChatPane => ShowsPanes && IsChatActive;
+    public bool ShowsChatPane => ShowsPanes && IsChatActive && Subagent is null;
+    public bool ShowsSubagentPane => ShowsPanes && IsChatActive && Subagent is not null;
+
+    SubagentPaneViewModel? _subagent;
+    /// A subagent's own transcript, shown in place of the chat until the user goes back.
+    public SubagentPaneViewModel? Subagent {
+        get => _subagent;
+        private set {
+            this.RaiseAndSetIfChanged(ref _subagent, value);
+            this.RaisePropertyChanged(nameof(ShowsChatPane));
+            this.RaisePropertyChanged(nameof(ShowsSubagentPane));
+        }
+    }
     public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
     public bool ShowsPullRequestPane => ShowsPanes && IsPullRequestActive;
     public bool ShowsArtefactsPane => ShowsPanes && IsArtefactsActive;
@@ -184,6 +199,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         this.RaisePropertyChanged(nameof(ShowsArtefactsPane));
         this.RaisePropertyChanged(nameof(ShowsPanes));
         this.RaisePropertyChanged(nameof(ShowsChatPane));
+        this.RaisePropertyChanged(nameof(ShowsSubagentPane));
         this.RaisePropertyChanged(nameof(ShowsTerminalPane));
         _terminalPaneShown.OnNext(ShowsTerminalPane);
     }
@@ -202,8 +218,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
-            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null, Action<string>? pullRequestLinksChanged = null) {
+            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null, Action<string>? pullRequestLinksChanged = null,
+            SubagentEventsReader? readSubagent = null) {
         _drafts = drafts;
+        _time = time;
+        _permissions = permissions;
+        _readSubagent = readSubagent;
         _row = row;
         _opener = opener;
         _access = access;
@@ -225,6 +245,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         WorkContext = new WorkContextViewModel(_presence, workContext, time, opener, runs,
             requestSignIn, signInCompleted, actions.OpenWorkItemInWeb, plans, planActivity,
             artefacts: Artefacts, isRemote: true);
+        WorkContext.RunOpened += OpenSubagent;
+        _disposables.Add(Disposable.Create(() => WorkContext.RunOpened -= OpenSubagent));
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
@@ -394,10 +416,30 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public void HandDraftTo(AgentOrigin origin) => _drafts?.Move(AgentOrigin.Remote, origin, AgentId);
 
+    /// The server keeps a subagent's events on a stream of its own, which only its events route serves.
+    void OpenSubagent(RunRow row) {
+        if (row.AgentId is not { } subagentId || _sessionIds.Value is not { } sessionId || _readSubagent is not { } read) return;
+        var vendor = _row.Vendor;
+        ReplaceSubagent(new SubagentPaneViewModel(
+            row, Title, AgentOrigin.Remote, AgentId, vendor, $"{sessionId}/{subagentId}",
+            _ => new RemoteSubagentFeed(sessionId, subagentId, vendor, read, () => row.IsRunning, _time, Log),
+            _opener, _time, _permissions, CloseSubagent));
+        ActiveTab = RemoteTab.Chat;
+    }
+
+    void CloseSubagent() => ReplaceSubagent(null);
+
+    void ReplaceSubagent(SubagentPaneViewModel? next) {
+        var previous = Subagent;
+        Subagent = next;
+        if (previous is not null) _ = previous.TeardownAsync();
+    }
+
     public async Task TeardownAsync() {
         _disposables.Dispose();
         Artefacts.OpenRequested -= ShowArtefacts;
         await Chat.TeardownAsync();
+        if (Subagent is { } subagent) await subagent.TeardownAsync();
         if (Terminal is { } terminal) await terminal.TeardownAsync();
         await WorkContext.TeardownAsync();
         await Artefacts.TeardownAsync();

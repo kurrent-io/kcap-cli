@@ -235,23 +235,28 @@
             </Grid>
         </DataTemplate>
         <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
-                </Panel>
-                <StackPanel Grid.Column="1" Spacing="2">
-                    <Grid ColumnDefinitions="Auto,*">
-                        <views:AppIcon x:Name="ShellGlyph" Kind="Terminal" Size="12" Margin="0,0,5,0"
-                                       Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
-                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                    </Grid>
-                    <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
-                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Grid>
+            <!-- Only a subagent whose id is known opens; any other row reads the same but takes no click. -->
+            <Button x:Name="RunRowButton" Classes="toggle" Cursor="Hand" IsHitTestVisible="{Binding CanOpen}"
+                    Command="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).OpenRunCommand}"
+                    CommandParameter="{Binding}" AutomationProperties.Name="{Binding Name}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                    <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                        <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
+                    </Panel>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <Grid ColumnDefinitions="Auto,*">
+                            <views:AppIcon x:Name="ShellGlyph" Kind="Terminal" Size="12" Margin="0,0,5,0"
+                                           Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
+                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
+                        </Grid>
+                        <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
+                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
+                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
+            </Button>
         </DataTemplate>
     </UserControl.Resources>
 
