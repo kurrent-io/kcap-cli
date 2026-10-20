@@ -461,7 +461,7 @@
                                                 <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
                                                         HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
                                                     <StackPanel>
-                                                        <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
+                                                        <TextBlock x:Name="ContributorNameText" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                                         <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
                                                                    IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -484,7 +484,7 @@
                                         HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}" IsVisible="{Binding PeopleExpanded}"
                                         AutomationProperties.Name="{Binding Requester}">
                                     <StackPanel>
-                                        <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
+                                        <TextBlock Text="{Binding Requester}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                         <TextBlock Text="{Binding RequesterRole}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0" />
                                     </StackPanel>
@@ -735,10 +735,15 @@
                             AutomationProperties.Name="Session details">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />
-                            <Panel Classes="chevronBox" Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
-                                <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding SessionExpanded}" />
-                                <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !SessionExpanded}" />
-                            </Panel>
+                            <!-- The base facts always show, so this toggle reads as more/less detail, not open/shut. -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <TextBlock x:Name="SessionToggleText" Classes="sectionMeta"
+                                           Text="{Binding SessionToggleText}" />
+                                <Panel Classes="chevronBox" Width="12" Height="12">
+                                    <views:AppIcon Kind="ChevronUp" Size="12" Classes="chevron" IsVisible="{Binding SessionExpanded}" />
+                                    <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding !SessionExpanded}" />
+                                </Panel>
+                            </StackPanel>
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody">

@@ -1545,7 +1545,7 @@ public class MainWindowSmokeTests {
             await Assert.That(items.IsVisible).IsEqualTo(inWindow);
             await Assert.That(settingsButton.Content).IsEqualTo("Settings…");
             await Assert.That(changelogButton.Content).IsEqualTo("Changelog");
-            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Kurrent Capacitor ");
+            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Desktop app ");
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
 
             settings.OnNext(() => opened++);
@@ -1707,7 +1707,7 @@ public class MainWindowSmokeTests {
         await Assert.That(tips.DaemonLines).IsEquivalentTo(
             new[] { MainWindowViewModel.DaemonNameTip }, CollectionOrdering.Matching);
         await Assert.That(tips.DaemonText).IsEqualTo("daemon-a");
-        await Assert.That(tips.VersionText).IsEqualTo("1.2.3");
+        await Assert.That(tips.VersionText).IsEqualTo("kcap 1.2.3");
         await Assert.That(tips.VersionLines).IsEquivalentTo(
             new[] { MainWindowViewModel.VersionIdentityTip }, CollectionOrdering.Matching);
         await Assert.That(string.Join('\n', tips.VersionLines)).DoesNotContain("1.2.3+abc");
@@ -1748,9 +1748,9 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "kcap 1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
         await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "kcap 1.2.3" }, CollectionOrdering.Matching);
     }
 
     /// A queued daemon update is the version's own status: warning paint on the semver, the
@@ -1792,7 +1792,7 @@ public class MainWindowSmokeTests {
         });
 
         await Assert.That(shown.PendingLabel).IsFalse();
-        await Assert.That(shown.VersionText).IsEqualTo("1.1.0");
+        await Assert.That(shown.VersionText).IsEqualTo("kcap 1.1.0");
         await Assert.That(shown.Warning).IsTrue();
         await Assert.That(shown.TipLines).IsEquivalentTo(
             new[] { MainWindowViewModel.RestartPendingMessage, MainWindowViewModel.VersionIdentityTip },

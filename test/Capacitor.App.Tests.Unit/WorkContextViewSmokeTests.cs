@@ -353,6 +353,28 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    /// Pins that a name is trimmed by the width it has, not by a character count: a long address
+    /// in a pane with room for it shows whole.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_contributor_name_shows_whole_when_the_pane_has_room() {
+        await RunOnUiAsync(async () => {
+            const string email = "someone.with.a.long.name@example.io";
+            await using var host = new Host();
+            host.Window.Width = 900;
+            var read = KeyOnlyRead();
+            await host.ShowAsync(read with { Item = read.Item! with {
+                Contributors = [new WorkItemContributorDto { UserId = "u1", DisplayName = email }] } });
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var name = host.Find<TextBlock>("ContributorNameText");
+            await Assert.That(name.Text).IsEqualTo(email);
+            await Assert.That(name.TextLayout.TextLines.Any(l => l.HasCollapsed)).IsFalse();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_requester_fallback_folds_to_its_initial() {
