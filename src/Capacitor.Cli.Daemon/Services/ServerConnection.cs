@@ -232,7 +232,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
-        void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+        CredentialHealth = new DaemonCredentialHealth(_statusNotifier.Pulse);
+        void ReportRejection(string report) {
+            logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+            CredentialHealth.ObserveRejection();
+        }
 
         // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
         // to anything.
@@ -250,7 +254,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             .WithUrl(
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
-                    options.AccessTokenProvider = async () => (await credentials.ResolveAsync(default)).Bearer;
+                    options.AccessTokenProvider = async () => {
+                        var state = await credentials.ResolveAsync(default);
+                        CredentialHealth.Observe(state);
+                        return state.Bearer;
+                    };
                     options.HttpMessageHandlerFactory = Guarded;
                     HttpClientExtensions.AddObservationHeaders(options.Headers, config.UpdateCheckOff);
                     options.WebSocketFactory = (context, ct) => {
@@ -516,6 +524,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// without a live SignalR transport.</summary>
     internal virtual HubConnectionState HubState => _hub.State;
 
+    /// <summary>Whether the daemon's sign-in is why the hub cannot connect.</summary>
+    internal DaemonCredentialHealth CredentialHealth { get; }
+
     /// <summary>The heartbeat's gate: only a <c>Connected</c> hub is pinged and, on a hung ping,
     /// force-reconnected. Any other state means automatic reconnect owns recovery.</summary>
     public bool IsConnected => HubState == HubConnectionState.Connected;
@@ -563,6 +574,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
                     await RegisterDaemonAsync();
                     _connectedTimestamp = _time.GetTimestamp();
+                    CredentialHealth.ObserveConnected();
                     LogConnected(_config.Name);
                     _statusNotifier.Pulse();
 
@@ -816,6 +828,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         LogReconnected();
         await RegisterDaemonAsync();
         _connectedTimestamp = _time.GetTimestamp();
+        CredentialHealth.ObserveConnected();
     }
 
     /// <summary>

@@ -357,6 +357,11 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
     // share the neutral fallback; reconnecting and disconnected get their own copy.
     static string AttentionBody(AttachStatus status, DaemonStatusDto? snap) {
         if (status.State == AttachState.Connected && snap is not null) {
+            if (snap.Daemon is { Credential: not null } daemon && daemon.Connection != "connected")
+                return daemon.Profile is { Length: > 0 } profile && !string.Equals(profile, "default", StringComparison.OrdinalIgnoreCase)
+                    ? $"signed out of {profile}: run kcap login --profile {profile}"
+                    : "signed out: run kcap login";
+
             return snap.Daemon.Connection switch {
                 "reconnecting" => "reconnecting to server",
                 "disconnected" => "disconnected from server",

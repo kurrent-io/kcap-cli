@@ -9,6 +9,14 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 public sealed class ProfilesSettingsViewModel : ReactiveObject {
+    /// The confirmation for removing a profile. Removing the one the local daemon runs on deletes the
+    /// daemon's only sign-in, so the prompt says so.
+    internal static string RemovePrompt(string name, string? daemonProfile) =>
+        string.Equals(name, daemonProfile, StringComparison.OrdinalIgnoreCase)
+            ? $"Remove profile {name}? Its saved sign-in is deleted too. The local daemon runs on this profile, so it "
+            + "is signed out until you sign in to it again or install the daemon on another profile. Nothing on the server changes."
+            : $"Remove profile {name}? Its saved sign-in is deleted too. Nothing on the server changes.";
+
     readonly ConfigRoot _config;
     readonly TokenStore _tokens;
     readonly OnboardingGate _gate;

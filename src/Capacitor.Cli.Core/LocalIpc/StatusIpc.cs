@@ -33,7 +33,13 @@ public sealed record DaemonInfoDto(
     // daemon that predates it, which a client must read as UNKNOWN, never as "hosts nothing".
     string[]? SupportedVendors = null,
     // Same null / missing-key / empty-array meaning as DaemonConnect.VendorModels.
-    Dictionary<string, VendorModelOption[]>? VendorModels = null);
+    Dictionary<string, VendorModelOption[]>? VendorModels = null,
+    // Why the daemon's own sign-in keeps the hub from connecting, while it is not connected:
+    // "signed_out" (nothing usable stored) or "rejected" (the server refused it). Null when the
+    // credential is not the problem, and from a daemon that predates the field.
+    string? Credential = null,
+    // The profile the daemon resolved its server and sign-in from. Null from an older daemon.
+    string? Profile = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open
