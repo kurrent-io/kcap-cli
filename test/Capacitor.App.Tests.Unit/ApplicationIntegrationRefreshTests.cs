@@ -78,7 +78,9 @@ public class ApplicationIntegrationRefreshTests {
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(Directory.Exists(old)).IsFalse();
         await refresh.RunPendingAsync(outcome.InstalledPath, CancellationToken.None);
-        await Assert.That(File.ReadAllText(codex)).Contains(Path.Combine(apps, "kcap.app/Contents/MacOS/kcap"));
+        var commands = CodexConfigToml.ReadMcpServerCommands(codex);
+        await Assert.That(commands.Count).IsGreaterThan(0);
+        await Assert.That(commands.All(command => command.Command == Path.Combine(apps, "kcap.app", "Contents", "MacOS", "kcap"))).IsTrue();
         await Assert.That(File.ReadAllText(codex)).DoesNotContain("Kurrent Capacitor.app");
         await Assert.That(File.Exists(Tmp.PathTo("home/.codex/hooks.json"))).IsFalse();
     }
