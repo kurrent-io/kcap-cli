@@ -1,0 +1,8 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Capacitor.App.Views.ProductWordmark"
+             Width="104.06" Height="31"
+             AutomationProperties.Name="kcap">
+    <Image Source="avares://kcap-desktop/Assets/kcap-logo-on-dark.png"
+           Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality" />
+</UserControl>

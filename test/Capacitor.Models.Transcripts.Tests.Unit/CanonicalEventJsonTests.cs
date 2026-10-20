@@ -44,4 +44,13 @@ public class CanonicalEventJsonTests {
         await Assert.That(CanonicalEventJson.TryParse(CanonicalEventTypes.UserMessageReceived, "not json")).IsNull();
         await Assert.That(CanonicalEventJson.TryParse(CanonicalEventTypes.UserMessageReceived, """{"content":42}""")).IsNull();
     }
+
+    /// <summary>A stored compaction reaches a remote chat as the note a local one shows.</summary>
+    [Test]
+    public async Task A_stored_compaction_reads_back_as_its_record() {
+        var parsed = CanonicalEventJson.TryParse(CanonicalEventTypes.ContextCompacted, """{"encrypted_content":"x","replacement_history":[]}""");
+
+        await Assert.That(parsed).IsTypeOf<ContextCompactedEvent>();
+        await Assert.That(((ContextCompactedEvent)parsed!).EncryptedContent).IsEqualTo("x");
+    }
 }

@@ -1,12 +1,17 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Harness.Cursor;
 using Capacitor.Cli.Harness.Cursor;
+using Capacitor.Cli.Tests.Unit.Capture;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Harness.Cursor;
 
 public class CursorTranscriptBackfillTests {
+    static readonly SecretPatterns UnboundedPatterns =
+        SecretRedactor.WatcherPatterns.WithMatchTimeout(Regex.InfiniteMatchTimeout);
+
     [Test]
     [Arguments(false, 2)]
     [Arguments(true, 3)]
@@ -19,7 +24,7 @@ public class CursorTranscriptBackfillTests {
             (_, body) => { posted.Add(body); return new HttpResponseMessage(HttpStatusCode.OK); });
         using var client = new HttpClient(handler);
         var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(), path,
-            () => posted.Count > 0, Frozen, CancellationToken.None, finalDrain: finalDrain);
+            () => posted.Count > 0, Frozen, CancellationToken.None, UnboundedPatterns, finalDrain: finalDrain);
         await Assert.That(stats.LinesPosted).IsEqualTo(expectedLines);
         await Assert.That(stats.Failed).IsFalse();
     }
@@ -35,8 +40,9 @@ public class CursorTranscriptBackfillTests {
         using var client = new HttpClient(handler);
 
         var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(),
-            path, () => false, Frozen, CancellationToken.None);
+            path, () => false, Frozen, CancellationToken.None, UnboundedPatterns);
 
+        await Assert.That(stats.Failed).IsFalse();
         await Assert.That(stats.LinesPosted).IsEqualTo(3);
         await Assert.That(posted.Count).IsEqualTo(2);
         foreach (var body in posted) {
@@ -51,6 +57,23 @@ public class CursorTranscriptBackfillTests {
     /// For the multi-megabyte runs: the watermark and per-chunk HTTP caps run on the clock passed in, and a
     /// starved runner moving megabytes through the recording handler can outlast them in real time.
     static FakeTimeProvider Frozen => new();
+
+    [Test]
+    public async Task A_record_that_exceeds_its_redaction_budget_is_held_without_posting() {
+        using var tmp = new TempDir();
+        var path = tmp.CreateFile("transcript.jsonl", "{\"role\":\"assistant\",\"content\":\"hello\"}\n");
+        var posted = 0;
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.NoContent),
+            (_, _) => { posted++; return new HttpResponseMessage(HttpStatusCode.OK); });
+        using var client = new HttpClient(handler);
+
+        var stats = await CursorTranscriptBackfill.RunAsync(Markers, client, "http://s", NewSessionId(), path,
+            () => false, new SteppingRedactionClock(TimeSpan.FromSeconds(2)), CancellationToken.None);
+
+        await Assert.That(stats.LinesPosted).IsEqualTo(0);
+        await Assert.That(stats.Failed).IsFalse();
+        await Assert.That(posted).IsEqualTo(0);
+    }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 

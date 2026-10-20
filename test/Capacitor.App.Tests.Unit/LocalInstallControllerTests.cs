@@ -38,7 +38,7 @@ public class LocalInstallControllerTests {
         };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         controller.Interrupt();
         controller.Interrupt();
         var settle = controller.SettleAsync();
@@ -97,7 +97,7 @@ public class LocalInstallControllerTests {
             () => cli, LocalSetupScript.NoSetup(Config), () => false, action => action(), probe.Funnel);
         using var shutdown = new CancellationTokenSource();
 
-        await controller.StartAsync(shutdown.Token);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, shutdown.Token);
         await runner.Spawned.Task.WaitAsync(TimeSpan.FromSeconds(5));
         // The app cancels its shutdown token before it settles the install.
         await shutdown.CancelAsync();
@@ -117,8 +117,8 @@ public class LocalInstallControllerTests {
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
 
         await controller.SettleAsync();
-        await controller.StartAsync(CancellationToken.None);
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         exit.SetResult(new StreamingResult(0, false, []));
         await controller.SettleAsync();
 
@@ -135,7 +135,7 @@ public class LocalInstallControllerTests {
         };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         var failed = (LocalInstallOutcome.Failed)controller.Outcome!;
@@ -151,7 +151,7 @@ public class LocalInstallControllerTests {
         var cli = new FakeKcapCli { SetupLocalBehavior = (_, _, _) => throw new InvalidOperationException("spawn refused") };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         var failed = (LocalInstallOutcome.Failed)controller.Outcome!;
@@ -166,7 +166,7 @@ public class LocalInstallControllerTests {
         var cli = new FakeKcapCli { SetupLocalBehavior = (_, _, _) => Task.FromResult(new StreamingResult(3, false, [])) };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), probe);
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(probe.Only("cli_setup_local_install_failed").Properties["code"]!.GetValue<string>()).IsEqualTo("no_failure_line");
@@ -184,7 +184,7 @@ public class LocalInstallControllerTests {
         };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Message).IsEqualTo("Unhandled exception: disk full");
@@ -201,7 +201,7 @@ public class LocalInstallControllerTests {
         };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).Message).IsEqualTo("The download stalled.");
@@ -218,7 +218,7 @@ public class LocalInstallControllerTests {
         RowState? firstStartWhenSettled = null;
         controller.Settled += _ => firstStartWhenSettled = controller.Progress.FirstStart.State;
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(controller.Progress.Install.State).IsEqualTo(RowState.Done);
@@ -234,7 +234,7 @@ public class LocalInstallControllerTests {
         };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(controller.Progress.Download.State).IsEqualTo(RowState.Pending);
@@ -248,7 +248,7 @@ public class LocalInstallControllerTests {
         LocalInstallOutcome? settled = null;
         controller.Settled += o => settled = o;
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(settled).IsEqualTo(controller.Outcome);
@@ -264,7 +264,7 @@ public class LocalInstallControllerTests {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("lifecycle_busy")) };
         var controller = Controller(cli, LocalSetupScript.PendingSetup(Config), probe);
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         var failed = (LocalInstallOutcome.Failed)controller.Outcome!;
@@ -280,7 +280,7 @@ public class LocalInstallControllerTests {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed")) };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe(), committedLocal: true);
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
 
         await Assert.That(((LocalInstallOutcome.Failed)controller.Outcome!).LockedToLocal).IsTrue();
@@ -291,7 +291,7 @@ public class LocalInstallControllerTests {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("download_failed")) };
         var controller = Controller(cli, LocalSetupScript.NoSetup(Config), Probe());
 
-        await controller.StartAsync(CancellationToken.None);
+        await controller.StartAsync(LocalEmbeddingChoice.Default, CancellationToken.None);
         await controller.SettleAsync();
         var first = controller.Progress;
 

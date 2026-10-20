@@ -33,6 +33,6 @@ static class SessionIdLineEmitter {
         foreach (var c in id)
             if (c == '`' || char.IsControl(c)) return null;
 
-        return $"Kurrent Capacitor session id: `{id}`. Pass it as `session_id` to a kcap MCP tool that cannot resolve the session by itself.";
+        return $"kcap session id: `{id}`. Pass it as `session_id` to a kcap MCP tool that cannot resolve the session by itself.";
     }
 }

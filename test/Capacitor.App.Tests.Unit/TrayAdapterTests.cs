@@ -334,13 +334,13 @@ public class TrayAdapterTests {
                 builder.Rebuild(menu, Model(agents: []));
 
                 var items = menu.Items.OfType<NativeMenuItem>().ToList();
-                var open = items.First(i => i.Header == "Open Kurrent Capacitor");
+                var open = items.First(i => i.Header == "Open kcap");
                 var quit = items.First(i => i.Header == "Quit");
                 return (open.Header, ReferenceEquals(open.Command, vm.OpenMainWindowCommand),
                     quit.Header, ReferenceEquals(quit.Command, vm.QuitCommand));
             });
 
-            await Assert.That(openHeader).IsEqualTo("Open Kurrent Capacitor");
+            await Assert.That(openHeader).IsEqualTo("Open kcap");
             await Assert.That(openMatches).IsTrue();
             await Assert.That(quitHeader).IsEqualTo("Quit");
             await Assert.That(quitMatches).IsTrue();
@@ -360,7 +360,7 @@ public class TrayAdapterTests {
         new TrayMenuBuilder(vm).Rebuild(menu, Model());
         var items = menu.Items.OfType<NativeMenuItem>().ToList();
         var settings = items.Single(i => i.Header == "Settings…");
-        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Open Kurrent Capacitor") + 1);
+        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Open kcap") + 1);
         await Assert.That(settings.IsEnabled).IsTrue();
         ((INativeMenuItemExporterEventsImplBridge)settings).RaiseClicked();
         await Assert.That(opened).IsEqualTo(1);
@@ -403,7 +403,7 @@ public class TrayAdapterTests {
 
                 var items = menu.Items.OfType<NativeMenuItem>().ToList();
                 var shim = items.First(i => i.Header == "Install command-line tool…");
-                var open = items.First(i => i.Header == "Open Kurrent Capacitor");
+                var open = items.First(i => i.Header == "Open kcap");
                 var quit = items.First(i => i.Header == "Quit");
 
                 return (shim.Header, menu.Items.IndexOf(shim), menu.Items.IndexOf(open), menu.Items.IndexOf(quit),
@@ -481,7 +481,7 @@ public class TrayAdapterTests {
             });
 
             await Assert.That(icon).IsNotNull();
-            await Assert.That(tooltip).IsEqualTo("Kurrent Capacitor");
+            await Assert.That(tooltip).IsEqualTo("kcap");
             await Assert.That(itemCountBeforeNeedsUpdate).IsEqualTo(0);
             await Assert.That(command).IsNull();
         });
@@ -507,7 +507,7 @@ public class TrayAdapterTests {
                 return (items, ReferenceEquals(trayIcon.Command, vm.OpenMainWindowCommand));
             });
 
-            await Assert.That(labels).Contains("Open Kurrent Capacitor");
+            await Assert.That(labels).Contains("Open kcap");
             await Assert.That(labels).Contains("Quit");
             await Assert.That(commandIsOpen).IsTrue();
         });

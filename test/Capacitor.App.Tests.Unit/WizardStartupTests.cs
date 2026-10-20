@@ -761,6 +761,7 @@ public class WizardStartupTests {
         var root = new LocalRoot(Config.PathTo("local"));
         root.EnsureCreated();
         Config.CreateFile("local/journal.json", "{not json");
+        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
         harness.LocalRoot = root;
         harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
         using var shutdown = new CancellationTokenSource();
@@ -1353,7 +1354,7 @@ public class WizardStartupTests {
     static (OnboardingViewModel Wizard, WizardLifecycleSurface Surface) NewShell() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
         var wizard = new OnboardingViewModel(
-            [new StubStep(WizardStepId.Edition, "Connect to Capacitor")], CancellationToken.None, surface);
+            [new StubStep(WizardStepId.Edition, "Connect to kcap")], CancellationToken.None, surface);
 
         return (wizard, surface);
     }

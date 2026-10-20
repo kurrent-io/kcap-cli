@@ -80,10 +80,30 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             case AcpEventKind.ToolCall:
                 return envelope with { ToolKind = ClaudeToolKinds.Of(envelope.ToolName) };
             case AcpEventKind.ToolResult:
-                return envelope with { ToolIsError = SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsError) };
+                return envelope with {
+                    ToolIsError = SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsError),
+                    ToolResult  = ChatResultText(slug) ?? envelope.ToolResult,
+                };
             default:
                 return envelope;
         }
+    }
+
+    /// The chat shows a block result's text blocks one per line, where the stored result joins them with
+    /// a blank line, as the server writes it.
+    static string? ChatResultText(Google.Protobuf.WellKnownTypes.Struct? slug) {
+        if (slug is null || !slug.Fields.TryGetValue(ClaudeCodeExtension.OutputRaw, out var raw) || raw.ListValue is not { } blocks) return null;
+
+        // The chat's own join: no separator ahead of the first text it has kept.
+        var sb    = new System.Text.StringBuilder();
+        var found = false;
+        foreach (var v in blocks.Values) {
+            if (v.StructValue is not { } b || SchemaExtensions.Text(b, "type") != "text" || SchemaExtensions.Text(b, "text") is not { } t) continue;
+            found = true;
+            if (sb.Length > 0) sb.Append('\n');
+            sb.Append(t);
+        }
+        return found ? TranscriptEnvelopes.Cap(sb.ToString()) : null;
     }
 
     /// A sidechain event is a subagent's own record: its runs are not the parent's rows, but are its own

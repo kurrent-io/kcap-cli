@@ -17,7 +17,7 @@ public class FeedbackWindowSmokeTests {
 
     [Test]
     public Task Window_reflects_the_category_gates_send_and_swaps_to_the_confirmation() => AvaloniaSession.RunOnUiAsync(async () => {
-        using var trailer = new BehaviorSubject<string>("Sent from Kurrent Capacitor Desktop 1.0.3 · daemon d 1.0.3");
+        using var trailer = new BehaviorSubject<string>("Sent from kcap Desktop 1.0.3 · daemon d 1.0.3");
         using var vm = new FeedbackViewModel(new SentApi(), FeedbackCategory.Feedback, trailer, "macOS 15.6", null);
         var window = new FeedbackWindow { DataContext = vm };
         try {

@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 public class KcapMcpRegistryReviewFlowTests {
     [Test]
     public async Task Resolve_accepts_read_only_servers_case_insensitively() {
-        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["Kcap-Review"], out var servers, out var rejected);
+        var ok = KcapMcpRegistry.TryResolveReviewFlowAllowlist(["kcap-Review"], out var servers, out var rejected);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(rejected).IsNull();

@@ -32,6 +32,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             OnboardingPane.DataContext = value;
             OnboardingPane.IsVisible   = value is not null;
             SessionsSurface.IsVisible  = value is null;
+            ApplyMinimumSize();
         }
     }
 
@@ -93,7 +94,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinWidth  = UiScale.Minimum(Onboarding is null ? WindowSizeMemory.MinWidth : 640, _scale, available?.Width);
         MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
@@ -232,7 +233,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     // entirely), is invisible to the user — stderr (AppNotifier's own mirroring) is the only
     // channel that survives either case.
     void ShowToast(string message) =>
-        _notifications?.Show(new Notification("Kurrent Capacitor", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
+        _notifications?.Show(new Notification("kcap", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
 
     // The launcher header strip and the bottom-most drag strip — see WindowChrome.
     void OnChromePointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>

@@ -92,9 +92,9 @@ public static class HttpClientExtensions {
     internal static readonly TimeSpan PerAttemptTimeout = TimeSpan.FromSeconds(60);
 
     const string UnreachableHint =
-        "Kurrent Capacitor API cannot be reached, is it running? "                    +
+        "kcap API cannot be reached, is it running? "                    +
         "Make sure the URL is correctly configured and the service is running. "      +
-        "Check https://github.com/kurrent-io/claude-remember#setup for instructions." +
+        "Check https://github.com/kurrent-io/kcap-cli#getting-started for instructions." +
         "\rError connecting to: ";
 
     internal const string SchemeMissingHint =

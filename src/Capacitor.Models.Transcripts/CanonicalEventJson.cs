@@ -19,8 +19,11 @@ public static class CanonicalEventJson {
                 CanonicalEventTypes.ToolResultReceived          => Parser.Parse<ToolResultReceived>(json),
                 CanonicalEventTypes.SubagentCompleted           => Parser.Parse<SubagentCompleted>(json),
                 CanonicalEventTypes.SubagentStarted             => Parser.Parse<SubagentStarted>(json),
+                CanonicalEventTypes.ContextCompacted            => System.Text.Json.JsonSerializer.Deserialize(json, Harness.Codex.CodexJsonContext.Default.ContextCompactedEvent),
                 _ => null,
             };
+        } catch (System.Text.Json.JsonException) {
+            return null;
         } catch (InvalidJsonException) {
             return null;
         } catch (InvalidProtocolBufferException) {

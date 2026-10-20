@@ -75,7 +75,7 @@ Options:
   --skip-codex-network-access
                       With --codex: skip enabling Codex sandbox network access.
                       By default `install --codex` also allows Codex's
-                      workspace-write sandbox to reach your configured Capacitor
+                      workspace-write sandbox to reach your configured kcap
                       server(s) (a network_proxy allowlist in
                       ~/.codex/config.toml) so kcap skills work. The
                       --if-installed refresh path never touches this, so the npm
@@ -207,7 +207,7 @@ Notes:
 
   Skills install to ~/.agents/skills/kcap-{recap,errors,hide,disable,
   validate-plan,review-flows,agent-flows,work-items,plans,guided-tour,
-  eval-watch,start-agents,connect-capacitor}/.
+  eval-watch,start-agents,connect-kcap}/.
   Codex, Cursor, and any other agent that honors the .agents/skills convention
   will pick them up automatically. Every install of a vendor that reads that tree
   writes them, so `install --cursor` alone leaves nothing missing. Kiro and

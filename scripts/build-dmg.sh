@@ -8,5 +8,5 @@ out="${2:?usage: build-dmg.sh <bundle.app> <out.dmg>}"
 here="$(cd "$(dirname "$0")" && pwd)/dmg"
 command -v dmgbuild >/dev/null || { echo "dmgbuild not found (pip install --require-hashes -r scripts/dmg/requirements.txt)" >&2; exit 1; }
 rm -f "$out"
-dmgbuild -s "$here/settings.py" -D app="$bundle" -D here="$here" "Kurrent Capacitor" "$out"
+dmgbuild -s "$here/settings.py" -D app="$bundle" -D here="$here" "kcap" "$out"
 echo "built $out"

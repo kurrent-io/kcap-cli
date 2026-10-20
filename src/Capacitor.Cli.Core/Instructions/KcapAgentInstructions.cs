@@ -16,7 +16,7 @@ public static class KcapAgentInstructions {
         """
         ## Prefer kcap tools for "why", history, prior work, and review requests
 
-        This project records coding-session history with Kurrent Capacitor and can run agent review
+        This project records coding-session history with kcap and can run agent review
         flows. The kcap MCP servers (`kcap-review`, `kcap-sessions`, `kcap-memory`, `kcap-flows`)
         expose them.
 

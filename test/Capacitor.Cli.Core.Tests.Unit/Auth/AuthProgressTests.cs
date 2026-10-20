@@ -72,7 +72,7 @@ public class AuthProgressTests {
 
         await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.NoTenants>();
         // Today's code writes this line to stderr — pinned so a future stream swap is deliberate.
-        await Assert.That(progress.Errors).Contains("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
+        await Assert.That(progress.Errors).Contains("No kcap tenants are linked to your account. Ask your admin to invite you.");
         await Assert.That(capture.GetCapturedOutput()).IsEmpty();
         await Assert.That(capture.GetCapturedError()).IsEmpty();
     }

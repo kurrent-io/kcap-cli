@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Time.Testing;
@@ -1660,8 +1661,11 @@ sealed class FakeKcapCli : IKcapCli {
     public int SetupLocalCallCount;
     public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> SetupLocalBehavior =
         (_, _, _) => Task.FromResult(new StreamingResult(0, false, []));
-    public Task<StreamingResult> SetupLocalAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+    public List<LocalEmbeddingChoice> SetupLocalEmbeddings { get; } = [];
+    public Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
         SetupLocalCallCount++;
+        SetupLocalEmbeddings.Add(embeddings);
         return SetupLocalBehavior(onLine, interrupt, ct);
     }
 

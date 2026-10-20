@@ -175,6 +175,9 @@ jobs:
 
   app-bundle:
     name: App bundle (osx-arm64)
+    # Not on PRs: macOS runners are the org's scarcest pool. Release's "Wait for CI" requires this
+    # check on the tag commit, so the tag push must keep running it.
+    if: github.event_name == 'push'
     runs-on: macos-latest
     env:
       # vpk and minver-cli are framework-dependent global tools built for an older runtime
@@ -240,15 +243,15 @@ jobs:
         run: |
           set -euo pipefail
           cp publish/cli/kcap publish/daemon/kcap-daemon publish/daemon/libpty_shim.dylib publish/app/
-          chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/Kurrent Capacitor"
-          bash scripts/assemble-app-bundle.sh publish/app "publish/Kurrent Capacitor.app" "${{ steps.version.outputs.VERSION }}"
+          chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/kcap-desktop"
+          bash scripts/assemble-app-bundle.sh publish/app "publish/kcap.app" "${{ steps.version.outputs.VERSION }}"
 
       - name: Pack (unsigned)
         shell: bash
         run: >
           vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
-          --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor"
-          --packDir "publish/Kurrent Capacitor.app"
+          --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop"
+          --packDir "publish/kcap.app"
           --channel osx-arm64 --noInst --outputDir releases
 
       - name: Assert the bundle
@@ -257,7 +260,7 @@ jobs:
           set -euo pipefail
           mkdir -p extracted
           ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
-          APP="extracted/Kurrent Capacitor.app"
+          APP="extracted/kcap.app"
           bash scripts/assert-app-plugin.sh "$APP" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$APP" publish/daemon.sha256
@@ -268,6 +271,14 @@ jobs:
           test -f "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib"
           if cmp -s "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib" "$APP/Contents/MacOS/libAvaloniaNative.dylib"; then
             echo "::error::libAvaloniaNative.patched.dylib is the stock library"; exit 1
+          fi
+          # This bundle is unsigned, but the release signs it, and codesign refuses any file under
+          # Contents/MacOS that is not code.
+          not_code="$(find "$APP/Contents/MacOS" -type f -print0 | while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^Mach-O' || echo "$f"
+          done)"
+          if [ -n "$not_code" ]; then
+            echo "::error::Contents/MacOS holds files codesign cannot sign:"; echo "$not_code"; exit 1
           fi
           # Pins the manifest field names the alias-promotion script depends on. Captured rather
           # than piped: grep -q closes the pipe at its first match, and a stable candidate prints a
@@ -345,7 +356,7 @@ jobs:
       - name: Pack (unsigned)
         run: >
           vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
-          --packTitle "Kurrent Capacitor" --packAuthors Kurrent --mainExe "Kurrent Capacitor.exe"
+          --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop.exe"
           --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico
           --channel win-x64 --outputDir releases
 
@@ -371,7 +382,7 @@ jobs:
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\Kurrent Capacitor.exe') -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\kcap-desktop.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force

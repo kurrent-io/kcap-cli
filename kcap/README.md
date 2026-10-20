@@ -1,6 +1,6 @@
-# Kurrent Capacitor Plugin
+# kcap Plugin
 
-This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
+This plugin integrates [kcap](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
 
 ## What it does
 
@@ -8,7 +8,7 @@ This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Co
 
 ### `kcap-sessions`
 
-Search and recall past Kurrent Capacitor sessions from inside the agent.
+Search and recall past kcap sessions from inside the agent.
 
 | Tool | Description |
 |------|-------------|
@@ -89,7 +89,7 @@ Declaring a `response_schema` turns the page into a form the server validates an
 
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 
-**Hooks** — Automatically captures session activity and forwards it to the Kurrent Capacitor server:
+**Hooks** — Automatically captures session activity and forwards it to the kcap server:
 
 | Hook | Event |
 |------|-------|
@@ -119,7 +119,7 @@ In Claude they're invoked as `/kcap:recap`, `/kcap:errors`, `/kcap:guided-tour`,
 ## Prerequisites
 
 - The `kcap` CLI must be on your PATH (`npm install -g @kurrent/kcap`)
-- The Kurrent Capacitor server must be running (default: `http://localhost:5108`)
+- The kcap server must be running (default: `http://localhost:5108`)
 
 ## Installation
 
@@ -205,8 +205,8 @@ kcap/
     guided-tour/
       SKILL.md           — /kcap:guided-tour onboarding tour
   muse-assistant/
-    capacitor-recording/
-      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-capacitor)
+    kcap-recording/
+      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-kcap)
 ```
 
 The two MCP files exist because Claude requires top-level `mcpServers` (camelCase) while Codex accepts only `mcp_servers` (snake_case) or a bare server map — the schemas don't overlap. Keep them in sync when adding or removing servers.

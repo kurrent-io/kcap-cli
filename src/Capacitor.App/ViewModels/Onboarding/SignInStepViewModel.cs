@@ -637,7 +637,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         var text = line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
             ? line[prefix.Length..].TrimStart()
             : line.Trim();
-        if (text.Length == 0) return text;
+        if (text.Length == 0 || text.StartsWith("kcap ", StringComparison.Ordinal)) return text;
 
         return char.ToUpperInvariant(text[0]) + text[1..];
     }

@@ -505,10 +505,10 @@ public class CodingAgentsStepTests {
         var detected = new DetectedAgents(Claude: false, Codex: true, Cursor: false, Copilot: false);
 
         // Accept the hooks prompt, decline only the network prompt (which is the
-        // one asking to "reach your Capacitor" server).
+        // one asking to "reach your kcap" server).
         var result = await RunAsync(
             options, detected, TestPaths(), calls.AsInstallers(),
-            prompt: text => !text.Contains("reach your Capacitor"), writeLine: sink.Write);
+            prompt: text => !text.Contains("reach your kcap"), writeLine: sink.Write);
 
         await Assert.That(result.CodexHooksInstalled).IsTrue();
         await Assert.That(result.CodexNetworkAccessApplied).IsFalse();

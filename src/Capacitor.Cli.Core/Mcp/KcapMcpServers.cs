@@ -3,7 +3,7 @@ namespace Capacitor.Cli.Core.Mcp;
 /// <summary>One kcap MCP server, described semantically (no harness field names).
 /// <paramref name="AutoApprove"/> marks a server safe to run without a per-call prompt where the
 /// harness has a per-server trust knob (see <see cref="McpConfigShape.Trust"/>): every tool either
-/// reads, or writes only to the session's own Capacitor record, the destination the hooks already
+/// reads, or writes only to the session's own kcap record, the destination the hooks already
 /// post to unprompted. kcap-flows launches a paid hosted agent; kcap-memory, kcap-pages
 /// and kcap-knowledge can change shared content or its audience, so they rely on each tool's
 /// annotations instead: a harness that reads them still runs the reads and additive writes
@@ -28,7 +28,7 @@ public static class KcapMcpServers {
         new("kcap-review",   ["mcp", "review"],   NeedsProjectCwd: false,
             "PR review context tools — query implementation session transcripts.", AutoApprove: true),
         new("kcap-sessions", ["mcp", "sessions"], NeedsProjectCwd: true,
-            "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", AutoApprove: true),
+            "Search and recall past kcap sessions — the reasoning behind prior work (why / what-was-tried / who-decided). Repo-aware; reach for it before git log or grep for history questions.", AutoApprove: true),
         // A start or round call holds the tool call open while the reviewer works, bounded by the
         // flows server at under 5 minutes; the registration's timeout sits well above that bound.
         new("kcap-flows",    ["mcp", "flows"],    NeedsProjectCwd: true,

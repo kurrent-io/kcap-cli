@@ -47,7 +47,8 @@ public static class FrameCodec {
         FrameType.Resize                    => Dims(f.Cols, f.Rows),
         FrameType.Detach or FrameType.StatusSubscribe => [],
         FrameType.Exited                    => BeInt(f.ExitCode),
-        FrameType.Error or FrameType.Attach or FrameType.List or FrameType.AgentList
+        FrameType.RuntimeStarted            => BeLong(f.StartedAt.UtcTicks),
+        FrameType.Error or FrameType.Attach or FrameType.AttachWithRuntime or FrameType.List or FrameType.AgentList
             or FrameType.Restart or FrameType.RestartAck
             or FrameType.Stop or FrameType.StopAck
             or FrameType.Hello or FrameType.HelloReply
@@ -74,7 +75,8 @@ public static class FrameCodec {
         FrameType.Resize  => new(t) { Cols = Be16(p, 0), Rows = Be16(p, 2) },
         FrameType.Detach or FrameType.StatusSubscribe => new(t),
         FrameType.Exited  => new(t) { ExitCode = BinaryPrimitives.ReadInt32BigEndian(p) },
-        FrameType.Error or FrameType.Attach or FrameType.List or FrameType.AgentList
+        FrameType.RuntimeStarted => new(t) { StartedAt = StartedAt(p) },
+        FrameType.Error or FrameType.Attach or FrameType.AttachWithRuntime or FrameType.List or FrameType.AgentList
             or FrameType.Restart or FrameType.RestartAck
             or FrameType.Stop or FrameType.StopAck
             or FrameType.Hello or FrameType.HelloReply
@@ -208,9 +210,17 @@ public static class FrameCodec {
         return (id, reason, f.Bytes[o..]);
     }
 
+    static DateTimeOffset StartedAt(byte[] p) {
+        Require(p, 0, 8);
+        var ticks = BinaryPrimitives.ReadInt64BigEndian(p);
+        if (ticks < 0 || ticks > DateTimeOffset.MaxValue.UtcTicks) throw new InvalidDataException($"RuntimeStarted ticks out of range: {ticks}");
+        return new DateTimeOffset(ticks, TimeSpan.Zero);
+    }
+
     // --- byte helpers ---
     static byte[] Dims(ushort c, ushort r) { var b = new byte[4]; BinaryPrimitives.WriteUInt16BigEndian(b, c); BinaryPrimitives.WriteUInt16BigEndian(b.AsSpan(2), r); return b; }
     static byte[] BeInt(int v) { var b = new byte[4]; BinaryPrimitives.WriteInt32BigEndian(b, v); return b; }
+    static byte[] BeLong(long v) { var b = new byte[8]; BinaryPrimitives.WriteInt64BigEndian(b, v); return b; }
     static ushort Be16(byte[] p, int o) => BinaryPrimitives.ReadUInt16BigEndian(p.AsSpan(o));
     static void WriteBe16(Stream s, ushort v) { var b = new byte[2]; BinaryPrimitives.WriteUInt16BigEndian(b, v); s.Write(b); }
     static void WriteBe32(Stream s, int v) { var b = new byte[4]; BinaryPrimitives.WriteInt32BigEndian(b, v); s.Write(b); }

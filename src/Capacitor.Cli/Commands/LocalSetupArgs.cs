@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Commands;
@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Commands;
 /// <summary>What <c>kcap setup --local</c> was asked. Every other step's flags pass through to the terminal arm
 /// untouched; under <c>--json</c> alone nothing else is accepted, because the desktop app's wizard owns those steps.
 /// <c>--json --no-prompt</c> is the whole run, reported.</summary>
-sealed partial record LocalSetupArgs(
+sealed record LocalSetupArgs(
         bool Json, bool SingleUser, bool Yes, bool NoPrompt, string? EmbeddingModel = null, bool NoEmbeddings = false, bool WholeRun = false) {
     public const string EmbeddingModelFlag = "--embedding-model";
     public const string NoEmbeddingsFlag   = "--no-embeddings";
@@ -42,7 +42,7 @@ sealed partial record LocalSetupArgs(
 
         for (var i = 0; i < rest.Length; i++) {
             if (rest[i] == EmbeddingModelFlag) {
-                if (i + 1 >= rest.Length || !ModelName().IsMatch(rest[i + 1]))
+                if (i + 1 >= rest.Length || !LocalEmbeddingModelName.IsValid(rest[i + 1]))
                     return Refuse($"{EmbeddingModelFlag} needs an Ollama model name, such as {OllamaClient.DefaultModel}.");
 
                 model = rest[i + 1];
@@ -89,9 +89,4 @@ sealed partial record LocalSetupArgs(
     }
 
     static (LocalSetupArgs?, string?) Refuse(string error) => (null, error);
-
-    public static bool IsModelName(string name) => ModelName().IsMatch(name);
-
-    [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")]
-    private static partial Regex ModelName();
 }

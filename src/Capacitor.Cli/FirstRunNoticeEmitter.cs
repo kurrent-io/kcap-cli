@@ -35,7 +35,7 @@ static class FirstRunNoticeEmitter {
 
     internal static string Build(bool offerTour) {
         var notice =
-            "## Kurrent Capacitor is set up\n" +
+            "## kcap is set up\n" +
             "`kcap setup` completed before this session started, and this session is running with " +
             "kcap's hooks loaded. Hooks load when a session starts, so a session that was already " +
             "open when setup ran has none of what it installed until it restarts. Mention this to " +
@@ -43,7 +43,7 @@ static class FirstRunNoticeEmitter {
 
         return offerTour
             ? notice +
-              "\nIf they are new to Capacitor, offer the guided tour: it walks through what their team " +
+              "\nIf they are new to kcap, offer the guided tour: it walks through what their team " +
               "has recorded and the per-use-case tutorials. Start it by following the " +
               "`kcap-guided-tour` skill, or in Claude Code with `/kcap:guided-tour`."
             : notice;

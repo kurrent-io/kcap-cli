@@ -15,7 +15,7 @@ public static class CursorTranscriptBackfill {
 
     public readonly record struct Stats(int LinesPosted, bool Failed);
 
-    public static async Task<Stats> RunAsync(
+    public static Task<Stats> RunAsync(
             CursorMarkers     markers,
             HttpClient        client,
             string            baseUrl,
@@ -24,6 +24,21 @@ public static class CursorTranscriptBackfill {
             Func<bool>        budget,
             TimeProvider      time,
             CancellationToken ct,
+            string?           agentId    = null,
+            bool              finalDrain = false
+        ) => RunAsync(markers, client, baseUrl, sessionId, transcriptPath, budget, time, ct,
+            SecretRedactor.WatcherPatterns, agentId, finalDrain);
+
+    internal static async Task<Stats> RunAsync(
+            CursorMarkers     markers,
+            HttpClient        client,
+            string            baseUrl,
+            string            sessionId,
+            string?           transcriptPath,
+            Func<bool>        budget,
+            TimeProvider      time,
+            CancellationToken ct,
+            SecretPatterns    patterns,
             string?           agentId    = null,
             bool              finalDrain = false
         ) {
@@ -77,8 +92,8 @@ public static class CursorTranscriptBackfill {
                 : WatchCommand.IncompleteFinalLinePolicy.Hold;
             var read = await WatchCommand.ReadNewCompleteLinesAsync(stream, resumeFrom, policy, ct);
 
-            var captured = TranscriptCapture.EncodeUntilHeld(read.Lines, budget,
-                (reason, count) => Console.Error.WriteLine($"Cursor capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"));
+            var captured = TranscriptCapture.EncodeUntilHeld(read.Lines, budget, time,
+                (reason, count) => Console.Error.WriteLine($"Cursor capture loss: {count} record(s), {CaptureLossMarker.ReasonName(reason)}"), patterns);
             lines       = captured.Lines;
             lineNumbers = read.LineNumbers.GetRange(0, captured.Consumed);
         } catch { return new(0, Failed: true); }

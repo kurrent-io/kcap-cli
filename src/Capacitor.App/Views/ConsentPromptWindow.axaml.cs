@@ -49,5 +49,5 @@ public partial class ConsentPromptWindow : ReactiveWindow<ConsentPromptViewModel
     }
 
     void ShowToast(string message) =>
-        _notifications?.Show(new Notification("Kurrent Capacitor", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
+        _notifications?.Show(new Notification("kcap", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
 }
