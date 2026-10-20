@@ -905,16 +905,39 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     // Outgoing messages to server
-    public virtual Task AgentRegisteredAsync(
+    /// <summary>Registers the agent and returns the server's answer. A server without <c>AgentRegisteredAcked</c>
+    /// gets the unanswered <c>AgentRegistered</c> instead, read as accepted; that server is remembered for the
+    /// rest of the connection, and a reconnect, which may reach an upgraded server, asks again.</summary>
+    public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, AgentStartTitle? title = null)
-        => _hub.InvokeAsync(
-            "AgentRegistered",
-            new AgentRegistered(
-                agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-                title?.Text, title?.Derived ?? false),
-            cancellationToken: _ct);
+            string? runtimeTransport = null, AgentStartTitle? title = null) {
+        var registration = new AgentRegistered(
+            agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
+            title?.Text, title?.Derived ?? false);
+        var connection = CurrentConnectionId ?? "";
+
+        if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
+            try {
+                return await InvokeAgentRegisteredAckedRawAsync(registration) ?? AgentRegisteredResponse.Accepted;
+            } catch (Exception ex) when (IsUnknownHubMethod(ex)) {
+                Volatile.Write(ref _registrationAckMissingOn, connection);
+            }
+        }
+
+        await InvokeAgentRegisteredRawAsync(registration);
+
+        return AgentRegisteredResponse.Accepted;
+    }
+
+    /// <summary>The connection id on which the server answered <c>AgentRegisteredAcked</c> as an unknown method.</summary>
+    string? _registrationAckMissingOn;
+
+    internal virtual Task<AgentRegisteredResponse?> InvokeAgentRegisteredAckedRawAsync(AgentRegistered registration)
+        => _hub.InvokeAsync<AgentRegisteredResponse?>("AgentRegisteredAcked", registration, cancellationToken: _ct);
+
+    internal virtual Task InvokeAgentRegisteredRawAsync(AgentRegistered registration)
+        => _hub.InvokeAsync("AgentRegistered", registration, cancellationToken: _ct);
 
     /// <summary>
     /// Reports the hosted agent's fixed PTY dimensions to the server, which stores

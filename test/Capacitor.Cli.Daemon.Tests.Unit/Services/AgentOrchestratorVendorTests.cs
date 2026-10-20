@@ -85,6 +85,31 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(2);
     }
 
+    /// <summary>A refusal is the server's answer rather than a transient failure: no retry, and no status that
+    /// could overwrite what the server recorded for the refused id.</summary>
+    [Test]
+    public async Task ReRegister_neither_retries_a_refusal_nor_sends_a_status_after_it() {
+        using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
+        var server = new CaptureServerConnection { RegistrationResponse = _ => new AgentRegisteredResponse(false, "recorded_failure") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance(
+            "agent-refused", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
+
+        await server.ReRegisterAgentsHook!();
+
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
+        await Assert.That(server.StatusChangedCalls).IsEmpty();
+    }
+
     // A PTY codex runtime reports "pty" on AgentRegistered — the transport rides the runtime TYPE,
     // not the vendor (a codex agent is not automatically app-server).
     [Test]

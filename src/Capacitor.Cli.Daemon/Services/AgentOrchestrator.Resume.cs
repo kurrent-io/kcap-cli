@@ -474,14 +474,18 @@ internal partial class AgentOrchestrator {
         /// <summary>Ends the runtime start with the attempt: a stop during the handshake must not wait for the vendor.</summary>
         public CancellationToken Token { get; init; }
 
+        /// <summary>The server's reason, empty when it gave none, once it refused the registration.</summary>
+        public string? RefusedRegistration { get; set; }
+
         public WorkLocation Work      => Entry.Launch.Work;
         public bool         IsPrivate => Entry.Launch.IsPrivate;
         public string       Origin    => Entry.Launch.Origin;
     }
 
-    const string NativeResumeUnsupported = "native_resume_unsupported";
-    const string StoppedDuringResume     = "stopped";
-    const string TranscriptRefusedReason = "acp_binding_unavailable";
+    const string NativeResumeUnsupported   = "native_resume_unsupported";
+    const string StoppedDuringResume       = "stopped";
+    const string TranscriptRefusedReason   = "acp_binding_unavailable";
+    const string RegistrationRefusedReason = "registration_refused";
 
     static bool TranscriptRefused(AgentInstance agent) => agent.ReopenedTranscript == ReopenedTranscript.Refused;
 
@@ -843,7 +847,7 @@ internal partial class AgentOrchestrator {
         if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
 
         InterruptEntry(entry.AgentId, LastErrorOf(reason, exitCode));
-        if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
+        if (!entry.Launch.IsPrivate && reason != RegistrationRefusedReason) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
 
         return ResumeOutcome.Interrupted;
     }
@@ -870,6 +874,9 @@ internal partial class AgentOrchestrator {
         var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume);
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
+
+        // The server holds no live entry under this id, so the resume goes on under a new one.
+        if (resume.RefusedRegistration is not null) return (RegistrationRefusedReason, null);
 
         if (outcome.Kind == CommandOutcomeKind.LaunchRejected)
             return (outcome.RejectReason == CommandRejectedReason.DaemonCapacity ? "daemon_capacity" : "launch_rejected", null);
@@ -947,7 +954,7 @@ internal partial class AgentOrchestrator {
         }
 
         if (survived && TryHandOverContinuation(entry, launch!.Entry, agent!)) {
-            await ReportSupersededAsync(entry, ct);
+            await ReportSupersededAsync(entry, reason, ct);
             if (entry.SessionId is { } previous) StartContinuationTakeover(agent!, previous);
 
             return ResumeOutcome.Continued;
@@ -967,7 +974,7 @@ internal partial class AgentOrchestrator {
         // A stop of the successor itself ends the agent it continued too.
         if (agent.StopRequested) {
             DeleteLedger(entry.AgentId);
-            await ReportSupersededAsync(entry, ct);
+            await ReportSupersededAsync(entry, reason, ct);
 
             return ResumeOutcome.Stopped;
         }
@@ -990,9 +997,10 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    /// <summary>A private agent was never registered, so the server holds no agent to end.</summary>
-    Task ReportSupersededAsync(ResumeLedgerEntry entry, CancellationToken ct) =>
-        entry.Launch.IsPrivate
+    /// <summary>A private agent was never registered, and a refused one has no live entry left on the server:
+    /// neither has an agent to end, and a status for the refused id could overwrite the failure it recorded.</summary>
+    Task ReportSupersededAsync(ResumeLedgerEntry entry, string reason, CancellationToken ct) =>
+        entry.Launch.IsPrivate || reason == RegistrationRefusedReason
             ? Task.CompletedTask
             : _server.ReportAgentEndedForShutdownAsync(entry.AgentId, entry.SessionId, "Completed", SupersededReason, null, ct);
 

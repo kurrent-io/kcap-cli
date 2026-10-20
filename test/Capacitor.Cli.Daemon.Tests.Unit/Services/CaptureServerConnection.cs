@@ -119,7 +119,10 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>The start title echoed on each registration, in call order.</summary>
     public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
 
-    public override async Task AgentRegisteredAsync(
+    /// <summary>The server's answer per agent id; accepted when unset or null.</summary>
+    public Func<string, AgentRegisteredResponse?>? RegistrationResponse { get; set; }
+
+    public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
         string? runtimeTransport = null, AgentStartTitle? title = null) {
@@ -135,6 +138,8 @@ sealed class CaptureServerConnection() : ServerConnection(
 
         if (AgentRegisteredCallCount <= AgentRegisteredFailTimes)
             throw new InvalidOperationException("transient re-register failure");
+
+        return RegistrationResponse?.Invoke(agentId) ?? AgentRegisteredResponse.Accepted;
     }
 
     // ── Option B task 4: ACP bind/forward capture ────────────────────────────────────

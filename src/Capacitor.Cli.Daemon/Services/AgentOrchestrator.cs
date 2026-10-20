@@ -320,6 +320,10 @@ internal record AgentInstance(
     /// </summary>
     public bool IsPrivate { get; init; }
 
+    /// <summary>Set when the server refused a resumed agent's registration: it holds no live entry under
+    /// this id, so neither a re-registration nor the unregister is sent for it.</summary>
+    public bool RegistrationRefused { get; set; }
+
     /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
     /// (the user's own checkout — never removed).</summary>
     public WorkLocation Work { get; init; } = WorkLocation.OwnedWorktree;
@@ -2890,7 +2894,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // routes it through the single-flight cleanup (the agent is already in _agents).
             PersistPidRecordOrThrow(agent, runtime.Pid, runtime.StartIdentity);
 
-            await RegisterAgentAsync(agent);
+            var registration = await RegisterAgentAsync(agent);
+
+            // A resume the server refused must not run under an id it holds no entry for; the resume
+            // lane takes it from here, and the pending resume keeps the worktree and ledger entry.
+            if (!registration.Registered && resume is not null) {
+                agent.RegistrationRefused = true;
+                resume.RefusedRegistration = registration.RefusedReason ?? "";
+
+                try {
+                    await runtime.TerminateAsync(ShutdownTerminateGrace);
+                } catch (Exception ex) {
+                    LogCleanupStepFailed(ex, "terminating a resume whose registration was refused", agentId);
+                }
+
+                await CleanupAgentAsync(agentId);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+            }
 
             // Slash commands are reported out of band, and the server drops a report for an agent it
             // has not yet registered — so attach the callback (which synchronously flushes any list
@@ -4904,12 +4925,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// terminal dims + AgentRunStarted, then persists/announces the repo path. No-ops for a
     /// PrivateLocal agent. Shared by the hosted launch and the registered local launch so the
     /// two cannot drift. Dims come from <see cref="AgentInstance.CurrentCols"/>/<c>CurrentRows</c>
-    /// (hosted = HostedPtyCols/Rows; local = the client's terminal size).
+    /// (hosted = HostedPtyCols/Rows; local = the client's terminal size). A refusal sends nothing
+    /// further: the server holds no entry for the dims or the run to attach to.
     /// </summary>
-    async Task RegisterAgentAsync(AgentInstance agent) {
-        if (agent.IsPrivate) return;
+    async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
+        if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+
+        if (!registration.Registered) {
+            LogRegistrationRefused(agent.Id, registration.RefusedReason);
+            return registration;
+        }
 
         // Report the PTY size so read-only viewers lock their xterm to it. Best-effort.
         try {
@@ -4933,6 +4960,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
         );
+
+        return registration;
     }
 
     /// <summary>The only caller of <c>AgentStatusChangedAsync</c>. A failure status is always sent. Any
@@ -5363,7 +5392,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     internal async Task ReRegisterAgentsAsync() {
         // PrivateLocal agents are never registered with the server, so never re-register them.
-        foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
+        foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate && !a.RegistrationRefused)) {
             // A published launch-window verdict (or its reported flag) means this agent is terminally
             // Failed and about to be unregistered by the finalizer — re-sending its (possibly stale
             // "Running") non-failure Status would clear the FailureReason the verdict's LaunchFailed
@@ -5375,7 +5404,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+
+                    // A refusal is the server's answer, not a transient failure, so it is not retried. A status
+                    // sent for the refused id could clear the failure the server recorded for it.
+                    if (!registration.Registered) {
+                        LogRegistrationRefused(agent.Id, registration.RefusedReason);
+                        break;
+                    }
 
                     // The acknowledgement is what re-registered means: whatever was written to
                     // the old connection may not have arrived, and that holds even if the sends
@@ -5811,7 +5847,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // disconnection through SignalR's transport-level signals. Filtered
         // catch covers the residual race where shutdown fires mid-call.
         // PrivateLocal agents were never registered, so never unregister them (deny-all).
-        if (!agent.IsPrivate && !_shutdownCts.IsCancellationRequested) {
+        if (!agent.IsPrivate && !agent.RegistrationRefused && !_shutdownCts.IsCancellationRequested) {
             try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
@@ -6263,6 +6299,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to re-register agent {AgentId}")]
     partial void LogReRegisterFailed(Exception ex, string agentId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Server refused the registration of agent {AgentId} ({Reason})")]
+    partial void LogRegistrationRefused(string agentId, string? reason);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to send terminal dimensions for agent {AgentId} (read-only viewers may render garbled until the next reconnect)")]
     partial void LogTerminalDimsSendFailed(Exception ex, string agentId);
 
@@ -6516,7 +6555,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             string agentId, string vendor, ExplicitReviewerModelLaunch block, IReviewerModelResolver? resolver) =>
         BuildExplicitReviewerModelReport(agentId, vendor, block, resolver);
 
-    internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
+    internal Task<AgentRegisteredResponse> RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
     internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
     internal void HandleResizeTerminalForTest(ResizeTerminalCommand cmd) => _ = HandleResizeTerminal(cmd);
     internal LocalPermissionBridge PermissionBridgeForTest => _permissionBridge;
