@@ -240,6 +240,24 @@ public class RemoteTerminalViewModelTests {
         });
     }
 
+    /// <summary>The server says when it refuses the terminal, so the pane says so too, rather than reading
+    /// as a connection that dropped; a failed subscribe stays offline.</summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task A_denied_subscribe_says_the_terminal_was_refused(bool denied) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            h.Lane.TerminalSubscribeHandler = _ => Task.FromResult(denied ? HubCallOutcome.Denied("no") : HubCallOutcome.Failed("boom"));
+            h.Access.OnNext(SessionAccessState.Established);
+            var expected = denied ? RemoteTerminalPhase.Refused : RemoteTerminalPhase.Offline;
+            await WaitUntilAsync(() => h.Vm.Phase == expected, what: expected.ToString());
+
+            await Assert.That(h.Vm.PhaseNote).IsEqualTo(denied ? RemoteTerminalViewModel.RefusedNote : "Not connected to the session");
+            await h.Vm.TeardownAsync();
+        });
+    }
+
     /// A stale subscribe the hub took while a newer one was in flight holds the connection in the
     /// group; if that newer one is then refused, the membership is given back.
     [Test]
@@ -262,7 +280,7 @@ public class RemoteTerminalViewModelTests {
 
             newer.SetResult(HubCallOutcome.Denied("no"));
             await WaitUntilAsync(() => h.Lane.TerminalUnsubscribes.Count == 1, what: "the stray membership released");
-            await Assert.That(h.Vm.Phase).IsEqualTo(RemoteTerminalPhase.Offline);
+            await Assert.That(h.Vm.Phase).IsEqualTo(RemoteTerminalPhase.Refused);
             await h.Vm.TeardownAsync();
         });
     }
@@ -291,7 +309,7 @@ public class RemoteTerminalViewModelTests {
             var h = new Harness();
             h.Lane.TerminalSubscribeHandler = _ => Task.FromResult(HubCallOutcome.Denied("x"));
             h.Access.OnNext(SessionAccessState.Established);
-            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Offline, what: "offline");
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Refused, what: "refused");
 
             h.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1", Harness.B64("hel")));
             var surface = h.Surfaces.Single();
