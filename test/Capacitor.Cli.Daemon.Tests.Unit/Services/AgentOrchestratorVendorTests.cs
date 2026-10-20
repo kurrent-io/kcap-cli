@@ -106,11 +106,15 @@ public class AgentOrchestratorVendorTests {
 
         await server.ReRegisterAgentsHook!();
         await server.ReRegisterAgentsHook!();
+        orch.ReportCommandsForTest("agent-refused", [new HostedAgentCommand("review", null, null)]);
+        var commands = orch.GetAgentForTest("agent-refused")!.Commands;
         await orch.CleanupAgentForTest("agent-refused");
 
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
         await Assert.That(server.StatusChangedCalls).IsEmpty();
         await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+        await Assert.That(server.CommandReports).IsEmpty();
+        await Assert.That(commands!.Single().Name).IsEqualTo("review");
     }
 
     /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.</summary>

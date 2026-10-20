@@ -3193,8 +3193,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     void ReportCommands(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
         try {
-            if (_agents.TryGetValue(agentId, out var agent))
+            if (_agents.TryGetValue(agentId, out var agent)) {
                 SetCommands(agent, commands);
+                if (agent.IsServerSilent) return;
+            }
 
             _ = _server.ReportAgentCommandsAsync(agentId, commands);
         } catch (Exception ex) {
@@ -3592,7 +3594,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // FinalDrainAcpTranscriptAsync's remarks); it always returns within AcpFinalDrainBudget
             // regardless of outcome. PTY agents have no AcpForwarder and take none of this path — the
             // runtime is disposed exactly where it always was, inside CleanupAgentAsync below.
-            if (agent.AcpForwarder is { } acpForwarder) {
+            if (!agent.IsServerSilent && agent.AcpForwarder is { } acpForwarder) {
                 await FinalDrainAcpTranscriptAsync(agent, acpForwarder);
             }
 
@@ -5435,6 +5437,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                         agent.RegistrationRefused = true;
                         LogRegistrationRefused(agent.Id, registration.RefusedReason);
 
+                        // The forwarder would go on sending the transcript under the refused id.
+                        if (agent.AcpCts is { } acpCts) {
+                            try { await acpCts.CancelAsync(); } catch { /* best-effort */ }
+                        }
+
                         // Readiness returns once this pass ends, and a live sink would then mirror under the refused id.
                         if (agent.CloudSink is { } cloud) {
                             try {
@@ -6593,6 +6600,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     internal Task<AgentRegisteredResponse> RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
     internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
+    internal void ReportCommandsForTest(string agentId, IReadOnlyList<HostedAgentCommand> commands) => ReportCommands(agentId, commands);
     internal void HandleResizeTerminalForTest(ResizeTerminalCommand cmd) => _ = HandleResizeTerminal(cmd);
     internal LocalPermissionBridge PermissionBridgeForTest => _permissionBridge;
 }

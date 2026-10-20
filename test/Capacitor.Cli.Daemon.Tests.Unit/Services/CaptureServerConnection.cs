@@ -433,6 +433,13 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// await the fire-and-forget report deterministically instead of racing Task.Delay.</summary>
     public Channel<int> ExplicitReviewerModelReportSignal { get; } = Channel.CreateUnbounded<int>();
 
+    public List<string> CommandReports { get; } = [];
+
+    public override Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        lock (CommandReports) CommandReports.Add(agentId);
+        return Task.CompletedTask;
+    }
+
     public override Task ReportAgentResolvedModelAsync(string agentId, string model) {
         lock (ReportAgentResolvedModelCalls) ReportAgentResolvedModelCalls.Add((agentId, model));
 
