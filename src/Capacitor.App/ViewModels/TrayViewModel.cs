@@ -362,7 +362,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         if (!windows) return $"run KCAP_PROFILE='{profile.Replace("'", "'\\''")}' kcap login";
 
         var inner = $"$env:KCAP_PROFILE='{profile.Replace("'", "''")}'; kcap login";
-        return $"run powershell -NoProfile -Command '{inner.Replace("'", "''")}'";
+        return $"in PowerShell, run powershell -NoProfile -Command '{inner.Replace("'", "''")}'";
     }
 
     // A malformed count, an unrecognized connection value and an unrecognized unreachable reason
