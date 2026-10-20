@@ -1511,6 +1511,7 @@ public class DaemonLifecycleControllerTests {
     [Arguments("https://norton.kcap.ai:443", "norton", "Daemon daemon-a is running for norton.kcap.ai, profile norton, not kcap.example.com, profile default.")]
     [Arguments("https://kcap.example.com:443", "norton", "Daemon daemon-a is running for profile norton, not profile default.")]
     public async Task A_daemon_serving_another_identity_is_reported_and_offered_a_replace(string server, string profile, string message) {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
         await using var h = new Harness();
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
@@ -1526,10 +1527,57 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Lane.Requests.Single().Profile).IsEqualTo("default");
     }
 
+    /// A reconnect while the offer waits on the gate is checked afresh rather than suppressed as already reported.
+    [Test]
+    public async Task A_reconnect_while_the_offer_waits_for_the_gate_still_gets_one() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        var running = false;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: running ? "running" : "installed"));
+        var release = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        h.Lane.Behavior = (_, _) => Interlocked.Increment(ref calls) == 1
+            ? release.Task
+            : Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(24, "verify_readiness_timeout", RecoverySurface.Attention));
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+        var startTask = h.Controller.StartActionAsync(CancellationToken.None);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "a Start holding the gate");
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        h.PushConnecting();
+        h.PushConnected();
+        await Task.Delay(50);
+        running = true;
+        release.SetResult(new MutationOutcome.Failed(24, "verify_readiness_timeout", RecoverySurface.Attention));
+        await startTask;
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Any(p => p.Kind == LifecyclePrompt.KindRepair), what: "the replace offer");
+    }
+
+    /// Where the platform has no verified replace, a mismatch is reported with the command to run by hand.
+    [Test]
+    public async Task Without_a_verified_replace_the_mismatch_is_only_reported() {
+        if (AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single()).Contains("kcap daemon service uninstall --name daemon-a");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
     /// A busy daemon is reported but not offered a replace, which would end its agents; once they finish,
     /// without a reconnect, the offer follows.
     [Test]
     public async Task A_busy_foreign_daemon_is_offered_a_replace_once_its_agents_finish() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
         await using var h = new Harness();
         h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
@@ -1551,6 +1599,7 @@ public class DaemonLifecycleControllerTests {
     /// Agents that start while the prompt is open cancel the replace it was answered for.
     [Test]
     public async Task Agents_starting_while_the_prompt_is_open_cancel_the_replace() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
         h.Surface.ConfirmBehavior = (_, _) => {
@@ -1607,18 +1656,17 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.AttentionMessages.Count).IsEqualTo(1);
     }
 
-    /// The command offered by hand names the daemon and profile as a shell would read them, and asks for the
-    /// verified replace only where the platform supports it.
+    /// The command offered by hand names the daemon by its service id and the profile as the named shell
+    /// reads it, and asks for the verified replace only where the platform supports it.
     [Test]
-    [Arguments("daemon-a", "default", "--name daemon-a --profile default")]
-    [Arguments("my laptop", "it's mine", "--name 'my laptop' --profile 'it'\\''s mine'")]
-    public async Task The_manual_repair_command_quotes_what_a_shell_would_split(string name, string profile, string expected) {
-        if (OperatingSystem.IsWindows()) return;
-        var command = AttachedIdentity.ManualRepair(name, profile);
-
-        await Assert.That(command).Contains(expected);
-        await Assert.That(command.Contains("--replace --verify", StringComparison.Ordinal)).IsEqualTo(OperatingSystem.IsMacOS());
-    }
+    [Arguments("daemon-a", "default", false, true,
+        "`kcap daemon service install --replace --verify --name daemon-a --profile default` in a shell ")]
+    [Arguments("-My Laptop", "it's mine", false, false,
+        "`kcap daemon service uninstall --name my-laptop`, then `kcap daemon service install --name my-laptop --profile 'it'\\''s mine'` in a shell ")]
+    [Arguments("my laptop", "it's mine", true, true,
+        "`kcap daemon service install --replace --verify --name my-laptop --profile 'it''s mine'` in PowerShell ")]
+    public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string profile, bool windows, bool verified, string expected) =>
+        await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).Contains(expected);
 
     /// A configured name the socket reduces to the daemon's own is the same daemon, and two servers on one host
     /// are told apart in full.

@@ -38,19 +38,29 @@ internal static class AttachedIdentity {
             : (ServerIdentity.Canonicalize(first) ?? first, ServerIdentity.Canonicalize(second) ?? second);
     }
 
+    /// Only launchd and the Windows scheduler support the verified replace the app offers.
+    public static bool SupportsVerifiedReplace => OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
+
+    public static string ManualRepair(string daemonName, string? profile) =>
+        ManualRepair(daemonName, profile, OperatingSystem.IsWindows(), SupportsVerifiedReplace);
+
     /// The fix when the app cannot offer one: the unit captures the invoking environment, so a server
     /// override inherited from the shell would be baked into the replacement and outrank the profile again.
-    /// Only launchd and the Windows scheduler support the verified replace.
-    public static string ManualRepair(string daemonName, string? profile) {
-        var flags = OperatingSystem.IsMacOS() || OperatingSystem.IsWindows() ? " --replace --verify" : "";
-        return $"To fix it, run `kcap daemon service install{flags} --name {Quote(daemonName)} --profile {(profile is null ? "PROFILE" : Quote(profile))}` "
-             + "in a shell where KCAP_URL is unset, then restart the app.";
+    /// The name is the service id, which the CLI derives from it anyway and which never reads as a flag;
+    /// on Windows the quoting is PowerShell's, which cmd.exe does not share.
+    internal static string ManualRepair(string daemonName, string? profile, bool windows, bool verifiedReplace) {
+        var name     = DaemonStore.Sanitize(daemonName);
+        var install  = $"kcap daemon service install --name {name} --profile {(profile is null ? "PROFILE" : Quote(profile, windows))}";
+        var commands = verifiedReplace
+            ? $"`{install.Replace(" install ", " install --replace --verify ", StringComparison.Ordinal)}`"
+            : $"`kcap daemon service uninstall --name {name}`, then `{install}`";
+        return $"To fix it, run {commands} in {(windows ? "PowerShell" : "a shell")} where KCAP_URL is unset, then restart the app.";
     }
 
-    // Quoted only when the value needs it, in the convention of the shell the user is likely to paste into.
-    static string Quote(string value) {
+    // Quoted only when the value needs it.
+    static string Quote(string value, bool windows) {
         if (value.Length > 0 && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')) return value;
-        return OperatingSystem.IsWindows()
+        return windows
             ? "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'"
             : "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }

@@ -844,7 +844,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             }
             if (mismatch is null) return;
 
-            if (expectedProfile is null || _autoActionsPermanentlyClosed) {
+            if (expectedProfile is null || _autoActionsPermanentlyClosed || !AttachedIdentity.SupportsVerifiedReplace) {
                 _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
                 return;
             }
@@ -861,13 +861,20 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             // Under the gate like every other repair, so it neither races the reconciliation's own offers
             // nor escapes the shutdown barrier.
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
+            var superseded = false;
             try {
-                // An attach that changed while this was prepared has its own check.
-                if (CurrentGeneration() != generation) return;
-                if (await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
+                superseded = CurrentGeneration() != generation;
+                if (!superseded && await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false) is { } snap)
                     await OfferRepairAsync(snap, _lifetime.Token, requireIdle: true).ConfigureAwait(false);
             } finally {
                 _gate.Release();
+            }
+            // A reconnect while this waited was suppressed as already reported; check its attach afresh.
+            if (superseded) {
+                lock (_lock) {
+                    if (_reportedMismatch == mismatch) _reportedMismatch = null;
+                }
+                _ = CheckAttachedIdentityAsync();
             }
         } catch (OperationCanceledException) {
             // shutdown
