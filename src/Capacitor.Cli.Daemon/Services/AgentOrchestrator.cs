@@ -281,6 +281,10 @@ internal record AgentInstance(
     /// </summary>
     public string PendingEndReason { get; set; } = "agent_exited";
 
+    /// <summary>Why this daemon stopped the agent on its own, where the stop otherwise reads as a person's
+    /// (<c>agent_stopped</c>). Reported to a flow driver only; the session's end reason is unchanged.</summary>
+    public string? AutoStopReason { get; set; }
+
     /// <summary>True while a park ack is outstanding; a sweep skips an agent already parking; reset
     /// on ambiguous ack to allow retry.</summary>
     public bool ParkAttemptInFlight { get; set; }
@@ -2306,8 +2310,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Cancelled past its last cancellation point, with no stopper left waiting to stop what it
                 // published: that instance only, never another the id has come to hold since.
                 if (launch.SettleAbandoned() && launch.Published is { } published
-                    && ReferenceEquals(_agents.GetValueOrDefault(cmd.AgentId), published))
+                    && ReferenceEquals(_agents.GetValueOrDefault(cmd.AgentId), published)) {
+                    published.AutoStopReason ??= "launch_abandoned";
                     _ = StopAgentCoreAsync(published);
+                }
 
                 return outcome;
             }
@@ -5794,6 +5800,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (agent.Status                         == "Starting" &&
                     _time.GetUtcNow().UtcDateTime - agent.LastOutputAt > StartupTimeout) {
                     LogAgentStuck(agent.Id, (_time.GetUtcNow().UtcDateTime - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
+                    agent.AutoStopReason ??= "agent_startup_timeout";
                     _ = HandleStopAgent(agent.Id);
 
                     continue;
@@ -6014,11 +6021,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Why this daemon ended the agent, for a flow driver to read beside its stop code: the code of the
     /// runtime's own termination verdict — the part before any colon, since some verdicts append free text the
-    /// server must not echo to a driver — else the end reason a stop or reap stamped, such as
-    /// <c>agent_stopped</c>. Null for an agent that exited on its own.</summary>
+    /// server must not echo to a driver — else why this daemon stopped it on its own, else the end reason a
+    /// stop or reap stamped, such as <c>agent_stopped</c>. Null for an agent that exited on its own.</summary>
     internal static string? StopReasonCode(AgentInstance agent) {
         if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict)
-            return agent.PendingEndReason is "agent_exited" or "" ? null : agent.PendingEndReason;
+            return agent.AutoStopReason ?? (agent.PendingEndReason is "agent_exited" or "" ? null : agent.PendingEndReason);
 
         var colon = verdict.Reason.IndexOf(':');
         var code  = (colon < 0 ? verdict.Reason : verdict.Reason[..colon]).Trim();
