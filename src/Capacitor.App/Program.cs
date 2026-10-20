@@ -53,8 +53,10 @@ internal static class Program
     public static AppBuilder BuildAvaloniaApp() =>
         Host.ConfigureAvalonia(AppBuilder.Configure<App>()
             .UsePlatformDetect()
-            .WithInterFont()
-            .With(new FontManagerOptions { DefaultFamilyName = "fonts:Inter#Inter" })
+            .WithAppFont()
             .UseReactiveUI(_ => { })
             .LogToTrace());
+
+    internal static AppBuilder WithAppFont(this AppBuilder builder) =>
+        builder.WithInterFont().With(new FontManagerOptions { DefaultFamilyName = "fonts:Inter#Inter" });
 }
