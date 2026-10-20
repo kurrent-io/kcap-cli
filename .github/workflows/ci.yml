@@ -175,6 +175,9 @@ jobs:
 
   app-bundle:
     name: App bundle (osx-arm64)
+    # Not on PRs: macOS runners are the org's scarcest pool. Release's "Wait for CI" requires this
+    # check on the tag commit, so the tag push must keep running it.
+    if: github.event_name == 'push'
     runs-on: macos-latest
     env:
       # vpk and minver-cli are framework-dependent global tools built for an older runtime
