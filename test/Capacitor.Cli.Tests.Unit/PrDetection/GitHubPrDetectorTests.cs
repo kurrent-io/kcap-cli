@@ -138,7 +138,7 @@ public class GitHubPrDetectorTests {
 
         await Assert.That(pr!.Number).IsEqualTo(9);
         await Assert.That(pr.HeadRef).IsEqualTo("fix/renamed");
-        await Assert.That(calls).Contains("git reflog show --format=%H refs/heads/local-name");
+        await Assert.That(calls).Contains("git reflog show --format=%H%x20%gs refs/heads/local-name");
         await Assert.That(calls).Contains($"git rev-list -n 100 HEAD --not --remotes=*/HEAD {Created}");
         await Assert.That(calls).Contains(
             "gh pr list --repo github.com/acme/widget --author @me --state open --limit 100 --json number,title,url,headRefName,headRefOid,isCrossRepository");

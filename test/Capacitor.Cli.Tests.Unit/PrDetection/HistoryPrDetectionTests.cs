@@ -48,6 +48,26 @@ public class HistoryPrDetectionTests {
         await Assert.That((await Detect(repo, "feature", prHead))!.Number).IsEqualTo(9);
     }
 
+    /// <summary>A copy carries the PR branch's reflog, creation entry included: only the copy entry
+    /// marks where the copy itself starts.</summary>
+    [Test]
+    public async Task A_copy_of_a_pr_branch_is_not_that_pr() {
+        using var repo = FeatureWithOpenPr(out var prHead);
+        repo.Do("branch", "-c", "feature", "agent");
+        repo.Checkout("agent");
+
+        await Assert.That(await Detect(repo, "agent", prHead)).IsNull();
+    }
+
+    /// <summary>A rename keeps the reflog and stays the same branch, so it keeps its PR.</summary>
+    [Test]
+    public async Task A_renamed_pr_branch_keeps_its_pr() {
+        using var repo = FeatureWithOpenPr(out var prHead);
+        repo.Do("branch", "-m", "feature", "renamed");
+
+        await Assert.That((await Detect(repo, "renamed", prHead))!.Number).IsEqualTo(9);
+    }
+
     /// <summary>No local branch holds the PR head, as when the daemon fetches a base into its own
     /// ref: only the branch's creation point tells the two apart.</summary>
     [Test]

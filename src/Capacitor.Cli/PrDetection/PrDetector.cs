@@ -47,8 +47,8 @@ internal static class GitHubPrDetector {
     /// default branch: a merged PR's head, or an open PR from the default branch into another, sits
     /// in the history of every checkout cut from it. Only commits made on this branch count: the walk
     /// stops at the branch's creation point from its reflog, so a branch cut from a PR's tip, such as
-    /// an agent worktree, is not that PR, while the branch it was cut from keeps it. With no reflog
-    /// it links nothing. A nearest commit heading two PRs links neither.
+    /// an agent worktree or a <c>git branch -c</c> copy, is not that PR, while the branch it was cut
+    /// from keeps it. With no reflog it links nothing. A nearest commit heading two PRs links neither.
     /// </summary>
     public static async Task<PrInfo?> DetectForHistoryAsync(
             string host, string owner, string repo, string? branch, string cwd, Func<TimeSpan> remaining, CommandRunner run) {
@@ -96,8 +96,13 @@ internal static class GitHubPrDetector {
         var cap = remaining();
         if (cap <= TimeSpan.Zero) return null;
 
-        var reflog  = await run("git", $"reflog show --format=%H refs/heads/{branch}", cwd, cap);
-        var created = reflog?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+        var reflog  = await run("git", $"reflog show --format=%H%x20%gs refs/heads/{branch}", cwd, cap);
+        var entries = reflog?.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) ?? [];
+        // A copy carries the source branch's reflog, so its own start is the newest copy entry.
+        var start   = entries.FirstOrDefault(e => e.EndsWith($" to refs/heads/{branch}", StringComparison.Ordinal)
+                                               && e.Contains(" Branch: copied ", StringComparison.Ordinal))
+                   ?? entries.LastOrDefault();
+        var created = start?.Split(' ')[0];
         if (created is not { Length: 40 or 64 } || !created.All(char.IsAsciiHexDigit)) return null;
 
         cap = remaining();
