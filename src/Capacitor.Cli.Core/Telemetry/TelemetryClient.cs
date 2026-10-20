@@ -8,11 +8,12 @@ namespace Capacitor.Cli.Core.Telemetry;
 /// A flush that fails for any reason spills to the spool instead of retrying inline — the
 /// caller is on a user's command path and must not wait on a broken network.
 /// </summary>
-/// <param name="consent">Asked just before a send starts, for a process that outlives an opt-out saved by another:
-/// false withdraws the send and discards as <see cref="Discard"/> does. Null for a process that never needs it.</param>
+/// <param name="consent">The saved choice, asked before a send or a spill, for a process that outlives an opt-out
+/// saved by another: false withdraws the send and drops what is queued and spooled; null, a choice that cannot be
+/// read, sends and spools nothing but leaves the spool. Omitted for a process that never needs it.</param>
 public sealed class TelemetryClient(
         HttpMessageHandler handler, TelemetrySpool spool, string token, string endpoint,
-        TimeProvider timeProvider, Func<bool>? consent = null) : ITelemetrySink {
+        TimeProvider timeProvider, Func<bool?>? consent = null) : ITelemetrySink {
     readonly List<TelemetryEvent> _queue = [];
     readonly Lock                 _flushLock = new();
     Task<bool>                    _lastFlush = Task.FromResult(true);
@@ -52,14 +53,20 @@ public sealed class TelemetryClient(
     }
 
     // Under the lock, so a spill can never land after the discard cleared the spool. A consent withdrawn
-    // since the capture keeps the events off the disk as well as off the wire.
+    // since the capture keeps the events off the disk as well as off the wire; one that cannot be read keeps
+    // these events off it but leaves the spool to the next reader.
     void Spill(List<TelemetryEvent> queued) {
-        if (consent?.Invoke() == false) {
-            Withdraw();
-            return;
+        lock (_discardLock) {
+            if (_discarded) return;
+            switch (consent?.Invoke()) {
+                case false:
+                    Withdraw();
+                    return;
+                case null when consent is not null:
+                    return;
+            }
+            spool.Append(queued);
         }
-        lock (_discardLock)
-            if (!_discarded) spool.Append(queued);
     }
 
     /// <summary>Ships queued + previously spooled events. Returns false when nothing reached
@@ -139,7 +146,12 @@ public sealed class TelemetryClient(
 
             // Re-checked after the drain and build, under the lock Discard takes: an opt-out before this
             // point starts no send, and one after it cancels the send in flight.
-            var withdrawn = consent?.Invoke() == false;
+            var saved     = consent?.Invoke();
+            var withdrawn = saved == false;
+            if (consent is not null && saved is null) {
+                Spill(queued);
+                return false;
+            }
             lock (_discardLock) {
                 if (_discarded) return false;
                 if (!withdrawn) _sending = cts;

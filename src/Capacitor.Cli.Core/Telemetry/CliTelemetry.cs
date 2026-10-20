@@ -94,9 +94,10 @@ public sealed class CliTelemetry {
             () => new TelemetryClient(new HttpClientHandler(), Spool(config), Token, Endpoint, time,
                 consent: startup.Source == TelemetryStartup.DesktopSource ? () => SavedConsent(config) : null));
 
-    // A saved file that cannot be read may hold an opt-out, so it counts as one.
-    static bool SavedConsent(ConfigRoot config) =>
-        TelemetryState.TryRead(config) is { } state && TelemetrySettings.Resolve(state.Enabled).Enabled;
+    /// The saved choice, or null when the file cannot be read: it may hold an opt-out, so nothing is sent on it,
+    /// but a read that fails for a moment is not an opt-out either.
+    static bool? SavedConsent(ConfigRoot config) =>
+        TelemetryState.TryRead(config) is { } state ? TelemetrySettings.Resolve(state.Enabled).Enabled : null;
 
     /// <param name="sink">
     /// Invoked only when the facade comes up live, so a run that is opted out builds no HTTP
@@ -258,11 +259,15 @@ public sealed class CliTelemetry {
 
     bool StillEnabled() {
         if (!Enabled) return false;
-        if (_config is null || SavedConsent(_config)) return true;
+        if (_config is null) return true;
 
-        DiscardAndDisable();
-
-        return false;
+        switch (SavedConsent(_config)) {
+            case true:  return true;
+            case null:  return false;
+            default:
+                DiscardAndDisable();
+                return false;
+        }
     }
 
     /// <summary>

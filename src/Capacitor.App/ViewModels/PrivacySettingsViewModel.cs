@@ -23,7 +23,8 @@ public sealed class PrivacySettingsViewModel : ReactiveObject, IDisposable {
         _notice    = notice;
         _notice.TurnedOff += OnTurnedOff;
 
-        var decision = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config));
+        // A choice that cannot be read sends nothing, so the switch shows it off.
+        var decision = TelemetrySettings.Resolve(TelemetryState.TryRead(config) is { } saved ? saved.Enabled : false);
         _send      = decision.Enabled;
         Overridden = decision.Reason is "KCAP_TELEMETRY" or "DO_NOT_TRACK"
             ? $"{decision.Reason} is set in the app's environment, which decides this instead."

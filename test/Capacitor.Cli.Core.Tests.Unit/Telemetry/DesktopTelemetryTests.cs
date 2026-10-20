@@ -89,17 +89,21 @@ public class DesktopTelemetryTests {
         await Assert.That(telemetry.Enabled).IsFalse();
     }
 
-    /// <summary>A saved file it cannot read may hold an opt-out, so the app treats it as one.</summary>
+    /// <summary>A saved file it cannot read may hold an opt-out, so nothing is sent on it; but a read that fails
+    /// for a moment is not an opt-out, so sending resumes once the choice reads again.</summary>
     [Test]
-    public async Task An_unreadable_saved_choice_stops_the_app_sending() {
+    public async Task An_unreadable_saved_choice_sends_nothing_until_it_reads_again() {
         var (telemetry, sink) = Start(new RecordingTelemetrySink());
         TelemetryTestGuards.AssertEnabled("app", Config.Root, telemetry);
 
         await File.WriteAllTextAsync(Config.Root.Path("telemetry.json"), "{not json");
-        telemetry.Capture("after", new JsonObject());
-
+        telemetry.Capture("unreadable", new JsonObject());
         await Assert.That(sink.Events).IsEmpty();
-        await Assert.That(telemetry.Enabled).IsFalse();
+        await Assert.That(telemetry.Enabled).IsTrue();
+
+        TelemetryState.SetEnabled(true, Config.Root);
+        telemetry.Capture("readable", new JsonObject());
+        await Assert.That(sink.Events.Select(e => e.Name).ToList()).IsEquivalentTo(new List<string> { "readable" });
     }
 
     /// <summary>The once-per-device event goes only with the marker that says it went; an unsaved marker shows

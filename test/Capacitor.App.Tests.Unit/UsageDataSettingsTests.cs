@@ -60,6 +60,17 @@ public class UsageDataSettingsTests {
         await Assert.That(privacy.Hint).IsEqualTo(PrivacySettingsViewModel.TakesEffectOnRelaunch);
     }
 
+    /// A choice that cannot be read sends nothing, so the switch shows it off rather than on.
+    [Test]
+    public async Task An_unreadable_choice_shows_the_switch_off() {
+        var probe = Desktop();
+        Unwritable();
+
+        using var privacy = new PrivacySettingsViewModel(probe.Telemetry, Config.Root, new UsageDataNotice(probe.Telemetry, Config.Root));
+
+        await Assert.That(privacy.SendUsageData).IsFalse();
+    }
+
     [Test]
     public async Task Turning_it_off_from_the_notice_moves_an_open_settings_switch() {
         var probe   = Desktop();
