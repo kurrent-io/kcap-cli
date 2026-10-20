@@ -1555,6 +1555,7 @@ public class DaemonLifecycleControllerTests {
         await startTask;
 
         await WaitUntilAsync(() => h.Surface.Prompts.Any(p => p.Kind == LifecyclePrompt.KindRepair), what: "the replace offer");
+        await Assert.That(h.Surface.AttentionMessages.Count(m => m.StartsWith("Daemon daemon-a is running", StringComparison.Ordinal))).IsEqualTo(1);
     }
 
     /// Where the platform has no verified replace, a mismatch is reported with the command to run by hand.
@@ -1664,7 +1665,9 @@ public class DaemonLifecycleControllerTests {
     [Arguments("-My Laptop", "it's mine", false, false,
         "`kcap daemon service uninstall --name my-laptop`, then `kcap daemon service install --name my-laptop --profile 'it'\\''s mine'` in a shell ")]
     [Arguments("my laptop", "it's mine", true, true,
-        "`kcap daemon service install --replace --verify --name my-laptop --profile 'it''s mine'` in PowerShell ")]
+        "`kcap daemon service install --replace --verify --name 'my laptop' --profile 'it''s mine'` in PowerShell ")]
+    [Arguments("laptop", "it\u2019s", true, false,
+        "`kcap daemon service uninstall --name laptop`, then `kcap daemon service install --name laptop --profile 'it\u2019\u2019s'` in PowerShell ")]
     public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string profile, bool windows, bool verified, string expected) =>
         await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).Contains(expected);
 

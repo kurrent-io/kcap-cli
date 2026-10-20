@@ -829,23 +829,27 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     /// typically one installed under a profile since switched away from. The expected identity is the
     /// graph's own resolution, never a re-read of the active profile, so an external selection change
     /// cannot move the daemon out from under the app.
-    async Task CheckAttachedIdentityAsync() {
+    /// <param name="reoffer">An offer superseded by a reconnect: the same mismatch is offered again, not reported again.</param>
+    async Task CheckAttachedIdentityAsync(bool reoffer = false) {
         try {
             var generation = CurrentGeneration();
             if (Volatile.Read(ref _latestDaemon) is not { } daemon) return;
             var expectedProfile = await _resolveProfileName().ConfigureAwait(false);
             var mismatch = AttachedIdentity.Mismatch(daemon, _client.DaemonName, _canonicalServer, expectedProfile);
             var busy     = daemon.ActiveAgents > 0;
+            bool reported;
             lock (_lock) {
+                reported = mismatch == _reportedMismatch;
                 // The same mismatch is reported again only when the agents that held back its offer have finished.
-                if (mismatch == _reportedMismatch && !(_mismatchWaitsForIdle && !busy)) return;
+                if (reported && !reoffer && !(_mismatchWaitsForIdle && !busy)) return;
                 _reportedMismatch     = mismatch;
                 _mismatchWaitsForIdle = false;
             }
             if (mismatch is null) return;
+            var announce = !(reoffer && reported);
 
             if (expectedProfile is null || _autoActionsPermanentlyClosed || !AttachedIdentity.SupportsVerifiedReplace) {
-                _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
+                if (announce) _surface.Attention($"{mismatch} {AttachedIdentity.ManualRepair(_client.DaemonName, expectedProfile)}");
                 return;
             }
             if (busy) {
@@ -853,11 +857,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 // An idle snapshot landing while this read the profile found the flag unset; look again now.
                 if (_latestActiveAgents == 0) _ = CheckAttachedIdentityAsync();
                 var agents = daemon.ActiveAgents == 1 ? "its running agent finishes" : $"its {daemon.ActiveAgents} running agents finish";
-                _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
+                if (announce) _surface.Attention($"{mismatch} The app offers to replace it once {agents}.");
                 return;
             }
 
-            _surface.Attention(mismatch);
+            if (announce) _surface.Attention(mismatch);
             // Under the gate like every other repair, so it neither races the reconciliation's own offers
             // nor escapes the shutdown barrier.
             if (!await TryAcquireGateAsync(_lifetime.Token).ConfigureAwait(false)) return;
@@ -869,12 +873,16 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             } finally {
                 _gate.Release();
             }
-            // A reconnect while this waited was suppressed as already reported; check its attach afresh.
+            // A reconnect while this waited was suppressed as already reported: offer it again on the attach now
+            // current. Detached, the next attach reports afresh.
             if (superseded) {
-                lock (_lock) {
-                    if (_reportedMismatch == mismatch) _reportedMismatch = null;
+                if (IsCurrentlyAttached()) {
+                    _ = CheckAttachedIdentityAsync(reoffer: true);
+                } else {
+                    lock (_lock) {
+                        if (_reportedMismatch == mismatch) _reportedMismatch = null;
+                    }
                 }
-                _ = CheckAttachedIdentityAsync();
             }
         } catch (OperationCanceledException) {
             // shutdown

@@ -46,22 +46,24 @@ internal static class AttachedIdentity {
 
     /// The fix when the app cannot offer one: the unit captures the invoking environment, so a server
     /// override inherited from the shell would be baked into the replacement and outrank the profile again.
-    /// The name is the service id, which the CLI derives from it anyway and which never reads as a flag;
-    /// on Windows the quoting is PowerShell's, which cmd.exe does not share.
+    /// The install keeps the configured name, which the daemon reports, unless it would read as a flag; the
+    /// uninstall targets the service id. On Windows the quoting is PowerShell's, which cmd.exe does not share.
     internal static string ManualRepair(string daemonName, string? profile, bool windows, bool verifiedReplace) {
-        var name     = DaemonStore.Sanitize(daemonName);
-        var install  = $"kcap daemon service install --name {name} --profile {(profile is null ? "PROFILE" : Quote(profile, windows))}";
-        var commands = verifiedReplace
-            ? $"`{install.Replace(" install ", " install --replace --verify ", StringComparison.Ordinal)}`"
-            : $"`kcap daemon service uninstall --name {name}`, then `{install}`";
+        var serviceId = DaemonStore.Sanitize(daemonName);
+        var name      = string.IsNullOrWhiteSpace(daemonName) || daemonName.TrimStart().StartsWith('-') ? serviceId : Quote(daemonName, windows);
+        var target    = $"--name {name} --profile {(profile is null ? "PROFILE" : Quote(profile, windows))}";
+        var commands  = verifiedReplace
+            ? $"`kcap daemon service install --replace --verify {target}`"
+            : $"`kcap daemon service uninstall --name {serviceId}`, then `kcap daemon service install {target}`";
         return $"To fix it, run {commands} in {(windows ? "PowerShell" : "a shell")} where KCAP_URL is unset, then restart the app.";
     }
 
     // Quoted only when the value needs it.
     static string Quote(string value, bool windows) {
         if (value.Length > 0 && value.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')) return value;
+        // PowerShell ends a single-quoted string at any of its four single quotes, typographic ones included.
         return windows
-            ? "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'"
+            ? "'" + string.Concat(value.Select(c => c is '\'' or '\u2018' or '\u2019' or '\u201A' or '\u201B' ? $"{c}{c}" : c.ToString())) + "'"
             : "'" + value.Replace("'", "'\\''", StringComparison.Ordinal) + "'";
     }
 
