@@ -1736,7 +1736,7 @@ public class SetupCommandTests {
     // A run that never mentions a plan must not start a time-limited trial nobody chose.
     [Test]
     public async Task ParseRequestedWorkspace_defaults_to_the_free_plan() {
-        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsEqualTo(WorkspaceTier.Free);
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsNull();
     }
 
     [Test]

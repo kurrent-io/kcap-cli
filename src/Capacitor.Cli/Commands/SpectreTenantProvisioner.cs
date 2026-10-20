@@ -112,7 +112,7 @@ public sealed class SpectreTenantProvisioner(
             return ProvisionOffer.Declined;
         }
 
-        return await ProvisionAsync(orgName, slug, origin, tier, tokens, ct);
+        return await ProvisionAsync(orgName, slug, origin, tier, tokens, ct, tierChosen: true);
     }
 
     /// <summary>
@@ -149,9 +149,10 @@ public sealed class SpectreTenantProvisioner(
 
         // The interactive path confirms the name and hostname before committing to them. Nothing can
         // be confirmed here, so the same two values are at least stated before the workspace exists.
-        Note($"Creating {want.OrgName} at {want.Origin} on {PlanName(want.Tier)}…");
+        var tier = want.Tier ?? WorkspaceTier.Free;
+        Note($"Creating {want.OrgName} at {want.Origin} on {PlanName(tier)}…");
 
-        return await ProvisionAsync(want.OrgName, slug, want.Origin, want.Tier, tokens, ct);
+        return await ProvisionAsync(want.OrgName, slug, want.Origin, tier, tokens, ct, tierChosen: want.Tier is not null);
     }
 
     /// <summary>
@@ -198,8 +199,11 @@ public sealed class SpectreTenantProvisioner(
 
     static string PlanName(WorkspaceTier tier) => tier == WorkspaceTier.Team ? "the Team trial" : "the Free plan";
 
+    /// <param name="tierChosen">False when no plan was named: a Free refusal while Free cloud workspaces are closed
+    /// then asks for the Team trial instead.</param>
     async Task<ProvisionOffer> ProvisionAsync(
-            string orgName, string slug, string origin, WorkspaceTier tier, WorkOSTokenSource tokens, CancellationToken ct) {
+            string orgName, string slug, string origin, WorkspaceTier tier, WorkOSTokenSource tokens, CancellationToken ct,
+            bool tierChosen) {
         telemetry.Funnel.WorkspaceRequested();
 
         var code       = requested?.InviteCode;
@@ -208,6 +212,13 @@ public sealed class SpectreTenantProvisioner(
         while (true) {
             var outcome = await client.ProvisionAsync(
                 baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
+
+            if (tier == WorkspaceTier.Free && !tierChosen && IsFreeUnavailable(outcome)) {
+                Retry("Free cloud workspaces aren't open right now. Asking for the Team trial instead.");
+                tier    = WorkspaceTier.Team;
+                outcome = await client.ProvisionAsync(
+                    baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
+            }
 
             // Both refusals land before kcap-web reserves anything, so asking again for Free is a fresh
             // request rather than a resume. The user has already approved a sign-in to get this far.
@@ -283,6 +294,12 @@ public sealed class SpectreTenantProvisioner(
                 }
                 case 400:
                     Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
+                    return ProvisionOffer.Failed;
+                case 409 when IsFreeUnavailable(outcome):
+                    Fail(Scripted
+                             ? "Free cloud workspaces aren't open right now. Re-run with --tier team --invite-code <code>, or with --local to run kcap on this machine."
+                             : "Free cloud workspaces aren't open right now. Re-run and choose the Team trial, which needs an invite code, or run `kcap setup --local` to run kcap on this machine.",
+                         "free_unavailable");
                     return ProvisionOffer.Failed;
                 case 409:
                     Fail(Reason409(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "conflict");
@@ -405,6 +422,8 @@ public sealed class SpectreTenantProvisioner(
             return ProvisionOffer.InProgress(slug);
         }
     }
+
+    static bool IsFreeUnavailable(ProvisionOutcome outcome) => outcome is { StatusCode: 409, Body.Reason: "free_unavailable" };
 
     static string? TeamRefusal(ProvisionOutcome outcome) => (outcome.StatusCode, outcome.Body?.Reason) switch {
         (400, "work_email_required") => "The Team trial needs a work email, and this account uses a personal address.",
