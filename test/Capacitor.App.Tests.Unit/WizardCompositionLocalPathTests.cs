@@ -1,7 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
+using Avalonia.Threading;
 using Capacitor.App.Services;
-using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
@@ -258,9 +258,11 @@ public class WizardCompositionLocalPathTests {
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
             exit.SetResult(new StreamingResult(0, false, []));
-            await WizardFixtures.WaitUntilAsync(
-                () => graph.Install.Outcome is LocalInstallOutcome.Installed && !graph.ViewModel.Navigating,
-                what: "the install to settle and its advance to land");
+            await graph.Install.SettleAsync();
+            await graph.ViewModel.PendingAdvanceForTesting;
+            // Outcome and Navigating flip on the pool thread that finishes setup. CanExecute is
+            // delivered to the UI thread afterwards, so a direct read can still see the disabled value.
+            await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
             return (before, during, await finishLater.CanExecute.FirstAsync());
         }).WaitAsync(TimeSpan.FromSeconds(30));
