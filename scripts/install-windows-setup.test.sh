@@ -5,10 +5,10 @@ sh="$here/install-windows-setup.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 layout=(
-  "Local/KurrentCapacitor/Update.exe"
-  "Local/KurrentCapacitor/current/kcap-desktop.exe"
-  "Local/KurrentCapacitor/current/kcap.exe"
-  "Local/KurrentCapacitor/current/kcap-daemon.exe"
+  "Local/kcap/Update.exe"
+  "Local/kcap/current/kcap-desktop.exe"
+  "Local/kcap/current/kcap.exe"
+  "Local/kcap/current/kcap-daemon.exe"
   "Roaming/Microsoft/Windows/Start Menu/Programs/kcap.lnk"
 )
 

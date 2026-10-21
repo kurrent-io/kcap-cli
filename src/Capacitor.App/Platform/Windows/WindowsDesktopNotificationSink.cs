@@ -10,7 +10,7 @@ namespace Capacitor.App.Platform.Windows;
 /// Windows toasts through Avalonia.Labs, which interpolates titles, bodies and labels into toast
 /// XML unescaped, and exposes async-void Initialize/Show/Close.
 internal sealed class WindowsDesktopNotificationSink : IDesktopNotificationSink, IDesktopNotificationAccess {
-    const string AppUserModelId = "io.kurrent.capacitor";
+    const string AppUserModelId = "io.kurrent.kcap";
 
     sealed record Pending(DesktopNotification Source, INativeNotification Native,
         IReadOnlyDictionary<string, string> ActionIdsByTag, Action<string?> Activated);
