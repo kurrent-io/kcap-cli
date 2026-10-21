@@ -435,6 +435,21 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A transcript that loads with no rows is still waiting for the agent, so it says so and offers
+    /// the terminal.
+    [Test]
+    public async Task A_transcript_that_loads_empty_waits_and_offers_the_terminal() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(vendor: "claude"));
+            await WaitUntilAsync(() => vm.Chat.Phase == ChatTabPhase.Reading, what: "the empty transcript read");
+            await Assert.That(vm.Chat.Items).IsEmpty();
+            await Assert.That(vm.Chat.PhaseNote).IsEqualTo("Waiting for chat…");
+            await Assert.That(vm.Chat.ShowsTerminalOffer).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
     /// The agent's own session id can arrive before anything is recorded under it, so the chat's
     /// note offers the terminal, whatever access says; an agent that ends, or one with no terminal,
     /// offers nothing.

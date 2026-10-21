@@ -3575,7 +3575,7 @@ public class ChatTabViewModelTests {
             time.Advance(ChatTabViewModel.PollInterval);
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Reading);
-            await Assert.That(chat.PhaseNote).IsEqualTo("");
+            await Assert.That(chat.PhaseNote).IsEqualTo("Waiting for chat…");
             await chat.TeardownAsync();
         });
     }

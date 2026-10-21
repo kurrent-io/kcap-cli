@@ -226,8 +226,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
     }
 
+    /// A working agent's chat is never empty for long, so an empty one is still waiting, read or not.
     public string PhaseNote => _items.Count > 0 ? "" : Phase switch {
-        ChatTabPhase.Waiting     => "Waiting for chat…",
+        ChatTabPhase.Waiting or ChatTabPhase.Reading => "Waiting for chat…",
         ChatTabPhase.Missing     => _missingNote ?? "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
         ChatTabPhase.Failed      => FailureNote(_failureNote),
@@ -675,6 +676,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
+        // The note follows whether the chat is empty, which every path that adds or clears rows changes.
+        var empty = true;
+        _items.CollectionChanged += (_, _) => {
+            if (empty == (_items.Count == 0)) return;
+            empty = _items.Count == 0;
+            RaisePhaseNote();
+        };
         ShowTerminalCommand = ReactiveCommand.Create(() => ShowTerminal?.Invoke());
         _disposables.Add(ShowTerminalCommand);
 
@@ -1451,7 +1459,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var suppressGroup = trailingGroup is not null && HidesBehindQuestionCard(trailingGroup, questionPending);
 
         if (!TrailingCardsMatch(start, cards)) {
-            var wasEmpty = _items.Count == 0;
             for (var i = _items.Count - 1; i >= 0; i--)
                 if (_items[i] is PendingCardItem) _items.RemoveAt(i);
             var first = true;
@@ -1459,8 +1466,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _items.Add(new PendingCardItem(card, packsWithPrevious: first && trailingGroup is not null && !suppressGroup));
                 first = false;
             }
-            if (wasEmpty != (_items.Count == 0))
-                RaisePhaseNote();
         }
 
         if (!ReferenceEquals(_flaggedGroup, trailingGroup) && _flaggedGroup is { } stale) {
