@@ -53,6 +53,9 @@ interface IServiceManager {
     /// <summary>The daemon binary the installed unit names, read without asking the OS supervisor where
     /// the unit file says it; null when it cannot be read.</summary>
     string?                      UnitBinary(string serviceId) => Status(serviceId).BinaryPath;
+    /// <summary>The environment baked into the installed unit, read from the file this manager wrote;
+    /// null when no unit is on disk.</summary>
+    IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId);
     ServiceQuery                 Query(string serviceId);
     /// <summary>False when the OS tool refused the registration, with its reason in <paramref name="error"/>.</summary>
     bool Install(ServiceSpec spec, bool startNow, out string? error);

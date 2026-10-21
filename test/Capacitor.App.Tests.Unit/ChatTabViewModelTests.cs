@@ -184,12 +184,12 @@ public class ChatTabViewModelTests {
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
-                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
+                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts, transcripts: transcripts);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -221,6 +221,25 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.HasPendingCards).IsTrue();
             await Assert.That(CardRows(h.Chat).Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r1" });
             await Assert.That(h.Chat.PhaseNote).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_closing_local_tab_hands_off_its_feed_whether_or_not_it_reads_through_the_shared_cache(bool shared) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"), transcripts: shared ? new LocalTranscripts() : null);
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [UserLine, AssistantLine])));
+            await WaitUntilAsync(() => h.Chat.Items.Count > 0, what: "the initial load");
+
+            var handoff = h.Chat.ReleaseFeed();
+
+            await Assert.That(handoff).IsNotNull();
+            await Assert.That(handoff!.Runs).IsSameReferenceAs(h.Runs);
+            handoff.Feed.Dispose();
             await h.TeardownAsync();
         });
     }

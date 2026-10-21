@@ -92,7 +92,7 @@ public class SessionMutationServerContractTests : IDisposable {
         var run = await RunAsync(UnreachableUrl, sessionIdEnv: null, "disable", SessionId);
 
         await Assert.That(run.ExitCode).IsEqualTo(0);
-        await Assert.That(run.Stderr).Contains("Kurrent Capacitor API cannot be reached");
+        await Assert.That(run.Stderr).Contains("kcap API cannot be reached");
         await Assert.That(run.Stdout).Contains("Session disabled locally");
     }
 

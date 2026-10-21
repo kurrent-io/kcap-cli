@@ -296,7 +296,7 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        await Assert.That(rendered).Contains("Kurrent Capacitor");
+        await Assert.That(rendered).Contains("kcap");
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 

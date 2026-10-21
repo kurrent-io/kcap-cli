@@ -1,6 +1,6 @@
-# Kurrent Capacitor Plugin
+# kcap Plugin
 
-This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
+This plugin integrates [kcap](../README.md) with Claude Code and Codex CLI by automatically registering lifecycle hooks, providing skills for session review, and auto-installing MCP servers that expose past-session context to the agent.
 
 ## What it does
 
@@ -8,7 +8,7 @@ This plugin integrates [Kurrent Capacitor](../README.md) with Claude Code and Co
 
 ### `kcap-sessions`
 
-Search and recall past Kurrent Capacitor sessions from inside the agent.
+Search and recall past kcap sessions from inside the agent.
 
 | Tool | Description |
 |------|-------------|
@@ -72,7 +72,7 @@ Repo-aware: defaults to the cwd's repo; pass `scope: "global"` for org-wide ques
 
 ### `kcap-pages`
 
-Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. The page is served under a sandbox with no network access, so every style, script and image has to be inlined as a data URI; an external URL renders as nothing.
+Publish a self-contained HTML page — a plan, a report, a comparison, the artifact the user asked for — and get back a link to share. With kcap installed, "make me an artifact" means a page: the agent publishes it here instead of with its harness's own artifact tool, puts the link in its reply, and also opens it in the harness's browser tool when there is one (the `pages` skill below). The page is served under a sandbox with no network access, so every style, script and image has to be inlined as a data URI; an external URL renders as nothing.
 
 | Tool | Description |
 |------|-------------|
@@ -89,7 +89,7 @@ Declaring a `response_schema` turns the page into a form the server validates an
 
 `kcap mcp judge` is intentionally not auto-registered. Add it with `claude mcp add kcap-judge -- kcap mcp judge` if you want it.
 
-**Hooks** — Automatically captures session activity and forwards it to the Kurrent Capacitor server:
+**Hooks** — Automatically captures session activity and forwards it to the kcap server:
 
 | Hook | Event |
 |------|-------|
@@ -109,6 +109,7 @@ Each hook pipes its JSON payload through the `kcap` CLI, which enriches it with 
 - `validate-plan` / `kcap-validate-plan` — Verify that all planned items were completed
 - `disable` / `kcap-disable` — Stop recording and delete all server data for the current session
 - `hide` / `kcap-hide` — Hide the current session (owner-only visibility)
+- `pages` / `kcap-pages` — Make the artifact, page or report the user asked for as a kcap page: publish it, hand back the link, open it in the harness's browser tool
 - `review-flows` / `kcap-review-flows` — Run structured, iterative spec/code review loops; the reviewer vendor is chosen independently of the driver (pass a lowercase token like `claude`/`codex`/`cursor`)
 - `agent-flows` / `kcap-agent-flows` — Run structured multi-participant agent flows (catalog `definition_id` or an inline `definition_yaml`), each participant declaring its own vendor/model
 - `work-items` / `kcap-work-items` — Declare a work item's breakdown (parent and parts) and its blocks / blocked-by dependencies, so Home renders its topology, and record the loose ends a session leaves unfinished
@@ -119,7 +120,7 @@ In Claude they're invoked as `/kcap:recap`, `/kcap:errors`, `/kcap:guided-tour`,
 ## Prerequisites
 
 - The `kcap` CLI must be on your PATH (`npm install -g @kurrent/kcap`)
-- The Kurrent Capacitor server must be running (default: `http://localhost:5108`)
+- The kcap server must be running (default: `http://localhost:5108`)
 
 ## Installation
 
@@ -205,8 +206,8 @@ kcap/
     guided-tour/
       SKILL.md           — /kcap:guided-tour onboarding tour
   muse-assistant/
-    capacitor-recording/
-      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-capacitor)
+    kcap-recording/
+      SKILL.md           — Muse Assistant recording skill (Muse-side; not a Claude Code skill, installed into ~/workspace/skills by connect-kcap)
 ```
 
 The two MCP files exist because Claude requires top-level `mcpServers` (camelCase) while Codex accepts only `mcp_servers` (snake_case) or a bare server map — the schemas don't overlap. Keep them in sync when adding or removing servers.

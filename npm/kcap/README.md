@@ -1,6 +1,6 @@
 # @kurrent/kcap
 
-CLI companion for [Kurrent Capacitor](https://github.com/kurrent-io/kcap-cli) — records and visualizes coding-agent sessions across Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, and Pi.
+Command-line interface for [kcap](https://github.com/kurrent-io/kcap-cli) — records and visualizes coding-agent sessions across Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, and Pi.
 
 ## Install
 

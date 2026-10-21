@@ -133,7 +133,7 @@ public sealed class TrayViewModel : ReactiveObject, IDisposable {
         var shim = shimOfferable ?? Observable.Return(false);
         var pendingSummary = permissions?.Summary ?? Observable.Return(default(PendingSummary));
         var remoteSummary = remote ?? Observable.Return(default(RemoteTraySummary));
-        var projected = service.Status.CombineLatest(snapshots, pause.State, actions.StopsInFlight, consent.PendingCount, attention, pendingSummary, remoteSummary,
+        var projected = service.Status.CombineLatest(snapshots, pause.State.DistinctUntilChanged(), actions.StopsInFlight, consent.PendingCount, attention, pendingSummary, remoteSummary,
             (status, snap, pauseState, inFlight, pending, lifecycleMsg, summary, remoteFeed) =>
                 Build(service.DaemonName, status, snap, pauseState, inFlight, pending, lifecycleMsg, summary, remoteFeed));
 

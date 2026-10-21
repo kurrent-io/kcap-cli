@@ -137,7 +137,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
     /// server it talks to is what the hover tells you.
-    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string ServerUrlTip = "kcap server for this organization";
     public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
     public const string AgentCountTip = "Agents running on this daemon";
 
@@ -322,6 +322,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? identityReport = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
@@ -552,8 +553,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
+            // A connect clears the progress lines back to the standing identity report, whichever of the two the
+            // main thread happens to see first.
+            string? identity = null;
+            identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(report => {
+                    var shown = identity;
+                    identity = report;
+                    if (report is not null) StartMessage = report;
+                    else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
+                })
+                .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = null)
+                .Subscribe(_ => StartMessage = identity)
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while
@@ -676,13 +688,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
-        WatchOrigin(next);
+        WatchOpen(next);
     }
 
-    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
-    /// Nothing here ends a session — the row that wins says whether it did.
-    void WatchOrigin(ISessionWorkspace? workspace) {
-        var watch = workspace switch {
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use,
+    /// and closes once its session ends: the rail has already dropped it.
+    void WatchOpen(ISessionWorkspace? workspace) {
+        var moves = workspace switch {
             RemoteSessionViewModel remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
@@ -694,6 +706,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
+        var ended = workspace?.Ended
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); });
+        var watch = new CompositeDisposable(moves, ended ?? Disposable.Empty);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;

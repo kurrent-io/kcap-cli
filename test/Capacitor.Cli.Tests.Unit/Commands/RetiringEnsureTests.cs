@@ -51,7 +51,7 @@ public class RetiringEnsureTests {
         var ladder = new Ladder(InstalledResult);
 
         var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
-            NewId, previousName, canRetire: true, OldUnit(Installed), ladder.Run);
+            NewId, previousName, OldUnit(Installed), ladder.Run);
 
         await Assert.That(ladder.Retires).IsEquivalentTo(new string?[] { null });
         await Assert.That(outcome.Retired).IsNull();
@@ -64,7 +64,7 @@ public class RetiringEnsureTests {
     public async Task A_previous_name_with_no_service_retires_nothing() {
         var ladder = new Ladder(InstalledResult);
 
-        var outcome = await DaemonServiceCommands.RetiringEnsureAsync(NewId, OldId, true, OldUnit(Absent), ladder.Run);
+        var outcome = await DaemonServiceCommands.RetiringEnsureAsync(NewId, OldId, OldUnit(Absent), ladder.Run);
 
         await Assert.That(ladder.Retires).IsEquivalentTo(new string?[] { null });
         await Assert.That(outcome.Retired).IsNull();
@@ -78,7 +78,7 @@ public class RetiringEnsureTests {
         var ladder = new Ladder(InstalledResult);
 
         var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
-            NewId, " MAC ", true, OldUnit(Installed, Absent), ladder.Run);
+            NewId, " MAC ", OldUnit(Installed, Absent), ladder.Run);
 
         await Assert.That(ladder.Retires).IsEquivalentTo(new string?[] { OldId });
         await Assert.That(outcome.Result).IsEqualTo(InstalledResult);
@@ -95,23 +95,12 @@ public class RetiringEnsureTests {
         var ladder = new Ladder(reason == "verify_contended" ? Contended : RetireRefused, InstalledResult);
 
         var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
-            NewId, OldId, true, OldUnit(Installed, Installed), ladder.Run);
+            NewId, OldId, OldUnit(Installed, Installed), ladder.Run);
 
         await Assert.That(ladder.Retires).IsEquivalentTo(new string?[] { OldId, null });
         await Assert.That(outcome.Result).IsEqualTo(InstalledResult);
         await Assert.That(outcome.LeftInstalled).IsEqualTo(OldId);
         await Assert.That(outcome.Retired).IsNull();
-    }
-
-    [Test]
-    public async Task A_platform_that_cannot_retire_reports_the_old_service() {
-        var ladder = new Ladder(InstalledResult);
-
-        var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
-            NewId, OldId, canRetire: false, OldUnit(Installed, Installed), ladder.Run);
-
-        await Assert.That(ladder.Retires).IsEquivalentTo(new string?[] { null });
-        await Assert.That(outcome.LeftInstalled).IsEqualTo(OldId);
     }
 
     /// <summary>An unreadable probe afterwards proves neither, so neither is claimed.</summary>
@@ -120,7 +109,7 @@ public class RetiringEnsureTests {
         var ladder = new Ladder(InstalledResult);
 
         var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
-            NewId, OldId, true, OldUnit(Installed, Unknown), ladder.Run);
+            NewId, OldId, OldUnit(Installed, Unknown), ladder.Run);
 
         await Assert.That(outcome.Retired).IsNull();
         await Assert.That(outcome.LeftInstalled).IsNull();
@@ -133,7 +122,7 @@ public class RetiringEnsureTests {
         var ladder = new Ladder(TimedOut);
 
         var outcome = await DaemonServiceCommands.RetiringEnsureAsync(
-            NewId, OldId, canRetire: false, OldUnit(Installed, Installed), ladder.Run);
+            NewId, OldId, OldUnit(Installed, Installed), ladder.Run);
 
         await Assert.That(outcome.Result).IsEqualTo(TimedOut);
         await Assert.That(outcome.LeftInstalled).IsNull();

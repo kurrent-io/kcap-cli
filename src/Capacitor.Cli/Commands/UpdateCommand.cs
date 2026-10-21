@@ -11,7 +11,7 @@ public sealed class UpdateCommand(
         TimeProvider time, KcapReleaseClient? releases = null, ScriptUpdater? scriptUpdater = null, InstallKind? kind = null) {
     /// Printed by every `kcap update` invocation of a CLI that lives inside the desktop app.
     internal const string BundledMessage =
-        "This kcap is bundled with the Kurrent Capacitor desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
+        "This kcap is bundled with the kcap desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
 
     readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
 
@@ -267,7 +267,7 @@ public sealed class UpdateCommand(
     /// Per-channel cache path so a <c>beta</c> check doesn't clobber the
     /// cached <c>latest</c> result (and vice versa).
     /// </summary>
-    static string CachePathFor(string channel, ConfigRoot root) =>
+    internal static string CachePathFor(string channel, ConfigRoot root) =>
         root.Path($"update-check-{channel}.json");
 
     /// <summary>

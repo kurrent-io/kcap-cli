@@ -35,4 +35,9 @@ printf 'broken hook' > "$plugin/hooks/hooks.json"
 if bash "$here/assert-app-plugin.sh" "$bundle" "$version" >/dev/null 2>&1; then
   echo "FAIL: accepted a modified hook"; exit 1
 fi
+linux="$tmp/linux"
+mkdir -p "$linux/bin"
+cp -R "$here/../kcap" "$linux/"
+write_stub_kcap "$linux/bin/kcap"
+bash "$here/assert-app-plugin.sh" "$linux" "$version" >/dev/null
 echo "ok"

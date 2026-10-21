@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -24,11 +25,13 @@ public class RemoteSessionViewModelTests {
         public readonly SessionAccessService Access;
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
-        public readonly AgentActionService Actions = NewActions();
+        public readonly AgentActionService Actions;
         public readonly FakeTimeProvider Time = new();
         public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
+            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(),
+                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm, lane: Lane);
             Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
@@ -41,9 +44,9 @@ public class RemoteSessionViewModelTests {
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
                 Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
-                BackgroundCommandActivity? commands = null) {
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -139,6 +142,55 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A subagent row opens that subagent's own events in place of the chat, read-only, and Back returns to the chat.
+    /// A pane open when the agent moves to another session closes, since its subagent belongs to the old one.
+    [Test]
+    public async Task A_subagent_row_opens_its_own_transcript_in_place_of_the_chat_until_back() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var requested = new List<(string Session, string Agent)>();
+            SubagentEventsReader read = (session, agent, _, _) => {
+                requested.Add((session, agent));
+                return Task.FromResult(new SubagentEventsFetch(new SubagentEventsDto {
+                    Events = [Event(0, CanonicalEventTypes.AssistantTextGenerated, """{"content":"Found the chat surfaces"}""")],
+                }));
+            };
+            var agentRow = Harness.Row(vendor: "claude");
+            var vm = h.Build(agentRow, readSubagent: read);
+            await h.UntilAsync(vm, () => vm.WorkContext.Runs.Any(r => r.CanOpen), "subagent row named");
+            var row = vm.WorkContext.Runs.Single();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+
+            await Assert.That(vm.ShowsSubagentPane).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            var pane = vm.Subagent!;
+            await Assert.That(pane.Chat.IsReadOnlyParticipant).IsTrue();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!pane.Chat.Items.OfType<AssistantTextItem>().Any() && DateTime.UtcNow < deadline) {
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+            }
+            await Assert.That(pane.Chat.Items.OfType<AssistantTextItem>().Single().Text).IsEqualTo("Found the chat surfaces");
+            await Assert.That(requested[0]).IsEqualTo(("s1", "a9f262478e032f427"));
+            await Assert.That(vm.WorkContext.Runs.Single()).IsSameReferenceAs(row);
+
+            pane.BackCommand.Execute().Subscribe();
+
+            await Assert.That(vm.Subagent).IsNull();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            await Assert.That(vm.Subagent).IsNotNull();
+            h.Directory.Rows.AddOrUpdate(agentRow with { SessionId = "s2" });
+            await h.UntilAsync(vm, () => vm.Subagent is null, "pane closed on the session change");
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]
@@ -171,6 +223,10 @@ public class RemoteSessionViewModelTests {
             h.WorkSource.Gate();
             vm.WorkContext.RefreshCommand.Execute().Subscribe();
             await WaitUntilAsync(() => h.WorkSource.InFlight == 1, what: "refresh pending");
+            // Under the immediate scheduler the verdict below clears the sections off the UI thread,
+            // racing a settle the refresh dispatched there; settled reads have nothing left to re-apply.
+            await (vm.WorkContext.Plan.PendingReadForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
             if (denied) {
                 h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
                 h.Lane.SessionAccessChangedSubject.OnNext("s1");
@@ -395,6 +451,36 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A transient empty snapshot also removes a live row, so only a removal after the server
+    /// accepted this workspace's stop, or a live session turning terminal, reports the end.
+    [Test]
+    [Arguments(null, "Running", false, false)]
+    [Arguments(HubCallResult.Ok, "Running", false, true)]
+    [Arguments(HubCallResult.Denied, "Running", false, false)]
+    [Arguments(null, "Running", true, true)]
+    [Arguments(null, "Completed", true, false)]
+    public async Task Only_an_accepted_stop_or_a_live_session_ending_reports_the_end(
+            HubCallResult? stop, string openStatus, bool terminal, bool ends) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            if (stop is { } result) h.Lane.StopHandler = _ => Task.FromResult(new HubCallOutcome(result));
+            var vm = h.Build(Harness.Row(status: openStatus));
+            var ended = false;
+            using var sub = vm.Ended.Subscribe(_ => ended = true);
+
+            if (stop is not null) {
+                await vm.StopCommand.Execute();
+                await WaitUntilAsync(async () => (await h.Actions.StopsInFlight.FirstAsync()).Count == 0, what: "the stop settled");
+            }
+            if (terminal) h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
+            else h.Directory.Rows.Remove("remote:a1");
+
+            if (ends) await WaitUntilAsync(() => ended, what: "the end");
+            else await Assert.That(ended).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
     /// The local daemon proving the twin retires the remote row while the agent keeps running:
     /// nothing ended, and the window opens the local workspace for the same id instead.
     [Test]
@@ -541,7 +627,8 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Reading, "the empty seed");
+            // Reading alone is not the seed: a poll before the detail fetch lands reads empty and still sets it.
+            await h.UntilAsync(vm, () => vm.Chat.HasSeed, "the empty seed");
             await WaitUntilAsync(() => vm.Chat.ShowsComposer && vm.Chat.ComposerHint.StartsWith("Enter sends", StringComparison.Ordinal), what: "the composer");
 
             vm.Chat.ComposerText = "do it";
@@ -708,7 +795,7 @@ public class RemoteSessionViewModelTests {
                 Event(1, CanonicalEventTypes.ToolResultReceived, launch)));
             BackgroundCommandMonitor? monitor = null;
             var backgroundSeed = new TaskCompletionSource<SessionDetailFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
-            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+            using var commands = new BackgroundCommandActivity((key, report, ended, _) =>
                 monitor = new BackgroundCommandMonitor(key, report, ended, new FakeDaemonClientService(), h.Directory,
                     h.Access, (_, ct) => backgroundSeed.Task.WaitAsync(ct), h.Lane, h.Time));
             IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
@@ -754,7 +841,7 @@ public class RemoteSessionViewModelTests {
                 Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, call),
                 Event(1, CanonicalEventTypes.ToolResultReceived, launch)));
             var refusal = new SessionDetailFetch(null, NotFound: notFound, Unauthorized: !notFound);
-            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+            using var commands = new BackgroundCommandActivity((key, report, ended, _) =>
                 new BackgroundCommandMonitor(key, report, ended, new FakeDaemonClientService(), h.Directory,
                     h.Access, (_, _) => Task.FromResult(refusal), h.Lane, h.Time));
             IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();

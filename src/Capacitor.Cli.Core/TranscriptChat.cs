@@ -13,6 +13,10 @@ public interface IChatDisplayRules {
     string? SubmittedInput(CanonicalEvent evt, AcpEventEnvelope raw, AcpEventEnvelope? displayed) =>
         displayed is { Kind: AcpEventKind.UserMessage } user ? user.Text : null;
 
+    /// Possible literal user text before ambiguous wrapper cleanup. These are not receipts until
+    /// the caller proves a matching send; trusted meta, sidechain and peer records must yield none.
+    IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) => [];
+
     /// Subagent facts read off the raw envelope, whatever Filter decides for it.
     IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) => [];
 }
@@ -27,16 +31,7 @@ public sealed class TranscriptChatProjection(ITranscriptProjection projection, I
     public ChatProjectionResult ProjectWithInputs(string line, int lineNumber, DateTimeOffset receivedAt, TranscriptContext context) {
         var result = projection.Project(line, lineNumber, receivedAt, context);
         if (result.Events.Count == 0) return new([], [], []);
-        var shown = new List<AcpEventEnvelope>(result.Events.Count);
-        var submitted = new List<string>();
-        var runs = new List<RunSignal>();
-        foreach (var evt in result.Events) {
-            var projected = TranscriptChat.Project(evt, rules);
-            shown.AddRange(projected.Envelopes);
-            submitted.AddRange(projected.SubmittedInputs);
-            runs.AddRange(projected.Runs);
-        }
-        return new(shown, submitted, runs);
+        return ChatProjectionResult.Combine(result.Events.Select(evt => TranscriptChat.Project(evt, rules)).ToArray());
     }
 }
 
@@ -49,6 +44,18 @@ public static class TranscriptChat {
         TranscriptProjection.For(vendor) is { } projection && RulesFor(vendor) is { } rules
             ? new TranscriptChatProjection(projection, rules)
             : null;
+
+    /// The chat's view of one subagent's own transcript, in which nothing is hidden for being a sidechain.
+    public static TranscriptChatProjection? ForSubagent(string vendor) =>
+        TranscriptProjection.For(vendor) is { } projection && SubagentRulesFor(vendor) is { } rules
+            ? new TranscriptChatProjection(projection, rules)
+            : null;
+
+    public static IChatDisplayRules? SubagentRulesFor(string vendor) => vendor.ToLowerInvariant() switch {
+        "claude" => ClaudeChatRules.Subagent,
+        "codex"  => CodexChatRules.Subagent,
+        _        => RulesFor(vendor),
+    };
 
     public static IChatDisplayRules? RulesFor(string vendor) => vendor.ToLowerInvariant() switch {
         "claude" => ClaudeChatRules.Instance,
@@ -64,20 +71,24 @@ public static class TranscriptChat {
         // never how, and carries no call id.
         if (evt.Payload is SubagentCompleted { AgentId.Length: > 0 } completed)
             return new([], [], [new RunSignal.Finished(null, completed.AgentId, null, evt.Timestamp)]);
+        // Written from the subagent-start hook, which names the agent but not its call.
+        if (evt.Payload is SubagentStarted started)
+            return new([], [], started.AgentId is { Length: > 0 } agentId ? [new RunSignal.Identified(null, agentId)] : []);
         var envelopes = TranscriptEnvelopes.From(evt);
         if (envelopes.Count == 0) return new([], [], []);
-        var shown = new List<AcpEventEnvelope>(envelopes.Count);
-        var submitted = new List<string>();
-        var runs = new List<RunSignal>();
+        var parts = new List<ChatProjectionResult>(envelopes.Count);
         foreach (var envelope in envelopes) {
             var kept = rules is null ? envelope : rules.Filter(evt, envelope);
-            if (kept is { } visible) shown.Add(visible);
             var text = rules is null
                 ? kept is { Kind: AcpEventKind.UserMessage } user ? user.Text : null
                 : rules.SubmittedInput(evt, envelope, kept);
-            if (text is { Length: > 0 }) submitted.Add(text);
-            if (rules is not null) runs.AddRange(rules.Runs(evt, envelope));
+            var literal = envelope.Kind == AcpEventKind.UserMessage ? rules?.LiteralInputs(evt, envelope) ?? [] : [];
+            if (kept == envelope && literal.All(candidate => candidate == envelope.Text)) literal = [];
+            parts.Add(new(kept is { } visible ? [visible] : [], text is { Length: > 0 } ? [text] : [], rules?.Runs(evt, envelope) ?? []) {
+                OriginalInput = literal.Count > 0 ? envelope : null,
+                LiteralInputs = literal,
+            });
         }
-        return new(shown, submitted, runs);
+        return ChatProjectionResult.Combine(parts);
     }
 }

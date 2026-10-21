@@ -1078,26 +1078,6 @@ public static partial class EvalService {
             .Replace("{KNOWN_PATTERNS}", knownPatterns)
             .Replace("{TRACE_JSON}",     traceJson);
 
-    /// <summary>
-    /// Formats a per-category list of retained facts as a bulleted block for
-    /// injection into the judge prompt. Empty list renders an explicit
-    /// "(none yet)" marker so the section reads naturally.
-    /// </summary>
-    public static string FormatKnownPatterns(List<JudgeFact> facts) {
-        if (facts.Count == 0) {
-            return "_(no patterns retained for this category yet)_";
-        }
-
-        var sb = new StringBuilder();
-
-        foreach (var f in facts) {
-            if (sb.Length > 0) sb.AppendLine();
-            sb.Append("- ").Append(f.Fact);
-        }
-
-        return sb.ToString();
-    }
-
     // ── Verdict parsing ────────────────────────────────────────────────────
 
     /// <summary>
@@ -1398,32 +1378,6 @@ public static partial class EvalService {
         }
         return Encoding.UTF8.GetString(buffer.ToArray());
     }
-
-    // ── Facts-used snapshot ────────────────────────────────────────────────
-
-    /// <summary>
-    /// Builds the <see cref="EvalFactSnapshotPayload"/> list from the
-    /// per-category pool the runner fetched. Rows without a
-    /// <c>FactHash</c> or <c>RetainerGitHubId</c> come from an older server
-    /// that doesn't return those fields yet — they're filtered out so we only
-    /// snapshot facts that can be fully attributed.
-    /// </summary>
-    internal static List<EvalFactSnapshotPayload> BuildFactsUsedSnapshot(
-            IReadOnlyDictionary<string, List<JudgeFact>> knownFactsByCategory
-        ) =>
-        knownFactsByCategory
-            .SelectMany(kv => kv.Value
-                .Where(f => f.FactHash is not null && f.RetainerGitHubId is not null)
-                .Select(f => new EvalFactSnapshotPayload {
-                    Category         = kv.Key,
-                    FactHash         = f.FactHash!,
-                    Fact             = f.Fact,
-                    RetainerGitHubId = f.RetainerGitHubId!.Value,
-                    SourceSessionId  = f.SourceSessionId,
-                    SourceEvalRunId  = f.SourceEvalRunId,
-                    RetainedAt       = f.RetainedAt
-                }))
-            .ToList();
 
     /// <summary>
     /// Prepares untrusted model or subprocess output for embedding in a

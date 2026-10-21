@@ -1023,6 +1023,29 @@ public class AgentOrchestratorLocalAttachTests {
         await Assert.That(pty.Writes).IsEquivalentTo(new[] { "hello" });
     }
 
+    /// The stamp is the one the resume ledger records as started_at, so a client can tell which runtime it reached.
+    [Test]
+    public async Task An_attach_asking_for_the_runtime_is_told_its_start_before_the_acknowledgement() {
+        var             server = new TripwireServerConnection();
+        await using var orch   = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        var             started = new DateTime(2026, 10, 20, 9, 30, 15, DateTimeKind.Utc).AddTicks(7);
+        orch.SeedAgentForTest("plain-1", createdAt: started, pty: new RecordingPtyProcess());
+
+        var readBuf = new MemoryStream();
+        await FrameCodec.WriteAsync(readBuf, LocalFrame.Detach(), default);
+        readBuf.Position = 0;
+        using var client = new DuplexTestStream(readBuf, new MemoryStream());
+
+        await orch.HandleLocalAttachAsync("plain-1", client, default, reportRuntime: true);
+
+        client.WrittenStream.Position = 0;
+        var first = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        var second = await FrameCodec.ReadAsync(client.WrittenStream, default);
+        await Assert.That(first!.Type).IsEqualTo(FrameType.RuntimeStarted);
+        await Assert.That(first.StartedAt).IsEqualTo(new DateTimeOffset(started));
+        await Assert.That(second!.Type).IsEqualTo(FrameType.Attached);
+    }
+
     // ── Test doubles for the local-spawn lifecycle ──────────────────────
 
     sealed class EnvCapturingPtyFactory : IPtyProcessFactory {
@@ -1123,7 +1146,7 @@ public class AgentOrchestratorLocalAttachTests {
         public override Task SendTerminalDimensionsAsync(string agentId, int cols, int rows) { LastDims = (cols, rows); Calls.Add(nameof(SendTerminalDimensionsAsync)); return Task.CompletedTask; }
         public override Task LaunchFailedAsync(string agentId, string reason) { Calls.Add(nameof(LaunchFailedAsync)); return Task.CompletedTask; }
         public ConcurrentBag<AgentStartTitle?> RegisteredTitles { get; } = [];
-        public override Task AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, AgentStartTitle? title = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.CompletedTask; }
+        public override Task<AgentRegisteredResponse> AgentRegisteredAsync(string agentId, string? prompt, string? model, string? effort, string? repoPath, string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null, string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) { Calls.Add(nameof(AgentRegisteredAsync)); RegisteredTitles.Add(title); return Task.FromResult(AgentRegisteredResponse.Accepted); }
         public override Task AgentStatusChangedAsync(string agentId, string status, string? sessionId) { Calls.Add(nameof(AgentStatusChangedAsync)); return Task.CompletedTask; }
         public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) { Calls.Add(nameof(AgentUnregisteredAsync)); return Task.CompletedTask; }
         public override Task UpdateRepoPathsAsync() { Calls.Add(nameof(UpdateRepoPathsAsync)); return Task.CompletedTask; }

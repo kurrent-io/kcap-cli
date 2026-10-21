@@ -1,7 +1,7 @@
 ---
 name: recap
 description: >-
-  This skill should be used to read, search, or recall past Kurrent Capacitor
+  This skill should be used to read, search, or recall past kcap
   sessions. Triggers include: "read a previous session", "get session history",
   "recap session", "what happened in session X", "load context from a previous
   session", "continue from session", "recap session X and continue working",
@@ -21,7 +21,7 @@ description: >-
 
 # Session Recap
 
-Retrieve session history recorded by Kurrent Capacitor. Supports single-session recap, continuation chains, and **repository-wide session summaries** for understanding recent work across multiple sessions.
+Retrieve session history recorded by kcap. Supports single-session recap, continuation chains, and **repository-wide session summaries** for understanding recent work across multiple sessions.
 
 ## Continuing another session's work
 
@@ -138,7 +138,7 @@ For a plain metadata index instead of the outline (turn #, prompt excerpt, tool 
 
 ## Plans
 
-A session that works from a plan declares it to Capacitor: the documents, an ordered task list, and each task's status. That record outlives the session, so it is how you tell where earlier work stopped. It is reachable only through the `kcap-sessions` MCP tools — `kcap recap` does not print it, and the `## Plan` block above is the plan *text* a session captured, not its task list.
+A session that works from a plan declares it to kcap: the documents, an ordered task list, and each task's status. That record outlives the session, so it is how you tell where earlier work stopped. It is reachable only through the `kcap-sessions` MCP tools — `kcap recap` does not print it, and the `## Plan` block above is the plan *text* a session captured, not its task list.
 
 **Finding one.**
 - `list_repo_plans` — the unfinished plans in this repository, most recently touched first. Start here when you have no session id: "what was left unfinished", "is there a plan to continue". The default `state: "open"` lists plans with a visible unfinished task; a plan whose visible tasks are done but whose withheld tasks are not is absent from it. When the plan you expect is missing, call `list_repo_plans(state: "all")` and look for rows with `is_complete: false`.
@@ -199,4 +199,4 @@ The `KCAP_URL` environment variable overrides the default server URL (`http://lo
 
 - If the session is not found, the command prints "Session not found" and exits with code 1.
 - If not in a git repository (for `--repo`), the command prints an error and exits with code 1.
-- If the Kurrent Capacitor server is unreachable, the command prints an HTTP error. Ensure the server is running.
+- If the kcap server is unreachable, the command prints an HTTP error. Ensure the server is running.

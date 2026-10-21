@@ -754,11 +754,45 @@ public class WorkspaceViewModelTests {
         });
     }
 
+    /// A running foreground subagent is named by its meta file, and its own transcript, every line of it a
+    /// sidechain record, opens in place of the chat.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_local_subagent_opens_its_own_transcript_in_place_of_the_chat() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+            Tmp.CreateFile(["t", "subagents", "agent-s1.meta.json"], """{"toolUseId":"toolu_A","requestShape":"foreground"}""");
+            Tmp.CreateFile(["t", "subagents", "agent-s1.jsonl"],
+                """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found the chat surfaces"}]}}""" + "\n");
+
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            await (vm.Chat!.PendingReadForTesting ?? Task.CompletedTask);
+            var row = vm.WorkContext.Runs.Single();
+            await Assert.That(row.AgentId).IsEqualTo("s1");
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            var pane = vm.Subagent!;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+
+            await Assert.That(vm.ShowsSubagent).IsTrue();
+            await Assert.That(vm.ShowsChat).IsFalse();
+            await Assert.That(pane.Chat.Items.OfType<AssistantTextItem>().Single().Text).IsEqualTo("Found the chat surfaces");
+            await Assert.That(vm.Chat.Items.OfType<AssistantTextItem>()).IsEmpty();
+            await vm.TeardownAsync();
+        });
+    }
+
     const string ShellCallLine = """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_S","name":"Bash","input":{"command":"make check"}}]}}""";
     const string ShellLaunchLine = """{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_S","type":"tool_result","content":"Command running in background with ID: b1.","is_error":false}]},"toolUseResult":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false,"backgroundTaskId":"b1"}}""";
 
     /// The rail reads a session's running commands from here; the subagent beside it is left
-    /// out, since the daemon already counts that one. The header reads them too, so a finished
+    /// out, since the daemon already counts that one. A closed workspace hands its feed and runs on, so the
+    /// count carries on without the transcript being read again. The header reads them too, so a finished
     /// turn with a command still running is Working there as well.
     [Test]
     [Arguments("command")]
@@ -773,9 +807,9 @@ public class WorkspaceViewModelTests {
             var lane = new FakeServerLane();
             using var access = new SessionAccessService(lane, time);
             BackgroundCommandMonitor? monitor = null;
-            using var commands = new BackgroundCommandActivity((key, report, ended) =>
+            using var commands = new BackgroundCommandActivity((key, report, ended, handoff) =>
                 monitor = new BackgroundCommandMonitor(key, report, ended, daemon, directory, access,
-                    (_, _) => Task.FromResult(new SessionDetailFetch(null)), lane, time));
+                    (_, _) => Task.FromResult(new SessionDetailFetch(null)), lane, time, handoff));
             IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
             using var subscription = commands.Running.Subscribe(running => latest = running);
             var vm = Build(daemon, NewActions(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener()), new FakeTerminalAttachClientFactory(), time, commands: commands);
@@ -793,6 +827,9 @@ public class WorkspaceViewModelTests {
             await Assert.That(vm.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Working);
             await Assert.That(vm.Chat.AgentStatus.Tip).Contains("1 command running");
             selected.OnNext("another-agent");
+            // Blanked in place, same length: a monitor that carries on from the chat's feed reads none of it,
+            // and one that read the transcript again from the start would find no command running.
+            File.WriteAllText(path, new string(' ', (int)new FileInfo(path).Length - 1) + "\n");
             await vm.TeardownAsync();
             await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(latest.GetValueOrDefault("local:a1")).IsEqualTo(1);

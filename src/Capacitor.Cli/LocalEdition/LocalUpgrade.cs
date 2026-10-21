@@ -54,7 +54,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
 
         if (installed.UnitAbsent || !File.Exists(unit.ServerBinary))
             throw Failed(LocalInstallFailureCode.StartFailed,
-                $"The local server is uninstalled. Run kcap setup --local to reinstall Capacitor local {from}, then kcap local upgrade.");
+                $"The local server is uninstalled. Run kcap setup --local to reinstall kcap local {from}, then kcap local upgrade.");
 
         if (installed.Owner != OwnerDecision.Ours)
             throw Failed(LocalInstallFailureCode.NotOurServer,
@@ -87,7 +87,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
                 // The journal stays at staging, and the next lifecycle command removes what is left.
             }
 
-            throw Failed(Classify(ex, ct), $"{Describe(ex, ct)} Capacitor local {from} was left as it was.");
+            throw Failed(Classify(ex, ct), $"{Describe(ex, ct)} kcap local {from} was left as it was.");
         }
 
         entry = lease.Advance(entry, LocalUpgradeJournal.Stopping, ServerStart.Deny);
@@ -156,7 +156,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             LocalBin.Switch(stack.Root, details.To);
         } catch (Exception ex) {
             throw new LocalUpgradeFailure(LocalInstallFailureCode.CommitFailed,
-                $"The switch to Capacitor local {details.To} could not be confirmed ({ex.Message}). Nothing was restored; the next kcap local upgrade, start or setup --local finishes it.",
+                $"The switch to kcap local {details.To} could not be confirmed ({ex.Message}). Nothing was restored; the next kcap local upgrade, start or setup --local finishes it.",
                 switched: true);
         }
 
@@ -194,7 +194,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             CompleteOrThrow(lease, details);
 
             throw new LocalUpgradeFailure(LocalInstallFailureCode.StartFailed,
-                $"Capacitor local {details.To} did not start: {ex.Message} It stays selected and stopped, and {details.From} is kept in "
+                $"kcap local {details.To} did not start: {ex.Message} It stays selected and stopped, and {details.From} is kept in "
               + $"{bundle}. Nothing is rolled back; kcap local logs shows why, and kcap local start tries again.",
                 switched: true);
         }
@@ -233,7 +233,7 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
     /// <summary>The journal is kept at <c>starting</c>, so the next lifecycle command starts the new version again.</summary>
     static LocalUpgradeFailure Unfinished(UpgradeDetails details, string why) =>
         new(LocalInstallFailureCode.StartFailed,
-            $"Capacitor local {details.To} is selected, but {why}. Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.",
+            $"kcap local {details.To} is selected, but {why}. Nothing is rolled back; the next kcap local upgrade, start or setup --local finishes the upgrade.",
             switched: true);
 
     /// <summary>Whether the old version is back as it was, and a sentence saying so; never throws.</summary>
@@ -248,12 +248,12 @@ sealed class LocalUpgrade(LocalStack stack, IProgress<LocalInstallEvent> progres
             if (details.WasRunning) {
                 progress.Report(new LocalInstallEvent.Restarting(details.From));
                 await Control.StartAsync(Installed(), _ => { }, CancellationToken.None);
-                outcome = (true, $"Capacitor local {details.From} was started again.");
+                outcome = (true, $"kcap local {details.From} was started again.");
             } else {
-                outcome = (true, $"Capacitor local {details.From} stays selected and stopped, as it was.");
+                outcome = (true, $"kcap local {details.From} stays selected and stopped, as it was.");
             }
         } catch (Exception ex) {
-            outcome = (false, $"Capacitor local {details.From} stays selected but did not start again ({ex.Message}); kcap local start tries again.");
+            outcome = (false, $"kcap local {details.From} stays selected but did not start again ({ex.Message}); kcap local start tries again.");
         }
 
         lease.Complete();

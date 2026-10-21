@@ -11,7 +11,8 @@ namespace Capacitor.App.ViewModels;
 
 /// Continues folding run signals after the workspace releases its transcript and terminal.
 internal sealed class BackgroundCommandMonitor : IDisposable {
-    readonly SessionRuns _runs;
+    SessionRuns _runs;
+    TranscriptFeedHandoff? _handoff;
     readonly Action<int> _report;
     readonly Action _ended;
     readonly TimeProvider _time;
@@ -32,7 +33,8 @@ internal sealed class BackgroundCommandMonitor : IDisposable {
 
     public BackgroundCommandMonitor(string rowKey, Action<int> report, Action ended, IDaemonClientService daemon,
             IAgentDirectory directory, SessionAccessService access, SessionDetailReader readDetail,
-            IServerLane lane, TimeProvider time) {
+            IServerLane lane, TimeProvider time, TranscriptFeedHandoff? handoff = null) {
+        _handoff = handoff;
         _report = report;
         _ended = ended;
         _time = time;
@@ -73,6 +75,16 @@ internal sealed class BackgroundCommandMonitor : IDisposable {
         _accessLease.Disposable = Disposable.Empty;
         _key = info.FeedKey;
         _seeded = false;
+        var handoff = _handoff;
+        _handoff = null;
+        if (!_remote && handoff is not null && handoff.Key == _key) {
+            _feed = handoff.Feed;
+            _runs = handoff.Runs;
+            _report(_runs.RunningCommandCount);
+            Read();
+            return;
+        }
+        handoff?.Feed.Dispose();
         _runs.Clear();
         if (_key is null) { _feed = null; _report(0); return; }
         if (_remote) {
@@ -112,7 +124,7 @@ internal sealed class BackgroundCommandMonitor : IDisposable {
                     _seeded = true;
                     _runs.Clear();
                 }
-                foreach (var line in read.Lines) _runs.Apply(line.Projection);
+                _runs.ApplyAll(read.Lines.Select(line => line.Projection));
                 _report(_runs.RunningCommandCount);
             });
         } catch (Exception ex) {
@@ -132,5 +144,7 @@ internal sealed class BackgroundCommandMonitor : IDisposable {
         _subscriptions.Dispose();
         _feed?.Dispose();
         _feed = null;
+        _handoff?.Feed.Dispose();
+        _handoff = null;
     }
 }

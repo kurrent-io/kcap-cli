@@ -42,4 +42,24 @@ public class SingleFlightReaderTests {
             await Assert.That(reads.Select(r => r.State)).IsEquivalentTo(["a", "b"]);
         });
     }
+
+    [Test]
+    public async Task A_cached_result_applies_settled_at_the_switch_and_the_read_still_runs() {
+        await RunOnUiAsync(async () => {
+            var applied = new List<string>();
+            var read = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reader = new SingleFlightReader<string, string>(
+                (_, _) => read.Task, _ => "error", applied.Add, "test",
+                cached: state => state == "a" ? "cached a" : null);
+
+            reader.Switch("a");
+            await Assert.That(applied).IsEquivalentTo(["cached a"]);
+            await Assert.That(reader.IsCurrentSettled).IsTrue();
+
+            read.SetResult("fresh a");
+            await (reader.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(applied).IsEquivalentTo(["cached a", "fresh a"]);
+            await reader.TeardownAsync();
+        });
+    }
 }

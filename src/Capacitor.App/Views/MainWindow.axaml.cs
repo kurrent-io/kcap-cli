@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia;
@@ -5,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -32,6 +34,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             OnboardingPane.DataContext = value;
             OnboardingPane.IsVisible   = value is not null;
             SessionsSurface.IsVisible  = value is null;
+            ApplyMinimumSize();
         }
     }
 
@@ -93,7 +96,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        MinWidth  = UiScale.Minimum(WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinWidth  = UiScale.Minimum(Onboarding is null ? WindowSizeMemory.MinWidth : 640, _scale, available?.Width);
         MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
@@ -142,7 +145,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             activityFlyout.Closed += (_, _) => { _activityOpen = false; UpdateActivityVisibility(); };
         }
 
+        var switchCover = new WorkspaceSwitchCover(ContentPane, SwitchCover, SwitchCoverStill);
         this.WhenActivated(disposables => {
+            var coverTracking = new SerialDisposable().DisposeWith(disposables);
+            this.WhenAnyValue(x => x.ViewModel)
+                .Subscribe(vm => coverTracking.Disposable = vm is null ? null : switchCover.Track(vm))
+                .DisposeWith(disposables);
             // Switched over the ViewModel, not read once: an onboarding window activates before
             // the main surface hands it one.
             Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
@@ -150,9 +158,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                         ? Observable.Return<ISessionWorkspace?>(null)
                         : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
-                    // A popup can't meaningfully survive the pane swapping under it — opening a
-                    // workspace closes the feed; its Closed handler then turns the gate off.
                     if (workspace is not null) ActivityButton.Flyout?.Hide();
+                    else Dispatcher.UIThread.Post(LauncherView.FocusComposer, DispatcherPriority.Loaded);
                     UpdateActivityVisibility();
                 })
                 .DisposeWith(disposables);
@@ -232,7 +239,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     // entirely), is invisible to the user — stderr (AppNotifier's own mirroring) is the only
     // channel that survives either case.
     void ShowToast(string message) =>
-        _notifications?.Show(new Notification("Kurrent Capacitor", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
+        _notifications?.Show(new Notification("kcap", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
 
     // The launcher header strip and the bottom-most drag strip — see WindowChrome.
     void OnChromePointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>

@@ -543,7 +543,7 @@ internal partial class AgentOrchestrator {
     }
 
     /// <summary>Attach an existing agent to a local client (used by <c>kcap agent attach</c>).</summary>
-    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct) {
+    public Task HandleLocalAttachAsync(string agentId, Stream stream, CancellationToken ct, bool reportRuntime = false) {
         if (!_agents.TryGetValue(agentId, out var agent))
             return FrameCodec.WriteAsync(stream, LocalFrame.NoSuchAgent(agentId), ct);
 
@@ -560,7 +560,7 @@ internal partial class AgentOrchestrator {
               + "Drive it from the dashboard."), ct);
 
         // The daemon, not the client, decides whether this attach carries input.
-        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind));
+        return AttachClientLoopAsync(agent, stream, ct, readOnly: !AcceptsTypedInput(agent.Kind), reportRuntime);
     }
 
     /// A PR-review agent is a dialogue the reviewer types into; a flow participant is driven only
@@ -595,7 +595,7 @@ internal partial class AgentOrchestrator {
     /// running either way — the sink is just removed.
     /// </summary>
     internal async Task AttachClientLoopAsync(
-            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false) {
+            AgentInstance agent, Stream stream, CancellationToken ct, bool readOnly = false, bool reportRuntime = false) {
         // One NetworkStream, two writers (the sink's Stdout frames + Attached/Exited here):
         // serialise all writes through this lock. Reads (the input loop) are independent.
         var writeLock = new SemaphoreSlim(1, 1);
@@ -618,6 +618,7 @@ internal partial class AgentOrchestrator {
 
         try {
             // Bounded replay BEFORE any live chunk so the client paints a coherent screen.
+            if (reportRuntime) await Send(LocalFrame.RuntimeStarted(StartedAtOf(agent)));
             await Send(readOnly
                 ? FrameCodec.AttachedReadOnly(agent.Id, ProtectionReason(agent), snapshot)
                 : FrameCodec.Attached(agent.Id, snapshot));

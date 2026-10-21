@@ -35,6 +35,8 @@ public partial class LauncherPaneView : UserControl {
         GoalInput.AddHandler(KeyDownEvent, OnGoalKeyDown, RoutingStrategies.Tunnel);
     }
 
+    public void FocusComposer() => GoalInput.Focus();
+
     internal Task? PendingIntakeForTesting => _attachments?.PendingIntakeForTesting;
 
     internal Flyout? OpenMenuForTesting => _openMenu;

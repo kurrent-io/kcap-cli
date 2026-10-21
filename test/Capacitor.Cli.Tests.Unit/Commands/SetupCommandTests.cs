@@ -861,15 +861,15 @@ public class SetupCommandTests {
         // prompt it names must appear verbatim in that skill's description (asserted below)
         // or the phrase we tell users to type won't reliably fire it.
         await Assert.That(SetupCommand.GuidedTourCallToAction).IsEqualTo(
-            "New to Capacitor? Prompt \"Start kcap guided tour\" in your coding agent to see what "
-          + "Capacitor can do for you");
+            "New to kcap? Prompt \"Start kcap guided tour\" in your coding agent to see what "
+          + "kcap can do for you");
     }
 
     [Test]
     public async Task ServerSetupCallToAction_is_the_exact_agreed_wording() {
         // Pinned wording: a question the reader self-selects on, then the instruction itself.
         await Assert.That(SetupCommand.ServerSetupQuestion).IsEqualTo(
-            "Did you create this Capacitor server?");
+            "Did you create this kcap server?");
 
         await Assert.That(SetupCommand.ServerSetupAction).IsEqualTo(
             "Complete server setup with instructions here:");
@@ -1733,10 +1733,10 @@ public class SetupCommandTests {
         await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
     }
 
-    // A run that never mentions a plan must not start a time-limited trial nobody chose.
+    // Null records that no plan was named, which is what lets provisioning ask for Team when Free is closed.
     [Test]
-    public async Task ParseRequestedWorkspace_defaults_to_the_free_plan() {
-        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsEqualTo(WorkspaceTier.Free);
+    public async Task ParseRequestedWorkspace_leaves_an_unnamed_plan_unset() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsNull();
     }
 
     [Test]

@@ -131,7 +131,7 @@ internal static class UpdateNotice {
     /// this kcap, or null.</summary>
     internal static string? StackBehind(LocalEndpointClass endpoint, string cliVersion) =>
         endpoint is LocalEndpointClass.Local(var installation) && PrereleaseSemver.IsNewer(cliVersion, installation.Version)
-            ? $"The local server runs Capacitor local {installation.Version}, behind this kcap ({cliVersion}). Run `kcap local upgrade` to upgrade it."
+            ? $"The local server runs kcap local {installation.Version}, behind this kcap ({cliVersion}). Run `kcap local upgrade` to upgrade it."
             : null;
 
     /// <summary>The server the cap is computed against when the startup resolution named none —

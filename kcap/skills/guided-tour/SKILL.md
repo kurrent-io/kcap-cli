@@ -1,18 +1,19 @@
 ---
 name: guided-tour
 description: >-
-  Guided tour of Kurrent Capacitor (Kcap) for someone who has it installed but does
-  not yet know what it does for them — "what does capacitor do for me", "what is
+  Guided tour of kcap for someone who has it installed but does
+  not yet know what it does for them — "what does kcap do for me", "what is
   kcap", "is this thing doing anything", "what can kcap do", "just installed
-  capacitor, now what", "give me a tour", "Start kcap guided tour" (the prompt
+  kcap, now what", "give me a tour", "Start kcap guided tour" (the prompt
   `kcap setup` tells them to type) — or when they invoke this skill directly by
-  its listed name. Seven short cards, one per reply: welcome, capture,
-  investigate, collaborate, review, use, reuse — each a handful of questions to
+  its listed name. Also recognizes the former name Capacitor, including
+  "what is Capacitor" and "Start Capacitor guided tour". Seven short cards, one
+  per reply: welcome, capture, investigate, collaborate, review, use, reuse — each a handful of questions to
   ask the coding agent. Offers to install kcap if it is not set up. Not for
   general session recall on an established user — that is the recap skill.
 ---
 
-# Kcap guided tour
+# kcap guided tour
 
 The tour is **seven cards, one card per reply**. Emit each card verbatim from its template below,
 with only the placeholders filled. Do not rewrite, reorder, shorten or add to a card, and print
@@ -107,11 +108,11 @@ refused with `analytics_not_in_plan`. Pick the variant from what Q-CAPTURE retur
 - **Refused, failed, timed out or no rows** — one line. Run `search_sessions` with
   `author: "<user>"`, `repo: "all"`, `limit: 1`, empty `query`, and read `resolved_author.session_count` as `<N>`:
 
-  `Kcap has **<N>** of your sessions`
+  `kcap has **<N>** of your sessions`
 
   Print that line only when `<N>` is at least 1. Otherwise — `<user>` unknown, the lookup
   failed, `<N>` zero or `no_author_match` set — print
-  `Kcap is recording your sessions from here on` instead.
+  `kcap is recording your sessions from here on` instead.
 
 The tour never asks the user to import anything, on any card. An empty or missed lookup is not
 proof the user has no history — setup may still be importing it in the background — so the card
@@ -125,7 +126,7 @@ shows what is there, or the placeholder line, and moves on.
 
 ## 👋 Welcome  · 1 of 7
 
-Kcap is the shared memory, observability, and collaboration layer for the modern A-SDLC. Ask {{AGENT}}:
+kcap is the shared memory, observability, and collaboration layer for the modern A-SDLC. Ask {{AGENT}}:
 
 **❯** Are there any loose ends, or did we cover everything in the plan?
 **❯** What did we finish, what was checked, and what remains?
@@ -143,11 +144,11 @@ Capture, investigate, collaborate, review, use, reuse: every step of your work, 
 
 ## ⚡ Capture  · 2 of 7
 
-Kcap helps users understand what work they accomplished, what they're currently working on, and what they should focus on next. Kcap stores every session your coding agents run (Claude Code, Codex, Cursor, Copilot and more) into one searchable history your agents can use
+kcap helps users understand what work they accomplished, what they're currently working on, and what they should focus on next. kcap stores every session your coding agents run (Claude Code, Codex, Cursor, Copilot and more) into one searchable history your agents can use
 
 {{CAPTURE}}
 
-Let's look at how you can work with Kcap
+Let's look at how you can work with kcap
 
 ── 2 of 7 · Type `next` and hit Enter to continue · `stop` to exit ──
 
@@ -165,7 +166,7 @@ The stored history is searchable, retrievable, and actionable. Ask {{AGENT}}:
 **❯** We worked on this feature already, find the sessions and summarize the work we did
 **❯** Was there anything I was working on last month that isn't quite finished?
 **❯** What did my team accomplish yesterday, and what are they working on today?
-**❯** Why doesn't {{AGENT}} remember what it skipped over? Kcap to the rescue!
+**❯** Why doesn't {{AGENT}} remember what it skipped over? kcap to the rescue!
 
 ── 3 of 7 · Type `next` and hit Enter to continue · `stop` to exit ──
 

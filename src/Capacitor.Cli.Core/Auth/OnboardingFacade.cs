@@ -257,8 +257,6 @@ public sealed class OnboardingFacade(
     /// <summary>Test seams for the known-server WorkOS login, whose OidcClient leg bypasses the http factory.</summary>
     internal IBrowser? WorkOSBrowser { get; init; }
 
-    internal string? WorkOSApiBaseOverride { get; init; }
-
     /// <summary>
     /// Escape-hatch keyboard. Defaults to none for the same reason <see cref="IAuthProgress"/> is
     /// injected rather than defaulted: a GUI host has no console, and only a terminal host knows it
@@ -299,6 +297,10 @@ public sealed class OnboardingFacade(
         var config = await OAuthLoginFlow.FetchAuthConfigAsync(http, serverUrl, ct, progress);
 
         if (config is null) return Stop($"Failed to fetch auth config from {serverUrl}/auth/config", ct);
+
+        // Hooks read the provider from this cache for a day, keyed as CapacitorServer.Url trims it; a
+        // server that changed provider would otherwise be treated as the old one until it expired.
+        AuthProviderCache.Set(serverUrl.TrimEnd('/'), config.Provider, root, time);
 
         if (!ServerIdentity.TryCanonicalizeForStamping(serverUrl, out var canonical, out var identityError)) {
             return Fail($"Error: {identityError}", identityError, ct);
@@ -363,10 +365,13 @@ public sealed class OnboardingFacade(
             AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
         // The loopback browser is owned by OAuthLoginFlow.AcquireWorkOSAsync, which is where the join
         // collaborator is attached — see the ownership guard, which enumerates every site.
+        var apiBase = WorkOSApiBaseRule.Resolve(target.ServerUrl, config.ApiBaseUrl, out var refused);
+
+        if (refused) progress.Error(WorkOSApiBaseRule.RefusedWarning(target.ServerUrl, config.ApiBaseUrl!));
+
         var authenticated = await OAuthLoginFlow.WorkOSTokensForServerAsync(
-            workos, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
-            telemetry.Join, WorkOSBrowser, ct, progress, time,
-            WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase, KeyWatcher);
+            workos, apiBase, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
+            telemetry.Join, WorkOSBrowser, ct, progress, time, KeyWatcher);
 
         if (authenticated is null) return Stop("WorkOS sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
@@ -435,9 +440,8 @@ public sealed class OnboardingFacade(
         var auth = WorkOSOrglessLogin is not null
             ? await WorkOSOrglessLogin(ct)
             : await OAuthLoginFlow.AcquireWorkOSAsync(
-                  workos, proxyConfig.WorkOSClientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
-                  browser: null, apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
-                  ct: ct, progress: progress, keys: KeyWatcher);
+                  workos, WorkOSClient.ApiBase, proxyConfig.WorkOSClientId, organizationId: null, forceDevice,
+                  launcher, telemetry.Join, time, browser: null, ct: ct, progress: progress, keys: KeyWatcher);
 
         if (auth is null) return Halted(AuthProvider.WorkOS, "WorkOS sign-in failed.", ct);
 
@@ -504,14 +508,12 @@ public sealed class OnboardingFacade(
                 ? WorkOSOrglessLogin(ct)
                 // Org-less: the sign-in picks the organization, and discovery reconciles it afterwards.
                 : OAuthLoginFlow.AcquireWorkOSAsync(
-                    workos, clientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
-                    browser: null,
-                    apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
-                    ct: ct, progress: progress, keys: KeyWatcher),
+                    workos, WorkOSClient.ApiBase, clientId, organizationId: null, forceDevice, launcher,
+                    telemetry.Join, time, browser: null, ct: ct, progress: progress, keys: KeyWatcher),
             orgSwitch: (refreshToken, organizationId) =>
-                workos.SwitchOrganizationAsync(clientId, refreshToken, organizationId, ct),
+                workos.SwitchOrganizationAsync(WorkOSClient.ApiBase, clientId, refreshToken, organizationId, ct),
             orglessRefresh: async (refreshToken, refreshCt) =>
-                (await workos.RefreshAsync(clientId, refreshToken, refreshCt)).Response,
+                (await workos.RefreshAsync(WorkOSClient.ApiBase, clientId, refreshToken, refreshCt)).Response,
             provisioner: provisioner,
             time: time,
             ct: ct,
@@ -530,7 +532,7 @@ public sealed class OnboardingFacade(
                                                         root, store, ready, progress, beforeCommit, time, ct),
             WorkOSDiscoveryFlow.Retarget retarget => new AuthResult.Retarget(retarget.ServerInput),
             WorkOSDiscoveryFlow.Failed failed     => Stop(failed.Message, ct, failed.Reason),
-            _                                     => Stop("No Capacitor tenants are linked to your account.", ct,
+            _                                     => Stop("No kcap tenants are linked to your account.", ct,
                                                           AuthFailureReason.NoTenantsFound)
         };
     }

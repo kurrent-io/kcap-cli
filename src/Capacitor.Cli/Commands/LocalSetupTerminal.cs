@@ -27,7 +27,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
     const string MissingSingleUser =
         "Pass --single-user to confirm this machine has one user: on a shared machine, other users can open the web UI and act as its admin.";
 
-    static string MissingYes(string version, string root) => $"Pass --yes to install Capacitor local {version} in {root}.";
+    static string MissingYes(string version, string root) => $"Pass --yes to install kcap local {version} in {root}.";
 
     /// <returns>The commit, or null with the exit code when the later steps must not run.</returns>
     public async Task<(int Exit, LocalInstallEvent.Committed? Committed)> RunAsync() {
@@ -59,7 +59,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
         // A reuse asks nothing, and passes on no confirmation: a plan that becomes an install under the lease
         // must still be refused for want of one.
         if (!confirmed && plan.Hint != PlanHint.Reuse) {
-            if (!Ask($"Install Capacitor local {plan.Version} in {root}?")) return Declined();
+            if (!Ask($"Install kcap local {plan.Version} in {root}?")) return Declined();
 
             confirmed = true;
         }
@@ -120,7 +120,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
         var chosen = AnsiConsole.Prompt(new TextPrompt<string>("Embedding model:")
             .DefaultValue(OllamaClient.DefaultModel)
-            .Validate(m => LocalSetupArgs.IsModelName(m) ? ValidationResult.Success() : ValidationResult.Error("Not an Ollama model name.")));
+            .Validate(m => LocalEmbeddingModelName.IsValid(m) ? ValidationResult.Success() : ValidationResult.Error("Not an Ollama model name.")));
 
         return new LocalEmbeddingAnswer.Ollama(chosen);
     }
@@ -164,29 +164,29 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
     public static string? Line(LocalInstallEvent e, string version) =>
         e switch {
             LocalInstallEvent.PreflightPassed { Plan: PlanHint.Reuse } p => $"Reusing the local installation in {p.Root}",
-            LocalInstallEvent.PreflightPassed p => $"Installing Capacitor local {p.Version} in {p.Root}",
+            LocalInstallEvent.PreflightPassed p => $"Installing kcap local {p.Version} in {p.Root}",
             LocalInstallEvent.Recovering r      => $"Finishing an interrupted {r.Operation} (stopped at {r.Phase})…",
             LocalInstallEvent.Recovered r       => $"Finished the interrupted {r.Operation}",
             LocalInstallEvent.PortChosen p      => $"Using port {p.Port}",
-            LocalInstallEvent.Downloading d     => $"Downloading Capacitor local {version} ({Megabytes(d.Bytes)} MB)…",
+            LocalInstallEvent.Downloading d     => $"Downloading kcap local {version} ({Megabytes(d.Bytes)} MB)…",
             LocalInstallEvent.Verified          => "Verified",
             LocalInstallEvent.Unpacked u        => $"Unpacked into {u.Path}",
             LocalInstallEvent.Starting          => "Starting the local server…",
             LocalInstallEvent.Ready r           => $"Ready on {r.ServerUrl}",
             LocalInstallEvent.Committing        => "Committing…",
-            LocalInstallEvent.Reused r          => $"Reusing Capacitor local {r.InstalledVersion} on {r.ServerUrl}",
+            LocalInstallEvent.Reused r          => $"Reusing kcap local {r.InstalledVersion} on {r.ServerUrl}",
             LocalInstallEvent.RollingBack r     => $"Rolling back: {r.Reason}",
             LocalInstallEvent.RolledBack        => "Rolled back",
-            LocalInstallEvent.Committed c       => $"Committed: Capacitor local {c.Version} on {c.ServerUrl}",
-            LocalInstallEvent.UpgradePlanned u  => $"Upgrading Capacitor local {u.From} {UpdateCommand.Arrow} {u.To}",
+            LocalInstallEvent.Committed c       => $"Committed: kcap local {c.Version} on {c.ServerUrl}",
+            LocalInstallEvent.UpgradePlanned u  => $"Upgrading kcap local {u.From} {UpdateCommand.Arrow} {u.To}",
             LocalInstallEvent.Stopping          => "Stopping the local server…",
             LocalInstallEvent.Stopped           => "Stopped",
             LocalInstallEvent.Switched s        => $"Switched to {s.Version}",
-            LocalInstallEvent.Restarting r      => $"Starting Capacitor local {r.Version} again…",
-            LocalInstallEvent.Upgraded u        => $"Upgraded Capacitor local {u.From} {UpdateCommand.Arrow} {u.To} on {u.ServerUrl}",
+            LocalInstallEvent.Restarting r      => $"Starting kcap local {r.Version} again…",
+            LocalInstallEvent.Upgraded u        => $"Upgraded kcap local {u.From} {UpdateCommand.Arrow} {u.To} on {u.ServerUrl}",
             LocalInstallEvent.NothingToDo n     => n.Reason switch {
-                UpgradeSkip.Current    => $"Capacitor local is already at {n.Version}.",
-                UpgradeSkip.StackNewer => $"Capacitor local {n.InstalledVersion} is newer than this kcap ({n.Version}); it is left as it is, and this kcap keeps working with it.",
+                UpgradeSkip.Current    => $"kcap local is already at {n.Version}.",
+                UpgradeSkip.StackNewer => $"kcap local {n.InstalledVersion} is newer than this kcap ({n.Version}); it is left as it is, and this kcap keeps working with it.",
                 _                      => "There is no local installation to upgrade.",
             },
             LocalInstallEvent.EmbeddingOllamaFound o   => $"Found Ollama {o.Version} on {o.Url}",

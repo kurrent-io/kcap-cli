@@ -1,5 +1,5 @@
-using Capacitor.App.Services;
 using Microsoft.Extensions.Time.Testing;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 

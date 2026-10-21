@@ -155,9 +155,9 @@ public static partial class DaemonRunner {
             StdErrCapture.Apply(capturePath);
         }
 
-        // Strip our custom args before passing to host builder
-        var hostArgs = Array.Empty<string>();
-        var builder  = Host.CreateApplicationBuilder(hostArgs);
+        // The default host's appsettings watch walks every directory under the content root, the home directory under a service manager.
+        var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
+        builder.Services.AddLogging();
 
         // Configure logging: file when detached, console when foreground.
         // Minimum level defaults to Information; raise verbosity for transport

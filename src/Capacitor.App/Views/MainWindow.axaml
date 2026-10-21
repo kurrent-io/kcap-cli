@@ -8,8 +8,8 @@
                      x:Class="Capacitor.App.Views.MainWindow"
                      x:TypeArguments="vm:MainWindowViewModel"
                      x:DataType="vm:MainWindowViewModel"
-                     Title="Kurrent Capacitor Desktop"
-                     Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+                     Title="kcap Desktop"
+                     Icon="avares://kcap-desktop/Assets/kcap-icon.png"
                      Width="{x:Static svc:WindowSizeMemory.DefaultWidth}"
                      MinWidth="{x:Static svc:WindowSizeMemory.MinWidth}"
                      Height="{x:Static svc:WindowSizeMemory.DefaultHeight}"
@@ -139,7 +139,7 @@
                                 </Button>
                             </Grid>
 
-                            <views:LauncherPaneView Grid.Row="1" DataContext="{Binding Home}" />
+                            <views:LauncherPaneView x:Name="LauncherView" Grid.Row="1" DataContext="{Binding Home}" />
                         </Grid>
 
                         <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
@@ -153,6 +153,10 @@
                                 </views:RetainedViewTemplate>
                             </ContentControl.DataTemplates>
                         </ContentControl>
+
+                        <Border x:Name="SwitchCover" Background="{StaticResource KcapCanvasBrush}" IsVisible="False">
+                            <Image x:Name="SwitchCoverStill" Stretch="Fill" />
+                        </Border>
                     </Panel>
                 </Grid>
             </Panel>

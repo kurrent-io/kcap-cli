@@ -379,6 +379,22 @@ public class WizardStartupTests {
 
     // ── the consumer runs unchanged over the wizard's own surface ─────────────
 
+    /// A withdrawn line clears only while it is still the one shown; a newer line stays.
+    [Test]
+    public async Task The_wizard_surface_withdraws_only_the_line_it_still_shows() {
+        var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
+        const string report = "Daemon daemon-a is running for another server.";
+
+        surface.Attention(report);
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsNull();
+
+        surface.Attention(report);
+        surface.Attention("newer");
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsEqualTo("newer");
+    }
+
     [Test]
     public async Task The_outcome_consumer_presents_through_the_wizard_surface() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
@@ -761,6 +777,7 @@ public class WizardStartupTests {
         var root = new LocalRoot(Config.PathTo("local"));
         root.EnsureCreated();
         Config.CreateFile("local/journal.json", "{not json");
+        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
         harness.LocalRoot = root;
         harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
         using var shutdown = new CancellationTokenSource();
@@ -1353,7 +1370,7 @@ public class WizardStartupTests {
     static (OnboardingViewModel Wizard, WizardLifecycleSurface Surface) NewShell() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
         var wizard = new OnboardingViewModel(
-            [new StubStep(WizardStepId.Edition, "Connect to Capacitor")], CancellationToken.None, surface);
+            [new StubStep(WizardStepId.Edition, "Connect to kcap")], CancellationToken.None, surface);
 
         return (wizard, surface);
     }

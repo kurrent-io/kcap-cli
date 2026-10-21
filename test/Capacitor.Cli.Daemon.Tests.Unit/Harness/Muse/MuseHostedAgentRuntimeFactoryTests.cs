@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 public class MuseHostedAgentRuntimeFactoryTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(10);
 
-    const string Kcap = "/usr/local/bin/kcap";
+    const string kcap = "/usr/local/bin/kcap";
     const string SearchTool = "mcp__kcap_sessions__search_sessions";
 
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -62,7 +62,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         Model: model, Effort: null, Tools: null,
         IsReview: isReview, IsReviewFlow: isReviewFlow, Review: null,
         Cols: 80, Rows: 24,
-        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: Kcap,
+        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: kcap,
         McpAllowlist: allowlist, Work: work, DaemonId: "daemon-1", DaemonEpoch: "epoch-1",
         IsBorrowedSnapshot: borrowedSnapshot, ResumeSessionId: resume);
 
@@ -205,7 +205,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         foreach (var (_, server) in servers) {
             await Assert.That((string?)server!["transport"]).IsEqualTo("stdio");
-            await Assert.That((string?)server["command"]).IsEqualTo(Kcap);
+            await Assert.That((string?)server["command"]).IsEqualTo(kcap);
             await Assert.That((string?)server["mode"]).IsEqualTo("required");
         }
 
@@ -449,7 +449,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         var minted = (string)Params(await relayed.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
         var sessionStart = relayed.Relays.Single();
-        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(Kcap);
+        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(kcap);
         await Assert.That(sessionStart.SessionId).IsEqualTo(minted);
         await Assert.That(sessionStart.AgentId).IsEqualTo("agent-1");
         await Assert.That(sessionStart.ServerUrl).IsEqualTo("http://kcap.test");

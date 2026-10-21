@@ -31,7 +31,7 @@ public sealed class AppearanceSettingsViewModel : ReactiveObject, IDisposable {
     public string ScaleLabel => UiScale.Label(Scale);
 
     public string ShortcutHint { get; } = OperatingSystem.IsMacOS()
-        ? "Scales text and layout together. ⌘+ and ⌘− also change it."
+        ? "Scales text and layout together. ⌘+ and ⌘− also change it, and ⌘0 resets it."
         : "Scales text and layout together. Ctrl++ and Ctrl+− also change it, and Ctrl+0 resets it.";
 
     public ReactiveCommand<Unit, Unit> SmallerCommand { get; }

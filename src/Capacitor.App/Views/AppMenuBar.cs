@@ -3,6 +3,7 @@ using Avalonia.Input;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Commands;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Views;
 
@@ -57,7 +58,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         menu.Add(new NativeMenuItemSeparator());
 
         if (showMainWindow() is { } show) {
-            menu.Add(Item("Kurrent Capacitor", show, new KeyGesture(Key.D0, KeyModifiers.Meta)));
+            menu.Add(Item("kcap", show));
             menu.Add(new NativeMenuItemSeparator());
         }
 
@@ -74,7 +75,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
         window.Closed += (_, _) => _reportItems.Remove(items);
 
         return new NativeMenu {
-            Item("Kurrent Capacitor Documentation", () => LinkPolicy.Open(opener, DocsUrl)),
+            Item("kcap Documentation", () => LinkPolicy.Open(opener, DocsUrl)),
             Item("Changelog", () => LinkPolicy.Open(opener, ChangelogUrl)),
             new NativeMenuItemSeparator(),
             bug,
