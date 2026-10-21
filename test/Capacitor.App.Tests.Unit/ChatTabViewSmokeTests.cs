@@ -1037,9 +1037,9 @@ public class ChatTabViewSmokeTests {
             await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
             var summary = Summary(host.View);
             await Assert.That(summary.IsVisible).IsTrue();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file · ls -la");
+            await Assert.That(OnlyGroup(host).Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(summary.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text))
-                .Contains("Searched files, read a file · ls -la");
+                .Contains("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Running);
             var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
@@ -1048,14 +1048,14 @@ public class ChatTabViewSmokeTests {
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsTrue();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file");
+            await Assert.That(OnlyGroup(host).Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(3);
             await Assert.That(card.Classes.Contains("folded")).IsFalse();
             await Assert.That(card.Margin.Bottom).IsEqualTo(22);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsFalse();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file · ls -la");
+            await Assert.That(OnlyGroup(host).Summary).IsEqualTo("Searched files, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await host.CloseAsync();
         });
