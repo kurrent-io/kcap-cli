@@ -88,6 +88,22 @@ public class CodexHostedPolicySeamTests : IDisposable {
         await Assert.That(_decisions.Single().Seam).IsEqualTo(PolicySeams.HostedCodexApproval);
     }
 
+    /// A rule names a command, so it cannot answer an approval that also asks for network access or stdin.
+    [Test]
+    [Arguments("network")]
+    [Arguments("stdin")]
+    public async Task A_command_approval_asking_for_more_reaches_the_card_unevaluated(string shape) {
+        Judge("allow");
+        var request = JsonNode.Parse(Command("git fetch origin").GetRawText())!.AsObject();
+        if (shape == "network") request["networkApprovalContext"] = new JsonObject { ["host"] = "evil.example.com" };
+        else request["kind"] = "writeStdin";
+
+        await Assert.That(await Seam().EvaluateAsync(CommandApproval, Element(request), CancellationToken.None))
+            .IsEqualTo(CodexHostedVerdict.Forward);
+        await Assert.That(_decisions).IsEmpty();
+        await Assert.That(_server.LogEntries).IsEmpty();
+    }
+
     [Test]
     public async Task A_rule_deny_declines_and_is_declared_with_its_turn_and_approval() {
         await Assert.That(await Seam().EvaluateAsync(CommandApproval, Command("rm -rf build", approval: "a-1"), CancellationToken.None))

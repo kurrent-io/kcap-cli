@@ -65,6 +65,7 @@ internal static class CodexPtyPolicySeam {
             action = null;
         }
 
-        refusals.Record(call.SessionId, call.ToolUseId, approvalId: null, call.ToolName, action, promptId: null);
+        // Codex's permission prompt names no tool id, so each refusal gets its own and is declared unverified, not lost.
+        refusals.Record(call.SessionId, call.ToolUseId ?? $"codex-pty-{Guid.NewGuid():N}", approvalId: null, call.ToolName, action, promptId: null);
     }
 }

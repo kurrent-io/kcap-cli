@@ -55,7 +55,9 @@ internal sealed class PermissionRefusalLedger {
                 return;
             }
 
-            if (string.IsNullOrEmpty(approvalId) && !session.Unkeyed.Add(toolCallId)) session.Incomplete = true;
+            // Past MaxRefusals the declaration is incomplete anyway, so the repeat check needs no more ids than that.
+            if (string.IsNullOrEmpty(approvalId) && session.Unkeyed.Count < MaxRefusals && !session.Unkeyed.Add(toolCallId))
+                session.Incomplete = true;
 
             // An unnamed refusal is still declared, but the judge cannot match it reliably.
             var unnamed = string.IsNullOrWhiteSpace(tool);

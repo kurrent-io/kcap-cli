@@ -93,7 +93,9 @@ internal sealed class CodexHostedPolicySeam(
     CanonicalAction? Action(string method, JsonElement request) {
         var cwd = request.Str("cwd") ?? workingDirectory;
         switch (ItemType(method)) {
-            case "commandExecution" when request.Str("command") is { Length: > 0 } command: {
+            // Only a plain command: a stdin or managed-network approval asks for more than its command text says.
+            case "commandExecution" when request.Str("kind") is null or "command" && !HasValue(request, "networkApprovalContext")
+                                      && request.Str("command") is { Length: > 0 } command: {
                 using var input = JsonDocument.Parse(new JsonObject { ["command"] = command }.ToJsonString());
                 return CodexHookActions.Normalize("Bash", input.RootElement.Clone(), cwd);
             }
@@ -106,6 +108,9 @@ internal sealed class CodexHostedPolicySeam(
                 return null;
         }
     }
+
+    static bool HasValue(JsonElement request, string property) =>
+        request.TryGetProperty(property, out var value) && value.ValueKind != JsonValueKind.Null;
 
     async Task<PolicyJudgeResult> ConsultAsync(string sessionId, CanonicalAction action, CancellationToken ct) {
         try {
