@@ -9,7 +9,7 @@ manifest() { # <file> <versions...>  — Velopack's releases.<channel>.json shap
   { printf '{"Assets":['; local first=1
     for v in "$@"; do
       [ $first -eq 1 ] || printf ','; first=0
-      printf '{"PackageId":"KurrentCapacitor","Version":"%s","Type":"Full","FileName":"KurrentCapacitor-%s-osx-arm64-full.nupkg","SHA1":"","SHA256":"","Size":1}' "$v" "$v"
+      printf '{"PackageId":"kcap","Version":"%s","Type":"Full","FileName":"kcap-%s-osx-arm64-full.nupkg","SHA1":"","SHA256":"","Size":1}' "$v" "$v"
     done
     printf ']}'; } > "$file"
 }

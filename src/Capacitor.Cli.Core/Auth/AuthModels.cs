@@ -22,6 +22,11 @@ public record AuthDiscoveryResponse {
     [JsonPropertyName("github_client_id")]
     public string? GithubClientId { get; init; }
 
+    /// <summary>WorkOS only, and only from a server not on production WorkOS. Honoured solely through
+    /// <see cref="WorkOSApiBaseRule"/>.</summary>
+    [JsonPropertyName("api_base_url")]
+    public string? ApiBaseUrl { get; init; }
+
     [JsonPropertyName("token_exchange_url")]
     public string? TokenExchangeUrl { get; init; }
 

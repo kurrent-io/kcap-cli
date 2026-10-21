@@ -662,6 +662,69 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A connected daemon never clears the banner, so a withdrawn line has to; a line another
+    /// sender set since stays.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_withdrawn_lifecycle_line_clears_only_while_it_is_still_shown() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var lifecycleStatus = new Subject<string?>();
+            var lifecycleAttention = new Subject<string?>();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                lifecycleStatus: lifecycleStatus, lifecycleAttention: lifecycleAttention);
+            using var activation = vm.Activator.Activate();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            lifecycleStatus.OnNext("Installing the command-line tool was canceled.");
+            lifecycleStatus.OnNext(null);
+            var withdrawn = vm.StartMessage;
+
+            lifecycleStatus.OnNext("Installing the command-line tool was canceled.");
+            lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
+            lifecycleStatus.OnNext(null);
+            var replaced = vm.StartMessage;
+
+            lifecycleStatus.OnNext("Installing the command-line tool failed.");
+            lifecycleAttention.OnNext(null);
+            var restored = vm.StartMessage;
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
+            lifecycleAttention.OnNext(null);
+
+            await Assert.That(withdrawn).IsNull();
+            await Assert.That(replaced).IsEqualTo("The daemon didn't come up cleanly.");
+            await Assert.That(restored).IsEqualTo("Installing the command-line tool failed.");
+            await Assert.That(vm.StartMessage).IsNull(); // a connect cleared the status line, so nothing comes back
+        });
+    }
+
+    /// A withdrawal falls back to the newest standing line: an identity report outranks a lane line posted before it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_withdrawal_after_an_identity_report_restores_the_report() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var lifecycleStatus = new Subject<string?>();
+            var lifecycleAttention = new Subject<string?>();
+            var identity = new Subject<string?>();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                lifecycleStatus: lifecycleStatus, lifecycleAttention: lifecycleAttention, identityReport: identity);
+            using var activation = vm.Activator.Activate();
+            const string report = "Daemon daemon-a is running for another server.";
+
+            lifecycleStatus.OnNext("Installing the command-line tool failed.");
+            identity.OnNext(report);
+            lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
+            lifecycleAttention.OnNext(null);
+
+            await Assert.That(vm.StartMessage).IsEqualTo(report);
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Lifecycle_attention_also_lands_on_the_start_message_lane() {
@@ -675,6 +738,32 @@ public class MainWindowViewModelTests {
 
             lifecycleAttention.OnNext("The daemon didn't come up cleanly. Press Start daemon to try again.");
             await Assert.That(vm.StartMessage).IsEqualTo("The daemon didn't come up cleanly. Press Start daemon to try again.");
+        });
+    }
+
+    /// A connect clears progress lines back to the standing identity report, in either order of arrival, and to
+    /// nothing once the report is withdrawn.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_connect_resets_the_banner_to_the_standing_identity_report(bool reportFirst) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var identity = new System.Reactive.Subjects.BehaviorSubject<string?>(null);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                identityReport: identity);
+            using var activation = vm.Activator.Activate();
+            const string report = "Daemon daemon-a is running for another server.";
+
+            if (reportFirst) identity.OnNext(report);
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            if (!reportFirst) identity.OnNext(report);
+            await Assert.That(vm.StartMessage).IsEqualTo(report);
+
+            // Withdrawn after the connect that restored it, as a replace's own reconnect does: the banner clears.
+            identity.OnNext(null);
+            await Assert.That(vm.StartMessage).IsNull();
         });
     }
 
@@ -776,9 +865,6 @@ public class MainWindowViewModelTests {
         });
     }
 
-    // ---- Shell view state and rail wiring (Home/Sessions surfaces, orthogonal to
-    // CurrentWorkspace, and the rail's SelectedAgentId tracking the open workspace) ----
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task OpenSession_builds_the_workspace_and_reopening_the_same_id_is_a_noop() {
@@ -825,7 +911,7 @@ public class MainWindowViewModelTests {
             vm.OpenSessionIfCurrent(id, vm.NavigationGeneration);
             await Assert.That(target.IsExpanded).IsTrue();
             await Assert.That(other.IsExpanded).IsFalse();
-            await Assert.That(rail.SelectedAgentId).IsEqualTo(id);
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo($"{(remote ? "remote" : "local")}:{id}");
             var workspace = vm.CurrentWorkspace;
             target.ToggleCommand.Execute().Subscribe();
             vm.OpenSession(id);
@@ -868,11 +954,11 @@ public class MainWindowViewModelTests {
             var vm = NewVm(service, workspaceFactory: id => NewWorkspace(service, id), rail: rail);
 
             vm.OpenSession("a1");
-            await Assert.That(rail.SelectedAgentId).IsEqualTo("a1");
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("local:a1");
             await Assert.That(rail.Repos[0].Sessions[0].IsSelected).IsTrue();
 
             vm.CloseWorkspace();
-            await Assert.That(rail.SelectedAgentId).IsNull();
+            await Assert.That(rail.SelectedSessionKey).IsNull();
         });
     }
 
@@ -975,17 +1061,33 @@ public class MainWindowViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
+            var remoteWorkspace = host.New("a1");
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent("a1", "claude", false, "/repos/kcap-cli"),
+                new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            var sessions = rail.Repos.SelectMany(repo => repo.Sessions).ToList();
+            var local = sessions.Single(row => !row.IsRemote);
+            var remote = sessions.Single(row => row.IsRemote);
             var vm = NewVm(service,
+                rail: rail,
                 workspaceFactory: id => NewWorkspace(service, id),
                 originOf: _ => AgentOrigin.Local,
-                remoteWorkspaceFactory: host.New,
+                remoteWorkspaceFactory: _ => remoteWorkspace,
                 trackWorkspaceTeardown: teardown => _ = teardown());
 
             vm.OpenSession("a1", AgentOrigin.Remote);
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
+            await Assert.That(remote.IsSelected).IsTrue();
+            await Assert.That(local.IsSelected).IsFalse();
 
             vm.OpenSession("a1", AgentOrigin.Local);
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
+            await Assert.That(local.IsSelected).IsTrue();
+            await Assert.That(remote.IsSelected).IsFalse();
+
+            vm.CloseWorkspace();
+            await Assert.That(sessions.Any(row => row.IsSelected)).IsFalse();
         });
     }
 
@@ -1025,6 +1127,8 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("local:r1");
+            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("local:r1");
         });
     }
 
@@ -1073,7 +1177,9 @@ public class MainWindowViewModelTests {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
             var vm = NewVm(service,
+                rail: rail,
                 workspaceFactory: id => NewWorkspace(service, id),
                 originOf: id => host.Directory.Rows.Lookup($"local:{id}").HasValue ? AgentOrigin.Local
                     : host.Directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote : null,
@@ -1096,6 +1202,8 @@ public class MainWindowViewModelTests {
 
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
             await Assert.That(((RemoteSessionViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("remote:a1");
+            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("remote:a1");
         });
     }
 

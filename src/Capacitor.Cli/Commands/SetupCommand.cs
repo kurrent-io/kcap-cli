@@ -2619,13 +2619,13 @@ sealed class SetupCommand(
             return (null, null);
         }
 
-        var tier = !tierGiven ? WorkspaceTier.Free : tierText?.Trim().ToLowerInvariant() switch {
+        var tier = !tierGiven ? null : tierText?.Trim().ToLowerInvariant() switch {
             "team" => WorkspaceTier.Team,
             "free" => WorkspaceTier.Free,
             _      => (WorkspaceTier?)null
         };
 
-        if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
+        if (tierGiven && tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 
         // Present-but-empty is rejected rather than read as absent: a script whose $ORG expanded to
         // nothing still asked for a workspace.
@@ -2653,7 +2653,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value, code?.Trim()), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier, code?.Trim()), null);
     }
 
     static readonly string[] DiscoverFlags =
@@ -2698,8 +2698,11 @@ sealed class SetupCommand(
             }
 
             // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
-            await installer.InstallAsync(new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress,
-                deferral.Token);
+            var committed = await installer.InstallAsync(
+                new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress, deferral.Token);
+
+            // The app's wizard links to the dashboard before it reports anything itself.
+            await PingCliSetupAsync(committed.ServerUrl, profile: "", AuthProvider.None, deferral.Token);
 
             return 0;
         } catch (Exception ex) {
@@ -2919,55 +2922,42 @@ sealed class SetupCommand(
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
 
-    // Best-effort signal that this user finished CLI setup; every failure is swallowed, because
-    // the welcome-modal nudge is not part of what `kcap setup` promises.
-    //
-    // Two reliability rules:
-    //   • Take a lane that cannot refresh. A refresh makes HTTP calls that honour no
-    //     CancellationToken and can block far past any CTS timeout. The user logged in moments
-    //     ago in this same command, so a live token is the expected case; a missing or expired
-    //     one skips silently rather than triggering one.
-    //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)), so the wall-clock bound holds
-    //     independently of what HttpClient does internally. If the delay wins, disposal on
-    //     method-exit cancels the in-flight POST.
-    async Task PingCliSetupAsync(string serverUrl, string profile, string provider) {
-        // The ping is intentionally silent (see method-doc), which also hides why the
-        // dashboard welcome modal never flips when it fails — e.g. a token the server
-        // rejects or maps to a different identity. Set KCAP_DEBUG to surface the
-        // outcome on stderr without changing the best-effort, non-blocking contract.
+    // Best-effort: a failure must not fail setup. The lane cannot refresh, because a refresh honours
+    // no CancellationToken, and the 5s WhenAny bounds the wait whatever HttpClient does internally.
+    async Task PingCliSetupAsync(string serverUrl, string profile, string provider, CancellationToken ct = default) {
         var  debug = Environment.GetEnvironmentVariable("KCAP_DEBUG") is { Length: > 0 };
         void Debug(string message) {
             if (debug) Console.Error.WriteLine($"[kcap] cli-setup ping: {message}");
         }
 
-        // A None-provider server neither needs nor should receive a bearer. Setup performs no login
-        // on that path, so any token still in the profile belongs to whatever server it pointed at
-        // before — sending it here would disclose it to an unrelated host.
-        if (provider == AuthProvider.None) {
-            Debug("skipped — server requires no authentication");
-
-            return;
-        }
-
         try {
-            var tokens = await store.LoadAsync(profile);
-            if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
-                Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
+            HttpClient client;
 
-                return;
+            // A no-auth server records the report against its local user. Any token in the profile
+            // belongs to whatever server it pointed at before, so it is never sent there. A loopback
+            // server takes the proxy-free lane: an ambient proxy cannot reach this machine's server.
+            if (provider == AuthProvider.None) {
+                client = Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) && uri.IsLoopback ? http.Loopback() : http.Anonymous();
+            } else {
+                var tokens = await store.LoadAsync(profile);
+                if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
+                    Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
+
+                    return;
+                }
+
+                // A profile re-pointed at another server must not send the previous server's bearer.
+                if (tokens.ServerUrl is not null && !ServerIdentity.SameServer(tokens.ServerUrl, serverUrl)) {
+                    Debug($"skipped — stored token belongs to {tokens.ServerUrl}");
+
+                    return;
+                }
+
+                client = http.Bearer();
+                client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
             }
 
-            // Re-running setup to point an authenticated profile at a different server would
-            // otherwise send the previous server's bearer to the new one. Checked inline rather
-            // than through the resolving accessor to keep this path refresh-free and time-bound.
-            if (tokens.ServerUrl is not null && !ServerIdentity.SameServer(tokens.ServerUrl, serverUrl)) {
-                Debug($"skipped — stored token belongs to {tokens.ServerUrl}");
-
-                return;
-            }
-
-            using var client = http.Bearer();
-            client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
+            using var owned = client;
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
@@ -2975,14 +2965,14 @@ sealed class SetupCommand(
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload);
-            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
+            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload, ct);
+            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time, ct));
 
             if (winner == pingTask) {
                 // Observe the result so any exception is consumed by the outer
                 // catch (instead of surfacing as UnobservedTaskException later).
                 using var resp = await pingTask;
-                Debug($"{(int)resp.StatusCode} {resp.StatusCode} (provider={tokens.Provider})");
+                Debug($"{(int)resp.StatusCode} {resp.StatusCode} (provider={provider})");
             } else {
                 // Wall-clock cap hit. Disposing the client at method-exit cancels the in-flight
                 // POST; observe the orphan so its cancellation exception doesn't go unhandled.

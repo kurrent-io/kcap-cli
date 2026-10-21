@@ -26,8 +26,8 @@ internal sealed class LocalSetupJsonLinesTests {
             """{"v":1,"event":"verified","sha256":"ab12"}""");
         yield return () => (new LocalInstallEvent.Unpacked("/r/bin/1.3.0"),
             """{"v":1,"event":"unpacked","path":"/r/bin/1.3.0"}""");
-        yield return () => (new LocalInstallEvent.Starting("io.kurrent.capacitor.local"),
-            """{"v":1,"event":"starting","unit":"io.kurrent.capacitor.local"}""");
+        yield return () => (new LocalInstallEvent.Starting("io.kurrent.kcap.local"),
+            """{"v":1,"event":"starting","unit":"io.kurrent.kcap.local"}""");
         yield return () => (new LocalInstallEvent.Ready("http://localhost:9473"),
             """{"v":1,"event":"ready","server_url":"http://localhost:9473"}""");
         yield return () => (new LocalInstallEvent.Committing(),

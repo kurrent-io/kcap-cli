@@ -27,6 +27,7 @@ public class DaemonCommandsServiceEnsureTests {
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => [];
         public IReadOnlyList<string> ListInstalled() => [];
         public ServiceStatus Status(string serviceId) => new(ServiceState.NotInstalled, null);
+        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => null;
         public ServiceQuery Query(string serviceId) => QueryResult;
         public bool Install(ServiceSpec spec, bool startNow, out string? error) { error = null; return true; }
         public void WriteAndBootstrap(ServiceSpec spec) { }

@@ -7,31 +7,22 @@ public static class CliResolver {
     /// The CLI's file name beside the app: on Windows a bare `kcap` never exists.
     public static string BundledCliFileName { get; } = OperatingSystem.IsWindows() ? "kcap.exe" : "kcap";
 
-    public static string? ResolvePath(Func<string, string?> getEnv, Func<string, bool> fileExists, string baseDirectory) =>
-        ResolvePath(getEnv, fileExists, baseDirectory, BundledCliFileName);
+    public static string? ResolvePath(Func<string, string?> getEnv, Func<string, bool> fileExists, string cliDirectory) =>
+        ResolvePath(getEnv, fileExists, cliDirectory, BundledCliFileName);
 
-    /// KCAP_APP_CLI_PATH → the CLI beside this executable (the app bundle's Contents/MacOS, the
-    /// install directory elsewhere) → "kcap" on PATH.
+    /// KCAP_APP_CLI_PATH → the CLI in cliDirectory (Program.Host.CliDirectory) → "kcap" on PATH.
     ///
     /// Returns null ONLY when the override is set but the path it names does not exist — a broken
     /// override must not silently fall back, since that would make the dev seam lie about which
     /// binary actually ran. The sibling arm returns an absolute path, which is what lets the shim
     /// offer link to it. Every other case returns bare "kcap": PATH resolution, and "no CLI at
     /// all", are the OS's job at spawn time, surfaced by the caller's own RunAsync handling.
-    public static string? ResolvePath(Func<string, string?> getEnv, Func<string, bool> fileExists, string baseDirectory, string cliFileName) {
+    public static string? ResolvePath(Func<string, string?> getEnv, Func<string, bool> fileExists, string cliDirectory, string cliFileName) {
         var overridePath = getEnv("KCAP_APP_CLI_PATH");
         if (!string.IsNullOrEmpty(overridePath)) return fileExists(overridePath) ? overridePath : null;
 
-        return BundledPath(fileExists, baseDirectory, cliFileName) ?? "kcap";
-    }
-
-    /// The CLI shipped beside this executable, or null when there is none (a dev run, a bare build).
-    public static string? BundledPath(Func<string, bool> fileExists, string baseDirectory) =>
-        BundledPath(fileExists, baseDirectory, BundledCliFileName);
-
-    static string? BundledPath(Func<string, bool> fileExists, string baseDirectory, string cliFileName) {
-        var sibling = Path.Combine(baseDirectory, cliFileName);
-        return fileExists(sibling) ? sibling : null;
+        var sibling = Path.Combine(cliDirectory, cliFileName);
+        return fileExists(sibling) ? sibling : "kcap";
     }
 
     /// Strict: stdout must be exactly one non-empty line "kcap &lt;version&gt;"; multiline, a

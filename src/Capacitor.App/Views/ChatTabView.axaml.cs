@@ -1,5 +1,5 @@
-using System.Windows.Input;
 using System.Reactive.Linq;
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
@@ -128,9 +128,10 @@ public partial class ChatTabView : UserControl {
 
     void ObserveSending() {
         _sendSubscription?.Dispose();
-        _sendSubscription = (DataContext as ChatTabViewModel)?.SendCommand.IsExecuting
-            .Where(static executing => executing)
-            .Subscribe(_ => ResumeFollowing());
+        _sendSubscription = DataContext is ChatTabViewModel vm
+            ? Observable.FromEvent(h => vm.TurnSubmitted += h, h => vm.TurnSubmitted -= h)
+                .Subscribe(_ => ResumeFollowing())
+            : null;
     }
 
     void ResumeFollowing() {

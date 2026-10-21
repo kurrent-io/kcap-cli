@@ -59,7 +59,7 @@ namespace Capacitor.Cli.Daemon.Services;
 /// the source-claim's canonical <c>AcceptedSeq</c> — the forwarder sends NO SessionStarted and numbers the
 /// first new event at <c>AcceptedSeq + 1</c>, so round-2 events aren't deduped (<c>≤ AcceptedSeq</c>) and lost.</para>
 /// </summary>
-internal sealed class AcpTranscriptForwarder {
+internal sealed class AcpTranscriptForwarder : IAcpPersistenceProbe {
     static readonly TimeSpan DefaultInitialSendRetryDelay = TimeSpan.FromSeconds(1);
     static readonly TimeSpan DefaultMaxSendRetryDelay     = TimeSpan.FromSeconds(30);
     static readonly TimeSpan DefaultStalledGapResendDelay = TimeSpan.FromSeconds(1);
@@ -114,6 +114,68 @@ internal sealed class AcpTranscriptForwarder {
     /// <summary>True once the server has accepted the first canonical envelope; false when the forwarder
     /// stops first, a rejected or terminal binding among the reasons.</summary>
     public Task<bool> FirstEventAccepted => _firstAccepted.Task;
+
+    const int MaxTrackedUserMessages = 64;
+
+    // Read from the policy seam's thread, written by the loop: guarded by _persistence.
+    readonly Lock                             _persistence     = new();
+    readonly Dictionary<string, long>         _userMessageSeqs = new(StringComparer.Ordinal);
+    readonly Queue<string>                    _userMessageOrder = new();
+    long                                      _persistedSeq    = -1;
+    bool                                      _stopped;
+    TaskCompletionSource                      _progress        = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public async Task<IReadOnlyDictionary<string, long>> AwaitPersistedAsync(
+            IReadOnlyCollection<string> itemIds, TimeSpan budget, CancellationToken ct) {
+        var deadline = _time.GetUtcNow() + budget;
+
+        while (true) {
+            Task progress;
+            Dictionary<string, long> stored;
+            bool stopped;
+
+            lock (_persistence) {
+                stopped = _stopped;
+                stored = itemIds
+                    .Where(id => _userMessageSeqs.TryGetValue(id, out var seq) && seq <= _persistedSeq)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToDictionary(id => id, id => _userMessageSeqs[id], StringComparer.Ordinal);
+                progress = _progress.Task;
+            }
+
+            var left = deadline - _time.GetUtcNow();
+            if (stored.Count == itemIds.Distinct(StringComparer.Ordinal).Count() || left <= TimeSpan.Zero || stopped) return stored;
+
+            try {
+                await progress.WaitAsync(left, _time, ct).ConfigureAwait(false);
+            } catch (TimeoutException) {
+                // The next pass returns what is stored by now.
+            }
+        }
+    }
+
+    void RecordUserMessage(AcpEventEnvelope envelope) {
+        if (envelope is not { Kind: AcpEventKind.UserMessage, Ephemeral: false, ItemId: { Length: > 0 } itemId }) return;
+
+        lock (_persistence) {
+            if (_userMessageSeqs.TryAdd(itemId, envelope.Seq)) _userMessageOrder.Enqueue(itemId);
+            if (_userMessageOrder.Count > MaxTrackedUserMessages) _userMessageSeqs.Remove(_userMessageOrder.Dequeue());
+            Signal();
+        }
+    }
+
+    void RecordPersisted(long persistedSeq) {
+        lock (_persistence) {
+            if (persistedSeq > _persistedSeq) _persistedSeq = persistedSeq;
+            Signal();
+        }
+    }
+
+    void Signal() {
+        var reached = _progress;
+        _progress = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        reached.TrySetResult();
+    }
 
     /// <summary>Test-only visibility into the unacked buffer's current size.</summary>
     internal int UnackedCount => _unacked.Count;
@@ -285,12 +347,19 @@ internal sealed class AcpTranscriptForwarder {
                 foreach (var seq in _unacked.Keys.Where(seq => seq <= ack.AcceptedSeq).ToArray())
                     _unacked.Remove(seq);
 
+                RecordPersisted(ack.PersistedSeq);
+
                 if (ack.AcceptedSeq >= _firstCanonicalSeq) _firstAccepted.TrySetResult(true);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // normal shutdown — see this method's remarks.
         } finally {
             _firstAccepted.TrySetResult(false);
+            // A stopped forwarder stores nothing more; a waiter returns what is stored now.
+            lock (_persistence) {
+                _stopped = true;
+                Signal();
+            }
         }
     }
 
@@ -312,8 +381,11 @@ internal sealed class AcpTranscriptForwarder {
 
         List<AcpEventEnvelope>? batch = null;
 
-        while (_envelopes.TryRead(out var raw))
-            (batch ??= []).Add(raw.Ephemeral ? raw : raw with { Seq = _nextSeq++ });
+        while (_envelopes.TryRead(out var raw)) {
+            var envelope = raw.Ephemeral ? raw : raw with { Seq = _nextSeq++ };
+            RecordUserMessage(envelope);
+            (batch ??= []).Add(envelope);
+        }
 
         return batch is null ? null : DropSupersededEphemerals(batch);
     }
@@ -384,7 +456,9 @@ internal sealed class AcpTranscriptForwarder {
       + EscapedBytes(e.Text) + EscapedBytes(e.ToolInputJson) + EscapedBytes(e.ToolResult)
       + EscapedBytes(e.ToolName) + EscapedBytes(e.ToolCallId) + EscapedBytes(e.ToolKind) + EscapedBytes(e.ItemId)
       + EscapedBytes(e.Cwd) + EscapedBytes(e.Model) + EscapedBytes(e.RawSessionId) + EscapedBytes(e.SessionMode)
-      + EscapedBytes(e.EndReason) + EscapedBytes(e.TimestampIso) + EscapedBytes(e.Kind);
+      + EscapedBytes(e.EndReason) + EscapedBytes(e.TimestampIso) + EscapedBytes(e.Kind)
+      + EscapedBytes(e.RepoOwner) + EscapedBytes(e.RepoName) + EscapedBytes(e.RepoRemoteUrl) + EscapedBytes(e.RepoBranch)
+      + EscapedBytes(e.AgentId) + EscapedBytes(e.AgentType) + EscapedBytes(e.TurnId);
 
     // The hub's serializer uses the default encoder, which writes every non-ASCII and HTML-sensitive
     // character as a six-byte \uXXXX escape; counting characters would let such text blow the budget.

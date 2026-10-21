@@ -95,6 +95,41 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
+    /// Empty when the overview carries no thread summary, as a server without one sends, or when a zero is only
+    /// a lower bound, which says nothing about the threads it could not read.
+    public PullRequestStatus ThreadsStatus =>
+        CanDisplay && _overview?.Threads is { Availability.Status: "ready", Unresolved: { Value: { } count } unresolved }
+            ? count == 0
+                ? unresolved.Kind == "exact" ? new("No unresolved threads", "success", "Every review thread is resolved.") : new("")
+                : new($"{count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}",
+                      "warning", "Review threads are still waiting on a reply or a fix.")
+            : new("");
+    public bool HasThreadsStatus => ThreadsStatus.Text.Length > 0;
+
+    /// What the agent is asked to do about everything that keeps an open pull request from merging, or
+    /// null when nothing does.
+    internal string? FixPrompt {
+        get {
+            if (!CanDisplay || _overview is not { Lifecycle: "open" or "draft" } overview) return null;
+            var asks = new List<string>();
+            if (overview.Mergeable == false) asks.Add("resolve the merge conflicts with the base branch");
+            if (overview.Threads is { Availability.Status: "ready", Unresolved: { Value: > 0 and var count } unresolved })
+                asks.Add($"address the {count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved review thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}");
+            if (ChecksStatus.Kind == "failure") asks.Add("fix the failing checks");
+            return asks.Count == 0 ? null : $"Get pull request {NumberLabel} ready to merge: {string.Join("; ", asks)}.";
+        }
+    }
+    /// The draft the user has not sent stays, with the prompt after it; a draft already holding the prompt is left as is.
+    internal static string WithFixPrompt(string draft, string prompt) =>
+        string.IsNullOrWhiteSpace(draft) ? prompt
+        : draft.Contains(prompt, StringComparison.Ordinal) ? draft
+        : draft.TrimEnd() + "\n\n" + prompt;
+
+    public bool ShowsFix => FixPrompt is not null && _canRequestFix();
+
+    /// Call when the host's composer gains or loses the ability to send, so <see cref="ShowsFix"/> is read again.
+    internal void FixAvailabilityChanged() => NotifyValue(ShowsFix);
+
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);
         NotifyValue(SectionEyebrow);
@@ -118,6 +153,9 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(LifecycleStatus);
         NotifyValue(ReviewStatus);
         NotifyValue(ChecksStatus);
+        NotifyValue(ThreadsStatus);
+        NotifyValue(HasThreadsStatus);
+        NotifyValue(ShowsFix);
         NotifyValue(!ReferenceEquals(ReviewerRows, _reviewerRows), nameof(ReviewerRows));
         NotifyValue(!ReferenceEquals(CheckRows, _checkRows), nameof(CheckRows));
         NotifyValue(!ReferenceEquals(DiscussionRows, _discussionRows), nameof(DiscussionRows));

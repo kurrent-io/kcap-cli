@@ -24,7 +24,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// Attention lines are rendered here. Null in tests that don't need them.
     public WizardLifecycleSurface? Surface { get; }
 
+    UsageDataNotice? _usageNotice;
+    /// The usage-data disclosure, set by the composition root once the graph is built.
+    public UsageDataNotice? UsageNotice {
+        get => _usageNotice;
+        set => this.RaiseAndSetIfChanged(ref _usageNotice, value);
+    }
+
     int _index;
+    readonly bool[] _visited;
 
     IWizardStep? _current;
     public IWizardStep Current {
@@ -43,14 +51,27 @@ public sealed class OnboardingViewModel : ReactiveObject {
         }
     }
 
-    public string Eyebrow =>
-        $"STEP {_index + 1} OF {Steps.Count} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+    /// Counts the pages this run shows: a page it passes through is not a step, unless it was already shown
+    /// before it began passing through.
+    public string Eyebrow {
+        get {
+            var (position, total) = (0, 0);
+            for (var i = 0; i < Steps.Count; i++) {
+                if (!_visited[i] && Steps[i].PassThrough) continue;
+                total++;
+                if (i <= _index) position++;
+            }
+            return $"STEP {position} OF {total} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+        }
+    }
 
     public string NextLabel => Current.NextLabel ?? (_index == Steps.Count - 1 ? "Get started" : "Next");
     public string SkipLabel => Current.SkipLabel;
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
     public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
+    public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible
+        || ShowLifecycleStatus || ShowLifecycleAttention;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -110,7 +131,10 @@ public sealed class OnboardingViewModel : ReactiveObject {
         Steps = applicable;
         if (Steps.Count == 0) throw new ArgumentException("at least one applicable step is required", nameof(steps));
 
-        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : 0;
+        _visited = new bool[Steps.Count];
+        // A run starts on the first page that offers a choice.
+        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : FirstShownFrom(0);
+        _visited[_index] = true;
         Current = Steps[_index];
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
@@ -131,9 +155,15 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
         if (surface is not null) {
             surface.WhenAnyValue(x => x.StatusText)
-                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleStatus)));
+                .Subscribe(_ => {
+                    this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
+                    this.RaisePropertyChanged(nameof(FooterVisible));
+                });
             surface.WhenAnyValue(x => x.AttentionText)
-                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleAttention)));
+                .Subscribe(_ => {
+                    this.RaisePropertyChanged(nameof(ShowLifecycleAttention));
+                    this.RaisePropertyChanged(nameof(FooterVisible));
+                });
         }
 
         PendingEnterForTesting = SafeEnterAsync(Current);
@@ -162,10 +192,11 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
+        // A choice on this page, such as the edition, can change which later pages pass through.
+        this.RaisePropertyChanged(nameof(Eyebrow));
         switch (e.PropertyName) {
             case nameof(IWizardStep.NextLabel): this.RaisePropertyChanged(nameof(NextLabel)); break;
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
-            case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
             case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
                 or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip)
                 or nameof(IWizardStep.BackVisible):
@@ -174,6 +205,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
             case nameof(SignInStepViewModel.TenantPickerVisible)
                 or nameof(SignInStepViewModel.TenantChoicePending):
                 this.RaisePropertyChanged(nameof(TenantActionsVisible));
+                this.RaisePropertyChanged(nameof(FooterVisible));
                 this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
                 this.RaisePropertyChanged(nameof(CancelTenantCommand));
                 break;
@@ -181,11 +213,13 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void RestateActions() {
+        this.RaisePropertyChanged(nameof(Eyebrow));
         this.RaisePropertyChanged(nameof(CanGoNext));
         this.RaisePropertyChanged(nameof(CanGoSkip));
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(FooterVisible));
         this.RaisePropertyChanged(nameof(NextIsPrimary));
         this.RaisePropertyChanged(nameof(NextIsSecondary));
         this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
@@ -271,6 +305,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     // Caller holds the Navigating gate and the leaving step has already released it.
     async Task MoveToAsync(int index) {
         _index = index;
+        _visited[index] = true;
         Current = Steps[_index];
         await SafeEnterAsync(Current);
     }

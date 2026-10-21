@@ -85,11 +85,11 @@
                                 <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                                         Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
-                                        ToolTip.Tip="Harness and model">
+                                        ToolTip.Tip="Harness and model" AutomationProperties.Name="{Binding #AgentChipLabel.Text}">
                                     <StackPanel Orientation="Horizontal" Spacing="7">
                                         <ContentControl VerticalAlignment="Center"
                                                         Content="{Binding SelectedVendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=13}" />
-                                        <TextBlock VerticalAlignment="Center">
+                                        <TextBlock x:Name="AgentChipLabel" VerticalAlignment="Center">
                                             <TextBlock.Text>
                                                 <MultiBinding Converter="{x:Static views:AgentChipTextConverter.Instance}">
                                                     <Binding Path="Harnesses" />
@@ -243,7 +243,7 @@
                                IsVisible="{Binding LocalServer.IsStarting, FallbackValue=False}" />
                     <SelectableTextBlock x:Name="LocalServerMessage" Text="{Binding LocalServer.Message}"
                                          Foreground="{StaticResource KcapMutedBrush}" FontSize="12" LineHeight="18"
-                                         FontFamily="{StaticResource FrMonoFont}" TextWrapping="Wrap"
+                                         FontFamily="{StaticResource OnboardingMonoFont}" TextWrapping="Wrap"
                                          IsVisible="{Binding LocalServer.Message, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
                 <Button Grid.Column="2" x:Name="StartLocalServerButton" Classes="kcapChip" Content="Start"
@@ -287,6 +287,28 @@
                             Background="{StaticResource KcapPrimaryBrush}" Foreground="{StaticResource KcapOnPrimaryBrush}"
                             FontWeight="SemiBold" CornerRadius="7" Padding="14,6"
                             IsVisible="{Binding SignInVisible}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Once per device: the usage-data disclosure, until acknowledged here or in the wizard. -->
+        <Border x:Name="UsageNoticeBanner" Padding="14,12" CornerRadius="10"
+                Background="{StaticResource KcapSurfaceRaisedBrush}"
+                BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                IsVisible="{Binding UsageNotice.Visible, FallbackValue=False}">
+            <StackPanel Spacing="10">
+                <TextBlock x:Name="UsageNoticeText" Text="{Binding UsageNotice.Message, FallbackValue={x:Null}}"
+                           Foreground="{StaticResource KcapTextBrush}" FontSize="13" LineHeight="20" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button x:Name="UsageNoticeOkButton" Classes="kcapChip" Content="OK"
+                            Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}"
+                            Background="{StaticResource KcapSurfaceRaisedBrush}"
+                            BorderBrush="{StaticResource KcapBorderBrush}"
+                            Foreground="{StaticResource KcapTextBrush}"
+                            CornerRadius="7" Padding="14,6" />
+                    <Button x:Name="UsageNoticeTurnOffButton" Classes="kcapGhost" Content="Turn off"
+                            Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}"
+                            Padding="10,6" FontSize="12.5" />
                 </StackPanel>
             </StackPanel>
         </Border>

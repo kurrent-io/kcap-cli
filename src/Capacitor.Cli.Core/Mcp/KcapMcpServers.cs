@@ -43,7 +43,7 @@ public static class KcapMcpServers {
         new("kcap-handoff", ["mcp", "handoff"], NeedsProjectCwd: false,
             "Continue a session whose agent is gone: attach this session to its work items and unfinished plans.", AutoApprove: true),
         new("kcap-pages", ["mcp", "pages"], NeedsProjectCwd: true,
-            "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. Sandboxed with no network access, so everything is inlined; private until you set visibility."),
+            "Publish a self-contained HTML page — a plan, a report, a comparison, the artifact the user asked for — and get back a link to share. Sandboxed with no network access, so everything is inlined; private until you set visibility."),
         new("kcap-analytics", ["mcp", "analytics"], NeedsProjectCwd: true,
             "Query the org's AI coding-agent analytics (sessions, tools, tokens, cost, commits, PRs, evals) with read-only SQL. Repo-aware: defaults to the current repo; pass scope 'global' for org-wide.", AutoApprove: true),
         new("kcap-knowledge", ["mcp", "knowledge"], NeedsProjectCwd: true,

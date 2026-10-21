@@ -1,7 +1,8 @@
 namespace Capacitor.Cli.Daemon.Services;
 
-/// <summary>A cheap on-disk binary fingerprint: size + last-write-time ticks.</summary>
-public readonly record struct BinaryStat(long Size, long MtimeTicks);
+/// <summary>A cheap on-disk binary fingerprint: size + last-write-time ticks, plus the version directory a
+/// script install's <c>current</c> links to, since two releases' binaries can match on size and time.</summary>
+public readonly record struct BinaryStat(long Size, long MtimeTicks, string? Target = null);
 
 /// <summary>Pure decision helpers for the restart coordinator (unit-tested in isolation).</summary>
 public static class RestartDecision {
@@ -12,7 +13,7 @@ public static class RestartDecision {
     /// baseline (couldn't stat at startup) disables detection.
     /// </summary>
     public static bool BinaryChanged(BinaryStat? baseline, BinaryStat? current) =>
-        baseline is { } b && current is { } c && (b.Size != c.Size || b.MtimeTicks != c.MtimeTicks);
+        baseline is { } b && current is { } c && b != c;
 
     /// <summary>
     /// Fires when a restart is queued and the daemon is not busy. A self-detected restart also waits

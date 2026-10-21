@@ -1,32 +1,35 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <!-- The browser first-run setup's palette, for the onboarding pane. Kept apart from the kcap
-         tokens because the server scopes it to its own page the same way. -->
-    <SolidColorBrush x:Key="FrAccentBrush" Color="#DED9FF" />
-    <SolidColorBrush x:Key="FrAccentHoverBrush" Color="#C6BDFF" />
-    <SolidColorBrush x:Key="FrAccentOnBrush" Color="#080B0D" />
-    <SolidColorBrush x:Key="FrAccentWashBrush" Color="#1ADED9FF" />
-    <SolidColorBrush x:Key="FrAtmosphereBrush" Color="#DBABC0" />
-    <SolidColorBrush x:Key="FrMutedBrush" Color="#A79AB8" />
-    <SolidColorBrush x:Key="FrDimBrush" Color="#818C90" />
-    <SolidColorBrush x:Key="FrNeutralBrush" Color="#B8B9C1" />
-    <SolidColorBrush x:Key="FrSurfaceBrush" Color="#9E1E2528" />
-    <SolidColorBrush x:Key="FrSurfaceBorderBrush" Color="#24DED9FF" />
-    <SolidColorBrush x:Key="FrControlBorderBrush" Color="#38DED9FF" />
-    <SolidColorBrush x:Key="FrDividerBrush" Color="#17DED9FF" />
-    <SolidColorBrush x:Key="FrPanelBorderBrush" Color="#262E31" />
-    <SolidColorBrush x:Key="FrSkeletonBrush" Color="#1C2427" />
-    <SolidColorBrush x:Key="FrRailIdleBrush" Color="#29DED9FF" />
-    <SolidColorBrush x:Key="FrRailStopBrush" Color="#57DED9FF" />
-    <SolidColorBrush x:Key="FrRailPassedBrush" Color="#B8DED9FF" />
-    <SolidColorBrush x:Key="FrWarningFillBrush" Color="#0DFF7272" />
-    <SolidColorBrush x:Key="FrWarningBorderBrush" Color="#47FF7272" />
-    <SolidColorBrush x:Key="FrResolvedFillBrush" Color="#0D5BE0B3" />
-    <SolidColorBrush x:Key="FrResolvedBorderBrush" Color="#425BE0B3" />
-    <RadialGradientBrush x:Key="FrBloomBrush" GradientOrigin="50%,50%" Center="50%,50%" RadiusX="50%" RadiusY="50%">
-        <GradientStop Offset="0" Color="#2B8D5FFF" />
-        <GradientStop Offset="0.4" Color="#128D5FFF" />
-        <GradientStop Offset="0.7" Color="#008D5FFF" />
+    <!-- The installer and onboarding share the kcap brand's plum, lavender and coral palette.
+         Onboarding-prefixed resources keep this treatment separate from the main desktop theme. -->
+    <SolidColorBrush x:Key="OnboardingCanvasBrush" Color="#180F19" />
+    <SolidColorBrush x:Key="OnboardingTextBrush" Color="#DED9FF" />
+    <SolidColorBrush x:Key="OnboardingFieldBrush" Color="#1E1220" />
+    <SolidColorBrush x:Key="OnboardingAccentBrush" Color="#DED9FF" />
+    <SolidColorBrush x:Key="OnboardingAccentHoverBrush" Color="#EEEAFE" />
+    <SolidColorBrush x:Key="OnboardingAccentOnBrush" Color="#631B3A" />
+    <SolidColorBrush x:Key="OnboardingAccentWashBrush" Color="#1ADED9FF" />
+    <SolidColorBrush x:Key="OnboardingAtmosphereBrush" Color="#FF4A80" />
+    <SolidColorBrush x:Key="OnboardingMutedBrush" Color="#C3B5C7" />
+    <SolidColorBrush x:Key="OnboardingDimBrush" Color="#AD9AB2" />
+    <SolidColorBrush x:Key="OnboardingNeutralBrush" Color="#C7BBCD" />
+    <SolidColorBrush x:Key="OnboardingSurfaceBrush" Color="#2A1B2D" />
+    <SolidColorBrush x:Key="OnboardingSurfaceBorderBrush" Color="#5D4363" />
+    <SolidColorBrush x:Key="OnboardingControlBorderBrush" Color="#7D6384" />
+    <SolidColorBrush x:Key="OnboardingDividerBrush" Color="#17DED9FF" />
+    <SolidColorBrush x:Key="OnboardingPanelBorderBrush" Color="#5D4363" />
+    <SolidColorBrush x:Key="OnboardingSkeletonBrush" Color="#3A2540" />
+    <SolidColorBrush x:Key="OnboardingRailIdleBrush" Color="#29DED9FF" />
+    <SolidColorBrush x:Key="OnboardingRailStopBrush" Color="#57DED9FF" />
+    <SolidColorBrush x:Key="OnboardingRailPassedBrush" Color="#B8DED9FF" />
+    <SolidColorBrush x:Key="OnboardingWarningFillBrush" Color="#0DFF7272" />
+    <SolidColorBrush x:Key="OnboardingWarningBorderBrush" Color="#47FF7272" />
+    <SolidColorBrush x:Key="OnboardingResolvedFillBrush" Color="#0D5BE0B3" />
+    <SolidColorBrush x:Key="OnboardingResolvedBorderBrush" Color="#425BE0B3" />
+    <RadialGradientBrush x:Key="OnboardingBloomBrush" GradientOrigin="50%,50%" Center="50%,50%" RadiusX="50%" RadiusY="50%">
+        <GradientStop Offset="0" Color="#8C631B3A" />
+        <GradientStop Offset="0.4" Color="#38631B3A" />
+        <GradientStop Offset="0.7" Color="#00631B3A" />
     </RadialGradientBrush>
-    <FontFamily x:Key="FrMonoFont">Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace</FontFamily>
+    <FontFamily x:Key="OnboardingMonoFont">Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace</FontFamily>
 </ResourceDictionary>

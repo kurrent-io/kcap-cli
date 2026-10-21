@@ -627,12 +627,7 @@ public record EvalRetrospective {
     public List<string> Suggestions { get; init; } = [];
 }
 
-// Cross-eval memory — DEV-1434 / DEV-1438. Judges may optionally emit a
-// retain_fact when they spot a cross-cutting pattern; the CLI POSTs it to
-// the session-scoped endpoint and the server derives repo scope from the
-// session (facts live on JudgeFacts-repo-{repoHash}-{category} streams).
-// Facts accumulated on the same repo by any team member are fetched at
-// eval startup and injected into each judge's prompt as "known patterns".
+// A judge's retain_fact, posted to the session's judge-facts endpoint; the server derives the repo scope.
 record JudgeFactPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -659,35 +654,8 @@ record JudgeFactPayload {
     public string? EvidenceScopeToken { get; init; }
 }
 
-public record JudgeFact {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("fact_hash")]
-    public string? FactHash { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("retainer_github_id")]
-    public long? RetainerGitHubId { get; init; }
-
-    [JsonPropertyName("source_session_id")]
-    public required string SourceSessionId { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-
-    [JsonPropertyName("retained_at")]
-    public required DateTimeOffset RetainedAt { get; init; }
-}
-
-// Snapshot of a judge fact at eval time. Sent in the facts_used field of
-// SessionEvalCompletedPayload so the server can persist which facts were
-// in scope when the eval ran, even if the live judge_facts pool is later
-// modified (muted, deleted, replaced).
+// The element type of facts_used. Judges are given no retained facts, so the CLI always sends the list
+// empty; the server still reads it on the evals that carried some.
 public record EvalFactSnapshotPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -1072,7 +1040,6 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveV2))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV2))]
 [JsonSerializable(typeof(JudgeFactPayload))]
-[JsonSerializable(typeof(List<JudgeFact>))]
 [JsonSerializable(typeof(EvalFactSnapshotPayload))]
 [JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
 [JsonSerializable(typeof(EvalCatalogDto))]
@@ -1569,7 +1536,12 @@ public readonly record struct AcpEventEnvelope(
         // The subagent an event belongs to, and on subagent_started its role; null for the hosted
         // agent's own events. A server without these fields records a subagent's events as the parent's.
         string? AgentId   = null,
-        string? AgentType = null
+        string? AgentType = null,
+
+        // user_message — the vendor turn it opens. Sent only when set, so a server that predates it sees the
+        // shape it always has.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? TurnId = null
     );
 
 /// <summary>
@@ -1727,12 +1699,10 @@ public readonly record struct LaunchAgentCommand(
         // NEVER used for consent matching, which stays on RequesterUserId. Appended last, same
         // wire-compat rule as the fields above — old daemons ignore it, old servers never set it.
         string?           RequesterDisplay = null,
-        // Caller-selected ACP permission preset ("explore"/"edit") for an interactive ACP-hosted
-        // launch. The AcpInteractionBridge auto-approves permission requests whose ACP tool kind the
-        // preset covers; everything else keeps prompting. Null for every non-preset launch; the
-        // orchestrator's pre-flight AcpPermissionPresetPolicy fails closed on a preset supplied for a
-        // review-flow / borrowed / non-ACP-routed launch. Appended last so the SignalR positional
-        // binding stays wire-compatible — old daemons ignore it, old servers never set it.
+        // Caller-selected ACP permission preset for an interactive ACP-hosted launch; the
+        // AcpInteractionBridge auto-approves the permission requests it covers. Null for every
+        // non-preset launch; the orchestrator's pre-flight AcpPermissionPresetPolicy fails closed on a
+        // preset supplied for a review-flow / borrowed / non-ACP-routed launch.
         string?           AcpPermissionPreset = null,
         // §2.7 B4: the hosted Codex thread to RESUME (via thread/resume, no second SessionStarted) instead
         // of starting fresh — set by the server only for a parked-reviewer relaunch, else null. Appended
@@ -2271,7 +2241,10 @@ public readonly record struct DaemonConnect(
         // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
         // cannot see a branch that exists only here.
         bool                                        SupportsBranchBaseRef = false,
-        ResumingAgentClaim[]?                       ResumingAgents = null
+        ResumingAgentClaim[]?                       ResumingAgents = null,
+        // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
+        // Null from a daemon predating the field, which the server reads as explore and edit only.
+        string[]?                                   AcpPresets = null
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2323,7 +2296,11 @@ public readonly record struct AgentRegistered(
         string? RuntimeTransport = null,
         // The session's start title, with the same meaning as on LaunchAgentCommand.
         string? Title        = null,
-        bool    TitleDerived = false
+        bool    TitleDerived = false,
+        // The agent's vendor. A re-registration after a reconnect has no launch on the server to
+        // read it from. Trailing name-bound field — an older server ignores it, an older daemon
+        // never sets it.
+        string? Vendor = null
     );
 
 public readonly record struct AgentStatusChanged(

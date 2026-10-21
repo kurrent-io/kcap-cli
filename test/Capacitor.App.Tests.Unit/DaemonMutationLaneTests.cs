@@ -76,18 +76,17 @@ public class DaemonMutationLaneTests {
 
     DaemonMutationLane MakeLane(
             RecordingExecutorFactory factory, OutcomeChannel? channel = null,
-            Func<string?>? cliOverride = null, ILoginShellProbe? shellProbe = null,
+            Func<CliPin>? pinnedCli = null, ILoginShellProbe? shellProbe = null,
             Func<MutationRequest, IDaemonObservation>? oneShotFactory = null,
-            TimeProvider? time = null, MutationClassifier? classify = null, Func<string?>? bundledCli = null) {
+            TimeProvider? time = null, MutationClassifier? classify = null) {
         var lane = new DaemonMutationLane(
             Daemons.Store,
             shellProbe ?? new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>(null) },
             channel ?? new OutcomeChannel(),
-            cliOverride ?? (() => "/opt/kcap/bin/kcap"),
+            pinnedCli ?? (() => "/opt/kcap/bin/kcap"),
             factory.Invoke,
             oneShotFactory ?? (_ => new ScriptedObservation()),
-            time ?? TimeProvider.System,
-            bundledCli);
+            time ?? TimeProvider.System);
         if (classify is not null) lane.Classify = classify;
         return lane;
     }
@@ -185,7 +184,7 @@ public class DaemonMutationLaneTests {
     public async Task Retire_preflight_uses_the_lane_CLI_without_mutating(bool supported) {
         var cli = new FakeKcapCli { SupportsRetire = supported };
         var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
-        await using var lane = MakeLane(factory, cliOverride: () => null,
+        await using var lane = MakeLane(factory, pinnedCli: () => null,
             shellProbe: new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>("/terminal/kcap") });
         await Assert.That(await lane.CanRetireAsync(Req(MutationVerb.Replace), CancellationToken.None)).IsEqualTo(supported);
         await Assert.That(factory.Calls.Single().PinnedPath).IsEqualTo("/terminal/kcap");
@@ -317,7 +316,7 @@ public class DaemonMutationLaneTests {
         var factory = new RecordingExecutorFactory();
         var channel = new OutcomeChannel();
         var lane = MakeLane(
-            factory, channel: channel, cliOverride: () => null,
+            factory, channel: channel, pinnedCli: () => null,
             shellProbe: new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>(null) });
 
         var outcome = await lane.RunAsync(Req(), CancellationToken.None);
@@ -345,7 +344,7 @@ public class DaemonMutationLaneTests {
             KcapPathBehavior = _ => Task.FromResult<string?>(null), // cached negative
             KcapPathFreshBehavior = _ => Task.FromResult<string?>(justInstalledPath), // just installed
         };
-        var lane = MakeLane(factory, cliOverride: () => null, shellProbe: probe, classify: CannedSucceeded);
+        var lane = MakeLane(factory, pinnedCli: () => null, shellProbe: probe, classify: CannedSucceeded);
 
         var outcome = await lane.RunAsync(Req(), CancellationToken.None);
 
@@ -362,7 +361,7 @@ public class DaemonMutationLaneTests {
         var factory = new RecordingExecutorFactory();
         var channel = new OutcomeChannel();
         var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>(null) }; // both cached and refreshed answer null
-        var lane = MakeLane(factory, channel: channel, cliOverride: () => null, shellProbe: probe);
+        var lane = MakeLane(factory, channel: channel, pinnedCli: () => null, shellProbe: probe);
 
         var outcome = await lane.RunAsync(Req(), CancellationToken.None);
 
@@ -373,34 +372,17 @@ public class DaemonMutationLaneTests {
         await lane.DisposeAsync();
     }
 
-    /// A fresh Mac has no kcap on the terminal PATH; the app's own CLI must still run the daemon.
     [Test]
-    public async Task No_kcap_on_the_terminal_path_falls_back_to_the_bundled_cli() {
+    public async Task A_missing_override_refuses_without_looking_up_another_cli() {
         var factory = new RecordingExecutorFactory();
-        var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>(null) };
-        var lane = MakeLane(factory, cliOverride: () => null, shellProbe: probe, classify: CannedSucceeded,
-            bundledCli: () => "/Applications/Capacitor.app/Contents/MacOS/kcap");
+        var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>("/terminal/kcap") };
+        await using var lane = MakeLane(factory, pinnedCli: () => new CliPin(null, OverrideMissing: true), shellProbe: probe);
 
         var outcome = await lane.RunAsync(Req(), CancellationToken.None);
 
-        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Succeeded());
-        await Assert.That(factory.Calls[0].PinnedPath).IsEqualTo("/Applications/Capacitor.app/Contents/MacOS/kcap");
-
-        await lane.DisposeAsync();
-    }
-
-    [Test]
-    public async Task A_kcap_on_the_terminal_path_wins_over_the_bundled_cli() {
-        var factory = new RecordingExecutorFactory();
-        var probe = new FakeLoginShellProbe { KcapPathBehavior = _ => Task.FromResult<string?>("/opt/homebrew/bin/kcap") };
-        var lane = MakeLane(factory, cliOverride: () => null, shellProbe: probe, classify: CannedSucceeded,
-            bundledCli: () => "/Applications/Capacitor.app/Contents/MacOS/kcap");
-
-        await lane.RunAsync(Req(), CancellationToken.None);
-
-        await Assert.That(factory.Calls[0].PinnedPath).IsEqualTo("/opt/homebrew/bin/kcap");
-
-        await lane.DisposeAsync();
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Refused("cli_override_missing", RecoverySurface.Attention));
+        await Assert.That(factory.Calls.Count).IsEqualTo(0);
+        await Assert.That(probe.KcapPathForceRefreshCalls).IsEmpty();
     }
 
     /// A probe that did not answer (a shim that could not start, a timeout) says nothing about the CLI's age.
@@ -443,7 +425,7 @@ public class DaemonMutationLaneTests {
         var customPath = tmp.PathTo("custom", "kcap"); // the probe's answer, never opened
         var cli = new FakeKcapCli();
         var factory = new RecordingExecutorFactory { Behavior = (_, _) => cli };
-        var lane = MakeLane(factory, cliOverride: () => customPath, classify: CannedSucceeded);
+        var lane = MakeLane(factory, pinnedCli: () => customPath, classify: CannedSucceeded);
 
         var outcome = await lane.RunAsync(Req(), CancellationToken.None);
 
@@ -484,7 +466,7 @@ public class DaemonMutationLaneTests {
         var cliB = new FakeKcapCli();
         var factory = new RecordingExecutorFactory();
         factory.Behavior = (req, _) => req.DaemonName == "daemon-a" ? cliA : cliB;
-        var lane = MakeLane(factory, cliOverride: paths.Dequeue, classify: CannedSucceeded);
+        var lane = MakeLane(factory, pinnedCli: () => paths.Dequeue(), classify: CannedSucceeded);
 
         var outcome1 = await lane.RunAsync(Req(daemonName: "daemon-a"), CancellationToken.None);
         var outcome2 = await lane.RunAsync(Req(daemonName: "daemon-b"), CancellationToken.None);

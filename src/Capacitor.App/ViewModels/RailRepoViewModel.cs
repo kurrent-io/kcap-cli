@@ -45,7 +45,7 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
 
     public RailRepoViewModel(
             IGroup<AgentRow, string, string> group,
-            IObservable<string?> selectedAgentId, IObservable<IReadOnlySet<string>> agentsWithPending,
+            IObservable<string?> selectedSessionKey, IObservable<IReadOnlySet<string>> agentsWithPending,
             IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote, TimeProvider time,
             IObservable<IReadOnlySet<string>> agentsAwaitingAnswer,
@@ -92,7 +92,7 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
 
         Sessions = new ReadOnlyObservableCollection<RailSessionViewModel>(_sessionsSource);
         group.Cache.Connect()
-            .TransformWithInlineUpdate(row => new RailSessionViewModel(row, selectedAgentId, agentsWithPending, remoteStale,
+            .TransformWithInlineUpdate(row => new RailSessionViewModel(row, selectedSessionKey, agentsWithPending, remoteStale,
                 openLocal, openRemote, time, agentsAwaitingAnswer, agentsRunningCommands,
                 pullRequests, localOnAppServer, openPullRequest, ageTicks), (vm, row) => vm.Update(row))
             .DisposeMany()

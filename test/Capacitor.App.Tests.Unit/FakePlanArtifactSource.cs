@@ -25,6 +25,8 @@ sealed class FakePlanArtifactSource : IPlanArtifactSource {
         return gate;
     }
 
+    public PlanArtifactsRead? Cached(string sessionId) => null;
+
     public async Task<PlanArtifactsRead> ReadAsync(string sessionId, CancellationToken ct) {
         Requested.Add(sessionId);
         if (_gates.Count > 0) {

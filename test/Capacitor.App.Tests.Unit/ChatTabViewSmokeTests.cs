@@ -316,8 +316,13 @@ public class ChatTabViewSmokeTests {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (var i = 0; i < 80; i++) {
                 var middle = host.Scroll.Viewport.Height / 2;
-                var reading = drag ? null : items.GetRealizedContainers().FirstOrDefault(container =>
-                    container.TranslatePoint(default, host.Scroll) is { } point && point.Y <= middle && point.Y + container.Bounds.Height > middle);
+                // At the scroll end the tail reserve can leave the middle blank, so read the visible row nearest it.
+                var reading = drag ? null : items.GetRealizedContainers()
+                    .Select(container => (container, top: container.TranslatePoint(default, host.Scroll)?.Y))
+                    .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0)
+                    .OrderBy(row => Math.Max(0, Math.Max(row.top!.Value - middle, middle - row.top.Value - row.container.Bounds.Height)))
+                    .Select(row => row.container)
+                    .FirstOrDefault();
                 var readingItem = reading?.DataContext;
                 var beforeY = reading?.TranslatePoint(default, host.Scroll)?.Y;
                 if (drag) host.Window.MouseMove(origin + new Vector(0, direction * (i + 1) * 2), RawInputModifiers.LeftMouseButton);

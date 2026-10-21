@@ -80,6 +80,8 @@ public class TranscriptIdsTests {
     [Arguments("claude-block", "de376eef-af14-5d28-b930-bbbef251635d")]
     [Arguments("claude-attachment", "c0331d1c-5d1f-a123-49d3-820902c4d48b")]
     [Arguments("codex-record", "b17e302c-b826-0247-6fda-5634e74c45ce")]
+    // kcap-server's CodexNormalizerTests pins the id it stores for this redacted line to the same value.
+    [Arguments("codex-redacted-user", "9f1a5a84-cd92-5e9f-72ff-6db814f55976")]
     [Arguments("codex-usage-backfill", "5bccf7a4-6eee-83b2-b58c-f10627871a82")]
     [Arguments("vibe-record", "ca3c057b-649d-864f-339b-160c1c7fd711")]
     [Arguments("vibe-entry", "d219bcea-d51a-d28e-6f8a-c4d4635844d0")]
@@ -94,6 +96,9 @@ public class TranscriptIdsTests {
         "claude-block"      => TranscriptIds.ClaudeBlock(Primary, 2),
         "claude-attachment" => TranscriptIds.ClaudeAttachment("sess:agent", Primary, 3),
         "codex-record"      => TranscriptIds.CodexRecord("{\"type\":\"response_item\",\"payload\":{}}"),
+        "codex-redacted-user" => TranscriptIds.CodexRecord("""
+            {"timestamp":"2026-10-21T02:10:01.207Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"use token [REDACTED:github-token]"}],"internal_chat_message_metadata_passthrough":{"turn_id":"01a15c38-f9fc-7eb3-a679-cc676926d28f","create_time":1792548601.2,"content_item_kinds":["user.text"]}}}
+            """),
         "codex-usage-backfill" => TranscriptIds.Sibling(Primary, "usage-backfill"),
         "vibe-record"       => TranscriptIds.VibeRecord("{\"role\":\"user\",\"content\":\"hi\"}"),
         "vibe-entry"        => TranscriptIds.VibeEntry("user-turn-abc-1"),

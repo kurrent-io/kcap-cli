@@ -58,6 +58,16 @@ sealed class WindowsScheduledTaskServiceManager(
             .Where(id => id is not null).Select(id => id!).Distinct().Order()];
     }
 
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) {
+        var (code, _, err) = _schtasks(WindowsTaskUnit.QueryArgs(serviceId));
+        if (code != 0 && !ConfirmedAbsent(serviceId))
+            throw new InvalidOperationException(
+                $"Could not read the state of scheduled task {WindowsTaskUnit.TaskName(serviceId)} (exit {code}): {err.Trim()}");
+
+        var wrapper = WrapperOf(serviceId, taskExists: code == 0);
+        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
+    }
+
     /// <summary>
     /// The wrapper an installed task runs, read from the task's own definition: one installed under another
     /// <c>KCAP_CONFIG_DIR</c> or rooted <c>HOME</c> has it elsewhere, and a file left under this root is not

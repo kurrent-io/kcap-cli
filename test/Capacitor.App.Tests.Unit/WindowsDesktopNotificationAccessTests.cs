@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using Capacitor.App.Platform.Windows;
 using Capacitor.App.Services.Notifications;
 using TUnit.Core.Enums;
 
@@ -7,8 +8,8 @@ namespace Capacitor.App.Tests.Unit;
 [RunOn(OS.Windows)]
 [SupportedOSPlatform("windows")]
 public class WindowsDesktopNotificationAccessTests {
-    const string App = "io.kurrent.capacitor";
-    const string AppKey = @"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\io.kurrent.capacitor";
+    const string App = "io.kurrent.kcap";
+    const string AppKey = @"Software\Microsoft\Windows\CurrentVersion\Notifications\Settings\io.kurrent.kcap";
     const string GlobalKey = @"Software\Microsoft\Windows\CurrentVersion\PushNotifications";
 
     static WindowsDesktopNotificationAccess With(Dictionary<(string, string), object> values) =>

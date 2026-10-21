@@ -21,11 +21,11 @@ public sealed class ImportTrack : Control {
     const double Ring       = 9;
     const double Height_    = 32;
 
-    IBrush IdleBrush   => Brush("FrRailIdleBrush");
-    IBrush StopBrush   => Brush("FrRailStopBrush");
-    IBrush PassedBrush => Brush("FrRailPassedBrush");
-    IBrush ThumbBrush  => Brush("FrAccentBrush");
-    IBrush GlowBrush   => Brush("FrAccentWashBrush");
+    IBrush IdleBrush   => Brush("OnboardingRailIdleBrush");
+    IBrush StopBrush   => Brush("OnboardingRailStopBrush");
+    IBrush PassedBrush => Brush("OnboardingRailPassedBrush");
+    IBrush ThumbBrush  => Brush("OnboardingAccentBrush");
+    IBrush GlowBrush   => Brush("OnboardingAccentWashBrush");
 
     IBrush Brush(string key) => this.TryFindResource(key, out var value) && value is IBrush brush ? brush : Brushes.Transparent;
 

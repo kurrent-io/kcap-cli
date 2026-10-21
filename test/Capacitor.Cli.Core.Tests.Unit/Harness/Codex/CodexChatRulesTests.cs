@@ -36,7 +36,7 @@ public class CodexChatRulesTests {
 
     [Test]
     public async Task Injected_preludes_developer_and_system_roles_are_skipped() {
-        foreach (var prelude in new[] { "<environment_context>", "# AGENTS.md instructions", "<turn_aborted>", "<user_instructions>", "<permissions instructions>" })
+        foreach (var prelude in new[] { "<environment_context>", "# AGENTS.md instructions", "<turn_aborted>", "<user_instructions>", "<permissions instructions>", "<recommended_plugins>" })
             await Assert.That(P(Item($$"""{"type":"message","role":"user","content":[{"type":"input_text","text":"{{prelude}}\nstuff"}]}"""))).IsEmpty().Because(prelude);
 
         await Assert.That(P(Item("""{"type":"message","role":"developer","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
@@ -88,12 +88,35 @@ public class CodexChatRulesTests {
 
     [Test]
     public async Task Every_other_envelope_and_payload_type_projects_to_nothing() {
-        foreach (var type in new[] { "event_msg", "turn_context", "session_meta", "world_state", "compacted", "inter_agent_communication_metadata" })
+        foreach (var type in new[] { "event_msg", "turn_context", "session_meta", "world_state", "inter_agent_communication_metadata" })
             await Assert.That(P($$$"""{"type":"{{{type}}}","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}}""")).IsEmpty().Because(type);
 
         await Assert.That(P(Item("""{"type":"agent_message","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
         await Assert.That(P("garbage")).IsEmpty();
         await Assert.That(P(Item("""{"type":"message","role":"user","content":"not-an-array"}"""))).IsEmpty();
+    }
+
+    /// A message one agent sends another is hidden in the sender's chat, but in the recipient's own view it is the
+    /// task it was given, so it shows there as a note.
+    [Test]
+    public async Task An_agent_message_shows_only_in_a_subagents_own_view() {
+        var line = Item("""{"type":"agent_message","author":"parent","recipient":"child","content":[{"type":"output_text","text":"Review the parser"}]}""");
+        var own = TranscriptChat.ForSubagent("codex")!;
+
+        await Assert.That(P(line)).IsEmpty();
+        var shown = own.Project(line, 1, Received, own.CreateContext("a1", null));
+        await Assert.That((shown.Single().Kind, shown.Single().Text)).IsEqualTo((AcpEventKind.SystemNote, "Review the parser"));
+    }
+
+    /// A compaction is stored as its own event and reads as a note where it happened.
+    [Test]
+    public async Task A_compaction_reaches_the_chat_as_a_note() {
+        var e = P("""{"timestamp":"2026-08-25T00:00:00Z","type":"compacted","payload":{"replacement_history":[{"type":"compaction","encrypted_content":"x"}]}}""");
+
+        await Assert.That(e).Count().IsEqualTo(1);
+        await Assert.That(e[0].Kind).IsEqualTo(AcpEventKind.SystemNote);
+        await Assert.That(e[0].Text).IsEqualTo("Context compacted");
+        await Assert.That(e[0].TimestampIso).IsEqualTo("2026-08-25T00:00:00Z");
     }
 
     /// Pins the vendor-neutral kind beside the raw name. Codex's shell tools have no name of their

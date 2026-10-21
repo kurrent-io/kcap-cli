@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
@@ -46,7 +47,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public CodexHostedAgentRuntimeFactory(
             CodexLauncher launcher, IHostedAgentRuntimeFactory ptyDelegate, DaemonConfig config,
             ILoggerFactory loggerFactory, TimeProvider time, CodexAppServerSpawnFactory? spawnFactory = null,
-            ServerConnection? connection = null) {
+            ServerConnection? connection = null, PolicyJudgeGateway? policyJudge = null) {
         _time          = time;
         _launcher      = launcher;
         _pty           = ptyDelegate;
@@ -56,7 +57,20 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         _spawnFactory  = spawnFactory
             ?? ((cli, args, seed, cwd, env, cfg, lf) => DefaultSpawnFactory(cli, args, seed, cwd, env, cfg, lf, time));
         _connection    = connection;
+        _policyJudge   = policyJudge;
     }
+
+    readonly PolicyJudgeGateway? _policyJudge;
+
+    /// <summary>A governed interactive launch evaluates each approval before it reaches a card; a reviewer
+    /// (approvals never raised) and an ungoverned launch take none.</summary>
+    CodexHostedPolicySeam? PolicySeamFor(RuntimeStartContext ctx, string approval) =>
+        ctx.PolicySnapshot is { IsEmpty: false } snapshot && _connection is { } connection
+     && !string.Equals(approval, "never", StringComparison.Ordinal)
+            ? new CodexHostedPolicySeam(snapshot, _policyJudge, evt => _ = connection.AppendAgentRunEventAsync(ctx.AgentId, evt),
+                new PermissionRefusalLedger(), ctx.PersistenceProbe ?? (() => null), ctx.AgentId, _time,
+                _loggerFactory.CreateLogger<CodexHostedPolicySeam>(), ctx.Worktree.Path)
+            : null;
 
     public string Vendor => "codex";
 
@@ -174,7 +188,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             agentId: ctx.AgentId,
             requestInteraction: _connection is { } c ? c.RequestAcpInteractionAsync : null,
             approvalTimeout: TimeSpan.FromSeconds(Math.Max(1, _config.CodexAppServerApprovalTimeoutSeconds)),
-            journal: ctx.Journal);
+            journal: ctx.Journal,
+            policy: PolicySeamFor(ctx, approval));
 
         // StartAsync may spawn a child before it throws (a failed hooks/list, thread/start, or initial
         // turn on the fail-closed paths). The orchestrator never receives a runtime it did not get a

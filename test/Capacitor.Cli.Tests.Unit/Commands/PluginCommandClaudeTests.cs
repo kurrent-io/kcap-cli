@@ -105,8 +105,8 @@ public class PluginCommandClaudeTests {
         using var home = new TempDir();
         using var plugin = new TempDir();
         var settings = home.PathTo(".claude", "settings.json");
-        SetupCommand.InstallPlugin(settings, "/Applications/Kurrent Capacitor.app/Contents/Resources/kcap");
-        var old = new GitHookInstaller(new UserHome(home.Path), () => "/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap");
+        SetupCommand.InstallPlugin(settings, "/Users/someone/Applications/kcap.app/Contents/Resources/kcap");
+        var old = new GitHookInstaller(new UserHome(home.Path), () => "/Users/someone/Applications/kcap.app/Contents/MacOS/kcap");
         old.Install();
         var env = TestEnv(home.Path, plugin.Path) with { ResolveMcpBinaryPath = () => "/Applications/kcap.app/Contents/MacOS/kcap" };
         var exit = await new PluginCommand(env, new WorkingDirectory(home.Path)).HandleAsync(
@@ -114,7 +114,7 @@ public class PluginCommandClaudeTests {
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(JsonNode.Parse(File.ReadAllText(settings))!["extraKnownMarketplaces"]!["kcap"]!["source"]!["path"]!.GetValue<string>())
             .IsEqualTo(plugin.Path);
-        await Assert.That(File.ReadAllText(home.PathTo(".gitconfig"))).DoesNotContain("Kurrent Capacitor.app");
+        await Assert.That(File.ReadAllText(home.PathTo(".gitconfig"))).DoesNotContain("/Users/someone/Applications/kcap.app");
         await Assert.That(File.ReadAllText(home.PathTo(".gitconfig"))).Contains("/Applications/kcap.app/Contents/MacOS/kcap");
     }
 

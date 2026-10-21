@@ -127,6 +127,7 @@ public class DaemonCommandsServiceRefreshTests {
         public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) => throw Touched();
         public IReadOnlyList<string> ListInstalled() => throw Touched();
         public ServiceStatus Status(string serviceId) => throw Touched();
+        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => throw Touched();
         public ServiceQuery Query(string serviceId) => throw Touched();
         public bool Install(ServiceSpec spec, bool startNow, out string? error) => throw Touched();
         public void WriteAndBootstrap(ServiceSpec spec) => throw Touched();

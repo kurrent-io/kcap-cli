@@ -23,8 +23,8 @@ internal enum RestartRequestResult {
 /// fires the chosen <see cref="IRestartStrategy"/> the moment the daemon is idle
 /// (no in-flight eval, launch in admission or mid-turn flow participant, and interactive agents at a turn
 /// boundary). Also handles explicit requests from the control socket; a when-idle request waits for no
-/// agents at all. Self-detection is macOS/Linux only (the poll is a no-op on Windows,
-/// where a running binary can't be replaced); the explicit request path works anywhere.
+/// agents at all. On Windows self-detection covers script installs only; the explicit request path works
+/// anywhere.
 /// </summary>
 internal sealed partial class RestartCoordinator : BackgroundService {
     readonly TimeProvider _time;
@@ -106,19 +106,23 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         lock (_gate) _baseline = StatBinary();
     }
 
-    static BinaryStat? StatProcessBinary() {
-        // Windows can't replace a running binary in place, so self-detection is a no-op
-        // there: returning null means BinaryChanged() never sees a change. Explicit
-        // restart requests still work (they set _pending directly). Keeping the OS check
-        // here — rather than in Tick() — leaves the gate logic OS-agnostic and testable.
-        if (OperatingSystem.IsWindows()) return null;
+    static BinaryStat? StatProcessBinary() => StatBinaryAt(Environment.ProcessPath, OperatingSystem.IsWindows(), File.Exists);
+
+    /// <summary>
+    /// What the poll compares: the binary reached through a script install's <c>current</c>, which an
+    /// update switches rather than overwriting this file. Outside a script install Windows never replaces
+    /// a running binary in place, so there it returns null and BinaryChanged() never fires; explicit
+    /// restart requests still work.
+    /// </summary>
+    internal static BinaryStat? StatBinaryAt(string? processPath, bool isWindows, Func<string, bool> fileExists) {
+        if (processPath is null) return null;
+        var layout = ScriptInstallLayout.FromBinary(processPath, fileExists);
+        if (isWindows && layout is null) return null;
 
         try {
-            // A script install flips `current` rather than replacing this file, so watch the path through it.
-            var p = Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null;
-            if (p is null) return null;
-            var fi = new FileInfo(p);
-            return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks) : null;
+            var fi     = new FileInfo(ScriptInstallLayout.Stabilize(processPath, fileExists));
+            var target = layout is null ? null : new DirectoryInfo(layout.Current).LinkTarget;
+            return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks, target) : null;
         } catch {
             return null; // transient (file being swapped mid-install)
         }

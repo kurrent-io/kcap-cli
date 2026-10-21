@@ -45,6 +45,18 @@ public static class TranscriptChat {
             ? new TranscriptChatProjection(projection, rules)
             : null;
 
+    /// The chat's view of one subagent's own transcript, in which nothing is hidden for being a sidechain.
+    public static TranscriptChatProjection? ForSubagent(string vendor) =>
+        TranscriptProjection.For(vendor) is { } projection && SubagentRulesFor(vendor) is { } rules
+            ? new TranscriptChatProjection(projection, rules)
+            : null;
+
+    public static IChatDisplayRules? SubagentRulesFor(string vendor) => vendor.ToLowerInvariant() switch {
+        "claude" => ClaudeChatRules.Subagent,
+        "codex"  => CodexChatRules.Subagent,
+        _        => RulesFor(vendor),
+    };
+
     public static IChatDisplayRules? RulesFor(string vendor) => vendor.ToLowerInvariant() switch {
         "claude" => ClaudeChatRules.Instance,
         "codex"  => CodexChatRules.Instance,
@@ -59,6 +71,9 @@ public static class TranscriptChat {
         // never how, and carries no call id.
         if (evt.Payload is SubagentCompleted { AgentId.Length: > 0 } completed)
             return new([], [], [new RunSignal.Finished(null, completed.AgentId, null, evt.Timestamp)]);
+        // Written from the subagent-start hook, which names the agent but not its call.
+        if (evt.Payload is SubagentStarted started)
+            return new([], [], started.AgentId is { Length: > 0 } agentId ? [new RunSignal.Identified(null, agentId)] : []);
         var envelopes = TranscriptEnvelopes.From(evt);
         if (envelopes.Count == 0) return new([], [], []);
         var parts = new List<ChatProjectionResult>(envelopes.Count);

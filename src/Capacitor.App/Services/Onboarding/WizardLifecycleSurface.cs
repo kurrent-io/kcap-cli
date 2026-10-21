@@ -19,7 +19,8 @@ public sealed class WizardLifecycleSurface : ReactiveObject, ILifecycleSurface {
         _inner = new LifecycleSurface(
             message => post(() => StatusText = message),
             message => post(() => AttentionText = message),
-            showPrompt);
+            showPrompt,
+            message => post(() => { if (ReferenceEquals(AttentionText, message)) AttentionText = null; }));
 
     public string? StatusText {
         get => _statusText;
@@ -35,6 +36,8 @@ public sealed class WizardLifecycleSurface : ReactiveObject, ILifecycleSurface {
     public void Status(string message) => _inner.Status(message);
 
     public void Attention(string message) => _inner.Attention(message);
+
+    public void Withdraw(string message) => _inner.Withdraw(message);
 
     public Task<bool> ConfirmAsync(LifecyclePrompt prompt, CancellationToken ct) => _inner.ConfirmAsync(prompt, ct);
 

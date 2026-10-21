@@ -209,12 +209,9 @@ internal sealed record RuntimeStartContext(
         // and reap it. Empty when a test/legacy caller omits them — the markers are simply not written.
         string             DaemonId    = "",
         string             DaemonEpoch = "",
-        // Optional MCP-server list for session/new — null/empty for every launch today
-        // (no caller populates this yet; interactive launches must keep it empty). The reviewer
-        // path is the first planned consumer. Distinct from McpAllowlist above, which is a PTY-only
-        // materialization concern (an allowlist of names the launcher writes into a temp
-        // mcp-config file) — this is the literal ACP session/new payload for descriptors that
-        // support it.
+        // Extra servers for an interactive ACP launch's session/new, sent after kcap's own set where the
+        // descriptor injects one. Ignored by a review flow, whose list the factory builds, and by a
+        // descriptor without SupportsMcpServers.
         IReadOnlyList<AcpMcpServerSpec>? McpServers = null,
         // True only when a borrowed request has been materialized into a fully independent,
         // daemon-owned repository snapshot. Factories use this to revalidate exact artifacts.
@@ -261,7 +258,7 @@ internal sealed record RuntimeStartContext(
         // AcpHostedAgentRuntime.StartAsync is a silent no-op against a null clock. Null for the PTY
         // launchers (AgentInstance owns their clock) and for constructions predating this field.
         AgentActivityClock? ActivityClock = null,
-        // Caller-selected ACP permission preset ("explore"/"edit"), carried verbatim from
+        // Caller-selected ACP permission preset, carried verbatim from
         // LaunchAgentCommand.AcpPermissionPreset. The ACP factory resolves it (for non-review-flow
         // launches only) into an AcpLaunchPermissionPreset and wires it onto the interaction bridge.
         // Null for every non-preset launch and constructions predating this field.
@@ -290,5 +287,8 @@ internal sealed record RuntimeStartContext(
         string?             PinnedSessionId = null,
         // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
         // more than one transport starts it on that one. Null for a fresh launch.
-        string?             RequestedTransport = null
+        string?             RequestedTransport = null,
+        // Which of the agent's user messages the server has stored, answered by its transcript forwarder once
+        // one is bound. Null for constructions predating this field.
+        Func<IAcpPersistenceProbe?>? PersistenceProbe = null
     );

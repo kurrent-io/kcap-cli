@@ -40,7 +40,7 @@ public class BackgroundCommandActivityTests {
         Action<int>? report = null;
         Action? ended = null;
         var stopped = false;
-        using var activity = new BackgroundCommandActivity((_, changed, finished) => {
+        using var activity = new BackgroundCommandActivity((_, changed, finished, _) => {
             report = changed;
             ended = finished;
             return Disposable.Create(() => stopped = true);
@@ -66,7 +66,7 @@ public class BackgroundCommandActivityTests {
     public async Task Reopening_stops_the_old_monitor_and_ignores_its_late_result() {
         Action<int>? report = null;
         var stopped = false;
-        using var activity = new BackgroundCommandActivity((_, changed, _) => {
+        using var activity = new BackgroundCommandActivity((_, changed, _, _) => {
             report = changed;
             return Disposable.Create(() => stopped = true);
         });
@@ -79,10 +79,32 @@ public class BackgroundCommandActivityTests {
         await Assert.That(latest.GetValueOrDefault("remote:a1")).IsEqualTo(1);
     }
 
+    sealed class DisposalRecordingFeed : IChatTranscriptFeed {
+        public bool Disposed { get; private set; }
+        public FeedRead ReadAppended() => new(FeedStatus.Ok, []);
+        public long? CurrentOffset => 0;
+        public void Dispose() => Disposed = true;
+    }
+
+    /// A monitor that fails to start leaves no handed feed open and no stale count behind.
+    [Test]
+    public async Task A_monitor_that_fails_to_start_closes_the_handed_feed_and_drops_the_count() {
+        var feed = new DisposalRecordingFeed();
+        using var activity = new BackgroundCommandActivity((_, _, _, _) => throw new InvalidOperationException("boom"));
+        IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+        using var subscription = activity.Running.Subscribe(running => latest = running);
+        var runs = RunningCommand();
+        var registration = activity.Track("local:a1", runs, () => new TranscriptFeedHandoff(feed, "k", runs));
+
+        await Assert.That(registration.Dispose).Throws<InvalidOperationException>();
+        await Assert.That(feed.Disposed).IsTrue();
+        await Assert.That(latest.ContainsKey("local:a1")).IsFalse();
+    }
+
     [Test]
     public async Task Synchronous_completion_disposes_the_monitor() {
         var stopped = false;
-        using var activity = new BackgroundCommandActivity((_, _, ended) => {
+        using var activity = new BackgroundCommandActivity((_, _, ended, _) => {
             ended();
             return Disposable.Create(() => stopped = true);
         });

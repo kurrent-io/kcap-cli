@@ -24,6 +24,10 @@ internal interface IDaemonHeartbeatPort {
     Task<bool> PingAsync(CancellationToken ct);
     Task       ReRegisterAsync();
     Task       ForceReconnectAsync();
+
+    /// <summary>The stored sign-in now names an account other than the one the live hub negotiated as.
+    /// The hub keeps its handshake identity for the life of the socket, so only a reconnect picks it up.</summary>
+    Task<bool> CredentialChangedAsync(CancellationToken ct);
 }
 
 internal sealed class DaemonHeartbeatLoop(
@@ -43,6 +47,13 @@ internal sealed class DaemonHeartbeatLoop(
     /// cloudflared tunnel (vs the server itself) is the latency source.
     /// </summary>
     readonly TimeSpan _slowPingThreshold = slowPingThreshold ?? TimeSpan.FromTicks(pingDeadline.Ticks / 2);
+
+    /// A read that outlived its tick's wait, joined by the next tick rather than raced by a second read —
+    /// until it has run this many deadlines, when it is abandoned so one hung read cannot end detection.
+    const int CredentialReadAbandonedAfterDeadlines = 5;
+
+    Task<bool>? _credentialRead;
+    long        _credentialReadStarted;
 
     /// <summary>
     /// Total — never throws (modulo outer cancellation, which is expected at
@@ -91,6 +102,9 @@ internal sealed class DaemonHeartbeatLoop(
             if (!alive) {
                 logger.LogWarning("Heartbeat: server does not recognise this connection (cause=slot_displaced) — re-registering daemon");
                 await SafeReRegisterAsync();
+            } else if (await SafeCredentialChangedAsync(ct)) {
+                logger.LogWarning("Heartbeat: the stored sign-in no longer matches the one the hub negotiated (cause=credential_changed) — reconnecting");
+                await SafeForceReconnectAsync();
             }
         } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
             // Per-tick deadline fired before the server answered. The
@@ -132,6 +146,34 @@ internal sealed class DaemonHeartbeatLoop(
             // bad shape too. Both calls are guarded so the tick is total.
             logger.LogWarning(ex, "Heartbeat: re-register failed — escalating to forced reconnect");
             await SafeForceReconnectAsync();
+        }
+    }
+
+    async Task<bool> SafeCredentialChangedAsync(CancellationToken ct) {
+        try {
+            // Bounded like the ping: a stalled token-store read must not stop the loop probing the hub.
+            // Only the wait is bounded: a refresh under way must still save the token it rotated.
+            using var cap = new CancellationTokenSource(pingDeadline, time);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct, cap.Token);
+
+            if (_credentialRead is not { IsCompleted: false }
+             || time.GetElapsedTime(_credentialReadStarted) >= pingDeadline * CredentialReadAbandonedAfterDeadlines) {
+                _credentialReadStarted = time.GetTimestamp();
+                _credentialRead        = port.CredentialChangedAsync(ct);
+            }
+
+            return await _credentialRead.WaitAsync(cts.Token);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+            throw;
+        } catch (OperationCanceledException) {
+            logger.LogWarning("Heartbeat: reading the stored sign-in exceeded {DeadlineMs:F0} ms — leaving the hub connected", pingDeadline.TotalMilliseconds);
+
+            return false;
+        } catch (Exception ex) {
+            // An unreadable token store says nothing about who the hub is signed in as.
+            logger.LogWarning(ex, "Heartbeat: could not read the stored sign-in — leaving the hub connected");
+
+            return false;
         }
     }
 

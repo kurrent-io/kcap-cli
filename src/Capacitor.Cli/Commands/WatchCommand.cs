@@ -46,6 +46,26 @@ partial class WatchCommand(
     readonly CursorMarkers  _markers  = new(config, time);
     readonly WatcherPaths   _paths    = WatcherPaths.FromEnvironment(config);
     readonly Dictionary<(string, string?), HeldLineRedaction> _heldLines = [];
+    readonly WatchAckCursor _ackCursor = new(config);
+    readonly Lock   _ackCursorGate = new();
+    int _ackCursorWritten = -1;
+
+    /// The Codex hook declares only the turns the server acknowledged, so the root watcher publishes its count
+    /// whenever it moves, rewinds included. Reconnect and drain both publish, so the count is read and written under
+    /// one lock: a count read earlier can never land after a newer one.
+    internal void PublishAckedLines(string sessionId, string? agentId, string vendor, WatchState state) {
+        if (agentId is not null || vendor != "codex") return;
+
+        lock (_ackCursorGate) {
+            var count = state.LinesProcessed;
+            if (count == _ackCursorWritten) return;
+            if (_ackCursor.Write(sessionId, count)) _ackCursorWritten = count;
+        }
+    }
+
+    internal void RetireAckCursor(string sessionId, string? agentId, string vendor) {
+        if (agentId is null && vendor == "codex") _ackCursor.Delete(sessionId);
+    }
 
     /// <summary>The clock redaction budgets read, when not <c>time</c>.</summary>
     internal TimeProvider? RedactionClock { get; init; }
@@ -637,7 +657,6 @@ partial class WatchCommand(
 
         if (vendor == "claude" && agentId is null) {
             state.SecondaryRoots = new SecondaryRepoRoots(GitRepository.FindRoot, cwd is null ? null : GitRepository.FindRoot(cwd));
-            state.SecondaryRoots.SeedFromTranscript(vendor, transcriptPath);
         }
 
         // No cwd-derived repo (launched outside any checkout, or no cwd at all): fall back to
@@ -717,6 +736,7 @@ partial class WatchCommand(
                     // Thin wrapper over the directly-testable GatedApplyReconnectRewindAsync.
                     var rewound = await GatedApplyReconnectRewindAsync(
                         cursorRewindGate, state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, cts.Token);
+                    PublishAckedLines(sessionId, agentId, vendor, state);
 
                     if (!rewound) {
                         // the server's frontier couldn't be
@@ -806,6 +826,7 @@ partial class WatchCommand(
 
         // Register with server and get resume position
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
+        PublishAckedLines(sessionId, agentId, vendor, state);
         Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
 
@@ -858,20 +879,15 @@ partial class WatchCommand(
             cts.Cancel();
         }
 
-        // Resumed past a tool that opened before the cursor: rebuild the in-flight set so idle-end
-        // doesn't mistake a running agent for an idle one. Only reachable on a resume — at line 0
-        // the drain delivers the whole file and folds it itself.
+        // Resumed mid-session: rebuild what the lines before the cursor would have fed, such as a tool
+        // that opened before it, which idle-end would otherwise mistake for an idle agent. At line 0 the
+        // drain delivers the whole file and feeds every consumer itself.
         if (state.LinesProcessed > 0) {
-            if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) {
-                await BackfillClaudePendingToolCallsAsync(
-                    state.PendingClaudeToolCalls, transcriptPath, state.LinesProcessed, cts.Token, time);
-            }
-
-            if (TracksCodexToolCalls(vendor)) {
-                await BackfillCodexWatcherStateAsync(
-                    state, transcriptPath, isChildWatcher: agentId is not null, upToLine: state.LinesProcessed,
-                    ct: cts.Token, time: time);
-            }
+            var replay = new List<TranscriptReplayConsumer>();
+            if (state.SecondaryRoots is { } secondaryRoots) replay.Add(SecondaryRootsReplay(secondaryRoots, vendor));
+            if (TracksClaudeToolCalls(vendor, isSessionWatcher: agentId is null)) replay.Add(ClaudePendingToolCallsReplay(state.PendingClaudeToolCalls));
+            if (TracksCodexToolCalls(vendor)) replay.Add(CodexWatcherStateReplay(state, isChildWatcher: agentId is not null));
+            await TranscriptReplay.ReplayAsync(transcriptPath, state.LinesProcessed, replay, cts.Token, message => Log(time, message));
         }
 
         // Gemini fires no subagent hooks, so the parent watcher discovers nested subagent
@@ -948,7 +964,7 @@ partial class WatchCommand(
                     state.LastCoverageCheck = time.GetUtcNow();
                 }
 
-                if (state.SecondaryRoots is not null && time.GetUtcNow() - state.LastSecondaryProbe > TimeSpan.FromSeconds(60)) {
+                if (SecondaryProbeDue(state, time.GetUtcNow())) {
                     await LinkSecondaryPullRequestsAsync(state, sessionId, SecondaryProbeBudget, cts.Token, TouchHeartbeat);
                     state.LastSecondaryProbe = time.GetUtcNow();
                 }
@@ -1229,6 +1245,7 @@ partial class WatchCommand(
         // so an end written after this look finds none and gets a watcher of its own.
         watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
+        RetireAckCursor(sessionId, agentId, vendor);
 
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
 
@@ -1779,36 +1796,33 @@ partial class WatchCommand(
     }
 
     /// <summary>
-    /// Codex's counterpart to <see cref="BackfillClaudePendingToolCallsAsync"/>, same window and
-    /// fail-soft properties. Both roles need the pending set — a <c>function_call</c> that opened
-    /// before the cursor writes nothing until its output lands, so a session watcher would read
-    /// <c>toolInFlight</c> false and idle-end a live session. Turn state is child-only: nothing
-    /// else re-delivers the acknowledged <c>task_complete</c> that arms the live stop.
+    /// Codex's counterpart to <see cref="ClaudePendingToolCallsReplay"/>. Both roles need the pending set:
+    /// a <c>function_call</c> that opened before the cursor writes nothing until its output lands, so a
+    /// session watcher would read <c>toolInFlight</c> false and idle-end a live session. Turn state is
+    /// child-only: nothing else re-delivers the acknowledged <c>task_complete</c> that arms the live stop.
     /// </summary>
-    internal static async Task BackfillCodexWatcherStateAsync(
-            WatchState state, string transcriptPath, bool isChildWatcher, int upToLine, CancellationToken ct, TimeProvider time) {
-        if (ct.IsCancellationRequested) return;
+    internal static TranscriptReplayConsumer CodexWatcherStateReplay(WatchState state, bool isChildWatcher) =>
+        new(WindowOnly: true, line => {
+            UpdateCodexPendingToolCalls(state.PendingCodexToolCalls, line);
+            if (isChildWatcher) state.CodexSubagentTurn.Observe(line);
+            return false;
+        });
 
-        var firstParsedLine = Math.Max(0, upToLine - ToolBackfillWindowLines);
+    /// <summary>
+    /// The first probe waits for a root rather than spending its minute on none, since a short session can
+    /// end before the next one and the final probe is skipped below the transcript threshold.
+    /// </summary>
+    internal static bool SecondaryProbeDue(WatchState state, DateTimeOffset now) =>
+        state.SecondaryRoots is { Roots.Count: > 0 } && now - state.LastSecondaryProbe > TimeSpan.FromSeconds(60);
 
-        try {
-            await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-            using var       reader = new StreamReader(stream);
-
-            for (var lineNumber = 0; lineNumber < upToLine; lineNumber++) {
-                if (await reader.ReadLineAsync(ct) is not { } line) break;
-                if (lineNumber < firstParsedLine) continue;
-
-                UpdateCodexPendingToolCalls(state.PendingCodexToolCalls, line);
-
-                if (isChildWatcher) state.CodexSubagentTurn.Observe(line);
-            }
-        } catch (OperationCanceledException) {
-            // Shutdown racing startup — expected, and not worth a log line.
-        } catch (Exception ex) {
-            Log(time, $"Codex watcher-state backfill skipped: {ex.Message}");
-        }
-    }
+    /// <summary>
+    /// A checkout mutated before the restart, which a resumed watcher's drain never shows its roots.
+    /// </summary>
+    internal static TranscriptReplayConsumer SecondaryRootsReplay(SecondaryRepoRoots roots, string vendor) =>
+        new(WindowOnly: false, line => {
+            roots.OnLine(vendor, line);
+            return roots.IsFull;
+        });
 
     /// <summary>
     /// Whitelist of vendor values accepted by the server's session-end route.
@@ -2100,47 +2114,16 @@ partial class WatchCommand(
         vendor == "claude" && !isSessionWatcher;
 
     /// <summary>
-    /// How far back from the resume cursor the tool-call backfills parse. An unfinished tool sits
-    /// at the tail by construction — nothing is appended between the call and its result — so older
-    /// lines are settled and parsing them only costs startup latency. Bounding also stops a stale
-    /// unmatched call from an interrupted turn stranding an id and suppressing idle-end forever.
-    /// Shared by the Claude and Codex backfills: same rationale, and nothing about the number is
-    /// vendor-specific.
+    /// Rebuilds the in-flight set from the lines before a resume cursor. A watcher that reconnects
+    /// mid-tool starts draining at the server's line position and never sees the <c>tool_use</c> that
+    /// opened before it, so the set would come up empty and the ceiling would treat a live subagent as
+    /// idle.
     /// </summary>
-    internal const int ToolBackfillWindowLines = 512;
-
-    /// <summary>
-    /// Rebuilds the in-flight set from the transcript lines before a resume cursor. A watcher that
-    /// reconnects mid-tool starts draining at the server's line position and never sees the
-    /// <c>tool_use</c> that opened before it, so the set would come up empty and the ceiling would
-    /// treat a live subagent as idle. Parses only the last <see cref="ToolBackfillWindowLines"/>
-    /// lines before <paramref name="upToLine"/>; everything from the cursor on arrives through the
-    /// normal drain. Opened <c>FileShare.ReadWrite</c>: the agent is still writing this file.
-    /// Failure is a no-op, never fatal — losing the backstop beats failing a watcher's startup.
-    /// </summary>
-    internal static async Task BackfillClaudePendingToolCallsAsync(
-            HashSet<string> pending, string transcriptPath, int upToLine, CancellationToken ct, TimeProvider time) {
-        if (ct.IsCancellationRequested) return;
-
-        var firstParsedLine = Math.Max(0, upToLine - ToolBackfillWindowLines);
-
-        try {
-            await using var stream = new FileStream(transcriptPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            using var       reader = new StreamReader(stream);
-
-            for (var lineNumber = 0; lineNumber < upToLine; lineNumber++) {
-                if (await reader.ReadLineAsync(ct) is not { } line) break;
-
-                // Lines before the window are still read (there is no cheap seek to line N) but
-                // never parsed — the JSON parse is what actually costs.
-                if (lineNumber >= firstParsedLine) UpdateClaudePendingToolCalls(pending, line);
-            }
-        } catch (OperationCanceledException) {
-            // Shutdown racing startup — expected, and not worth a log line.
-        } catch (Exception ex) {
-            Log(time, $"Claude tool-call backfill skipped: {ex.Message}");
-        }
-    }
+    internal static TranscriptReplayConsumer ClaudePendingToolCallsReplay(HashSet<string> pending) =>
+        new(WindowOnly: true, line => {
+            UpdateClaudePendingToolCalls(pending, line);
+            return false;
+        });
 
     internal static void UpdateClaudePendingToolCalls(HashSet<string> pending, string line) {
         try {
@@ -2706,7 +2689,7 @@ partial class WatchCommand(
             // (task_complete vs renewed activity) so the polling loop can post a live
             // subagent-stop once the child is done + idle. Raw lines here too, in the other
             // direction: a redacted response_item reads as no activity, so a re-engaged child
-            // would be reported stopped while working. Matches BackfillCodexWatcherStateAsync.
+            // would be reported stopped while working. The resume replay must fold raw lines too.
             if (vendor == "codex" && agentId is not null) {
                 foreach (var line in drainRead.Lines) {
                     state.CodexSubagentTurn.Observe(line);
@@ -4731,16 +4714,20 @@ partial class WatchCommand(
             Action?             onCursorRewriteDetected = null
         ) {
         if (gate is null) {
-            return await DrainNewLines(
+            var drained = await DrainNewLines(
                 hubConnection, sessionId, transcriptPath, agentId, state, vendor, ct,
                 isFinalDrain: isFinalDrain, cursorGuard: cursorGuard, onCursorRewriteDetected: onCursorRewriteDetected);
+            PublishAckedLines(sessionId, agentId, vendor, state);
+            return drained;
         }
 
         await gate.WaitAsync(ct);
         try {
-            return await DrainNewLines(
+            var drained = await DrainNewLines(
                 hubConnection, sessionId, transcriptPath, agentId, state, vendor, ct,
                 isFinalDrain: isFinalDrain, cursorGuard: cursorGuard, onCursorRewriteDetected: onCursorRewriteDetected);
+            PublishAckedLines(sessionId, agentId, vendor, state);
+            return drained;
         } finally {
             gate.Release();
         }

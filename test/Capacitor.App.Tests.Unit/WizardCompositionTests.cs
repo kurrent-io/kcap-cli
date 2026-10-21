@@ -10,6 +10,7 @@ using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Telemetry;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core;
 
@@ -268,6 +269,33 @@ public class WizardSignInOperationPreconditionTests {
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(File.Exists(Config.PathTo("tokens", $"{ProfileName}.json"))).IsFalse();
+    }
+
+    /// The paste path counts sign-ins as the CLI does, so desktop and CLI funnels compare.
+    [Test]
+    [Arguments("committed", "cli_setup_signin_completed")]
+    [Arguments("committed-none", "")]
+    [Arguments("denied", "cli_setup_signin_failed")]
+    [Arguments("unreachable", "")]
+    [Arguments("other", "")]
+    [Arguments("unsaved", "")]
+    [Arguments("cancelled", "")]
+    public async Task A_paste_outcome_reaches_the_funnel_as_the_cli_counts_it(string outcome, string expected) {
+        var probe = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), Config.Root);
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, probe.Telemetry);
+        AuthResult result = outcome switch {
+            "committed"      => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", []),
+            "committed-none" => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.None, null, []),
+            "unsaved"        => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", [], CredentialSaved: false),
+            "denied"         => new AuthResult.Failed("denied", AuthFailureReason.SigninDenied),
+            "unreachable"    => new AuthResult.Failed("unreachable", AuthFailureReason.Unreachable),
+            "other"          => new AuthResult.Failed("other"),
+            _                => new AuthResult.Cancelled(),
+        };
+
+        WizardSignInOperation.Recorded(result, probe.Funnel);
+
+        await Assert.That(string.Join(",", probe.Names.Where(n => n.StartsWith("cli_setup_signin", StringComparison.Ordinal)))).IsEqualTo(expected);
     }
 }
 

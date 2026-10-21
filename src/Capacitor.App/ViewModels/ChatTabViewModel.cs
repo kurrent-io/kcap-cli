@@ -106,6 +106,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int _baselineVersion;
     int _readInFlight;
     string? _feedKey;
+    bool _feedReleased;
     /// The session the listed foreign rows belong to.
     string? _queueKey;
     string? _root;
@@ -377,6 +378,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// channel accepts the prompt. A reply answers the session's open questions, and no permission
     /// response will ever say so.
     public Func<string, Action>? InputSending { get; init; }
+    /// Raised once a turn has gone to the channel and was not refused.
+    public event Action? TurnSubmitted;
     volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
@@ -445,10 +448,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     bool _showsActivityNote;
-    /// Failure text beside the composer. Working and starting ride the header status instead.
     public bool ShowsActivityNote {
         get => _showsActivityNote;
         private set => this.RaiseAndSetIfChanged(ref _showsActivityNote, value);
+    }
+
+    bool _showsLiveNote;
+    public bool ShowsLiveNote {
+        get => _showsLiveNote;
+        private set => this.RaiseAndSetIfChanged(ref _showsLiveNote, value);
     }
 
     string _activityNote = "";
@@ -493,6 +501,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : working && _workingSince is { } since
                     ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
         ShowsActivityNote = _failureNote is not null && Phase != ChatTabPhase.Failed && ActivityNote.Length > 0;
+        ShowsLiveNote = !ShowsActivityNote && ActivityNote.Length > 0;
         RefreshAgentStatus();
         RefreshQueuedSend();
     }
@@ -527,10 +536,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         StatusText = AgentStatus.Label;
     }
 
-    static string WorkingNote(TimeSpan elapsed) {
-        var seconds = Math.Max(0, (long)elapsed.TotalSeconds);
-        return $"Working for {seconds / 60}m {seconds % 60}s";
-    }
+    static string WorkingNote(TimeSpan elapsed) => $"Working for {RunRow.Duration(elapsed)}";
 
     bool _isReadOnlyParticipant;
     /// True for a flow participant (any kind other than "agent"): the view swaps the composer
@@ -584,10 +590,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// The dedup is per pane, not per feed: a projection failure that survives a transcript switch
     /// would otherwise be logged again by every feed the pane opens.
-    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time) {
+    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time, LocalTranscripts? transcripts) {
         var logged = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        return path => new LocalTranscriptFeed(path, projection, agentId, time,
-            reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); });
+        Action<string> log = reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); };
+        return path => transcripts?.Open(path, projection, agentId, time, log) ?? new LocalTranscriptFeed(path, projection, agentId, time, log);
     }
 
     /// Test-only seam: the read in flight, or the last one started. A switch that loses the
@@ -603,9 +609,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null)
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
-               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
+               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
                drafts: drafts) { }
 
@@ -890,7 +896,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
-        _runs.SessionOver = info.Ended;
+        if (!_feedReleased) _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
@@ -972,6 +978,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
+        // A released tab's runs belong to the monitor that took its feed; this tab reads nothing more.
+        if (_feedReleased) return;
         _items.Clear();
         _history.Clear();
         _literalInputHistory.Clear();
@@ -1152,6 +1160,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             return outcome;
         }
         if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
+        else TurnSubmitted?.Invoke();
         var waits = !queued.Acknowledged && outcome switch {
             ChatSendOutcome.Accepted    => _openFeed is not null,
             ChatSendOutcome.Unconfirmed => true,
@@ -1222,7 +1231,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var read = lease.Feed is RemoteTranscriptFeed
                 ? lease.Feed.ReadAppended()
                 : await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
-            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0
+            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0 && read.Runs.Count == 0
                 && baselineVersion == Volatile.Read(ref _baselineVersion) && inputGeneration == Volatile.Read(ref _inputGeneration)) return;
             await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read));
         } catch (Exception ex) {
@@ -1288,6 +1297,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         if (rebased) RefreshQueue();
         if (read.Lines.Count == 0) {
+            ApplyFeedRuns(read);
             if (read.Status == FeedStatus.Reset) {
                 SyncPendingCardItems();
                 RefreshActivityNote();
@@ -1297,6 +1307,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
         _planActivity?.Apply(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
+        var restored = new List<ChatProjectionResult>(read.Lines.Count);
         foreach (var (line, offset) in read.Lines) {
             var projected = line.RestoreSubmittedInputs(text => {
                 if (!Tracked.Any(q => !q.IsForeign && !q.Acknowledged && q.Matches(text, _inputGeneration, offset))
@@ -1304,7 +1315,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _literalInputHistory.Add((offset, text));
                 return true;
             }, text => _literalInputHistory.Contains((offset, text)));
-            _runs.Apply(projected);
+            restored.Add(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
                 if (TakeSupersededEcho(text, offset)) continue;
@@ -1364,7 +1375,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                             : foreignLabel is not null ? FirstOrAny(e.ToolInputJson, category)
                             : ToolDetail.From(e.ToolInputJson, _root, category);
                         var label = entry?.Label ?? (isToolSearch ? "Looked up tools" : foreignLabel ?? ToolSummary.RowLabel(name, category, e.ToolInputJson));
-                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson);
+                        var chip = foreignLabel is not null ? KcapToolCatalogue.ForeignServer(name) : null;
+                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson, chip);
                         if (e.ToolCallId is { } id) {
                             _pendingTools[id] = item;
                             if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
@@ -1390,11 +1402,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
             }
         }
+        _runs.ApplyAll(restored);
         if (fresh.Count > 0) _items.AddRange(fresh);
+        ApplyFeedRuns(read);
         RefreshQueue();
         Reconcile();
         SyncPendingCardItems();
         RefreshActivityNote();
+    }
+
+    void ApplyFeedRuns(FeedRead read) {
+        if (read.Runs.Count > 0) _runs.Apply(new ChatProjectionResult([], [], read.Runs));
     }
 
     /// The one group carrying the pack/suppress flags. Only the trailing group ever carries them,
@@ -1551,6 +1569,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void LogOnce(string reason) {
         if (_loggedFailures.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}");
+    }
+
+    /// <summary>Gives up a local feed to whoever carries on reading it after this tab closes. Only between reads,
+    /// so two readers never share it; null otherwise, and the caller reads afresh. The tab reads nothing after.</summary>
+    public TranscriptFeedHandoff? ReleaseFeed() {
+        if (_lease is not { Feed: LocalTranscriptFeed or LocalTranscripts.Reader } lease || _feedKey is not { } key) return null;
+        if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return null;
+        Interlocked.Increment(ref _generation);
+        _feedReleased = true;
+        _lease = null;
+        return new TranscriptFeedHandoff(lease.Feed, key, _runs);
     }
 
     public Task TeardownAsync() {

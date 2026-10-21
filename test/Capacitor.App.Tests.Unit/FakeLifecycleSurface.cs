@@ -19,6 +19,9 @@ sealed class FakeLifecycleSurface : ILifecycleSurface {
 
     public void Attention(string message) => AttentionMessages.Add(message);
 
+    public readonly List<string> Withdrawn = [];
+    public void Withdraw(string message) => Withdrawn.Add(message);
+
     public Task<bool> ConfirmAsync(LifecyclePrompt prompt, CancellationToken ct) {
         Prompts.Add(prompt);
         return ConfirmBehavior(prompt, ct);

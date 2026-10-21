@@ -36,6 +36,15 @@ public class CodexNotificationMapperTests {
         await Assert.That(e.TimestampIso).IsNotNull();
     }
 
+    /// The server records the turn a message opened, which places a refusal of that turn in the judge's window.
+    [Test]
+    public async Task A_completed_user_message_carries_its_turn_id() {
+        var e = Single(Run(NewMapper(), "item/completed",
+            """{"item":{"type":"userMessage","id":"m1","content":[{"type":"text","text":"go"}]},"threadId":"t","turnId":"u"}"""));
+        await Assert.That(e.Kind).IsEqualTo(AcpEventKind.UserMessage);
+        await Assert.That(e.TurnId).IsEqualTo("u");
+    }
+
     [Test]
     public async Task Reasoning_completed_renders_content_blocks_preferring_content_over_summary() {
         // content/summary are arrays of plain strings per the pinned schema.
