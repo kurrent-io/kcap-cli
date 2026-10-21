@@ -99,23 +99,20 @@ public class CodexPolicyJudgeLiveCertTests {
         using var repo = MemoryIndexLiveCertHarness.NewCertWorktree(VendorLabel);
         using var home = MemoryIndexLiveCertHarness.NewCertWorktree(VendorLabel + "-home");
 
-        Directory.CreateDirectory(Path.Combine(repo.Path, ".kcap"));
-        await File.WriteAllTextAsync(Path.Combine(repo.Path, ".kcap", "approvals.yaml"), Policy(judge));
+        repo.CreateFile([".kcap", "approvals.yaml"], Policy(judge));
         await MemoryIndexLiveCertHarness.RunProcessAsync("git", ["init", "-q"], repo.Path);
         await MemoryIndexLiveCertHarness.RunProcessAsync("git", ["remote", "add", "origin", "https://github.com/kurrent-io/kcap-cli.git"], repo.Path);
 
-        File.Copy(Path.Combine(Environment.GetEnvironmentVariable("HOME")!, ".codex", "auth.json"),
-            Path.Combine(home.Path, "auth.json"));
-        await File.WriteAllTextAsync(Path.Combine(home.Path, "config.toml"), """
+        home.CreateFile("auth.json", await File.ReadAllTextAsync(Path.Combine(Environment.GetEnvironmentVariable("HOME")!, ".codex", "auth.json")));
+        home.CreateFile("config.toml", """
             approval_policy = "on-request"
             sandbox_mode = "workspace-write"
             [sandbox_workspace_write]
             network_access = false
             """);
 
-        var log      = Path.Combine(home.Path, "hook-calls.jsonl");
-        var recorder = Path.Combine(home.Path, "record.sh");
-        await File.WriteAllTextAsync(recorder, $$"""
+        var log      = home.GetResolvedPath("hook-calls.jsonl");
+        var recorder = home.CreateExecutable("record.sh", $$"""
             #!/bin/sh
             in=$(cat)
             out=$(printf '%s' "$in" | kcap hook --codex)
@@ -124,11 +121,9 @@ public class CodexPolicyJudgeLiveCertTests {
             printf '%s' "$out"
             exit $code
             """);
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(recorder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
 
         JsonArray Hook(int timeout) => [new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = recorder, ["timeout"] = timeout }) }];
-        await File.WriteAllTextAsync(Path.Combine(home.Path, "hooks.json"), new JsonObject {
+        home.CreateFile("hooks.json", new JsonObject {
             ["hooks"] = new JsonObject {
                 ["SessionStart"] = Hook(30), ["Stop"] = Hook(30), ["PreToolUse"] = Hook(30), ["PermissionRequest"] = Hook(600),
             },

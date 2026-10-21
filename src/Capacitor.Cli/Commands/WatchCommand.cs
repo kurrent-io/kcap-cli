@@ -47,13 +47,20 @@ partial class WatchCommand(
     readonly WatcherPaths   _paths    = WatcherPaths.FromEnvironment(config);
     readonly Dictionary<(string, string?), HeldLineRedaction> _heldLines = [];
     readonly WatchAckCursor _ackCursor = new(config);
+    readonly Lock   _ackCursorGate = new();
     int _ackCursorWritten = -1;
 
     /// The Codex hook declares only the turns the server acknowledged, so the root watcher publishes its count
-    /// whenever it moves, rewinds included.
+    /// whenever it moves, rewinds included. Reconnect and drain both publish, so the count is read and written under
+    /// one lock: a count read earlier can never land after a newer one.
     internal void PublishAckedLines(string sessionId, string? agentId, string vendor, WatchState state) {
-        if (agentId is not null || vendor != "codex" || state.LinesProcessed == _ackCursorWritten) return;
-        if (_ackCursor.Write(sessionId, state.LinesProcessed)) _ackCursorWritten = state.LinesProcessed;
+        if (agentId is not null || vendor != "codex") return;
+
+        lock (_ackCursorGate) {
+            var count = state.LinesProcessed;
+            if (count == _ackCursorWritten) return;
+            if (_ackCursor.Write(sessionId, count)) _ackCursorWritten = count;
+        }
     }
 
     internal void RetireAckCursor(string sessionId, string? agentId, string vendor) {

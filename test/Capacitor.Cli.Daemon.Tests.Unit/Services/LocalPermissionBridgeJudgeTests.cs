@@ -178,14 +178,14 @@ public class LocalPermissionBridgeJudgeTests {
         await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsFalse();
     }
 
-    /// The hook denies a permission request the bridge rejects unread, so the ledger can no longer
-    /// claim it saw every refusal. The card-deny test above is the control: the same session is complete.
+    /// The hook denies a permission request the bridge rejects before identifying its session, so no session's
+    /// refusals can be claimed complete.
     [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
-    [Arguments("oversized")]
-    [Arguments("malformed")]
-    [Arguments("null")]
-    [Arguments("no_session")]
-    public async Task A_permission_request_the_bridge_rejects_unread_leaves_refusals_incomplete(string body) {
+    [Arguments("oversized", 413)]
+    [Arguments("malformed", 400)]
+    [Arguments("null", 400)]
+    [Arguments("no_session", 400)]
+    public async Task A_permission_request_rejected_before_its_session_is_known_leaves_refusals_incomplete(string body, int status) {
         await using var h = new Harness();
         h.Answer("uncertain");
         await h.StartAsync();
@@ -197,7 +197,7 @@ public class LocalPermissionBridgeJudgeTests {
             _            => """{"tool_name":"Bash","tool_input":{"command":"git push"}}""",
         };
         var rejected = await h.Client.PostAsync($"{h.Bridge.BaseUrl}/claude/permission-request", new StringContent(raw));
-        await Assert.That(rejected.IsSuccessStatusCode).IsFalse();
+        await Assert.That((int)rejected.StatusCode).IsEqualTo(status);
 
         var call = h.PostAsync("git push", "toolu_1");
         h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
@@ -208,14 +208,14 @@ public class LocalPermissionBridgeJudgeTests {
 
     /// A reviewer's requests never reach the judge, so one the bridge rejects costs no governed session its completeness.
     [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
-    public async Task A_reviewer_request_the_bridge_rejects_unread_leaves_refusals_complete() {
+    public async Task A_reviewer_request_rejected_before_its_session_is_known_leaves_refusals_complete() {
         await using var h = new Harness();
         h.Answer("uncertain");
         await h.StartAsync();
 
         var reviewerUrl = h.Bridge.RegisterReviewerToken(["kcap-review"]);
         var rejected    = await h.Client.PostAsync($"{reviewerUrl}/codex/permission-request", new StringContent("{"));
-        await Assert.That(rejected.IsSuccessStatusCode).IsFalse();
+        await Assert.That((int)rejected.StatusCode).IsEqualTo(400);
 
         var call = h.PostAsync("git push", "toolu_1");
         h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");

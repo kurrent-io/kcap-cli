@@ -456,7 +456,9 @@ internal sealed class AcpTranscriptForwarder : IAcpPersistenceProbe {
       + EscapedBytes(e.Text) + EscapedBytes(e.ToolInputJson) + EscapedBytes(e.ToolResult)
       + EscapedBytes(e.ToolName) + EscapedBytes(e.ToolCallId) + EscapedBytes(e.ToolKind) + EscapedBytes(e.ItemId)
       + EscapedBytes(e.Cwd) + EscapedBytes(e.Model) + EscapedBytes(e.RawSessionId) + EscapedBytes(e.SessionMode)
-      + EscapedBytes(e.EndReason) + EscapedBytes(e.TimestampIso) + EscapedBytes(e.Kind);
+      + EscapedBytes(e.EndReason) + EscapedBytes(e.TimestampIso) + EscapedBytes(e.Kind)
+      + EscapedBytes(e.RepoOwner) + EscapedBytes(e.RepoName) + EscapedBytes(e.RepoRemoteUrl) + EscapedBytes(e.RepoBranch)
+      + EscapedBytes(e.AgentId) + EscapedBytes(e.AgentType) + EscapedBytes(e.TurnId);
 
     // The hub's serializer uses the default encoder, which writes every non-ASCII and HTML-sensitive
     // character as a six-byte \uXXXX escape; counting characters would let such text blow the budget.
