@@ -145,18 +145,30 @@ public class MarkViewSelectionTests {
     }
 
     [Test]
-    [Arguments(0, "hello worl")]
-    [Arguments(1, "second lin")]
+    [Arguments(0, false, "hello worl")]
+    [Arguments(1, false, "second lin")]
+    [Arguments(0, true, "hello worl")]
+    [Arguments(1, true, "second lin")]
     [NotInParallel]
-    public async Task A_drag_starting_in_left_padding_selects_from_the_nearest_character(int line, string expected) {
+    public async Task A_drag_starting_in_left_padding_selects_from_the_nearest_character(int line, bool explicitCrlf, string expected) {
         await RunOnUiAsync(async () => {
-            var (window, view, _) = Show("```\nhello world\nsecond line\n```");
+            var (window, view, _) = Show("```\r\nhello world\r\nsecond line\r\n```");
             try {
+                if (explicitCrlf) {
+                    var viewer = Viewer(view);
+                    viewer.Extensions.Add(new CrlfCodeBlockRenderer());
+                    viewer.Markdown = null;
+                    viewer.Markdown = view.Text;
+                    Dispatcher.UIThread.RunJobs();
+                    window.UpdateLayout();
+                }
                 var block = All<TextBlock>(view).First(t => Reads(t).Contains("hello", StringComparison.Ordinal));
-                var offset = line * 12;
+                await Assert.That(block.TextLayout.TextLines.Count).IsEqualTo(2);
+                if (explicitCrlf) await Assert.That(block.TextLayout.TextLines[1].FirstTextSourceIndex).IsEqualTo(13);
+                var offset = block.TextLayout.TextLines[line].FirstTextSourceIndex;
                 var mid = block.TextLayout.HitTestTextPosition(offset);
-                var origin = block.TranslatePoint(new Point(mid.X, mid.Y + mid.Height / 2), window)!.Value;
-                var end = block.TranslatePoint(new Point(block.TextLayout.HitTestTextPosition(offset + 10).X, mid.Y + mid.Height / 2), window)!.Value;
+                var origin = block.TranslatePoint(new Point(mid.X + block.Padding.Left, mid.Y + block.Padding.Top + mid.Height / 2), window)!.Value;
+                var end = block.TranslatePoint(new Point(block.TextLayout.HitTestTextPosition(offset + 10).X + block.Padding.Left, mid.Y + block.Padding.Top + mid.Height / 2), window)!.Value;
                 Drag(window, new Point(origin.X - 8, origin.Y), end);
                 await Assert.That(await Copied(view)).IsEqualTo(expected);
             } finally { window.Close(); }
