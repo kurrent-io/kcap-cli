@@ -9,11 +9,12 @@ namespace Capacitor.App.Services;
 /// stack, and the shim offer reuses the same gate to never appear over a live skew/repair dialog.
 public sealed class LifecycleSurface(
         Action<string> setStatus, Action<string> setAttention,
-        Func<LifecyclePrompt, CancellationToken, Task<bool>> showPrompt) : ILifecycleSurface {
+        Func<LifecyclePrompt, CancellationToken, Task<bool>> showPrompt, Action<string>? withdraw = null) : ILifecycleSurface {
     readonly SemaphoreSlim _gate = new(1, 1);
 
     public void Status(string message) => setStatus(message);
     public void Attention(string message) => setAttention(message);
+    public void Withdraw(string message) => withdraw?.Invoke(message);
 
     public async Task<bool> ConfirmAsync(LifecyclePrompt prompt, CancellationToken ct) =>
         await TryConfirmAsync(prompt, ct).ConfigureAwait(false) ?? false;

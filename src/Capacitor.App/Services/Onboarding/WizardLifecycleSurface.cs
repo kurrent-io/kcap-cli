@@ -36,6 +36,8 @@ public sealed class WizardLifecycleSurface : ReactiveObject, ILifecycleSurface {
 
     public void Attention(string message) => _inner.Attention(message);
 
+    public void Withdraw(string message) => _inner.Withdraw(message);
+
     public Task<bool> ConfirmAsync(LifecyclePrompt prompt, CancellationToken ct) => _inner.ConfirmAsync(prompt, ct);
 
     public Task<bool?> TryConfirmAsync(LifecyclePrompt prompt, CancellationToken ct) => _inner.TryConfirmAsync(prompt, ct);

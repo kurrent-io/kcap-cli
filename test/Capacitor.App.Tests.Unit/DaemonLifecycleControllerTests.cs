@@ -1598,6 +1598,25 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
     }
 
+    /// A mismatch the daemon no longer has is taken back from wherever the report still shows, the tray included.
+    [Test]
+    public async Task A_resolved_mismatch_withdraws_its_report() {
+        await using var h = new Harness(autoActionsPermanentlyClosed: true);
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        var report = h.Surface.AttentionMessages.Single();
+
+        h.PushConnecting();
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server: "https://kcap.example.com:443", profile: "default"));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Withdrawn.Count > 0, what: "the withdrawal");
+        await Assert.That(h.Surface.Withdrawn.Single()).IsEqualTo(report);
+    }
+
     /// A launch the daemon has admitted but not yet listed is work in progress: no replace is offered over it.
     [Test]
     public async Task A_daemon_still_starting_a_launch_is_not_offered_a_replace() {

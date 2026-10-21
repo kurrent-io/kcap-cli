@@ -692,7 +692,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
-            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || timedOut || (
+            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
                 t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);

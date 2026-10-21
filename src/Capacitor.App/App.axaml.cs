@@ -527,6 +527,7 @@ public partial class App : Application {
         // or the startup phase could miss the first terminal outcome it hinges on.
         var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe, lifecycleCli) = BuildLifecycleController(
             service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext, lifecycleAttention.OnNext,
+            message => { if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null); },
             lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
         lifecycle.Start();
         _lifecycle = lifecycle;
@@ -1502,7 +1503,7 @@ public partial class App : Application {
     (DaemonLifecycleController Lifecycle, ShimOfferCoordinator ShimOffer, ConsentFlipCoordinator ConsentFlip,
             ILifecycleSurface Surface, ILoginShellProbe Probe, IKcapCli Cli) BuildLifecycleController(
             DaemonClientService service, ILocalControlOps ops, bool autoActionsPermanentlyClosed,
-            Action<string> setLifecycleStatus, Action<string> setLifecycleAttention,
+            Action<string> setLifecycleStatus, Action<string> setLifecycleAttention, Action<string> withdrawLifecycleAttention,
             Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
             ResolvedProfile? profile, Func<bool> requiresAppRestart) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, AppContext.BaseDirectory);
@@ -1513,7 +1514,7 @@ public partial class App : Application {
         // must reflect the SAME probe outcome that the controller's preconditions/PathDegraded see.
         var cli     = new KcapCli(runner, cliPath, service.DaemonName, profile?.ProfileName ?? "default", probe.TerminalPathAsync,
             canonicalServer: canonicalServer);
-        var surface = new LifecycleSurface(setLifecycleStatus, setLifecycleAttention, ConfirmLifecyclePromptAsync);
+        var surface = new LifecycleSurface(setLifecycleStatus, setLifecycleAttention, ConfirmLifecyclePromptAsync, withdrawLifecycleAttention);
 
         var lifecycle = new DaemonLifecycleController(
             service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), _time,
