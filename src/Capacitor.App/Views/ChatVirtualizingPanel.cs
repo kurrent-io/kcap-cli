@@ -33,7 +33,7 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
         get {
             if (_starts.Length != Items.Count + 1) return null;
             for (var i = Items.Count - 1; i >= 0; i--)
-                if (Items[i] is UserTurnItem) return _starts[i];
+                if (Items[i] is UserTurnItem or ShellCommandItem { HasCommand: true }) return _starts[i];
             return null;
         }
     }
