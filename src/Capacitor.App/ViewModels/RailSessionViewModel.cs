@@ -72,7 +72,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     readonly TimeProvider _time;
 
     public RailSessionViewModel(
-            AgentRow row, IObservable<string?> selectedAgentId,
+            AgentRow row, IObservable<string?> selectedSessionKey,
             IObservable<IReadOnlySet<string>> agentsWithPending, IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote, TimeProvider time,
             IObservable<IReadOnlySet<string>>? agentsAwaitingAnswer = null,
@@ -102,7 +102,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
                 this.RaisePropertyChanged(nameof(HasPullRequest));
                 this.RaisePropertyChanged(nameof(PullRequestAccessibleName));
             }).DisposeWith(_disposables);
-        _isSelected = selectedAgentId.Select(sel => sel == row.Id)
+        // Pending launches open a local workspace; publication must keep that row selected.
+        var selectionKey = row.Origin == AgentOrigin.Pending ? $"local:{row.Id}" : row.Key;
+        _isSelected = selectedSessionKey.Select(sel => sel == selectionKey)
             .ToProperty(this, x => x.IsSelected, initialValue: false)
             .DisposeWith(_disposables);
 

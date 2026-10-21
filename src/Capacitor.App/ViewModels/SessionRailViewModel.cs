@@ -26,18 +26,18 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     // Keep the user's choices when the directory empties/re-forms a group during refresh.
     readonly HashSet<string> _collapsedRepos = new(StringComparer.Ordinal);
 
-    // SelectedAgentId is fed to the nested VMs via this subject, not this.WhenAnyValue: that
+    // SelectedSessionKey is fed to the nested VMs via this subject, not this.WhenAnyValue: that
     // call routes through ReactiveUI's ObservableForProperty/RxAppBuilder global init, which is
     // only reliably primed when some other test has already pumped the headless dispatcher
     // first — AvaloniaSession.cs documents the MainThreadScheduler initialization race.
-    readonly BehaviorSubject<string?> _selectedAgentIdChanges = new(null);
+    readonly BehaviorSubject<string?> _selectedSessionKeyChanges = new(null);
 
-    string? _selectedAgentId;
-    public string? SelectedAgentId {
-        get => _selectedAgentId;
+    string? _selectedSessionKey;
+    public string? SelectedSessionKey {
+        get => _selectedSessionKey;
         set {
-            this.RaiseAndSetIfChanged(ref _selectedAgentId, value);
-            _selectedAgentIdChanges.OnNext(value);
+            this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
+            _selectedSessionKeyChanges.OnNext(value);
         }
     }
 
@@ -68,7 +68,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         var ageTicks = new Subject<Unit>().DisposeWith(_disposables);
         time.CreateTimer(_ => RxSchedulers.MainThreadScheduler.Schedule(() => { if (!ageTicks.IsDisposed) ageTicks.OnNext(Unit.Default); }),
             null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1)).DisposeWith(_disposables);
-        IObservable<string?> selected = _selectedAgentIdChanges;
+        IObservable<string?> selected = _selectedSessionKeyChanges;
         // PermissionService.AgentsWithPending emits from background continuations; marshal once
         // here so every nested OAPH downstream sees
         // it on the UI thread without adding its own ObserveOn.

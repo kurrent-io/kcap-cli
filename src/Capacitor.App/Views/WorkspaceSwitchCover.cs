@@ -17,11 +17,11 @@ public sealed class WorkspaceSwitchCover {
 
     readonly Control _pane;
     readonly Control _cover;
-    readonly CoverBitmap _still;
+    readonly StillImage _still;
     readonly SerialDisposable _hold = new();
     int _generation;
 
-    public WorkspaceSwitchCover(Control pane, Control cover, CoverBitmap still) {
+    public WorkspaceSwitchCover(Control pane, Control cover, StillImage still) {
         _pane = pane;
         _cover = cover;
         _still = still;
@@ -77,7 +77,7 @@ public sealed class WorkspaceSwitchCover {
         _generation++;
         _hold.Disposable = null;
         _cover.IsVisible = false;
-        var still = _still.Source as IDisposable;
+        var still = _still.Source;
         _still.Source = null;
         still?.Dispose();
     }

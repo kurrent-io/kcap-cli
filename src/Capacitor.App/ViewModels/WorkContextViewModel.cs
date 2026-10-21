@@ -54,7 +54,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
 
     internal const string WaitingNote      = "Waiting for session…";
     internal const string LoadingNote      = "Loading…";
-    internal const string NoWorkItemNote   = "No work item yet — the agent can attach one with declare.";
+    internal const string NoWorkItemNote   = "No work item yet. Ask the agent to link this session to an issue or task.";
     internal const string NoRepositoryNote = "No repository on this session, so a work item cannot attach.";
     internal const string SignedOutNote    = "Sign in to see the work context.";
     internal const string NotInPlanNote    = "Work items are not in this workspace's plan.";
@@ -230,7 +230,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         private set { if (_isRefreshing != value) { this.RaiseAndSetIfChanged(ref _isRefreshing, value); this.RaisePropertyChanged(nameof(RefreshTip)); } }
     }
     bool _hasSession;
-    // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedAgentId.
+    // Subject, not WhenAnyValue — same RxAppBuilder init trap as SessionRailViewModel.SelectedSessionKey.
     readonly BehaviorSubject<bool> _hasSessionChanges = new(false);
     public bool HasSession {
         get => _hasSession;

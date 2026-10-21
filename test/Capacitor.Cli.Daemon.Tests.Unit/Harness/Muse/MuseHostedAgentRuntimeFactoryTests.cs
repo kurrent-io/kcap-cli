@@ -8,6 +8,7 @@ using Capacitor.Cli.Daemon.Harness.Muse;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 
@@ -156,6 +157,22 @@ public class MuseHostedAgentRuntimeFactoryTests {
         await Assert.That(await factory.ProbeModelsAsync(CancellationToken.None)).IsNull();
         await Assert.That(factory.CatalogFingerprintPaths).IsEquivalentTo(new[] {
             Home.PathTo(".config", "muse", "settings.json"), Home.PathTo(".config", "muse", "auth.json") });
+    }
+
+    [Test]
+    public async Task The_factory_advertises_the_models_muse_cached_and_fingerprints_the_cache() {
+        var file = Home.CreateFile([".local", "share", "muse", "model-catalog", "6d657461__p746268.json"], """
+            {"schema_version":2,"provider_id":"meta","rows":[
+              {"model_id":"muse-spark-1.3","display_label":"muse-spark-1.3","visibility":"visible","release_date":"2026-09-02"},
+              {"model_id":"muse-spark-1.3-contributor","display_label":"muse-spark-1.3-contributor","visibility":"hidden","release_date":"2026-09-02"},
+              {"model_id":"muse-spark-1.2","display_label":"muse-spark-1.2","visibility":"visible","release_date":"2026-08-05"}]}
+            """);
+        var factory = NewRig().Factory;
+
+        var models = (await factory.ProbeModelsAsync(CancellationToken.None))!;
+
+        await Assert.That(models.Select(m => m.Value)).IsEquivalentTo(["muse-spark-1.3", "muse-spark-1.2"], CollectionOrdering.Matching);
+        await Assert.That(factory.CatalogFingerprintPaths).Contains(file);
     }
 
     [Test]

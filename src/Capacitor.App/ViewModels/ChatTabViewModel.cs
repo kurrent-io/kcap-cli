@@ -378,6 +378,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// channel accepts the prompt. A reply answers the session's open questions, and no permission
     /// response will ever say so.
     public Func<string, Action>? InputSending { get; init; }
+    /// Raised once a turn has gone to the channel and was not refused.
+    public event Action? TurnSubmitted;
     volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
@@ -446,10 +448,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     bool _showsActivityNote;
-    /// Failure text beside the composer. Working and starting ride the header status instead.
     public bool ShowsActivityNote {
         get => _showsActivityNote;
         private set => this.RaiseAndSetIfChanged(ref _showsActivityNote, value);
+    }
+
+    bool _showsLiveNote;
+    public bool ShowsLiveNote {
+        get => _showsLiveNote;
+        private set => this.RaiseAndSetIfChanged(ref _showsLiveNote, value);
     }
 
     string _activityNote = "";
@@ -494,6 +501,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : working && _workingSince is { } since
                     ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
         ShowsActivityNote = _failureNote is not null && Phase != ChatTabPhase.Failed && ActivityNote.Length > 0;
+        ShowsLiveNote = !ShowsActivityNote && ActivityNote.Length > 0;
         RefreshAgentStatus();
         RefreshQueuedSend();
     }
@@ -528,10 +536,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         StatusText = AgentStatus.Label;
     }
 
-    static string WorkingNote(TimeSpan elapsed) {
-        var seconds = Math.Max(0, (long)elapsed.TotalSeconds);
-        return $"Working for {seconds / 60}m {seconds % 60}s";
-    }
+    static string WorkingNote(TimeSpan elapsed) => $"Working for {RunRow.Duration(elapsed)}";
 
     bool _isReadOnlyParticipant;
     /// True for a flow participant (any kind other than "agent"): the view swaps the composer
@@ -1155,6 +1160,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             return outcome;
         }
         if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
+        else TurnSubmitted?.Invoke();
         var waits = !queued.Acknowledged && outcome switch {
             ChatSendOutcome.Accepted    => _openFeed is not null,
             ChatSendOutcome.Unconfirmed => true,
