@@ -382,7 +382,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _row = row;
         PublishWorkPresence();
         var sessionId = row.SessionId;
-        _hadSession |= sessionId is not null;
+        if (!_hadSession && sessionId is not null) {
+            _hadSession = true;
+            this.RaisePropertyChanged(nameof(AccessNote));
+            this.RaisePropertyChanged(nameof(ShowsChatPane));
+        }
         if (_sessionIds.Value != sessionId) _sessionIds.OnNext(sessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
