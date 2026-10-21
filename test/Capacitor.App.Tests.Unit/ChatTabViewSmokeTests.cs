@@ -230,6 +230,33 @@ public class ChatTabViewSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Expanded_tool_results_can_scroll_to_the_last_retained_line() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            await host.LoadAsync(Tmp.CreateFile("scroll-result.jsonl", [ToolCallLine, ToolResultLine]));
+            var call = OnlyGroup(host).Calls.Single();
+            call.SetResult(string.Join("\n", Enumerable.Range(1, 200).Select(i => $"line {i}")), false);
+            host.Settle();
+            var toggle = host.View.GetVisualDescendants().OfType<Button>()
+                .Single(b => b.Classes.Contains("toolBody") && b.IsEffectivelyVisible);
+            Click(host, toggle);
+            host.Settle();
+            var result = host.View.GetVisualDescendants().OfType<SelectableTextBlock>()
+                .Single(t => t.Text == call.ResultText);
+            var scroll = result.GetVisualAncestors().OfType<ScrollViewer>().First();
+            scroll.ScrollToEnd();
+            host.Settle();
+            await Assert.That(call.IsExpanded).IsTrue();
+            await Assert.That(scroll.Offset.Y).IsGreaterThan(0);
+            await Assert.That(result.Text!.EndsWith("line 200", StringComparison.Ordinal)).IsTrue();
+            Click(host, toggle);
+            await Assert.That(call.IsExpanded).IsFalse();
+            await host.CloseAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_usage_limit_question_renders_its_choices_and_a_choice_sends_the_digit() {
         await RunOnUiAsync(async () => {
             var host = new Host();
@@ -989,9 +1016,9 @@ public class ChatTabViewSmokeTests {
             await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
             var summary = Summary(host.View);
             await Assert.That(summary.IsVisible).IsTrue();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file · ls -la");
+            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Ran a command, read a file · ls -la");
             await Assert.That(summary.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text))
-                .Contains("Searched files, read a file · ls -la");
+                .Contains("Ran a command, read a file · ls -la");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Running);
             var card = host.View.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("toolGroup"));
@@ -1000,14 +1027,14 @@ public class ChatTabViewSmokeTests {
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsTrue();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file");
+            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Ran a command, read a file");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(3);
             await Assert.That(card.Classes.Contains("folded")).IsFalse();
             await Assert.That(card.Margin.Bottom).IsEqualTo(22);
 
             Click(host, summary);
             await Assert.That(OnlyGroup(host).IsExpanded).IsFalse();
-            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Searched files, read a file · ls -la");
+            await Assert.That(OnlyGroup(host).SummaryLine).IsEqualTo("Ran a command, read a file · ls -la");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await host.CloseAsync();
         });
@@ -1022,16 +1049,16 @@ public class ChatTabViewSmokeTests {
             await host.LoadAsync(Tmp.CreateFile("one.jsonl", [ToolCallLine, ToolResultLine]));
             await Assert.That(OnlyGroup(host).ShowsSummaryHeader).IsFalse();
             await Assert.That(OnlyGroup(host).ShowsKindChip).IsTrue();
-            await Assert.That(OnlyGroup(host).KindChip).IsEqualTo("Search");
+            await Assert.That(OnlyGroup(host).KindChip).IsEqualTo("Command");
             await Assert.That(SummaryOrNull(host.View)?.IsVisible ?? false).IsFalse();
             host.Settle();
             var header = host.View.GetVisualDescendants().OfType<ChatKindHeader>()
                 .Single(h => h.IsEffectivelyVisible);
-            await Assert.That(header.Label).IsEqualTo("Search");
+            await Assert.That(header.Label).IsEqualTo("Command");
             await Assert.That(header.IconKind).IsNotNull();
             var chip = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("toolKindChip") && t.IsEffectivelyVisible);
-            await Assert.That(chip.Text).IsEqualTo("Search");
+            await Assert.That(chip.Text).IsEqualTo("Command");
             await Assert.That(ToolRows(host.View)).Count().IsEqualTo(1);
             await Assert.That(((ToolCallItem)ToolRows(host.View)[0].DataContext!).Outcome).IsEqualTo(ToolOutcome.Done);
             await host.CloseAsync();
@@ -1167,7 +1194,7 @@ public class ChatTabViewSmokeTests {
                 .Single(t => t.Name == "ToolRowLabel" && t.IsEffectivelyVisible);
             var detail = ToolRows(host.View)[0].GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.IsEffectivelyVisible && t.Text == "ls -la");
-            await Assert.That(rowLabel.Text).IsEqualTo("Searched files");
+            await Assert.That(rowLabel.Text).IsEqualTo("Ran command");
             await Assert.That(rowLabel.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapTextBrush"));
             await Assert.That(detail.Foreground).IsSameReferenceAs(Avalonia.Application.Current!.FindResource("KcapMutedBrush"));
             await host.CloseAsync();

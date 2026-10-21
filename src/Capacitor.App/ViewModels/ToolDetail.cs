@@ -9,6 +9,7 @@ namespace Capacitor.App.ViewModels;
 /// a repository root is stripped as well.
 public static class ToolDetail {
     const int MaxLength = 80;
+    const int PathLength = 56;
     /// A question is read rather than scanned — the row wraps it instead of eliding — so the only
     /// cap on it is the one that keeps an unbounded prompt out of a notification body.
     const int MaxQuestionLength = 400;
@@ -34,8 +35,10 @@ public static class ToolDetail {
                 return TextElision.End(FirstLine(prompt), MaxQuestionLength);
             foreach (var key in Keys) {
                 if (category == ToolCategory.Question && key == "prompt") continue;
-                if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
-                    return TextElision.Middle(FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s), MaxLength);
+                if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0) {
+                    var line = FirstLine(PathKeys.Contains(key) ? Relative(s.Trim(), root) : s);
+                    return PathKeys.Contains(key) ? TextElision.PathTail(line, PathLength) : TextElision.Middle(line, MaxLength);
+                }
             }
         } catch (JsonException) { }
         return "";
@@ -47,18 +50,40 @@ public static class ToolDetail {
         return raw.Length > 0 ? TextElision.End(FirstLine(raw), MaxLength) : "";
     }
 
-    public static string RawForKey(string? inputJson, string? key) {
+    public static string RawForKey(string? inputJson, string? key) => FirstLine(StringForKey(inputJson, key));
+
+    static string StringForKey(string? inputJson, string? key) {
         if (string.IsNullOrEmpty(inputJson) || string.IsNullOrEmpty(key)) return "";
         try {
             using var doc = JsonDocument.Parse(inputJson);
             if (!doc.RootElement.IsObject) return "";
-            return doc.RootElement.Str(key) is { } s && s.Trim().Length > 0 ? FirstLine(s) : "";
+            return doc.RootElement.Str(key) is { } s && s.Trim().Length > 0 ? s : "";
         } catch (JsonException) {
             return "";
         }
     }
 
-    /// For a tool nothing describes: the first string argument, in declaration order.
+    /// Whether the first populated detail key uses path elision.
+    public static bool ShowsPath(string? inputJson) {
+        if (string.IsNullOrEmpty(inputJson)) return false;
+        try {
+            using var doc = JsonDocument.Parse(inputJson);
+            if (!doc.RootElement.IsObject) return false;
+            foreach (var key in Keys)
+                if (doc.RootElement.Str(key) is { } s && s.Trim().Length > 0)
+                    return PathKeys.Contains(key);
+        } catch (JsonException) { }
+        return false;
+    }
+
+    /// The shell text behind a description, kept for the expanded row. Empty when the call has none.
+    public static string CommandOf(string? inputJson) {
+        var command = StringForKey(inputJson, "command");
+        if (command.Length == 0) command = StringForKey(inputJson, "cmd");
+        const int cap = 2000;
+        return TextElision.End(command, cap);
+    }
+
     public static string FirstString(string? inputJson) {
         if (string.IsNullOrEmpty(inputJson)) return "";
         try {

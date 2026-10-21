@@ -12,6 +12,42 @@ public class ToolGroupItemTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Results_are_bounded_and_only_removed_content_is_labelled() {
+        await RunOnUiAsync(async () => {
+            var call = Call("Bash", ToolCategory.Command);
+            call.SetResult(new string('x', ToolCallItem.ShownResultCharacters + 10), false);
+            await Assert.That(call.ResultText!.Length).IsEqualTo(ToolCallItem.ShownResultCharacters);
+            await Assert.That(call.ResultNotice).IsEqualTo("Output truncated.");
+            await Assert.That(call.IsExpanded).IsFalse();
+            foreach (var complete in new[] { new string('x', 4096), "done…", new string('x', ToolCallItem.ShownResultCharacters), string.Join("\n", Enumerable.Repeat("line", 200)) + "\n" }) {
+                call.SetResult(complete, false);
+                await Assert.That(call.ResultText).IsEqualTo(complete.TrimEnd('\n'));
+                await Assert.That(call.HasResultNotice).IsFalse();
+            }
+            call.SetResult(string.Join("\n", Enumerable.Range(1, 201)), false);
+            await Assert.That(call.ResultText!.Split('\n').Length).IsEqualTo(200);
+            await Assert.That(call.ResultNotice).IsEqualTo("Showing the first 200 lines.");
+            call.SetResult(new string('x', ToolCallItem.ShownResultCharacters - 1) + "😀tail", false);
+            await Assert.That(char.IsHighSurrogate(call.ResultText![^1])).IsFalse();
+            call.SetResult(null, true);
+            await Assert.That(call.ResultText).IsEqualTo("The tool failed.");
+            await Assert.That(call.IsExpanded).IsTrue();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Folded_previews_cap_non_paths_even_with_existing_ellipses() {
+        await RunOnUiAsync(async () => {
+            var group = new ToolGroupItem();
+            group.Add(new ToolCallItem("Bash", "…" + new string('x', 79), ToolCategory.Command) { Outcome = ToolOutcome.Done });
+            group.Add(new ToolCallItem("Read", "file", ToolCategory.Read) { Outcome = ToolOutcome.Done });
+            await Assert.That(group.SummaryLine!.Split(" · ")[1].Length).IsEqualTo(56);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Live_calls_show_until_they_settle_and_the_summary_appears_with_the_first_settlement() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
