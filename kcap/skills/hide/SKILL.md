@@ -20,7 +20,7 @@ Run this command in the terminal:
 kcap hide
 ```
 
-This sets the session visibility to "none" (owner-only). Other users will no longer see this session in the Capacitor dashboard.
+This sets the session visibility to "none" (owner-only). Other users will no longer see this session in the kcap dashboard.
 
 ## Requirements
 
@@ -29,6 +29,6 @@ This sets the session visibility to "none" (owner-only). Other users will no lon
 
 ## Notes
 
-- This is reversible — visibility can be changed back via the Capacitor dashboard
+- This is reversible — visibility can be changed back via the kcap dashboard
 - The session data remains on the server, just hidden from other users
 - Unlike `kcap disable`, recording continues normally

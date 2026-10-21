@@ -102,15 +102,19 @@ public class KiroReviewerLaunchTests {
     /// <summary>The control: an interactive launch gets neither the trust argv nor an isolated home,
     /// because a hosted Kiro the user drives should behave exactly as their own session does.</summary>
     [Test]
+    [NotInParallel]
     public async Task AnInteractiveLaunch_HasNoTrustArgvAndNoIsolatedHome() {
         // Deliberately NOT skipped on Windows: it asserts the interactive path creates no home and
         // no trust argv, which is exactly the assertion that should hold on a platform where the
         // reviewer is unavailable. Skipping it there would drop the coverage that matters most.
 
+        using var inherited = EnvScope.Exclusive("KIRO_HOME", "/tmp/kcap-kiro-home-probe");
+
         var psi = Psi(isReviewFlow: false, EnabledConfig(Daemons.Store));
 
         await Assert.That(psi.ArgumentList.Contains("--trust-tools")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("KIRO_HOME")).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue("KIRO_HOME", out var home) ? home : null)
+            .IsEqualTo("/tmp/kcap-kiro-home-probe");
     }
 
     [Test]

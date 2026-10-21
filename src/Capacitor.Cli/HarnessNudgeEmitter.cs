@@ -72,7 +72,7 @@ static class HarnessNudgeEmitter {
         if (harnesses.Count == 0) return null;
 
         var lines = new List<string> {
-            "One or more coding agents are installed that Kurrent Capacitor is not set up for, so " +
+            "One or more coding agents are installed that kcap is not set up for, so " +
             "sessions in them are not being recorded:"
         };
         foreach (var h in harnesses)

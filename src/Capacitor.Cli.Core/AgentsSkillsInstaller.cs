@@ -38,13 +38,15 @@ public static class AgentsSkillsInstaller {
         "guided-tour",
         "eval-watch",
         "start-agents",
-        "connect-capacitor"
+        "connect-kcap",
+        "pages"
     ];
 
     /// <summary>Skills this installer once shipped. Their <c>kcap-</c> folders are deleted on install and remove,
     /// so an upgraded user does not keep a skill that no longer matches the tools.</summary>
     public static readonly string[] RetiredSourceNames = [
-        "suggest-review-flow"
+        "suggest-review-flow",
+        "connect-capacitor"
     ];
 
     /// <summary>

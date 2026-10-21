@@ -112,8 +112,8 @@ jobs:
           case "$RUNNER_OS" in
             macOS)
               cp trio/bin/kcap trio/bin/kcap-daemon trio/bin/libpty_shim.dylib publish/app/
-              chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/Kurrent Capacitor"
-              bash scripts/assemble-app-bundle.sh publish/app "publish/Kurrent Capacitor.app" "$VERSION" ;;
+              chmod +x publish/app/kcap publish/app/kcap-daemon "publish/app/kcap-desktop"
+              bash scripts/assemble-app-bundle.sh publish/app "publish/kcap.app" "$VERSION" ;;
             Windows)
               cp trio/bin/kcap.exe trio/bin/kcap-daemon.exe publish/app/
               bash scripts/bundle-app-plugin.sh publish/app "$VERSION" ;;
@@ -144,9 +144,9 @@ jobs:
         run: |
           set -euo pipefail
           case "$RUNNER_OS" in
-            macOS)   args=(--mainExe "Kurrent Capacitor" --packDir "publish/Kurrent Capacitor.app" --noInst) ;;
-            Windows) args=(--mainExe "Kurrent Capacitor.exe" --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico) ;;
-            Linux)   args=(--mainExe "Kurrent Capacitor" --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.png) ;;
+            macOS)   args=(--mainExe "kcap-desktop" --packDir "publish/kcap.app" --noInst) ;;
+            Windows) args=(--mainExe "kcap-desktop.exe" --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico) ;;
+            Linux)   args=(--mainExe "kcap-desktop" --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.png) ;;
           esac
           if [ "$RELEASE" = true ] && [ "$RUNNER_OS" = macOS ]; then
             args+=(--signAppIdentity "$APPLE_SIGNING_IDENTITY" --signEntitlements src/Capacitor.App/Packaging/app.entitlements
@@ -160,7 +160,7 @@ jobs:
               echo "::warning::WINDOWS_CERTIFICATE_PFX is not configured; the Windows app ships unsigned"
             fi
           fi
-          vpk pack --packId KurrentCapacitor --packVersion "$VERSION" --packTitle "Kurrent Capacitor" --packAuthors Kurrent \
+          vpk pack --packId KurrentCapacitor --packVersion "$VERSION" --packTitle "kcap" --packAuthors Kurrent \
             --channel "$RID" --outputDir releases "${args[@]}"
           rm -f "$RUNNER_TEMP/kcap-sign.pfx"
 
@@ -170,7 +170,7 @@ jobs:
           set -euo pipefail
           mkdir -p extracted
           ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
-          APP="extracted/Kurrent Capacitor.app"
+          APP="extracted/kcap.app"
           bash scripts/assert-app-plugin.sh "$APP" "$VERSION"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "$VERSION"
           bash scripts/assert-bundle-digest.sh "$APP" trio/bin/daemon.sha256
@@ -182,9 +182,16 @@ jobs:
           if cmp -s "$APP/Contents/MacOS/libAvaloniaNative.patched.dylib" "$APP/Contents/MacOS/libAvaloniaNative.dylib"; then
             echo "::error::libAvaloniaNative.patched.dylib is the stock library"; exit 1
           fi
+          # codesign refuses any file under Contents/MacOS that is not code.
+          not_code="$(find "$APP/Contents/MacOS" -type f -print0 | while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q '^Mach-O' || echo "$f"
+          done)"
+          if [ -n "$not_code" ]; then
+            echo "::error::Contents/MacOS holds files codesign cannot sign:"; echo "$not_code"; exit 1
+          fi
           # Signed, this is also JIT under the hardened runtime: the app must still be alive after 15 s.
           SCRATCH="$(mktemp -d)"
-          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" "$APP/Contents/MacOS/Kurrent Capacitor" &
+          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" DO_NOT_TRACK=1 "$APP/Contents/MacOS/kcap-desktop" &
           APP_PID=$!
           sleep 15
           kill -0 "$APP_PID" || { echo "::error::the packed app exited within 15 s"; exit 1; }
@@ -215,7 +222,7 @@ jobs:
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\Kurrent Capacitor.exe') -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\kcap-desktop.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force
@@ -257,7 +264,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          DEB="releases/Kurrent-Capacitor-$VERSION-linux-x64.deb"
+          DEB="releases/kcap-$VERSION-linux-x64.deb"
           bash scripts/build-deb.sh publish/app "$VERSION" "$DEB"
           sudo apt-get install -y "./$DEB"
           app=/usr/lib/kurrent-capacitor
@@ -288,10 +295,10 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          DMG="releases/Kurrent-Capacitor-$VERSION-osx-arm64.dmg"
+          DMG="releases/kcap-$VERSION-osx-arm64.dmg"
           python3 -m venv "$RUNNER_TEMP/dmgbuild"
           "$RUNNER_TEMP/dmgbuild/bin/pip" install --quiet --only-binary :all: --require-hashes -r scripts/dmg/requirements.txt
-          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/Kurrent Capacitor.app" "$DMG"
+          PATH="$RUNNER_TEMP/dmgbuild/bin:$PATH" bash scripts/build-dmg.sh "extracted/kcap.app" "$DMG"
           codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" --keychain "$KEYCHAIN" "$DMG"
           xcrun notarytool submit "$DMG" --keychain-profile kcap-notary --keychain "$KEYCHAIN" --wait --timeout 45m
           xcrun stapler staple "$DMG"
@@ -303,8 +310,8 @@ jobs:
           set -euo pipefail
           cp trio/bin/daemon.sha256 trio/bin/kcap.sha256 releases/
           case "$RUNNER_OS" in
-            Windows) mv "releases/KurrentCapacitor-$RID-Setup.exe" "releases/Kurrent-Capacitor-$VERSION-$RID-Setup.exe" ;;
-            Linux)   cp "releases/KurrentCapacitor-$RID.AppImage" "releases/Kurrent-Capacitor-$VERSION-$RID.AppImage" ;;
+            Windows) mv "releases/KurrentCapacitor-$RID-Setup.exe" "releases/kcap-$VERSION-$RID-Setup.exe" ;;
+            Linux)   cp "releases/KurrentCapacitor-$RID.AppImage" "releases/kcap-$VERSION-$RID.AppImage" ;;
           esac
 
       - name: Upload the release set
@@ -324,4 +331,4 @@ jobs:
             releases/KurrentCapacitor-osx-arm64-Portable.zip
             releases/KurrentCapacitor-win-x64-Setup.exe
             releases/KurrentCapacitor-linux-x64.AppImage
-            releases/Kurrent-Capacitor-*-linux-x64.deb
+            releases/kcap-*-linux-x64.deb

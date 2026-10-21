@@ -561,6 +561,16 @@ public class WorkContextViewSmokeTests {
             await Assert.That(VisibleTexts(section)).Contains("AGENTS & COMMANDS");
             await Assert.That(VisibleGlyphs(host.Find<ItemsControl>("RunningSubagentList"))).IsEqualTo(1);
             await Assert.That(VisibleTexts(section)).Contains("Run the full suite");
+            // Nothing opens yet, so no row is a live button; naming the subagent makes its row one.
+            await Assert.That(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Count(b => b.IsEnabled)).IsEqualTo(0);
+            host.Runs.Identify("c1", "a1");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Count(b => b.IsEnabled)).IsEqualTo(1);
+            // A screen reader hears the row's state with its name, but not its ticking duration, which would
+            // re-announce a focused row every second.
+            var row = host.Runs.Rows.Single(r => r.CanOpen);
+            await Assert.That(Avalonia.Automation.AutomationProperties.GetName(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Single(b => b.IsEnabled)))
+                .IsEqualTo($"{row.Name}, running");
 
             await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
@@ -570,6 +580,9 @@ public class WorkContextViewSmokeTests {
 
         static int VisibleGlyphs(ItemsControl list) =>
             list.GetVisualDescendants().OfType<AppIcon>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
+
+        static IEnumerable<Button> RowButtons(ItemsControl list) =>
+            list.GetVisualDescendants().OfType<Button>().Where(b => b.Name == "RunRowButton");
     }
 
     /// Driven through the Claude projection: a command with no description is named by its own

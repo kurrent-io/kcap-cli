@@ -243,4 +243,111 @@ public class TelemetryClientTests {
         await Assert.That(handler.LastBody!.Contains("organization")).IsTrue();
         await Assert.That(handler.LastBody!.Contains("acme")).IsTrue();
     }
+
+    /// <summary>An opt-out leaves nothing for a later flush to send: neither what was queued nor what an
+    /// earlier failure parked on disk. A stop that is only this process's own drops its queue but leaves the
+    /// spool other processes share.</summary>
+    [Test]
+    [Arguments(true, 0)]
+    [Arguments(false, 1)]
+    public async Task After_a_stop_a_flush_sends_nothing_and_only_an_opt_out_empties_the_spool(bool optOut, int parked) {
+        var handler = new StubHandler(HttpStatusCode.OK);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var client  = Client(handler, spoolPath, out var spool);
+        spool.Append([Event("parked_event")]);
+        client.Enqueue(Event("queued_event"));
+
+        if (optOut) client.Discard();
+        else client.Abandon();
+        await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(2));
+
+        await Assert.That(handler.Calls).IsEqualTo(0);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(parked);
+    }
+
+    /// <summary>A request already on the wire cannot be recalled, but if it fails it must not park its
+    /// events for a later run to send.</summary>
+    [Test]
+    public async Task A_flush_in_flight_at_the_discard_does_not_spool_its_events_on_failure() {
+        var handler = new GatedHandler(HttpStatusCode.ServiceUnavailable);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+        client.Enqueue(Event("in_flight_event"));
+
+        var flush = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10));
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        client.Discard();
+        handler.Release.SetResult();
+        await flush;
+
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task A_discard_cancels_the_send_in_flight() {
+        var handler = new GatedHandler(HttpStatusCode.OK);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool  = new TelemetrySpool(spoolPath);
+        var client = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System);
+        client.Enqueue(Event("in_flight_event"));
+
+        var flush = client.FlushAsync("device-1", null, TimeSpan.FromSeconds(30));
+        await handler.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        client.Discard();
+
+        await Assert.That(await flush.WaitAsync(TimeSpan.FromSeconds(10))).IsFalse();
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
+    /// <summary>An opt-out saved by another process between the capture and the send stops the send and drops
+    /// what it would have carried.</summary>
+    [Test]
+    public async Task A_send_whose_consent_was_withdrawn_does_not_start() {
+        var handler = new StubHandler(HttpStatusCode.OK);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool   = new TelemetrySpool(spoolPath);
+        var consent = true;
+        var client  = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System, () => consent);
+        client.Enqueue(Event("captured_with_consent"));
+
+        consent = false;
+
+        await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsFalse();
+        await Assert.That(handler.Calls).IsEqualTo(0);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+
+        // Withdrawn, not shut: once the choice is back on, what is captured after goes out.
+        consent = true;
+        client.Enqueue(Event("captured_after_reconsent"));
+        await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsTrue();
+        await Assert.That(handler.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>A consent withdrawn after a failed send keeps its events off the disk too.</summary>
+    [Test]
+    public async Task A_failed_send_does_not_spill_events_whose_consent_was_withdrawn() {
+        var handler = new StubHandler(HttpStatusCode.ServiceUnavailable);
+        using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
+        var spool   = new TelemetrySpool(spoolPath);
+        var asked   = 0;
+        var client  = new TelemetryClient(handler, spool, "phc_test", "https://phog.example", TimeProvider.System, () => ++asked == 1);
+        client.Enqueue(Event("captured_with_consent"));
+
+        await Assert.That(await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(10))).IsFalse();
+        await Assert.That(handler.Calls).IsEqualTo(1);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+    }
+
+    sealed class GatedHandler(HttpStatusCode status) : HttpMessageHandler {
+        public readonly TaskCompletionSource Started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(ct);
+
+            return new HttpResponseMessage(status);
+        }
+    }
 }

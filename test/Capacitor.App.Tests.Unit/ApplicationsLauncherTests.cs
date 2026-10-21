@@ -6,7 +6,7 @@ using Capacitor.App.Platform.Mac;
 namespace Capacitor.App.Tests.Unit;
 
 public class ApplicationsLauncherTests {
-    const string Installed = "/Applications/Kurrent Capacitor.app";
+    const string Installed = "/Applications/kcap.app";
 
     sealed class Runner : IProcessRunner {
         public string[]? Args;

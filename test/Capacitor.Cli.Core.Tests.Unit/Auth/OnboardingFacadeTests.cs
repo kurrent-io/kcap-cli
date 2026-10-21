@@ -23,6 +23,12 @@ public class OnboardingFacadeTests {
 
     internal bool TokenFileExists(string profile) => File.Exists(Path.Combine(TokensDir, $"{profile}.json"));
 
+    // Only a loopback server may point the WorkOS calls at a stub.
+    const string LoopbackServer = "http://127.0.0.1:5108";
+
+    static string WorkOSConfig(string apiBase) =>
+        $$"""{"provider":"workos","client_id":"client_d","organization_id":"org_a","api_base_url":"{{apiBase}}"}""";
+
     // ── login to a known server ──────────────────────────────────────────────
 
     [Test]
@@ -128,15 +134,13 @@ public class OnboardingFacadeTests {
               .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                   """{"user":{"id":"user_x","first_name":"Ada"},"organization_id":"org_a","access_token":"acc","refresh_token":"rt"}"""));
 
-        using var handler = AuthHttp.Script(
-            authConfig: """{"provider":"workos","client_id":"client_d","organization_id":"org_a"}""");
+        using var handler = AuthHttp.Script(authConfig: WorkOSConfig(apiBase: workos.Urls[0]));
 
         var progress = new RecordingAuthProgress();
-        var facade   = NewFacade(Config.Root, progress, handler,
-            workosBrowser: FakeBrowser.WithCode("the_code"), workosApiBase: workos.Urls[0]);
+        var facade   = NewFacade(Config.Root, progress, handler, workosBrowser: FakeBrowser.WithCode("the_code"));
 
         var result = await facade.LoginAsync(
-            "https://acme.kcap.ai", forceDevice: false, profile: "acme", CancellationToken.None, adoptServer: true);
+            LoopbackServer, forceDevice: false, profile: "acme", CancellationToken.None, adoptServer: true);
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
 
@@ -145,9 +149,12 @@ public class OnboardingFacadeTests {
         await Assert.That(stored.RefreshToken).IsEqualTo("rt");
         await Assert.That(stored.ClientId).IsEqualTo("client_d");
         await Assert.That(stored.Provider).IsEqualTo(AuthProvider.WorkOS);
+        await Assert.That(stored.WorkOSApiBase).IsEqualTo(workos.Urls[0]);
+        await Assert.That(workos.LogEntries.Count).IsEqualTo(1);
+        await Assert.That(progress.Errors).IsEmpty();
 
         var profile = ReadConfig().Profiles["acme"];
-        await Assert.That(profile.ServerUrl).IsEqualTo("https://acme.kcap.ai");
+        await Assert.That(profile.ServerUrl).IsEqualTo(LoopbackServer);
         await Assert.That(profile.AuthProvider!.Provider).IsEqualTo(AuthProvider.WorkOS);
         await Assert.That(progress.Notices).Contains("Logged in as Ada");
     }
@@ -159,18 +166,65 @@ public class OnboardingFacadeTests {
               .RespondWith(Response.Create().WithStatusCode(200).WithBody(
                   """{"user":{"id":"user_x"},"organization_id":"org_other","access_token":"acc","refresh_token":"rt"}"""));
 
-        using var handler = AuthHttp.Script(
-            authConfig: """{"provider":"workos","client_id":"client_d","organization_id":"org_a"}""");
+        using var handler = AuthHttp.Script(authConfig: WorkOSConfig(apiBase: workos.Urls[0]));
 
         var facade = NewFacade(Config.Root, new RecordingAuthProgress(), handler,
-            workosBrowser: FakeBrowser.WithCode("the_code"), workosApiBase: workos.Urls[0]);
+            workosBrowser: FakeBrowser.WithCode("the_code"));
 
         var result = await facade.LoginAsync(
-            "https://acme.kcap.ai", forceDevice: false, profile: "acme", CancellationToken.None, adoptServer: true);
+            LoopbackServer, forceDevice: false, profile: "acme", CancellationToken.None, adoptServer: true);
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(File.Exists(ConfigPath)).IsFalse();
         await Assert.That(TokenFileExists("acme")).IsFalse();
+    }
+
+    /// The browser answers a cancel, so no token call is made: the authorize URL it was handed is
+    /// where the sign-in went.
+    [Test]
+    [Arguments("https://acme.kcap.ai", "http://127.0.0.1:4100")]
+    [Arguments(LoopbackServer, "https://workos.attacker.example")]
+    public async Task LoginAsync_workos_refuses_an_advertised_base_unless_both_are_loopback(string server, string apiBase) {
+        using var handler  = AuthHttp.Script(authConfig: WorkOSConfig(apiBase));
+        var       browser  = FakeBrowser.NonSuccess(Duende.IdentityModel.OidcClient.Browser.BrowserResultType.UserCancel);
+        var       progress = new RecordingAuthProgress();
+        var       facade   = NewFacade(Config.Root, progress, handler, workosBrowser: browser);
+
+        await facade.LoginAsync(server, forceDevice: false, profile: "acme", CancellationToken.None, adoptServer: true);
+
+        await Assert.That(browser.LastStartUrl).StartsWith("https://api.workos.com/user_management/authorize?");
+        await Assert.That(progress.Errors.Count(e => e.Contains("advertised the WorkOS API", StringComparison.Ordinal)))
+            .IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task LoginAsync_workos_with_no_advertised_base_signs_in_against_production_without_a_warning() {
+        using var handler = AuthHttp.Script(
+            authConfig: """{"provider":"workos","client_id":"client_d","organization_id":"org_a"}""");
+        var browser  = FakeBrowser.NonSuccess(Duende.IdentityModel.OidcClient.Browser.BrowserResultType.UserCancel);
+        var progress = new RecordingAuthProgress();
+        var facade   = NewFacade(Config.Root, progress, handler, workosBrowser: browser);
+
+        await facade.LoginAsync(LoopbackServer, forceDevice: false, profile: "acme", CancellationToken.None, adoptServer: true);
+
+        await Assert.That(browser.LastStartUrl).StartsWith("https://api.workos.com/user_management/authorize?");
+        await Assert.That(progress.Errors).IsEquivalentTo(["Sign-in was cancelled."]);
+    }
+
+    /// Hooks read the provider from the cache for a day, so a login that learned it changed must say so.
+    [Test]
+    public async Task LoginAsync_rewrites_a_stale_provider_cache_entry() {
+        AuthProviderCache.Set("https://none.example", AuthProvider.GitHubApp, Config.Root, TimeProvider.System);
+
+        using var handler = AuthHttp.Script(authConfig: """{"provider":"None"}""");
+        var       facade  = NewFacade(Config.Root, new RecordingAuthProgress(), handler);
+
+        // A configured server_url may carry the slash the hooks' server URL never does.
+        await facade.LoginAsync(
+            "https://none.example/", forceDevice: false, profile: "solo", CancellationToken.None, adoptServer: true);
+
+        await Assert.That(AuthProviderCache.TryGet("https://none.example", Config.Root, TimeProvider.System))
+            .IsEqualTo(AuthProvider.None);
     }
 
     // Cancellation is never rendered as failure: closing the wizard while the browser is up must
@@ -185,7 +239,7 @@ public class OnboardingFacadeTests {
         var progress = new RecordingAuthProgress();
         // No token endpoint is stubbed: the cancel lands in the browser, before any WorkOS call.
         var facade = NewFacade(Config.Root, progress, handler,
-            workosBrowser: FakeBrowser.CancellingCaller(cts), workosApiBase: "http://127.0.0.1:9");
+            workosBrowser: FakeBrowser.CancellingCaller(cts));
 
         var result = await facade.LoginAsync(
             "https://acme.kcap.ai", forceDevice: false, profile: "acme", cts.Token, adoptServer: true);

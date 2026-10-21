@@ -41,7 +41,7 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
     async Task ShowAsync(DesktopNotification notification, (string Key, string Label, string Id)[] actions, Pending pending) {
         try {
             var (buttons, markup) = await EnsureReadyAsync();
-            var body = buttons || actions.Length == 0 ? notification.Body : $"{notification.Body}\n\nOpen Kurrent Capacitor to respond.";
+            var body = buttons || actions.Length == 0 ? notification.Body : $"{notification.Body}\n\nOpen kcap to respond.";
             string[] wire = buttons ? [DefaultAction, "", .. actions.SelectMany(a => new[] { a.Key, a.Label })] : [];
             // A request with choices must outlive the server's default timeout, whose close drops it.
             var expire = actions.Length > 0 ? 0 : -1;
@@ -134,7 +134,7 @@ sealed class LinuxDesktopNotificationSink(Action<Action> dispatch) : IDesktopNot
     static MessageBuffer Notify(string title, string body, string[] actions, int expire) {
         var writer = Connection.GetMessageWriter();
         writer.WriteMethodCallHeader(Service, Path, Service, "Notify", "susssasa{sv}i");
-        writer.WriteString("Kurrent Capacitor");
+        writer.WriteString("kcap");
         writer.WriteUInt32(0);
         writer.WriteString("");
         writer.WriteString(title);

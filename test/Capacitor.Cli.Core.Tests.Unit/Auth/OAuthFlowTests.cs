@@ -116,7 +116,7 @@ public class OAuthFlowTests {
         using var stub = new StubHost(server.Urls[0]);
 
         var auth = await new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System)
-            .SwitchOrganizationAsync("client_d", "rt1", "org_a", CancellationToken.None);
+            .SwitchOrganizationAsync(WorkOSClient.ApiBase, "client_d", "rt1", "org_a", CancellationToken.None);
 
         await Assert.That(auth!.OrganizationId).IsEqualTo("org_a");
         await Assert.That(auth.RefreshToken).IsEqualTo("rt2");
@@ -131,7 +131,7 @@ public class OAuthFlowTests {
         using var stub = new StubHost(server.Urls[0]);
 
         var auth = await new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System)
-            .SwitchOrganizationAsync("client_d", "rt1", "org_a", CancellationToken.None);
+            .SwitchOrganizationAsync(WorkOSClient.ApiBase, "client_d", "rt1", "org_a", CancellationToken.None);
 
         await Assert.That(auth).IsNull();
     }
@@ -145,7 +145,7 @@ public class OAuthFlowTests {
         using var stub = new StubHost(server.Urls[0]);
 
         var auth = (await new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System)
-            .RefreshAsync("client_d", "rt1", CancellationToken.None)).Response;
+            .RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None)).Response;
 
         await Assert.That(auth!.AccessToken).IsEqualTo("acc");
         await Assert.That(auth.RefreshToken).IsEqualTo("rt2");
@@ -166,7 +166,7 @@ public class OAuthFlowTests {
         using var stub = new StubHost(url);
 
         var auth = (await new WorkOSClient(new PlainHttpClientFactory(stub), TimeProvider.System)
-            .RefreshAsync("client_d", "rt1", CancellationToken.None)).Response;
+            .RefreshAsync(WorkOSClient.ApiBase, "client_d", "rt1", CancellationToken.None)).Response;
 
         await Assert.That(auth).IsNull();
     }
@@ -322,9 +322,9 @@ public class OAuthFlowTests {
     [Test]
     public async Task Installation_message_extracted_from_not_installed_error() {
         var msg = OAuthLoginFlow.TryParseInstallationMessage(
-            """{"error":"The Kurrent Capacitor GitHub App is not installed on your organization."}""");
+            """{"error":"The kcap GitHub App is not installed on your organization."}""");
 
-        await Assert.That(msg).IsEqualTo("The Kurrent Capacitor GitHub App is not installed on your organization.");
+        await Assert.That(msg).IsEqualTo("The kcap GitHub App is not installed on your organization.");
     }
 
     [Test]

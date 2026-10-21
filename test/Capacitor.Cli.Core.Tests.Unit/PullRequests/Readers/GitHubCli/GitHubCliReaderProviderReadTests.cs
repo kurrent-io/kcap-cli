@@ -40,7 +40,7 @@ public class GitHubCliReaderProviderReadTests {
         using var h = await Ready(Tmp);
         var read = await h.Provider.OverviewAsync("session", Subject, default);
         await Assert.That(h.LastArgs).IsEquivalentTo(new[] { "pr", "view", "12", "--repo", "github.com/example/repo", "--json",
-            "title,url,state,isDraft,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments" });
+            "title,url,state,isDraft,mergeable,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments" });
         await Assert.That(read.Kind).IsEqualTo(PullRequestReadKind.Ready);
         await Assert.That(read.AccessValidForSeconds).IsEqualTo(30);
         await Assert.That(read.PollAfterSeconds).IsEqualTo(30);
@@ -48,6 +48,7 @@ public class GitHubCliReaderProviderReadTests {
         var data = read.Data!;
         await Assert.That(data.Title).IsEqualTo("Add the thing");
         await Assert.That(data.Lifecycle).IsEqualTo("open");
+        await Assert.That(data.Mergeable == false).IsTrue();
         await Assert.That(data.HeadSha).IsEqualTo("8dc30b635dcd4aac3970e376d5c2d55fc33b91da");
         await Assert.That(data.Description).IsEqualTo("Adds the thing.\n\nCloses #1");
         await Assert.That(data.ReviewDecision).IsEqualTo("changes_requested");

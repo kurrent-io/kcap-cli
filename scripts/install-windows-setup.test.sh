@@ -6,10 +6,10 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 layout=(
   "Local/KurrentCapacitor/Update.exe"
-  "Local/KurrentCapacitor/current/Kurrent Capacitor.exe"
+  "Local/KurrentCapacitor/current/kcap-desktop.exe"
   "Local/KurrentCapacitor/current/kcap.exe"
   "Local/KurrentCapacitor/current/kcap-daemon.exe"
-  "Roaming/Microsoft/Windows/Start Menu/Programs/Kurrent Capacitor.lnk"
+  "Roaming/Microsoft/Windows/Start Menu/Programs/kcap.lnk"
 )
 
 fail=0

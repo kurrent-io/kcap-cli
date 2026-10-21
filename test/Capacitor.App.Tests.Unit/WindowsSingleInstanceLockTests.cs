@@ -70,9 +70,9 @@ public class WindowsSingleInstanceLockTests {
 
     [Test]
     public async Task The_lock_name_ignores_path_case_and_carries_no_backslash() {
-        var lower = WindowsSingleInstanceLock.NameFor(@"C:\Users\someone\AppData\Local\KurrentCapacitor\current\Kurrent Capacitor.exe");
-        var upper = WindowsSingleInstanceLock.NameFor(@"C:\USERS\SOMEONE\APPDATA\LOCAL\KURRENTCAPACITOR\CURRENT\KURRENT CAPACITOR.EXE");
-        var other = WindowsSingleInstanceLock.NameFor(@"C:\src\kcap-cli\src\Capacitor.App\bin\Debug\net10.0\Kurrent Capacitor.exe");
+        var lower = WindowsSingleInstanceLock.NameFor(@"C:\Users\someone\AppData\Local\KurrentCapacitor\current\kcap-desktop.exe");
+        var upper = WindowsSingleInstanceLock.NameFor(@"C:\USERS\SOMEONE\APPDATA\LOCAL\KURRENTCAPACITOR\CURRENT\KCAP-DESKTOP.EXE");
+        var other = WindowsSingleInstanceLock.NameFor(@"C:\src\kcap-cli\src\Capacitor.App\bin\Debug\net10.0\kcap-desktop.exe");
 
         await Assert.That(upper).IsEqualTo(lower);
         await Assert.That(other).IsNotEqualTo(lower);

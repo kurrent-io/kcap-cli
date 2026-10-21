@@ -1,3 +1,4 @@
+using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -23,15 +24,32 @@ public class TerminalTabResumeTests {
         public volatile Func<ResumeLedgerEntry?>? Gate;
         public TerminalTabViewModel Vm = null!;
 
-        public async Task<FakeTerminalAttachClient> AttachAsync() {
+        /// A daemon that reports which runtime an attach reached.
+        public Rig ReportingRuntime() {
+            Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [AgentAttachClient.RuntimeCapability]));
+            return this;
+        }
+
+        public async Task<FakeTerminalAttachClient> StartAsync() {
             Vm = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time,
                 agentId => agentId != "a1" ? null : Gate is { } gate ? gate() : Entry, Window);
             Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
             Dispatcher.UIThread.RunJobs();
             await (Vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
             var client = Factory.Created.Single();
-            await client.TriggerAttached("before"u8.ToArray());
+            await client.RunStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             return client;
+        }
+
+        public async Task<FakeTerminalAttachClient> AttachAsync(DateTimeOffset? runtimeStartedAt = null) {
+            var client = await StartAsync();
+            await client.TriggerAttached("before"u8.ToArray(), runtimeStartedAt: runtimeStartedAt);
+            return client;
+        }
+
+        public async Task RecoveryAsync() {
+            await (Vm.PendingRecoveryForTesting ?? Task.CompletedTask);
+            Dispatcher.UIThread.RunJobs();
         }
 
         public async Task DropAsync(FakeTerminalAttachClient client, AttachOutcome outcome) {
@@ -143,6 +161,7 @@ public class TerminalTabResumeTests {
 
             rig.Entry = Ledger(ResumeState.Resuming);
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await rig.RecoveryAsync();
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
 
             rig.Entry = Ledger(ResumeState.Running);
@@ -172,6 +191,7 @@ public class TerminalTabResumeTests {
 
             rig.Entry = Ledger(ResumeState.Resuming);
             rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await rig.RecoveryAsync();
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
         });
     }
@@ -265,7 +285,9 @@ public class TerminalTabResumeTests {
             var phases = new List<TerminalSessionPhase>();
             rig.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(TerminalTabViewModel.State)) phases.Add(rig.Vm.State.Phase); };
             release.Set();
-            for (var i = 0; i < 200 && !phases.Contains(TerminalSessionPhase.Interrupted); i++) { Dispatcher.UIThread.RunJobs(); await Task.Delay(5); }
+            // The re-arm to Resuming is a second dispatch queued off the UI thread after Interrupted publishes.
+            bool Rearmed() => phases.Contains(TerminalSessionPhase.Interrupted) && rig.Vm.State.Phase == TerminalSessionPhase.Resuming;
+            for (var i = 0; i < 200 && !Rearmed(); i++) { Dispatcher.UIThread.RunJobs(); await Task.Delay(5); }
 
             await Assert.That(phases).Contains(TerminalSessionPhase.Interrupted);
 
@@ -361,6 +383,298 @@ public class TerminalTabResumeTests {
 
             await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
             await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// A restart can publish its successor between the ledger read and the daemon resolving the attach;
+    /// the runtime the attach reached is the one the daemon reports, so its normal exit stays an exit.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_attach_is_bound_to_the_runtime_the_daemon_reports() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.StartAsync();
+
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            await client.TriggerAttached("successor"u8.ToArray(), runtimeStartedAt: SecondStart);
+            await rig.DropAsync(client, new AttachOutcome.Exited(0));
+            await rig.TickAsync();
+
+            await Assert.That(client.RequestedRuntime).IsTrue();
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(1);
+        });
+    }
+
+    /// A daemon without attach-runtime/1 gets a plain Attach, and the tab binds the runtime the ledger
+    /// named before dialing.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_older_daemon_gets_a_plain_attach_bound_by_the_ledger_read_before_dialing() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) };
+            var client = await rig.StartAsync();
+
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            await client.TriggerAttached("first"u8.ToArray());
+            await rig.DropAsync(client, new AttachOutcome.Exited(1));
+
+            await Assert.That(client.RequestedRuntime).IsFalse();
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+        });
+    }
+
+    /// The restart's own Resuming row can arrive after its replacement attached and exited normally; it
+    /// names no runtime other than the one the tab ended on, so the exit stands.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_late_resuming_row_after_a_settled_exit_leaves_the_exit_alone(bool entryStillListed) {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+            rig.Entry = Ledger(ResumeState.Resuming);
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            await rig.TickAsync();
+            var resumed = rig.Factory.Created[^1];
+            await resumed.TriggerAttached("ring"u8.ToArray(), runtimeStartedAt: SecondStart);
+            await rig.DropAsync(resumed, new AttachOutcome.Exited(0));
+            if (!entryStillListed) rig.Entry = null;
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await rig.RecoveryAsync();
+            await rig.TickAsync();
+            await rig.TickAsync();
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// A manual retry that writes the ledger after the attempt read Interrupted reaches a tab still
+    /// attached, where its rows change nothing; settling reads the ledger again and follows the retry.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retry_seen_while_an_interrupted_verdict_settles_starts_a_wait() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+
+            using var inRead = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var gated = Ledger(ResumeState.Interrupted, "runtime_exited");
+            rig.Gate = () => { inRead.Set(); release.Wait(TimeSpan.FromSeconds(5)); return gated; };
+            client.Result.SetResult(new AttachOutcome.ConnectionLost());
+            while (!inRead.IsSet) await Task.Delay(5);
+
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            rig.Gate = null;
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            var phases = new List<TerminalSessionPhase>();
+            rig.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(TerminalTabViewModel.State)) phases.Add(rig.Vm.State.Phase); };
+            release.Set();
+            await rig.Vm.CurrentRunForTesting!;
+
+            await Assert.That(phases).Contains(TerminalSessionPhase.Interrupted);
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+            await rig.TickAsync();
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// An Interrupted row that reaches a still-attached tab between its own runtime's exit verdict and
+    /// that verdict's publication is not overwritten by the exit.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_interruption_seen_while_an_own_exit_settles_shows_the_reason() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+
+            using var inRead = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var gated = Ledger(ResumeState.Running);
+            rig.Gate = () => { inRead.Set(); release.Wait(TimeSpan.FromSeconds(5)); return gated; };
+            client.Result.SetResult(new AttachOutcome.Exited(3));
+            while (!inRead.IsSet) await Task.Delay(5);
+
+            rig.Entry = Ledger(ResumeState.Interrupted, "readiness_failed");
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Failed" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted", Interruption = "readiness_failed" });
+            rig.Gate = null;
+            release.Set();
+            await rig.Vm.CurrentRunForTesting!;
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Interrupted);
+            await Assert.That(rig.Vm.State.Detail).IsEqualTo("readiness_failed");
+        });
+    }
+
+    /// A restart reconnects the status stream through states with no capabilities, and the daemon it
+    /// reaches may predate the request, so only the daemon connected now decides how to attach.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task An_attach_asks_for_the_runtime_only_while_the_connected_daemon_offers_it(bool reconnectedToOlder) {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+            await Assert.That(client.RequestedRuntime).IsTrue();
+
+            rig.Entry = Ledger(ResumeState.Resuming);
+            rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connecting, null, null));
+            if (reconnectedToOlder)
+                rig.Daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, ["status/1", "resume/1"]));
+            await rig.DropAsync(client, new AttachOutcome.ConnectionLost());
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            await rig.TickAsync();
+
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+            await Assert.That(rig.Factory.Created[^1].RequestedRuntime).IsFalse();
+        });
+    }
+
+    /// A retry whose rows land while settlement is publishing the interruption it read is still followed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_retry_seen_while_settlement_publishes_an_interruption_starts_a_wait() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+
+            using var recheckRead = new ManualResetEventSlim();
+            using var releaseRecheck = new ManualResetEventSlim();
+            using var recoveryRead = new ManualResetEventSlim();
+            using var releaseRecovery = new ManualResetEventSlim();
+            var reads = 0;
+            var interrupted = Ledger(ResumeState.Interrupted, "readiness_failed");
+            var stale = Ledger(ResumeState.Running, startedAt: SecondStart);
+            rig.Gate = () => {
+                switch (Interlocked.Increment(ref reads)) {
+                    case 2: recheckRead.Set(); releaseRecheck.Wait(TimeSpan.FromSeconds(5)); return interrupted;
+                    case 3: recoveryRead.Set(); releaseRecovery.Wait(TimeSpan.FromSeconds(5)); return stale;
+                    default: return rig.Entry;
+                }
+            };
+            client.Result.SetResult(new AttachOutcome.Exited(3));
+            while (!recheckRead.IsSet) { Dispatcher.UIThread.RunJobs(); await Task.Delay(5); }
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            var recovery = rig.Vm.PendingRecoveryForTesting!;
+            while (!recoveryRead.IsSet) await Task.Delay(5);
+
+            releaseRecheck.Set();
+            await rig.Vm.CurrentRunForTesting!;
+            releaseRecovery.Set();
+            await recovery;
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+            await rig.TickAsync();
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// A status-driven read that outlives the attempt it started from cannot restart the wait for a later
+    /// runtime whose exit happens to settle on an equal state.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stale_status_recovery_leaves_a_later_runtimes_exit_alone() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+            await rig.DropAsync(client, new AttachOutcome.Exited(0));
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+
+            using var inRead = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var captured = Ledger(ResumeState.Resuming);
+            rig.Gate = () => { inRead.Set(); release.Wait(TimeSpan.FromSeconds(5)); return captured; };
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            var stale = rig.Vm.PendingRecoveryForTesting!;
+            while (!inRead.IsSet) await Task.Delay(5);
+
+            rig.Gate = null;
+            rig.Entry = Ledger(ResumeState.Resuming);
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Completed" });
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            await rig.RecoveryAsync();
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+
+            rig.Entry = Ledger(ResumeState.Running, startedAt: SecondStart);
+            await rig.TickAsync();
+            var resumed = rig.Factory.Created[^1];
+            await resumed.TriggerAttached("ring"u8.ToArray(), runtimeStartedAt: SecondStart);
+            await rig.DropAsync(resumed, new AttachOutcome.Exited(0));
+            rig.Entry = null;
+
+            release.Set();
+            await stale;
+            await rig.TickAsync();
+            await rig.TickAsync();
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Exited);
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+        });
+    }
+
+    /// A daemon handing its agents to a successor marks them Resuming with the departing runtime's own
+    /// stamp, so that runtime's exit is the restart and the tab waits for the resume.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_exit_while_the_attached_runtime_is_handed_over_waits_for_the_resume() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+
+            rig.Entry = Ledger(ResumeState.Resuming, startedAt: FirstStart);
+            await rig.DropAsync(client, new AttachOutcome.Exited(0));
+
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Resuming);
+        });
+    }
+
+    /// A reattach the user started while a status-driven ledger read was in flight keeps its attempt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_status_recovery_does_not_cancel_a_reattach_already_under_way() {
+        await RunOnUiAsync(async () => {
+            var rig = new Rig { Entry = Ledger(ResumeState.Running) }.ReportingRuntime();
+            var client = await rig.AttachAsync(FirstStart);
+            await rig.DropAsync(client, new AttachOutcome.Failed("boom"));
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+
+            using var inRead = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            var resuming = Ledger(ResumeState.Resuming);
+            rig.Gate = () => { inRead.Set(); release.Wait(TimeSpan.FromSeconds(5)); return resuming; };
+            rig.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+            var recovery = rig.Vm.PendingRecoveryForTesting!;
+            while (!inRead.IsSet) await Task.Delay(5);
+            rig.Gate = null;
+
+            client.DisposeGate = new TaskCompletionSource();
+            var reattach = rig.Vm.ReattachCommand.Execute().ToTask();
+            release.Set();
+            await recovery;
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Failed);
+
+            client.DisposeGate.SetResult();
+            await reattach;
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(rig.Factory.Created.Count).IsEqualTo(2);
+            await Assert.That(rig.Vm.State.Phase).IsEqualTo(TerminalSessionPhase.Connecting);
         });
     }
 

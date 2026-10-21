@@ -20,10 +20,10 @@ channel="${4:-osx-arm64}"
 names=(
   "KurrentCapacitor-$version-$channel-full.nupkg"
   "KurrentCapacitor-$version-$channel-delta.nupkg"
-  "Kurrent-Capacitor-$version-$channel.dmg"
-  "Kurrent-Capacitor-$version-$channel-Setup.exe"
-  "Kurrent-Capacitor-$version-$channel.AppImage"
-  "Kurrent-Capacitor-$version-$channel.deb"
+  "kcap-$version-$channel.dmg"
+  "kcap-$version-$channel-Setup.exe"
+  "kcap-$version-$channel.AppImage"
+  "kcap-$version-$channel.deb"
 )
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 for name in "${names[@]}"; do

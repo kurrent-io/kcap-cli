@@ -137,7 +137,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
     /// server it talks to is what the hover tells you.
-    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string ServerUrlTip = "kcap server for this organization";
     public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
     public const string AgentCountTip = "Agents running on this daemon";
 
@@ -208,7 +208,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
 
-    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
+    public string AppVersionLabel { get; } = $"kcap {AppVersion.Display}";
 
     /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
     /// flyout opens the app's own.
@@ -322,6 +322,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? identityReport = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
@@ -552,8 +553,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
+            // A connect clears the progress lines back to the standing identity report, whichever of the two the
+            // main thread happens to see first.
+            string? identity = null;
+            identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(report => {
+                    var shown = identity;
+                    identity = report;
+                    if (report is not null) StartMessage = report;
+                    else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
+                })
+                .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = null)
+                .Subscribe(_ => StartMessage = identity)
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while

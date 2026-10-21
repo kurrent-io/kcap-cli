@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.LocalEdition;
 

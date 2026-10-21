@@ -50,7 +50,7 @@ public static class GitHubCliMapping {
 
     public const int BodyLimit = 262_144;
     public const int ToolListLimit = 100;
-    public const string ViewFields = "title,url,state,isDraft,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments";
+    public const string ViewFields = "title,url,state,isDraft,mergeable,headRefName,baseRefName,headRefOid,body,updatedAt,reviewDecision,author,statusCheckRollup,reviewRequests,latestReviews,reviews,comments";
 
     public static (string? Text, bool Truncated) Truncate(string? text) => text is { Length: > BodyLimit } ? (text[..BodyLimit], true) : (text, false);
 
@@ -73,7 +73,8 @@ public static class GitHubCliMapping {
         var requests = root.Prop("reviewRequests") is { } reviewRequests && reviewRequests.IsArray ? reviewRequests.EnumerateArray().ToArray() : [];
         var overview = new PullRequestOverviewDto {
             Title = Text(root, "title"), Url = PullRequestWire.SafeLink(Text(root, "url")), Lifecycle = Lifecycle(Text(root, "state"), root.Bool("isDraft")),
-            IsDraft = root.Bool("isDraft"), HeadRef = Text(root, "headRefName"), BaseRef = Text(root, "baseRefName"),
+            IsDraft = root.Bool("isDraft"), HeadRef = Text(root, "headRefName"),
+            Mergeable = Text(root, "mergeable") switch { "MERGEABLE" => true, "CONFLICTING" => false, _ => null }, BaseRef = Text(root, "baseRefName"),
             HeadSha = headSha, Description = description, DescriptionTruncated = truncated, UpdatedAt = Time(root, "updatedAt"),
             ReviewDecision = ReviewDecision(Text(root, "reviewDecision")), AccessCheckedFor = "your GitHub CLI sign-in",
             Checks = new() { Availability = availability, Rollup = Rollup(checks, checksCapped), HeadSha = headSha, Counts = counts },

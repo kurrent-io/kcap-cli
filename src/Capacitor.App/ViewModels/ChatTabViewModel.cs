@@ -106,6 +106,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int _baselineVersion;
     int _readInFlight;
     string? _feedKey;
+    bool _feedReleased;
     /// The session the listed foreign rows belong to.
     string? _queueKey;
     string? _root;
@@ -890,7 +891,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
-        _runs.SessionOver = info.Ended;
+        if (!_feedReleased) _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
@@ -972,6 +973,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
+        // A released tab's runs belong to the monitor that took its feed; this tab reads nothing more.
+        if (_feedReleased) return;
         _items.Clear();
         _history.Clear();
         _literalInputHistory.Clear();
@@ -1222,7 +1225,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var read = lease.Feed is RemoteTranscriptFeed
                 ? lease.Feed.ReadAppended()
                 : await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
-            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0
+            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0 && read.Runs.Count == 0
                 && baselineVersion == Volatile.Read(ref _baselineVersion) && inputGeneration == Volatile.Read(ref _inputGeneration)) return;
             await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read));
         } catch (Exception ex) {
@@ -1288,6 +1291,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         if (rebased) RefreshQueue();
         if (read.Lines.Count == 0) {
+            ApplyFeedRuns(read);
             if (read.Status == FeedStatus.Reset) {
                 SyncPendingCardItems();
                 RefreshActivityNote();
@@ -1393,10 +1397,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         _runs.ApplyAll(restored);
         if (fresh.Count > 0) _items.AddRange(fresh);
+        ApplyFeedRuns(read);
         RefreshQueue();
         Reconcile();
         SyncPendingCardItems();
         RefreshActivityNote();
+    }
+
+    void ApplyFeedRuns(FeedRead read) {
+        if (read.Runs.Count > 0) _runs.Apply(new ChatProjectionResult([], [], read.Runs));
     }
 
     /// The one group carrying the pack/suppress flags. Only the trailing group ever carries them,
@@ -1553,6 +1562,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     void LogOnce(string reason) {
         if (_loggedFailures.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}");
+    }
+
+    /// <summary>Gives up a local feed to whoever carries on reading it after this tab closes. Only between reads,
+    /// so two readers never share it; null otherwise, and the caller reads afresh. The tab reads nothing after.</summary>
+    public TranscriptFeedHandoff? ReleaseFeed() {
+        if (_lease is not { Feed: LocalTranscriptFeed } lease || _feedKey is not { } key) return null;
+        if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return null;
+        Interlocked.Increment(ref _generation);
+        _feedReleased = true;
+        _lease = null;
+        return new TranscriptFeedHandoff(lease.Feed, key, _runs);
     }
 
     public Task TeardownAsync() {

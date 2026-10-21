@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using TUnit.Assertions.Enums;
 using Capacitor.Cli.Core;
 
@@ -638,16 +639,27 @@ public class KcapCliTests {
         var cli = MakeCli(runner);
         using var interrupt = new CancellationTokenSource();
 
-        await cli.SetupLocalAsync(_ => { }, interrupt.Token, CancellationToken.None);
+        await cli.SetupLocalAsync(new LocalEmbeddingChoice("nomic-embed-text"), _ => { }, interrupt.Token, CancellationToken.None);
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
-            ["setup", "--local", "--json", "--single-user", "--yes"], CollectionOrdering.Matching);
+            ["setup", "--local", "--json", "--single-user", "--yes", "--embedding-model", "nomic-embed-text"], CollectionOrdering.Matching);
         await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
         await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
         await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
         await Assert.That(runner.SeenOptions!.Timeout).IsNull();
         // Above the 26 min a recovery and commit can spend back to back after the interrupt.
         await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(30));
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_passes_keyword_only_as_no_embeddings() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.KeywordOnly, _ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings"], CollectionOrdering.Matching);
     }
 
     /// The caller's token bounds only the work before the spawn: a running setup stops through its
@@ -658,7 +670,7 @@ public class KcapCliTests {
         var cli = MakeCli(runner);
         using var caller = new CancellationTokenSource();
 
-        await cli.SetupLocalAsync(_ => { }, CancellationToken.None, caller.Token);
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, caller.Token);
 
         await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
     }
@@ -668,7 +680,7 @@ public class KcapCliTests {
         var runner = new FakeProcessRunner();
         var cli = MakeCliWithNullPath(runner);
 
-        var result = await cli.SetupLocalAsync(_ => { }, CancellationToken.None, CancellationToken.None);
+        var result = await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, CancellationToken.None);
 
         await Assert.That(result.ExitCode).IsEqualTo(-1);
         await Assert.That(result.Tail).IsEquivalentTo(

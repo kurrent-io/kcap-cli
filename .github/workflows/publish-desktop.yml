@@ -19,7 +19,7 @@ on:
         required: true
         type: string
       installers:
-        description: Space-separated suffixes after Kurrent-Capacitor-<version>-<channel>, one per installer.
+        description: Space-separated suffixes after kcap-<version>-<channel>, one per installer.
         required: true
         type: string
 
@@ -92,13 +92,16 @@ jobs:
           aws s3 cp $R2 "$DEST/releases.$CHANNEL.json" merged.json
           aliases="$(bash scripts/promote-desktop-aliases.sh merged.json "$VERSION")"
           for suffix in $INSTALLERS; do
-            FILE="releases/Kurrent-Capacitor-$VERSION-$CHANNEL$suffix"
-            aws s3 cp $R2 "$FILE" "$DEST/Kurrent-Capacitor-$VERSION-$CHANNEL$suffix" --cache-control "public, max-age=31536000, immutable"
+            FILE="releases/kcap-$VERSION-$CHANNEL$suffix"
+            aws s3 cp $R2 "$FILE" "$DEST/kcap-$VERSION-$CHANNEL$suffix" --cache-control "public, max-age=31536000, immutable"
+            # Keep legacy download links current while publishing the kcap names.
             for alias in $aliases; do
-              case "$alias" in
-                beta)   aws s3 cp $R2 "$FILE" "$DEST/Kurrent-Capacitor-$CHANNEL-beta$suffix" --cache-control "public, max-age=300" ;;
-                stable) aws s3 cp $R2 "$FILE" "$DEST/Kurrent-Capacitor-$CHANNEL$suffix" --cache-control "public, max-age=300" ;;
-              esac
+              for name in kcap Kurrent-Capacitor; do
+                case "$alias" in
+                  beta)   aws s3 cp $R2 "$FILE" "$DEST/$name-$CHANNEL-beta$suffix" --cache-control "public, max-age=300" ;;
+                  stable) aws s3 cp $R2 "$FILE" "$DEST/$name-$CHANNEL$suffix" --cache-control "public, max-age=300" ;;
+                esac
+              done
             done
           done
 
@@ -108,5 +111,5 @@ jobs:
         run: |
           set -euo pipefail
           files=()
-          for suffix in $INSTALLERS; do files+=("releases/Kurrent-Capacitor-$VERSION-$CHANNEL$suffix"); done
+          for suffix in $INSTALLERS; do files+=("releases/kcap-$VERSION-$CHANNEL$suffix"); done
           gh release upload "$GITHUB_REF_NAME" "${files[@]}" --clobber

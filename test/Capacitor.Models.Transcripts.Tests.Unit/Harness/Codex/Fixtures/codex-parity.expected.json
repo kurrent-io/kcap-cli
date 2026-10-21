@@ -1,0 +1,972 @@
+[
+  {
+    "line": 1,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "SessionStarted",
+        "id": "203085ed-c072-2e7d-f0f3-eac0820adc1c",
+        "timestamp": "2026-09-04T09:00:01.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:01.000Z",
+        "causedBy": null,
+        "payload": {
+          "timestamp": "2026-09-04T09:00:01Z",
+          "extensions": {
+            "codex": {
+              "cwd": "/work/repo",
+              "originator": "codex_cli_rs",
+              "cli_version": "0.150.0",
+              "source": "cli",
+              "model_provider": "openai",
+              "git": {
+                "commit_hash": "abc123",
+                "branch": "main",
+                "repository_url": "https://example.invalid/repo.git"
+              },
+              "workspace_root": null
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 2,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 3,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "dc60b15b-ec85-4c36-9baa-2169e2f22366",
+        "timestamp": "2026-09-04T09:00:03.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:03.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "\u003Cenvironment_context\u003E\n  \u003Ccwd\u003E/work/repo\u003C/cwd\u003E\n\u003C/environment_context\u003E",
+          "timestamp": "2026-09-04T09:00:03Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 4,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "3701c73b-7463-abd4-f17c-52ea374b0a2e",
+        "timestamp": "2026-09-04T09:00:04.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:04.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "Fix the failing build",
+          "timestamp": "2026-09-04T09:00:04Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 5,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantThinkingGenerated",
+        "id": "73d734a0-26ba-71f6-9e08-89c35c33c20f",
+        "timestamp": "2026-09-04T09:00:05.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:05.000Z",
+        "causedBy": null,
+        "payload": {
+          "encrypted": true,
+          "timestamp": "2026-09-04T09:00:05Z",
+          "extensions": {
+            "openai": {
+              "thinking": {
+                "raw": "gAAAA-opaque-1"
+              }
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 6,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "9be60f3f-d10f-8672-86a3-280f5c57532e",
+        "timestamp": "2026-09-04T09:00:06.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:06.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "Looking at the build first.",
+          "timestamp": "2026-09-04T09:00:06Z",
+          "extensions": {
+            "codex": {
+              "phase": "commentary"
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 7,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "50b4f235-9378-4726-6c23-cecca121c07e",
+        "timestamp": "2026-09-04T09:00:07.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:07.000Z",
+        "causedBy": null,
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "call_a",
+              "toolName": "exec_command",
+              "arguments": {
+                "cmd": "rg TODO src"
+              },
+              "toolKind": "search"
+            }
+          ],
+          "timestamp": "2026-09-04T09:00:07Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 8,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 9,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "02b5657c-bc0c-4cfc-b1fb-a85e7983276a",
+        "timestamp": "2026-09-04T09:00:09.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:09.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "call_a",
+          "result": "src/a.rs:1: TODO\n",
+          "timestamp": "2026-09-04T09:00:09Z",
+          "extensions": {
+            "codex": {
+              "exec": {
+                "exit_code": 0,
+                "duration_ms": 1500,
+                "stdout": "src/a.rs:1: TODO\n",
+                "stderr": null,
+                "parsed_cmd": [
+                  {
+                    "type": "search",
+                    "cmd": "rg TODO src",
+                    "query": "TODO",
+                    "path": "src"
+                  }
+                ],
+                "source": "unified_exec_startup"
+              }
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 10,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "c609e9d1-fa95-a416-a889-b5adf6d75974",
+        "timestamp": "2026-09-04T09:00:10.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:10.000Z",
+        "causedBy": null,
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "call_b",
+              "toolName": "apply_patch",
+              "arguments": {
+                "input": "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-// TODO\n\u002B// done\n*** End Patch\n"
+              },
+              "toolKind": "edit"
+            }
+          ],
+          "timestamp": "2026-09-04T09:00:10Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 11,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "8f3985a6-ff0f-8220-476f-6cd6675b433e",
+        "timestamp": "2026-09-04T09:00:11.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:11.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "call_b",
+          "result": "Success. Updated the following files:\nM src/a.rs\n",
+          "timestamp": "2026-09-04T09:00:11Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 12,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": [
+      {
+        "target": "8f3985a6-ff0f-8220-476f-6cd6675b433e",
+        "slug": "codex",
+        "extension": {
+          "patch": {
+            "changes": [
+              {
+                "file_path": "/work/repo/src/a.rs",
+                "kind": "update",
+                "unified_diff": "@@ -1 \u002B1 @@\n-// TODO\n\u002B// done\n",
+                "content": null,
+                "move_path": null
+              }
+            ],
+            "success": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "line": 13,
+    "batch": 1,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UsageApplied",
+        "id": "f280e6ef-fdd4-9e15-66bf-9434d6b53846",
+        "timestamp": "2026-09-04T09:00:13.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:13.000Z",
+        "causedBy": null,
+        "payload": {
+          "usage": {
+            "inputTokens": "9649",
+            "outputTokens": "288",
+            "totalTokens": "16465",
+            "cachedInputTokens": "6528",
+            "reasoningTokens": "215",
+            "model": "gpt-5-codex",
+            "additionalCounts": {
+              "model_context_window": 258400
+            }
+          },
+          "anchor": "73d734a0-26ba-71f6-9e08-89c35c33c20f",
+          "targets": [
+            {
+              "eventId": "73d734a0-26ba-71f6-9e08-89c35c33c20f",
+              "eventType": "AssistantThinkingGenerated",
+              "toolName": null,
+              "isEcho": true
+            },
+            {
+              "eventId": "9be60f3f-d10f-8672-86a3-280f5c57532e",
+              "eventType": "AssistantTextGenerated",
+              "toolName": null,
+              "isEcho": false
+            },
+            {
+              "eventId": "50b4f235-9378-4726-6c23-cecca121c07e",
+              "eventType": "AssistantToolCallsGenerated",
+              "toolName": "exec_command",
+              "isEcho": true
+            },
+            {
+              "eventId": "c609e9d1-fa95-a416-a889-b5adf6d75974",
+              "eventType": "AssistantToolCallsGenerated",
+              "toolName": "apply_patch",
+              "isEcho": true
+            }
+          ]
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 14,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 15,
+    "batch": 1,
+    "rejected": null,
+    "events": [],
+    "amendments": [
+      {
+        "target": "73d734a0-26ba-71f6-9e08-89c35c33c20f",
+        "slug": "codex",
+        "extension": {
+          "task": {
+            "duration_ms": 4200,
+            "time_to_first_token_ms": 350
+          }
+        }
+      }
+    ]
+  },
+  {
+    "line": 16,
+    "batch": 2,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 17,
+    "batch": 2,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UserMessageReceived",
+        "id": "990c8a17-8be8-d85e-4a9b-e1930c60fe2a",
+        "timestamp": "2026-09-04T09:00:17.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:17.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "Now look up the issue",
+          "timestamp": "2026-09-04T09:00:17Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 18,
+    "batch": 2,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantThinkingGenerated",
+        "id": "7d8d106e-1b84-f692-3300-317a3e35af53",
+        "timestamp": "2026-09-04T09:00:18.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:18.000Z",
+        "causedBy": null,
+        "payload": {
+          "content": "**Finding the issue**",
+          "encrypted": false,
+          "timestamp": "2026-09-04T09:00:18Z",
+          "extensions": {
+            "openai": {
+              "thinking": {
+                "raw": "gAAAA-opaque-2"
+              }
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 19,
+    "batch": 2,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "1df32c10-4202-623e-9f6a-7672f76c2193",
+        "timestamp": "2026-09-04T09:00:19.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:19.000Z",
+        "causedBy": null,
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "call_c",
+              "toolName": "mcp__linear__get_issue",
+              "arguments": {
+                "id": "ENG-1"
+              },
+              "toolKind": "other"
+            }
+          ],
+          "timestamp": "2026-09-04T09:00:19Z",
+          "extensions": {
+            "codex": {
+              "name": "get_issue",
+              "namespace": "mcp__linear__"
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 20,
+    "batch": 3,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "1430295f-297d-ed91-6ce3-13fdcf45a123",
+        "timestamp": "2026-09-04T09:00:20.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:20.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "call_c",
+          "result": "{\u0022title\u0022:\u0022Build\u0022}",
+          "timestamp": "2026-09-04T09:00:20Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 21,
+    "batch": 3,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "6930bda3-f8e1-2499-adb7-8aac36f45241",
+        "timestamp": "2026-09-04T09:00:21.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:21.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "call_d",
+          "result": "late",
+          "timestamp": "2026-09-04T09:00:21Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 22,
+    "batch": 3,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 23,
+    "batch": 3,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 24,
+    "batch": 3,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UsageApplied",
+        "id": "1a5faaf9-689f-79ed-2d12-2a084da3e5c8",
+        "timestamp": "2026-09-04T09:00:24.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:24.000Z",
+        "causedBy": null,
+        "payload": {
+          "usage": {
+            "inputTokens": "200",
+            "outputTokens": "40",
+            "totalTokens": "1240",
+            "cachedInputTokens": "1000",
+            "reasoningTokens": "0",
+            "model": "gpt-5.1-codex",
+            "additionalCounts": {
+              "model_context_window": 258400
+            }
+          },
+          "anchor": "7d8d106e-1b84-f692-3300-317a3e35af53",
+          "targets": [
+            {
+              "eventId": "7d8d106e-1b84-f692-3300-317a3e35af53",
+              "eventType": "AssistantThinkingGenerated",
+              "toolName": null,
+              "isEcho": true
+            },
+            {
+              "eventId": "1df32c10-4202-623e-9f6a-7672f76c2193",
+              "eventType": "AssistantToolCallsGenerated",
+              "toolName": "mcp__linear__get_issue",
+              "isEcho": false
+            }
+          ]
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 25,
+    "batch": 3,
+    "rejected": null,
+    "events": [],
+    "amendments": [
+      {
+        "target": "7d8d106e-1b84-f692-3300-317a3e35af53",
+        "slug": "codex",
+        "extension": {
+          "task": {
+            "duration_ms": 900,
+            "time_to_first_token_ms": 120
+          }
+        }
+      }
+    ]
+  },
+  {
+    "line": 26,
+    "batch": 3,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 27,
+    "batch": 4,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 28,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "d7761797-8435-cd6d-3381-edd93d9e1420",
+        "timestamp": "2026-09-04T09:00:28.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:28.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "call_e",
+          "result": "boom",
+          "timestamp": "2026-09-04T09:00:28Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 29,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantThinkingGenerated",
+        "id": "2331771b-8400-a35d-313b-4f090f907030",
+        "timestamp": "2026-09-04T09:00:29.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:29.000Z",
+        "causedBy": null,
+        "payload": {
+          "encrypted": true,
+          "timestamp": "2026-09-04T09:00:29Z",
+          "extensions": {
+            "openai": {
+              "thinking": {
+                "raw": "gAAAA-opaque-3"
+              }
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 30,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UsageApplied",
+        "id": "22d71d0d-ee1a-b7d2-004a-57a55bf273ac",
+        "timestamp": "2026-09-04T09:00:30.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:30.000Z",
+        "causedBy": null,
+        "payload": {
+          "usage": {
+            "inputTokens": "500",
+            "outputTokens": "20",
+            "totalTokens": "520",
+            "cachedInputTokens": "0",
+            "reasoningTokens": "20",
+            "model": "gpt-5.1-codex"
+          },
+          "anchor": "2331771b-8400-a35d-313b-4f090f907030",
+          "targets": [
+            {
+              "eventId": "2331771b-8400-a35d-313b-4f090f907030",
+              "eventType": "AssistantThinkingGenerated",
+              "toolName": null,
+              "isEcho": false
+            }
+          ]
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 31,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "9412d789-550f-fdd4-5612-a9435a5d4df5",
+        "timestamp": "2026-09-04T09:00:31.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:31.000Z",
+        "causedBy": null,
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "ws_1",
+              "toolName": "web_search",
+              "arguments": {
+                "type": "search",
+                "query": "codex rollout"
+              },
+              "toolKind": "fetch"
+            }
+          ],
+          "timestamp": "2026-09-04T09:00:31Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      },
+      {
+        "type": "ToolResultReceived",
+        "id": "ee7717ae-20bc-f0df-4d52-fd3b6cd699d3",
+        "timestamp": "2026-09-04T09:00:31.0000001\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:31.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "ws_1",
+          "result": "completed",
+          "timestamp": "2026-09-04T09:00:31.000000100Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 32,
+    "batch": 4,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 33,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "163cd767-916b-ff24-d49e-8cd9d1765b50",
+        "timestamp": "2026-09-04T09:00:33.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:33.000Z",
+        "causedBy": null,
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "163cd767916bff24d49e8cd9d1765b50",
+              "toolName": "web_search",
+              "arguments": {
+                "type": "open_page",
+                "url": "https://example.invalid/doc"
+              },
+              "toolKind": "fetch"
+            }
+          ],
+          "timestamp": "2026-09-04T09:00:33Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      },
+      {
+        "type": "ToolResultReceived",
+        "id": "17c0f4f9-bdf5-4744-9290-e076a7cb8f9e",
+        "timestamp": "2026-09-04T09:00:33.0000001\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:33.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "163cd767916bff24d49e8cd9d1765b50",
+          "result": "completed",
+          "timestamp": "2026-09-04T09:00:33.000000100Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 34,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantTextGenerated",
+        "id": "9f5ff18a-af85-da19-afa3-db44a9b8365d",
+        "timestamp": "2026-09-04T10:00:00.0000000\u002B00:00",
+        "recordTimestamp": null,
+        "causedBy": null,
+        "payload": {
+          "content": "Review done: no findings.",
+          "timestamp": "2026-09-04T10:00:00Z",
+          "extensions": {
+            "codex": {
+              "agent_message": {
+                "author": "/root/reviewer",
+                "recipient": "/root"
+              }
+            }
+          }
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 35,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "UsageApplied",
+        "id": "33a04a13-c1dc-d98d-e87e-a5a748ccf98b",
+        "timestamp": "2026-09-04T09:00:34.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:34.000Z",
+        "causedBy": null,
+        "payload": {
+          "usage": {
+            "inputTokens": "800",
+            "outputTokens": "60",
+            "totalTokens": "960",
+            "cachedInputTokens": "100",
+            "reasoningTokens": "10",
+            "model": "gpt-5.1-codex",
+            "additionalCounts": {
+              "model_context_window": 258400
+            }
+          },
+          "anchor": "9412d789-550f-fdd4-5612-a9435a5d4df5",
+          "targets": [
+            {
+              "eventId": "9412d789-550f-fdd4-5612-a9435a5d4df5",
+              "eventType": "AssistantToolCallsGenerated",
+              "toolName": "web_search",
+              "isEcho": false
+            },
+            {
+              "eventId": "163cd767-916b-ff24-d49e-8cd9d1765b50",
+              "eventType": "AssistantToolCallsGenerated",
+              "toolName": "web_search",
+              "isEcho": true
+            },
+            {
+              "eventId": "9f5ff18a-af85-da19-afa3-db44a9b8365d",
+              "eventType": "AssistantTextGenerated",
+              "toolName": null,
+              "isEcho": true
+            }
+          ]
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 36,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ContextCompacted",
+        "id": "f670238c-da5f-5a2a-c1b6-48ef9468e720",
+        "timestamp": "2026-09-04T09:00:35.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:35.000Z",
+        "causedBy": null,
+        "payload": {
+          "replacement_history": [
+            {
+              "type": "message",
+              "role": "user",
+              "content": [
+                {
+                  "type": "input_text",
+                  "text": "Fix the failing build"
+                }
+              ]
+            },
+            {
+              "type": "compaction",
+              "encrypted_content": "gAAAA-summary"
+            }
+          ],
+          "encrypted_content": "gAAAA-summary"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 37,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "AssistantToolCallsGenerated",
+        "id": "7ce3aaad-b727-f4be-40f5-60dbd22a8e0e",
+        "timestamp": "2026-09-04T09:00:36.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:36.000Z",
+        "causedBy": null,
+        "payload": {
+          "toolCalls": [
+            {
+              "callId": "call_f",
+              "toolName": "tool_search",
+              "arguments": {
+                "query": "linear",
+                "limit": 5
+              },
+              "toolKind": "other"
+            }
+          ],
+          "timestamp": "2026-09-04T09:00:36Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 38,
+    "batch": 4,
+    "rejected": null,
+    "events": [
+      {
+        "type": "ToolResultReceived",
+        "id": "29ffd047-11c6-348b-eecb-5623f231f416",
+        "timestamp": "2026-09-04T09:00:37.0000000\u002B00:00",
+        "recordTimestamp": "2026-09-04T09:00:37.000Z",
+        "causedBy": null,
+        "payload": {
+          "callId": "call_f",
+          "result": "[{\u0022type\u0022:\u0022function\u0022,\u0022name\u0022:\u0022get_issue\u0022}]",
+          "timestamp": "2026-09-04T09:00:37Z"
+        },
+        "usage": null,
+        "usageIsEcho": false
+      }
+    ],
+    "amendments": []
+  },
+  {
+    "line": 39,
+    "batch": 4,
+    "rejected": null,
+    "events": [],
+    "amendments": []
+  },
+  {
+    "line": 40,
+    "batch": 4,
+    "rejected": true,
+    "events": [],
+    "amendments": []
+  }
+]

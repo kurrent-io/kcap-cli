@@ -4,7 +4,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/app"; printf '#!/bin/sh\n' > "$tmp/app/Kurrent Capacitor"; chmod +x "$tmp/app/Kurrent Capacitor"
+mkdir -p "$tmp/app"; printf '#!/bin/sh\n' > "$tmp/app/kcap-desktop"; chmod +x "$tmp/app/kcap-desktop"
 bash "$here/build-deb.sh" "$tmp/app" "1.4.0-beta.2+abc" "$tmp/out.deb" >/dev/null
 version="$(dpkg-deb -f "$tmp/out.deb" Version)"
 [ "$version" = "1.4.0~beta.2" ] && dpkg --compare-versions "$version" lt 1.4.0 \

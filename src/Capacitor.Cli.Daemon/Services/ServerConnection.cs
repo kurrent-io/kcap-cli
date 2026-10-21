@@ -19,6 +19,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly DaemonConfig              _config;
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate                = new();
+    // The first identity a provider call returned since the connect began, and the one a connection was
+    // established with. A later call (a long-polling poll or 401 retry) authenticates nothing the
+    // connection's principal follows, so only the first is kept, and only an established connection
+    // commits it. A call with no bearer claims nothing: automatic reconnect retries without a reset, and
+    // an early failed attempt must not hide the identity a later one succeeds with.
+    HubIdentity?                       _pendingAs;
+    HubIdentity?                       _negotiatedAs;
+    string?                            _lastUnavailable;
     readonly PendingPermissionRegistry _pendingPermissions  = new();
     readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
     readonly AgentRunEventQueue        _eventQueue;
@@ -260,6 +268,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     options.AccessTokenProvider = async () => {
                         var state = await credentials.ResolveAsync(default);
                         CredentialHealth.Observe(state);
+                        if (HubIdentity.Of(state) is { } identity) Interlocked.CompareExchange(ref _pendingAs, identity, null);
+                        if (state.Bearer is null) LogHubSignInUnavailable(state);
+                        else Volatile.Write(ref _lastUnavailable, null);
                         return state.Bearer;
                     };
                     options.HttpMessageHandlerFactory = inner => Guarded(inner, ReportHubRejection);
@@ -568,7 +579,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // exhausts to Disconnected (firing Closed), so this converges.
                     if (HubState == HubConnectionState.Disconnected) {
                         LogConnecting(_config.ServerUrl);
+                        Volatile.Write(ref _pendingAs, null);
                         await StartHubAsync(ct);
+                        CommitNegotiatedIdentity();
                         // Hub is now Connected (pre-registration) — pulse so a subscriber that
                         // snapshotted while still "connecting" converges without waiting for
                         // RegisterDaemonAsync too.
@@ -794,6 +807,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// re-runs <see cref="RegisterDaemonAsync"/>.
     /// </summary>
     Task OnReconnecting(Exception? error) {
+        Volatile.Write(ref _pendingAs, null);
         _gate.MarkUnregistered();
         _statusNotifier.Pulse();
 
@@ -815,6 +829,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     internal virtual string? CurrentConnectionId => _hub.ConnectionId;
 
     async Task OnReconnected(string? connectionId) {
+        CommitNegotiatedIdentity();
         _statusNotifier.Pulse();
         LogReconnected();
         await RegisterDaemonAsync();
@@ -840,6 +855,29 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// connection as a daemon (slot displaced or never registered).
     /// </summary>
     public Task ReRegisterAsync() => RegisterDaemonAsync();
+
+    public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
+        Volatile.Read(ref _negotiatedAs) is { } negotiated
+     && HubIdentity.Changed(negotiated, await Credentials.ResolveAsync(ct));
+
+    void CommitNegotiatedIdentity() => Volatile.Write(ref _negotiatedAs, Volatile.Read(ref _pendingAs));
+
+    // Once per change of reason, so a hub retrying every 30 s does not repeat it. A server that takes
+    // no sign-in sends no bearer by design.
+    void LogHubSignInUnavailable(CredentialState state) {
+        if (state.Status == AuthStatus.NoAuthRequired) return;
+
+        var issuer = state.Resolution?.IssuedServerUrl ?? "unknown";
+        var reason = $"{state.Status}|{issuer}|{state.Problem}";
+        if (Interlocked.Exchange(ref _lastUnavailable, reason) == reason) return;
+
+        if (state.Problem is { Length: > 0 } problem)
+            LogHubCredentialProblem(_config.ServerUrl, problem);
+        else if (state.Status == AuthStatus.WrongServer)
+            LogHubTokenFromAnotherServer(_config.ServerUrl, issuer);
+        else
+            LogHubNoSignIn(state.Status, _config.ServerUrl);
+    }
 
     /// <summary>
     /// Stops the underlying hub. <see cref="OnClosed"/> fires and calls
@@ -910,16 +948,40 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     // Outgoing messages to server
-    public virtual Task AgentRegisteredAsync(
+    /// <summary>Registers the agent and returns the server's answer. A server without <c>AgentRegisteredAcked</c>
+    /// gets the unanswered <c>AgentRegistered</c> instead, read as accepted; that server is remembered for the
+    /// rest of the connection, and a reconnect, which may reach an upgraded server, asks again.</summary>
+    public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, AgentStartTitle? title = null)
-        => _hub.InvokeAsync(
-            "AgentRegistered",
-            new AgentRegistered(
-                agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-                title?.Text, title?.Derived ?? false),
-            cancellationToken: _ct);
+            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
+        var registration = new AgentRegistered(
+            agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
+            title?.Text, title?.Derived ?? false, vendor);
+        var connection = CurrentConnectionId ?? "";
+
+        if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
+            try {
+                return await InvokeAgentRegisteredAckedRawAsync(registration)
+                    ?? throw new InvalidOperationException($"The server answered the registration of agent {agentId} with no outcome");
+            } catch (Exception ex) when (IsUnknownHubMethod(ex)) {
+                Volatile.Write(ref _registrationAckMissingOn, connection);
+            }
+        }
+
+        await InvokeAgentRegisteredRawAsync(registration);
+
+        return AgentRegisteredResponse.Accepted;
+    }
+
+    /// <summary>The connection id on which the server answered <c>AgentRegisteredAcked</c> as an unknown method.</summary>
+    string? _registrationAckMissingOn;
+
+    internal virtual Task<AgentRegisteredResponse?> InvokeAgentRegisteredAckedRawAsync(AgentRegistered registration)
+        => _hub.InvokeAsync<AgentRegisteredResponse?>("AgentRegisteredAcked", registration, cancellationToken: _ct);
+
+    internal virtual Task InvokeAgentRegisteredRawAsync(AgentRegistered registration)
+        => _hub.InvokeAsync("AgentRegistered", registration, cancellationToken: _ct);
 
     /// <summary>
     /// Reports the hosted agent's fixed PTY dimensions to the server, which stores
@@ -1698,6 +1760,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Daemon name '{Name}' is already in use by another live daemon on this account. Server rejected DaemonConnect: {Reason}")]
     partial void LogNameInUse(string name, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon is configured for {ServerUrl}, but its profile's token was issued by {IssuedBy}. Run `kcap login` for {ServerUrl}, or reinstall the daemon on the profile that holds it.")]
+    partial void LogHubTokenFromAnotherServer(string serverUrl, string issuedBy);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon has no usable sign-in for {ServerUrl} ({Status}). Run `kcap login` for that server.")]
+    partial void LogHubNoSignIn(AuthStatus status, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon cannot sign in to {ServerUrl}: {Problem}")]
+    partial void LogHubCredentialProblem(string serverUrl, string problem);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connecting to {Url}...")]
     partial void LogConnecting(string url);

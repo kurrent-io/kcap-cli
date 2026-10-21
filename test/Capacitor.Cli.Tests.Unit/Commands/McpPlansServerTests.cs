@@ -47,7 +47,7 @@ public class McpPlansServerTests {
         // An approval reviewer reads the tool description, not the server instructions: a tool that
         // "records" a local file's content without saying where reads as an upload to nowhere.
         var declare = McpPlansServer.BuildToolsList().Single(t => t.Name == "declare_plan_document");
-        await Assert.That(declare.Description).Contains("Capacitor server");
+        await Assert.That(declare.Description).Contains("kcap server");
         await Assert.That(declare.Description).Contains("kcap login");
     }
 

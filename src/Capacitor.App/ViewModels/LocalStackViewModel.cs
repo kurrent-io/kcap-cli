@@ -20,8 +20,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     internal const string BusyDetail    = "Another local setup, upgrade or uninstall is running on this Mac. The upgrade runs again once the local server is back.";
     internal const string StartGuidance = "Its data is kept. Start it to finish the upgrade.";
     const int StartMessageTailLines     = 12;
-    public const string NameTip         = "The local Capacitor server on this machine";
-    public const string VersionTip      = "Version of Capacitor local on this machine";
+    public const string NameTip         = "The local kcap server on this machine";
+    public const string VersionTip      = "Version of kcap local on this machine";
 
     static readonly string[] Derived = [
         nameof(Version), nameof(StateText), nameof(Attention), nameof(Upgrading), nameof(BannerVisible), nameof(Headline),
@@ -30,6 +30,7 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
     ];
 
     readonly LocalUpgradeController _upgrade;
+    readonly LocalSearchController? _searchChange;
     readonly Func<CancellationToken, Task<ProcessResult>> _start;
     readonly Func<Task> _reconnect;
     readonly CancellationToken _shutdown;
@@ -46,11 +47,13 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     /// <param name="readVersion">The version the installation registry names; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
+    /// <param name="searchChange">The search change that shares the installation with the upgrade, when there is one.</param>
     public LocalStackViewModel(
             Func<string?> readVersion, IObservable<ServerLaneStatus> status, LocalUpgradeController upgrade,
             Func<CancellationToken, Task<ProcessResult>> start, Func<Task> reconnect, CancellationToken shutdown,
-            IScheduler? readScheduler = null) {
+            IScheduler? readScheduler = null, LocalSearchController? searchChange = null) {
         _upgrade       = upgrade;
+        _searchChange  = searchChange;
         _start         = start;
         _reconnect     = reconnect;
         _shutdown      = shutdown;
@@ -83,6 +86,16 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         upgrade.Settled += OnSettled;
         Disposable.Create(() => upgrade.Settled -= OnSettled).DisposeWith(_disposables);
 
+        if (searchChange is not null) {
+            searchChange.WhenAnyValue(x => x.Running).Subscribe(_ => Refresh()).DisposeWith(_disposables);
+            // An upgrade held off by the search change runs once the change is over.
+            void OnSearchSettled(LocalInstallOutcome outcome) {
+                if (Waiting) _ = _upgrade.StartAsync(_shutdown);
+            }
+            searchChange.Settled += OnSearchSettled;
+            Disposable.Create(() => searchChange.Settled -= OnSearchSettled).DisposeWith(_disposables);
+        }
+
         TryAgainCommand = ReactiveCommand.CreateFromTask(() => _upgrade.StartAsync(shutdown));
         StartCommand    = ReactiveCommand.CreateFromTask(RunStartAsync);
         _isStarting = StartCommand.IsExecuting
@@ -94,6 +107,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
             Refresh();
         });
     }
+
+    public LocalSearchViewModel? Search { get; init; }
 
     LocalUpgradeProgress Progress => _upgrade.Progress;
 
@@ -127,20 +142,20 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     public string? Headline => Upgrading
         ? (Progress.From, Progress.To) switch {
-            ({ } from, { } to) => $"Upgrading Capacitor local {from} to {to}",
-            (_, { } to)        => $"Upgrading Capacitor local to {to}",
-            _                  => "Upgrading Capacitor local",
+            ({ } from, { } to) => $"Upgrading kcap local {from} to {to}",
+            (_, { } to)        => $"Upgrading kcap local to {to}",
+            _                  => "Upgrading kcap local",
         }
         : Waiting ? Progress.To is { } waitingFor
-            ? $"The upgrade to Capacitor local {waitingFor} is waiting"
-            : "The upgrade of Capacitor local is waiting"
+            ? $"The upgrade to kcap local {waitingFor} is waiting"
+            : "The upgrade of kcap local is waiting"
         : _shown switch {
-            LocalUpgradeOutcome.Failed { Switched: true } f => $"Capacitor local {f.To ?? Version} did not start after the upgrade",
-            LocalUpgradeOutcome.Failed { To: { } to }       => $"Capacitor local could not be upgraded to {to}",
-            LocalUpgradeOutcome.Failed                      => "Capacitor local could not be upgraded",
+            LocalUpgradeOutcome.Failed { Switched: true } f => $"kcap local {f.To ?? Version} did not start after the upgrade",
+            LocalUpgradeOutcome.Failed { To: { } to }       => $"kcap local could not be upgraded to {to}",
+            LocalUpgradeOutcome.Failed                      => "kcap local could not be upgraded",
             LocalUpgradeOutcome.NotPublished                => Progress.To is { } to
-                ? $"Capacitor local {to} is not available yet"
-                : "This version of Capacitor local is not available yet",
+                ? $"kcap local {to} is not available yet"
+                : "This version of kcap local is not available yet",
             _ => null,
         };
 
@@ -168,7 +183,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     public bool ProgressIndeterminate => Upgrading && DownloadFraction is null;
 
-    public bool TryAgainVisible => !Upgrading && _shown switch {
+    bool SearchChanging => _searchChange?.Running == true;
+
+    public bool TryAgainVisible => !Upgrading && !SearchChanging && _shown switch {
         LocalUpgradeOutcome.NotPublished => true,
         LocalUpgradeOutcome.Failed { Switched: false, Affordance: not LocalInstallAffordance.Permanent } => true,
         _ => false,
@@ -179,8 +196,9 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
 
     public bool StartVisible => !Upgrading && _shown is LocalUpgradeOutcome.Failed { Switched: true };
 
-    /// While this banner owns the stack, the "not running" banner's own Start stays hidden.
-    public bool SuppressesServerStart => Upgrading || StartVisible;
+    /// While this banner or a search change owns the stack, the "not running" banner's own Start stays hidden: a search
+    /// change can restart the server.
+    public bool SuppressesServerStart => Upgrading || StartVisible || SearchChanging;
 
     public bool IsStarting => _isStarting.Value;
 
@@ -260,5 +278,8 @@ public sealed class LocalStackViewModel : ReactiveObject, IDisposable {
         foreach (var name in Derived) this.RaisePropertyChanged(name);
     }
 
-    public void Dispose() => _disposables.Dispose();
+    public void Dispose() {
+        Search?.Dispose();
+        _disposables.Dispose();
+    }
 }

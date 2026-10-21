@@ -678,6 +678,32 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A connect clears progress lines back to the standing identity report, in either order of arrival, and to
+    /// nothing once the report is withdrawn.
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_connect_resets_the_banner_to_the_standing_identity_report(bool reportFirst) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var identity = new System.Reactive.Subjects.BehaviorSubject<string?>(null);
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                identityReport: identity);
+            using var activation = vm.Activator.Activate();
+            const string report = "Daemon daemon-a is running for another server.";
+
+            if (reportFirst) identity.OnNext(report);
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            if (!reportFirst) identity.OnNext(report);
+            await Assert.That(vm.StartMessage).IsEqualTo(report);
+
+            // Withdrawn after the connect that restored it, as a replace's own reconnect does: the banner clears.
+            identity.OnNext(null);
+            await Assert.That(vm.StartMessage).IsNull();
+        });
+    }
+
     // Supplied startAction runs instead of StartDaemonAsync.
     [Test]
     [NotInParallel("AvaloniaSession")]

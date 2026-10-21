@@ -4,8 +4,8 @@
         xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
-        Title="Kurrent Capacitor — Settings"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="kcap — Settings"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,20" RowDefinitions="*,Auto">
@@ -111,7 +111,7 @@
                         <StackPanel Spacing="10">
                             <TextBlock Classes="kcapTitle" Text="Notifications" LineHeight="22" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                                       Text="Shown only while Kurrent Capacitor is in the background. Your operating system must also allow notifications." />
+                                       Text="Shown only while kcap is in the background. Your operating system must also allow notifications." />
                         </StackPanel>
 
                         <Border x:Name="NotificationAccessNotice"
@@ -219,6 +219,40 @@
                                     <Button x:Name="TextResetButton" Classes="kcapGhost" Content="Reset"
                                             Command="{Binding Appearance.ResetCommand, FallbackValue={x:Null}}" />
                                 </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="PrivacyTab" Classes="kcapSettingsTab" Header="Privacy"
+                     IsVisible="{Binding Privacy, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Privacy" LineHeight="22" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="Shared with the kcap command line on this computer." />
+                        </StackPanel>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Classes="kcapLabel" Text="Send usage data" />
+                                    <TextBlock x:Name="UsageDataDescription" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Description, FallbackValue={x:Null}}" />
+                                    <TextBlock x:Name="UsageDataOverridden" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Overridden, FallbackValue={x:Null}}"
+                                               IsVisible="{Binding Privacy.Overridden, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                    <TextBlock x:Name="UsageDataHint" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Hint, FallbackValue={x:Null}}"
+                                               IsVisible="{Binding Privacy.Hint, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1" x:Name="UsageDataSwitch" Classes="kcapSwitch" VerticalAlignment="Center"
+                                              AutomationProperties.Name="Send usage data"
+                                              IsEnabled="{Binding Privacy.CanChange, FallbackValue=False}"
+                                              IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />
                             </Grid>
                         </Border>
                     </StackPanel>

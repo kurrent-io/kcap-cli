@@ -112,7 +112,11 @@ public class DoneStepViewModelTests {
             return all;
         });
 
-        foreach (var text in texts) await Assert.That(text).DoesNotContain("kcap ");
+        foreach (var text in texts) {
+            await Assert.That(text).DoesNotContain("kcap import");
+            await Assert.That(text).DoesNotContain("kcap setup");
+            await Assert.That(text).DoesNotContain("kcap daemon");
+        }
     }
 
     [Test]

@@ -9,7 +9,7 @@
       "command": "kcap",
       "args": ["mcp", "sessions"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Search and recall past Kurrent Capacitor sessions — the reasoning behind prior work (why / what-was-tried / who-decided / when). For 'have we done X before' or 'why did we' questions, reach for search_sessions before git log or grep. Repo-aware: cd into a project and search_sessions defaults to that repo's sessions."
+      "description": "Search and recall past kcap sessions — the reasoning behind prior work (why / what-was-tried / who-decided / when). For 'have we done X before' or 'why did we' questions, reach for search_sessions before git log or grep. Repo-aware: cd into a project and search_sessions defaults to that repo's sessions."
     },
     "kcap-flows": {
       "command": "kcap",
@@ -27,7 +27,7 @@
       "command": "kcap",
       "args": ["mcp", "workitems"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Attach the current session to a work item (issue, PR, or a brand-new item) on the Capacitor server, and list the work items a session is attached to."
+      "description": "Attach the current session to a work item (issue, PR, or a brand-new item) on the kcap server, and list the work items a session is attached to."
     },
     "kcap-plans": {
       "command": "kcap",
@@ -44,7 +44,7 @@
       "command": "kcap",
       "args": ["mcp", "pages"],
       "cwd": "${CLAUDE_PROJECT_DIR}",
-      "description": "Publish a self-contained HTML page — a plan, a report, a comparison — and get back a link to share. The page is sandboxed with no network access, so inline everything as data URIs. Private until you set visibility."
+      "description": "Publish a self-contained HTML page — a plan, a report, a comparison, the artifact the user asked for — and get back a link to share. The page is sandboxed with no network access, so inline everything as data URIs. Private until you set visibility."
     },
     "kcap-analytics": {
       "command": "kcap",

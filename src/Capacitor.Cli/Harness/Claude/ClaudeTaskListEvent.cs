@@ -76,10 +76,10 @@ sealed partial record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.
         if (!FromLedger && Moves.Count > 0) return null;
 
         var opening = (Kind, FromLedger) switch {
-            (Moment.Completed, true) => "You recorded a finished task in your ledger, but this session has recorded no kcap plan, so its progress is invisible in Capacitor. ",
-            (Moment.Completed, _)    => "You marked a task complete, but this session has recorded no kcap plan, so its progress is invisible in Capacitor. ",
-            (_, true)                => "You are keeping a plan ledger; Capacitor does not see it. ",
-            _                        => "You started a task list; Capacitor does not see it. "
+            (Moment.Completed, true) => "You recorded a finished task in your ledger, but this session has recorded no kcap plan, so its progress is invisible in kcap. ",
+            (Moment.Completed, _)    => "You marked a task complete, but this session has recorded no kcap plan, so its progress is invisible in kcap. ",
+            (_, true)                => "You are keeping a plan ledger; kcap does not see it. ",
+            _                        => "You started a task list; kcap does not see it. "
         };
 
         var declare = FromLedger
@@ -110,7 +110,7 @@ sealed partial record ClaudeTaskListEvent(string SessionId, ClaudeTaskListEvent.
             .ToList();
         if (calls.Count == 0) return null;
 
-        return "Your own record moved a plan task that Capacitor's plan has not caught up with. " +
+        return "Your own record moved a plan task that kcap's plan has not caught up with. " +
             string.Join(" ", calls) +
             " Pair every dispatch and ledger line with its `update_plan_task` in the same turn: `in_progress` when you start or dispatch a task, `completed` when it passes review.";
     }

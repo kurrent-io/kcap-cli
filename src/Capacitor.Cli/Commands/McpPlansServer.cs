@@ -103,7 +103,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
     }
 
     internal const string ServerInstructions =
-        "Use these tools to keep Capacitor's record of the plan this session executes. When you write or are " +
+        "Use these tools to keep kcap's record of the plan this session executes. When you write or are " +
         "handed a plan, spec or design document, declare it with declare_plan_document. When a plan has " +
         "discrete steps, declare them with set_plan_tasks and record every status change with " +
         "update_plan_task; after context compaction, get_plan returns the list with its ids. Keep whatever " +
@@ -576,7 +576,7 @@ sealed class McpPlansServer(ConfigRoot config, ProfileContext profiles, TokenSto
         new(PlanToolNames.DeclareDocument,
             "Declare the plan, spec or design document this session works from. Call it when you write such a "
           + "document or are handed one. The file is read locally; its SHA-256 and, up to 256 KB, its content go "
-          + "to the Capacitor server this session is recorded to — the one `kcap login` signed in to, which "
+          + "to the kcap server this session is recorded to — the one `kcap login` signed in to, which "
           + "already holds the session's transcript — keyed by path against the git repository root. Nothing is "
           + "published anywhere else. Returns plan_id, document_key and whether the plan was created; declaring "
           + "the same document again attaches this session to the same plan and replaces the stored copy with the "

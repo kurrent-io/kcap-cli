@@ -9,7 +9,7 @@ app="${1:?app directory required}"
 version="${2:?version required}"
 out="${3:?output .deb required}"
 [[ "$version" =~ ^[0-9A-Za-z.+-]+$ ]] || { echo "invalid version" >&2; exit 1; }
-[ -x "$app/Kurrent Capacitor" ] || { echo "no app executable in $app" >&2; exit 1; }
+[ -x "$app/kcap-desktop" ] || { echo "no app executable in $app" >&2; exit 1; }
 
 # A hyphen would split off a Debian revision; a tilde keeps a prerelease below its release.
 deb_version="${version%%+*}"
@@ -22,13 +22,13 @@ lib="$root/usr/lib/kurrent-capacitor"
 mkdir -p "$lib" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/512x512/apps" "$root/DEBIAN"
 cp -a "$app/." "$lib/"
 chmod -R go-w,a+rX "$lib"
-ln -s "../lib/kurrent-capacitor/Kurrent Capacitor" "$root/usr/bin/kurrent-capacitor"
+ln -s "../lib/kurrent-capacitor/kcap-desktop" "$root/usr/bin/kurrent-capacitor"
 cp "$here/../src/Capacitor.App/Assets/kcap-icon.png" "$root/usr/share/icons/hicolor/512x512/apps/kurrent-capacitor.png"
 
 cat > "$root/usr/share/applications/kurrent-capacitor.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=Kurrent Capacitor
+Name=kcap
 Comment=Run and watch coding agents
 Exec=kurrent-capacitor
 Icon=kurrent-capacitor
@@ -46,7 +46,7 @@ Depends: libc6, libgcc-s1, libstdc++6, zlib1g, libicu78 | libicu76 | libicu74 | 
 Section: devel
 Priority: optional
 Homepage: https://www.kurrent.io
-Description: Kurrent Capacitor desktop app
+Description: kcap desktop app
  Runs hosted coding agents through the kcap daemon and shows their sessions.
 EOF
 

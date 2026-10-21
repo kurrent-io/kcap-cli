@@ -209,14 +209,19 @@ public class HistoryStepViewModelTests {
         var lines = await LocalLinesAsync(onLocalPath: true);
 
         await Assert.That(lines.All(l => l is not null)).IsTrue();
-        foreach (var line in lines) await Assert.That(line!).DoesNotContain("kcap ");
+        foreach (var line in lines) {
+            await Assert.That(line!).DoesNotContain("kcap import");
+            await Assert.That(line).DoesNotContain("kcap remap");
+            await Assert.That(line).DoesNotContain("kcap setup");
+        }
     }
 
     [Test]
     public async Task The_cloud_path_keeps_its_terminal_commands() {
         var lines = await LocalLinesAsync(onLocalPath: false);
 
-        await Assert.That(lines.All(l => l is not null && l.Contains("kcap ", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(lines.All(l => l is not null && (l.Contains("kcap import", StringComparison.Ordinal)
+            || l.Contains("kcap remap", StringComparison.Ordinal)))).IsTrue();
     }
 
     [Test]

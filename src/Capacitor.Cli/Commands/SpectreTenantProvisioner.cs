@@ -38,8 +38,8 @@ public sealed class SpectreTenantProvisioner(
         // Says what was actually established, not more: single sign-on returned nothing. Claiming
         // "no tenant is linked to your account" is the very falsehood this prompt exists to stop —
         // a GitHub-App workspace IS linked to the user and simply cannot appear in this lane.
-        Note("Single sign-on found no Capacitor workspace for your account.",
-             markup: "[yellow]Single sign-on found no Capacitor workspace for your account.[/]");
+        Note("Single sign-on found no kcap workspace for your account.",
+             markup: "[yellow]Single sign-on found no kcap workspace for your account.[/]");
         Note("A workspace that signs in with the GitHub App won't appear here.");
 
         // The answers are already in hand, so nothing is offered and nothing is asked — including on
@@ -112,7 +112,7 @@ public sealed class SpectreTenantProvisioner(
             return ProvisionOffer.Declined;
         }
 
-        return await ProvisionAsync(orgName, slug, origin, tier, tokens, ct);
+        return await ProvisionAsync(orgName, slug, origin, tier, tokens, ct, tierChosen: true);
     }
 
     /// <summary>
@@ -149,9 +149,10 @@ public sealed class SpectreTenantProvisioner(
 
         // The interactive path confirms the name and hostname before committing to them. Nothing can
         // be confirmed here, so the same two values are at least stated before the workspace exists.
-        Note($"Creating {want.OrgName} at {want.Origin} on {PlanName(want.Tier)}…");
+        var tier = want.Tier ?? WorkspaceTier.Free;
+        Note($"Creating {want.OrgName} at {want.Origin} on {PlanName(tier)}…");
 
-        return await ProvisionAsync(want.OrgName, slug, want.Origin, want.Tier, tokens, ct);
+        return await ProvisionAsync(want.OrgName, slug, want.Origin, tier, tokens, ct, tierChosen: want.Tier is not null);
     }
 
     /// <summary>
@@ -198,20 +199,33 @@ public sealed class SpectreTenantProvisioner(
 
     static string PlanName(WorkspaceTier tier) => tier == WorkspaceTier.Team ? "the Team trial" : "the Free plan";
 
+    /// <param name="tierChosen">False when no plan was named: a Free refusal while Free cloud workspaces are closed
+    /// then asks for the Team trial instead.</param>
     async Task<ProvisionOffer> ProvisionAsync(
-            string orgName, string slug, string origin, WorkspaceTier tier, WorkOSTokenSource tokens, CancellationToken ct) {
+            string orgName, string slug, string origin, WorkspaceTier tier, WorkOSTokenSource tokens, CancellationToken ct,
+            bool tierChosen) {
         telemetry.Funnel.WorkspaceRequested();
 
         var code       = requested?.InviteCode;
         var wrongCodes = 0;
+        // Why the Team trial was refused this run, so a closed Free plan does not send the user back to it.
+        string? teamRefused = null;
 
         while (true) {
             var outcome = await client.ProvisionAsync(
                 baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
 
+            if (tier == WorkspaceTier.Free && !tierChosen && IsFreeUnavailable(outcome)) {
+                Retry("Free cloud workspaces aren't open right now. Asking for the Team trial instead.");
+                tier    = WorkspaceTier.Team;
+                outcome = await client.ProvisionAsync(
+                    baseUrl, await tokens.GetAsync(ct), orgName, slug, tier, telemetry.Join.Current, code, ct);
+            }
+
             // Both refusals land before kcap-web reserves anything, so asking again for Free is a fresh
             // request rather than a resume. The user has already approved a sign-in to get this far.
             if (tier == WorkspaceTier.Team && TeamRefusal(outcome) is { } refusal) {
+                teamRefused = refusal;
                 Retry($"{refusal} Creating the workspace on the Free plan instead.");
                 tier    = WorkspaceTier.Free;
                 outcome = await client.ProvisionAsync(
@@ -230,8 +244,8 @@ public sealed class SpectreTenantProvisioner(
                     // Passing the flags means no prompt is raised, so the code has to come as a flag too.
                     if (Scripted) {
                         Fail(requestUrl is { Length: > 0 }
-                                 ? $"Capacitor is invite-only right now. Request an invite at {requestUrl}, then re-run with --invite-code <code>."
-                                 : "Capacitor is invite-only right now. Re-run with --invite-code <code>.",
+                                 ? $"kcap is invite-only right now. Request an invite at {requestUrl}, then re-run with --invite-code <code>."
+                                 : "kcap is invite-only right now. Re-run with --invite-code <code>.",
                              "invite_required");
                         return ProvisionOffer.Failed;
                     }
@@ -242,7 +256,7 @@ public sealed class SpectreTenantProvisioner(
                         return ProvisionOffer.Failed;
                     }
 
-                    Note($"Capacitor is invite-only right now. Enter your invite code{RequestAt(requestUrl, u => $", or request one at {u}")}.");
+                    Note($"kcap is invite-only right now. Enter your invite code{RequestAt(requestUrl, u => $", or request one at {u}")}.");
                     code = PromptInviteCode();
 
                     if (code is null) {
@@ -283,6 +297,14 @@ public sealed class SpectreTenantProvisioner(
                 }
                 case 400:
                     Fail(Reason400(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "invalid_request");
+                    return ProvisionOffer.Failed;
+                case 409 when IsFreeUnavailable(outcome):
+                    Fail(teamRefused is not null
+                             ? $"Free cloud workspaces aren't open right now either. {(Scripted ? "Re-run with --local" : "Run `kcap setup --local`")} to run kcap on this machine."
+                             : Scripted
+                                 ? "Free cloud workspaces aren't open right now. Re-run with --tier team --invite-code <code>, or with --local to run kcap on this machine."
+                                 : "Free cloud workspaces aren't open right now. Re-run and choose the Team trial, which needs an invite code, or run `kcap setup --local` to run kcap on this machine.",
+                         "free_unavailable");
                     return ProvisionOffer.Failed;
                 case 409:
                     Fail(Reason409(outcome.Body?.Reason, slug, RetryTail), outcome.Body?.Reason ?? "conflict");
@@ -405,6 +427,8 @@ public sealed class SpectreTenantProvisioner(
             return ProvisionOffer.InProgress(slug);
         }
     }
+
+    static bool IsFreeUnavailable(ProvisionOutcome outcome) => outcome is { StatusCode: 409, Body.Reason: "free_unavailable" };
 
     static string? TeamRefusal(ProvisionOutcome outcome) => (outcome.StatusCode, outcome.Body?.Reason) switch {
         (400, "work_email_required") => "The Team trial needs a work email, and this account uses a personal address.",

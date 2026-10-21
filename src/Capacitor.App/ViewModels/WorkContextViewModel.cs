@@ -128,6 +128,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public IReadOnlyList<RunCount> RunCounts =>
         [.. RunCountOrder.Select(state => new RunCount(state, _runs.Count(state))).Where(c => c.Count > 0)];
 
+    /// A subagent row the user chose to read; the workspace opens its transcript in place of the chat.
+    public event Action<RunRow>? RunOpened;
+
+    public ReactiveCommand<RunRow, Unit> OpenRunCommand { get; }
+
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
     public PlanSectionViewModel Plan { get; }
@@ -293,6 +298,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _runs = runs;
         _runs.Changed += RefreshRuns;
         InitializeProjections();
+        OpenRunCommand = ReactiveCommand.Create<RunRow>(row => { if (row.CanOpen) RunOpened?.Invoke(row); });
+        _disposables.Add(OpenRunCommand);
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
 

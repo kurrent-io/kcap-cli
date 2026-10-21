@@ -22,7 +22,10 @@ public sealed class WorkOSClient(
         TimeSpan?          refreshTimeout = null,
         TimeSpan?          replayBudget   = null,
         TimeSpan?          replayBackoff  = null) {
-    /// <summary>AuthKit's API host. The machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.</summary>
+    /// <summary>
+    /// Production AuthKit's API host, and the only base tenant discovery uses. A known-server sign-in
+    /// takes its base from <see cref="WorkOSApiBaseRule"/>; the machine mint posts elsewhere — see <see cref="MachineAuth.DefaultTokenUrl"/>.
+    /// </summary>
     public const string ApiBase = "https://api.workos.com";
 
     // Per-attempt deadline. The shared HttpClient carries the 100 s default, and a refresh runs under
@@ -54,14 +57,14 @@ public sealed class WorkOSClient(
     /// understood the token and refused it. Reports rather than throws, cancellation aside.</para>
     /// </summary>
     public async Task<WorkOSRefreshResult> RefreshAsync(
-            string clientId, string refreshToken, CancellationToken ct) {
+            string apiBase, string clientId, string refreshToken, CancellationToken ct) {
         var started  = time.GetTimestamp();
         var consumed = false;
 
         bool AnotherAttemptFits() => time.GetElapsedTime(started) + _refreshTimeout <= _replayBudget;
 
         while (true) {
-            var (outcome, body) = await RefreshOnceAsync(clientId, refreshToken, ct);
+            var (outcome, body) = await RefreshOnceAsync(apiBase, clientId, refreshToken, ct);
 
             switch (outcome) {
                 case Attempt.Rotated: return new(WorkOSRefreshOutcome.Rotated, body);
@@ -86,7 +89,7 @@ public sealed class WorkOSClient(
     enum Attempt { Rotated, Refused, Transient, Unreadable }
 
     async Task<(Attempt Outcome, WorkOSAuthResponse? Body)> RefreshOnceAsync(
-            string clientId, string refreshToken, CancellationToken ct) {
+            string apiBase, string clientId, string refreshToken, CancellationToken ct) {
         // The deadline cancels only the linked token, so a timeout is classified below while the
         // caller's own cancellation still propagates.
         using var timeout  = new CancellationTokenSource(_refreshTimeout, time);
@@ -94,7 +97,7 @@ public sealed class WorkOSClient(
 
         HttpResponseMessage response;
         try {
-            response = await PostFormAsync(AuthenticateUrl, new() {
+            response = await PostFormAsync(AuthenticateUrl(apiBase), new() {
                 ["grant_type"]    = "refresh_token",
                 ["client_id"]     = clientId,
                 ["refresh_token"] = refreshToken
@@ -127,12 +130,13 @@ public sealed class WorkOSClient(
     /// a caller that needs a particular one corrects it afterwards with
     /// <see cref="SwitchOrganizationAsync"/>.
     /// </summary>
-    public Task<HttpResponseMessage> AuthorizeDeviceAsync(string clientId, CancellationToken ct) =>
-        PostFormAsync($"{ApiBase}/user_management/authorize/device", new() { ["client_id"] = clientId }, ct);
+    public Task<HttpResponseMessage> AuthorizeDeviceAsync(string apiBase, string clientId, CancellationToken ct) =>
+        PostFormAsync($"{apiBase}/user_management/authorize/device", new() { ["client_id"] = clientId }, ct);
 
     /// <summary>One poll of the device grant. The RFC 8628 loop that drives this lives with the flow.</summary>
-    public Task<HttpResponseMessage> PollForTokenAsync(Dictionary<string, string> form, CancellationToken ct) =>
-        PostFormAsync(AuthenticateUrl, form, ct);
+    public Task<HttpResponseMessage> PollForTokenAsync(
+            string apiBase, Dictionary<string, string> form, CancellationToken ct) =>
+        PostFormAsync(AuthenticateUrl(apiBase), form, ct);
 
     /// <summary>
     /// Moves an authenticated session onto an organization, or null when WorkOS refused. The resulting
@@ -142,8 +146,8 @@ public sealed class WorkOSClient(
     /// "you signed in to the wrong workspace", which a network blip has not established.</para>
     /// </summary>
     public async Task<WorkOSAuthResponse?> SwitchOrganizationAsync(
-            string clientId, string refreshToken, string organizationId, CancellationToken ct) {
-        using var response = await PostFormAsync(AuthenticateUrl, new() {
+            string apiBase, string clientId, string refreshToken, string organizationId, CancellationToken ct) {
+        using var response = await PostFormAsync(AuthenticateUrl(apiBase), new() {
             ["grant_type"]      = "refresh_token",
             ["client_id"]       = clientId,
             ["refresh_token"]   = refreshToken,
@@ -198,7 +202,7 @@ public sealed class WorkOSClient(
         }
     }
 
-    static string AuthenticateUrl => $"{ApiBase}/user_management/authenticate";
+    static string AuthenticateUrl(string apiBase) => $"{apiBase}/user_management/authenticate";
 
     // Accept rides on the request rather than the client, so a caller's own client cannot decide what
     // WorkOS answers with.

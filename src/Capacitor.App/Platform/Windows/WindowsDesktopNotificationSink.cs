@@ -42,7 +42,7 @@ internal sealed class WindowsDesktopNotificationSink : IDesktopNotificationSink,
                 Channels = [new NotificationChannel("attention", "Agent attention", NotificationPriority.High)],
                 ClearOnAppClose = true,
                 AppUserModelId = AppUserModelId,
-                AppName = "Kurrent Capacitor",
+                AppName = "kcap",
             });
             return builder.AfterSetup(app => {
                 try {
