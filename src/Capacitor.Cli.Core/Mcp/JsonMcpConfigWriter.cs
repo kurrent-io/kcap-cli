@@ -126,8 +126,11 @@ public static class JsonMcpConfigWriter {
         return true;
     }
 
+    /// <summary>A kcap command kcap may take over: the bare <c>kcap</c>, or an absolute one whose binary is gone.
+    /// A kcap binary that is still there may be the user's own build.</summary>
     static bool IsKcapCommand(JsonNode? node) =>
-        node is JsonValue v && v.TryGetValue<string>(out var command) && KcapBinaryCommand.IsKcap(command);
+        node is JsonValue v && v.TryGetValue<string>(out var command) && KcapBinaryCommand.IsKcap(command)
+     && (command == KcapMcpServers.Command || !File.Exists(command));
 
     static bool IsServerArgs(IEnumerable<JsonNode?> args, KcapMcpServer s) {
         var given = new List<string>();

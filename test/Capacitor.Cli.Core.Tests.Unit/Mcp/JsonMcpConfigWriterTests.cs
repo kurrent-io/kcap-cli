@@ -331,7 +331,7 @@ public class JsonMcpConfigWriterTests {
     /// <summary>An entry the marker does not vouch for is rewritten when it is exactly a kcap registration
     /// at another kcap command, and kcap then owns it, so uninstall removes it.</summary>
     [Test]
-    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}""", "kcap-workitems")]
+    [Arguments("""{"command":"/gone/bin/kcap","args":["mcp","workitems"]}""", "kcap-workitems")]
     [Arguments("""{"command":"kcap","args":["mcp","review"]}""", "kcap-review")]
     [Arguments("""{"command":"C:\\old\\kcap.exe","args":["mcp","plans"]}""", "kcap-plans")]
     [Arguments("""{"command":"kcap","args":["mcp","flows"]}""", "kcap-flows")]
@@ -350,6 +350,23 @@ public class JsonMcpConfigWriterTests {
         await Assert.That(marker.Owned(path)).Contains(name);
     }
 
+    /// <summary>An unrecorded entry on a kcap binary that is still there may be the user's own build, so only
+    /// one whose binary is gone, or a bare <c>kcap</c>, is taken over.</summary>
+    [Test]
+    public async Task Register_leaves_an_unrecorded_entry_on_a_kcap_build_that_exists() {
+        using var tmp = new TempDir();
+        var build  = tmp.CreateFile("kcap", "");
+        var path   = tmp.CreateFile("mcp.json", new JsonObject {
+            ["mcpServers"] = new JsonObject { ["kcap-review"] = new JsonObject { ["command"] = build, ["args"] = new JsonArray("mcp", "review") } },
+        }.ToJsonString());
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/new/kcap");
+
+        await Assert.That(CommandOf(path, "kcap-review")).IsEqualTo(build);
+        await Assert.That(marker.Owned(path)).DoesNotContain("kcap-review");
+    }
+
     /// <summary>A recorded entry whose command no longer matches its fingerprint is rewritten too.</summary>
     [Test]
     public async Task Register_rewrites_a_recorded_entry_whose_command_was_repointed_elsewhere() {
@@ -358,7 +375,7 @@ public class JsonMcpConfigWriterTests {
         var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
         var one    = KcapMcpServers.All.Where(s => s.Name == "kcap-workitems").ToArray();
         JsonMcpConfigWriter.Register(path, one, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/dev/build/kcap");
-        tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-workitems":{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}}}""");
+        tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-workitems":{"command":"/gone/bin/kcap","args":["mcp","workitems"]}}}""");
 
         JsonMcpConfigWriter.Register(path, one, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/new/kcap");
 
@@ -368,9 +385,9 @@ public class JsonMcpConfigWriterTests {
     /// <summary>A field kcap writes that the user removed is their choice: a Gemini entry without
     /// <c>trust</c> asks before each tool call, one without <c>cwd</c> runs where the harness starts it.</summary>
     [Test]
-    [Arguments("gemini", "kcap-review", """{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"]}""")]
-    [Arguments("standard", "kcap-sessions", """{"command":"/opt/homebrew/bin/kcap","args":["mcp","sessions"]}""")]
-    [Arguments("opencode", "kcap-review", """{"type":"local","command":["/opt/homebrew/bin/kcap","mcp","review"]}""")]
+    [Arguments("gemini", "kcap-review", """{"command":"/gone/bin/kcap","args":["mcp","review"]}""")]
+    [Arguments("standard", "kcap-sessions", """{"command":"/gone/bin/kcap","args":["mcp","sessions"]}""")]
+    [Arguments("opencode", "kcap-review", """{"type":"local","command":["/gone/bin/kcap","mcp","review"]}""")]
     public async Task Register_leaves_an_entry_missing_a_field_kcap_writes(string shape, string name, string entry) {
         using var tmp = new TempDir();
         var block  = shape == "opencode" ? "mcp" : "mcpServers";
@@ -391,10 +408,10 @@ public class JsonMcpConfigWriterTests {
     /// choice — an added env, a disabled server, a pinned cwd, a different subcommand, a non-kcap
     /// command — and the entry is left as it is.</summary>
     [Test]
-    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"],"env":{"KCAP_URL":"https://x"}}""")]
-    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"],"cwd":"/w/repo"}""")]
-    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","review","--verbose"]}""")]
-    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","sessions"]}""")]
+    [Arguments("""{"command":"/gone/bin/kcap","args":["mcp","review"],"env":{"KCAP_URL":"https://x"}}""")]
+    [Arguments("""{"command":"/gone/bin/kcap","args":["mcp","review"],"cwd":"/w/repo"}""")]
+    [Arguments("""{"command":"/gone/bin/kcap","args":["mcp","review","--verbose"]}""")]
+    [Arguments("""{"command":"/gone/bin/kcap","args":["mcp","sessions"]}""")]
     [Arguments("""{"command":"/opt/homebrew/bin/my-kcap-wrapper","args":["mcp","review"]}""")]
     [Arguments("""{"command":"./kcap","args":["mcp","review"]}""")]
     [Arguments("""{"command":"kcap"}""")]
@@ -413,7 +430,7 @@ public class JsonMcpConfigWriterTests {
     [Test]
     public async Task Register_leaves_an_opencode_server_the_user_disabled() {
         using var tmp = new TempDir();
-        var entry  = """{"type":"local","command":["/opt/homebrew/bin/kcap","mcp","review"],"enabled":false}""";
+        var entry  = """{"type":"local","command":["/gone/bin/kcap","mcp","review"],"enabled":false}""";
         var path   = tmp.CreateFile("opencode.json", """{"mcp":{"kcap-review":""" + entry + "}}");
         var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
 
@@ -426,7 +443,7 @@ public class JsonMcpConfigWriterTests {
     [Test]
     public async Task Register_rewrites_a_stale_opencode_argv() {
         using var tmp = new TempDir();
-        var path   = tmp.CreateFile("opencode.json", """{"mcp":{"kcap-review":{"type":"local","command":["/opt/homebrew/bin/kcap","mcp","review"],"enabled":true}}}""");
+        var path   = tmp.CreateFile("opencode.json", """{"mcp":{"kcap-review":{"type":"local","command":["/gone/bin/kcap","mcp","review"],"enabled":true}}}""");
         var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
 
         JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.OpenCode, null, marker,
