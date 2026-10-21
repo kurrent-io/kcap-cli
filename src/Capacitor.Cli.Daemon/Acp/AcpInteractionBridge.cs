@@ -186,7 +186,11 @@ internal sealed partial class AcpInteractionBridge(
         // The vendor keys each answer by its question's text, so a repeated question is asked once.
         var questions = asked.Questions.DistinctBy(q => q.Text, StringComparer.Ordinal).ToList();
 
-        if (questions.FirstOrDefault(q => !FitsAQuestionCard(q)) is { } oversized) {
+        var prompts = questions
+            .Select((q, i) => questions.Count > 1 ? $"({i + 1} of {questions.Count}) {q.Text}" : q.Text)
+            .ToArray();
+
+        if (questions.Where((q, i) => !FitsAQuestionCard(q, prompts[i])).FirstOrDefault() is { } oversized) {
             logger.LogWarning(
                 "ACP: {Method} for agent {AgentId} asked a question too large for a question card ({Options} options); declining",
                 request.Method, agentId, oversized.Options.Count);
@@ -210,7 +214,7 @@ internal sealed partial class AcpInteractionBridge(
                 ToolName: null,
                 ToolInput: null,
                 ToolCallId: null,
-                Prompt: questions.Count > 1 ? $"({i + 1} of {questions.Count}) {question.Text}" : question.Text,
+                Prompt: prompts[i],
                 Options: options,
                 IsMultiSelect: multi,
                 MinSelections: multi ? 1 : null,
@@ -243,8 +247,8 @@ internal sealed partial class AcpInteractionBridge(
     }
 
     /// <summary>The same bounds an elicitation's question card is held to, which the server enforces.</summary>
-    static bool FitsAQuestionCard(AcpVendorQuestion question) =>
-        question.Text.Length <= MaxElicitationMessageCodeUnits
+    static bool FitsAQuestionCard(AcpVendorQuestion question, string prompt) =>
+        prompt.Length <= MaxElicitationMessageCodeUnits
      && question.Options.Count <= ElicitationSchemaClassifier.MaxOptions
      && question.Options.All(o => o.Label.Length <= ElicitationSchemaClassifier.MaxOptionCodeUnits
                                && (o.Description?.Length ?? 0) <= ElicitationSchemaClassifier.MaxOptionCodeUnits);

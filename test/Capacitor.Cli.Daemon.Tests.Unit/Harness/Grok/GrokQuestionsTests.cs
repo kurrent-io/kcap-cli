@@ -173,6 +173,20 @@ public class GrokQuestionsTests {
         await Assert.That(asked).IsEmpty();
     }
 
+    /// <summary>A question that fits alone can outgrow a card once its "(i of n)" prefix is added.</summary>
+    [Test]
+    public async Task A_question_whose_numbered_prompt_is_too_large_is_declined_without_asking() {
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
+        var text = new string('q', AcpInteractionBridge.MaxElicitationMessageCodeUnits);
+
+        var result = await bridge.HandleAsync(Ask($$"""
+            [{"question":"Which colour?","options":[{"label":"Red"}]},{"question":"{{text}}","options":[{"label":"Yes"}]}]
+            """), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+    }
+
     [Test]
     public async Task A_vendor_without_a_question_method_leaves_it_unhandled() {
         var bridge = new AcpInteractionBridge(
