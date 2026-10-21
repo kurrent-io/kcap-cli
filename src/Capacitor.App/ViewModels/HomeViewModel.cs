@@ -268,7 +268,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// A 401 outcome is the only writer besides its own reset paths. A subject (not a reactive
     /// property read via WhenAnyValue) so the ctor can compose it — see SessionRailViewModel's
-    /// _selectedAgentIdChanges for why WhenAnyValue is avoided in constructors here.
+    /// _selectedSessionKeyChanges for why WhenAnyValue is avoided in constructors here.
     readonly BehaviorSubject<bool> _signInRequired = new(false);
     /// True after a successful re-auth until the daemon reports server-connected (or goes down).
     /// Keeps the banner from still asking to Sign in while the daemon catches up.

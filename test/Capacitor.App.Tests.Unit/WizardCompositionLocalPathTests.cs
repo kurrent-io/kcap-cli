@@ -7,6 +7,7 @@ using Capacitor.App.Services.Onboarding;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalEdition;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Tests.Unit;
@@ -70,6 +71,51 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(visited).DoesNotContain(WizardStepId.SignIn);
         await Assert.That(after).IsEqualTo(WizardStepId.Harnesses);
         await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+    }
+
+    /// The terminal command is part of the install itself, before any harness is chosen; otherwise
+    /// the app offers it on first launch after setup has finished.
+    [Test]
+    public async Task A_settled_local_install_puts_kcap_on_the_terminal_path() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(NotInstalled());
+        var installer = new RecordingInstaller();
+        harness.ShimInstaller = installer;
+        var exit = new TaskCompletionSource<StreamingResult>();
+        Action<StreamedLine>? print = null;
+        harness.Cli.SetupLocalBehavior = (onLine, _, _) => {
+            print = onLine;
+            return exit.Task;
+        };
+
+        var (during, targets) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+
+            await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
+            await graph.ViewModel.PendingAdvanceForTesting;
+            await graph.Steps.OfType<InstallStepViewModel>().Single().InstallCommand.Execute().ToTask();
+            var during = installer.Targets.Count;
+
+            print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
+            exit.SetResult(new StreamingResult(0, false, []));
+            await WizardFixtures.WaitUntilAsync(() => installer.Targets.Count == 1, what: "the settled install to link kcap");
+
+            return (during, installer.Targets.ToList());
+        }).WaitAsync(TimeSpan.FromSeconds(30));
+
+        await Assert.That(during).IsEqualTo(0);
+        await Assert.That(targets.Single()).IsEqualTo(harness.ShimTarget);
+    }
+
+    sealed class RecordingInstaller : ICliPathInstaller {
+        public readonly List<string> Targets = [];
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => ShimPreflight.Installable;
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
+            Targets.Add(target);
+            return Task.FromResult(new ShimResult(ShimOutcome.Installed, null, null));
+        }
     }
 
     /// The durable half of the local-path predicate is read at build, on Edition entry and on a settled

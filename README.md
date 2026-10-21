@@ -2179,6 +2179,7 @@ The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok
 - **It runs as its own process,** never through a shared `grok leader`, so stopping the agent stops Grok.
 - **It is recorded once.** kcap's own Grok hook loads inside the hosted child and stands down there, because the daemon already records the session. A `grok` the hosted agent starts itself is still recorded.
 - **Its usage is recorded per turn.** The daemon reads each finished turn's per-model token usage from Grok's `_x.ai/session_notification` extension, so a hosted Grok session is costed like one you run yourself. Usage on `grok-4.7-build-fast` is recorded but shows no cost, since xAI bills it at a different rate.
+- **It can ask you questions.** Each question Grok asks appears on the agent's page as a question card, and your answer goes back to Grok. A question that is cancelled tells Grok you declined, and it carries on without the answer.
 - **Its subagents are recorded as subagents.** Each subagent Grok starts lands on its own sub-session of the hosted session, with its start and finish recorded on the parent.
 
 #### Grok as an unattended review-flow reviewer
@@ -2760,7 +2761,12 @@ kcap feedback --feedback                               # send feedback; prompts 
 > Releases and checks its sha256 against the manifest, installing nothing on a
 > mismatch. Each release gets its own `versions/<version>` directory and the
 > `current` link is switched to it, so running processes keep the files they
-> started from; then the new binary runs `kcap refresh`. A daemon service
+> started from; then the new binary runs `kcap refresh`. The version it replaced
+> stays; every other version is deleted unless something still runs from it.
+> macOS cannot tell, so there it is deleted anyway, and a process already running
+> from it keeps working. A daemon started from a script install restarts on the new version once it is idle,
+> Windows included, provided it was started on a release that watches for updates
+> there; restart an older Windows daemon once with `kcap daemon restart`. A daemon service
 > installed from a script install is moved onto the `current` path, so it
 > follows updates. Switching from npm, a daemon service installed under npm keeps
 > running the npm binary: run `kcap daemon service install` again once the

@@ -155,7 +155,7 @@
                         </ContentControl>
 
                         <Border x:Name="SwitchCover" Background="{StaticResource KcapCanvasBrush}" IsVisible="False">
-                            <Image x:Name="SwitchCoverStill" Stretch="Fill" />
+                            <views:StillImage x:Name="SwitchCoverStill" />
                         </Border>
                     </Panel>
                 </Grid>

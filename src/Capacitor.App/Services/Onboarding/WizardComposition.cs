@@ -44,7 +44,7 @@ internal sealed record WizardFacadeSpec(
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
     HistoryStepViewModel History, ConnectChoiceViewModel Connect, DaemonEnabler Daemon,
-    LocalInstallController Install);
+    LocalInstallController Install, PathFixViewModel? PathFix = null);
 
 /// <summary>Everything wizard-first mode is composed from; the daemon-facing entries are factories so a call never lands on a stale daemon.</summary>
 internal sealed record WizardGraphOptions(
@@ -233,9 +233,12 @@ internal static class WizardComposition {
         signIn.WhenAnyValue(x => x.Satisfied)
             .Where(satisfied => satisfied)
             .Subscribe(signedIn => _ = daemon.EnsureAsync(options.ShutdownToken));
-        // Only the settled outcome counts: a progress line is not an installed server.
+        // Only the settled outcome counts: a progress line is not an installed server. The terminal
+        // command is part of a local install, harnesses or not; the harness step joins this run.
         void OnInstallSettled(LocalInstallOutcome outcome) {
-            if (outcome is LocalInstallOutcome.Installed) _ = daemon.EnsureAsync(options.ShutdownToken);
+            if (outcome is not LocalInstallOutcome.Installed) return;
+            _ = daemon.EnsureAsync(options.ShutdownToken);
+            _ = pathFix?.LinkAsync(options.ShutdownToken);
         }
         install.Settled += OnInstallSettled;
         if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);
@@ -280,7 +283,7 @@ internal static class WizardComposition {
             funnel.Dispose();
         };
 
-        return new WizardGraph(wizard, auth, steps, history, connect, daemon, install);
+        return new WizardGraph(wizard, auth, steps, history, connect, daemon, install, pathFix);
 
         bool Connected() => signIn.Satisfied || Installed() || CommittedLocal();
     }
