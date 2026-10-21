@@ -96,6 +96,18 @@ public class CodexChatRulesTests {
         await Assert.That(P(Item("""{"type":"message","role":"user","content":"not-an-array"}"""))).IsEmpty();
     }
 
+    /// A message one agent sends another is hidden in the sender's chat, but in the recipient's own view it is the
+    /// task it was given, so it shows there as a note.
+    [Test]
+    public async Task An_agent_message_shows_only_in_a_subagents_own_view() {
+        var line = Item("""{"type":"agent_message","author":"parent","recipient":"child","content":[{"type":"output_text","text":"Review the parser"}]}""");
+        var own = TranscriptChat.ForSubagent("codex")!;
+
+        await Assert.That(P(line)).IsEmpty();
+        var shown = own.Project(line, 1, Received, own.CreateContext("a1", null));
+        await Assert.That((shown.Single().Kind, shown.Single().Text)).IsEqualTo((AcpEventKind.SystemNote, "Review the parser"));
+    }
+
     /// A compaction is stored as its own event and reads as a note where it happened.
     [Test]
     public async Task A_compaction_reaches_the_chat_as_a_note() {

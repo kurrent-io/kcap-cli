@@ -743,8 +743,7 @@ public sealed class ClaudeHookCommand(
                                 await watchers.KillWatcher($"{sessionId}-{agentId}");
 
                                 if (transcriptPath is not null) {
-                                    var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-                                    var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
+                                    var agentTranscriptPath = ClaudeSubagentFiles.TranscriptPath(transcriptPath, agentId);
                                     await watchers.InlineDrainAsync(sessionId, agentTranscriptPath, agentId);
                                 }
                             },
@@ -1224,8 +1223,7 @@ public sealed class ClaudeHookCommand(
                 var transcriptPath = node?["transcript_path"]?.GetValue<string>();
 
                 if (sessionId is not null && agentId is not null && transcriptPath is not null) {
-                    var sessionDir          = Path.ChangeExtension(transcriptPath, null);
-                    var agentTranscriptPath = Path.Combine(sessionDir, "subagents", $"agent-{agentId}.jsonl");
+                    var agentTranscriptPath = ClaudeSubagentFiles.TranscriptPath(transcriptPath, agentId);
                     await watchers.EnsureWatcherRunning($"{sessionId}-{agentId}", agentTranscriptPath, agentId, sessionId);
                 }
 
