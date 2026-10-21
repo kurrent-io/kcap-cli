@@ -68,6 +68,31 @@
             <views:HistoryPaneView />
         </DataTemplate>
 
+        <DataTemplate DataType="vm:UsageDataStepViewModel">
+            <StackPanel Spacing="12">
+                <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
+                    <StackPanel Spacing="2">
+                        <RadioButton x:Name="ShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     IsChecked="{Binding Share, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.ShareTitle}" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{x:Static vm:UsageDataStepViewModel.ShareDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                        <RadioButton x:Name="DontShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
+                                     IsChecked="{Binding DontShare, Mode=TwoWay}">
+                            <StackPanel Spacing="2">
+                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vm:UsageDataStepViewModel.OffTitle}" />
+                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{x:Static vm:UsageDataStepViewModel.OffDetail}" />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                </Border>
+                <TextBlock x:Name="UsageDataProblemText" Classes="onboardingError" TextWrapping="Wrap" Text="{Binding Problem}"
+                           IsVisible="{Binding Problem, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </DataTemplate>
+
         <DataTemplate DataType="vm:DoneStepViewModel">
             <views:DonePaneView />
         </DataTemplate>
@@ -120,16 +145,6 @@
                                 IsVisible="{Binding NextVisible}" />
                     </Grid>
 
-                    <!-- Once per device: the usage-data disclosure, until acknowledged here or on the launcher. -->
-                    <Grid x:Name="UsageNotice" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10"
-                          IsVisible="{Binding UsageNotice.Visible, FallbackValue=False}">
-                        <TextBlock Classes="frNote" TextWrapping="Wrap" VerticalAlignment="Center"
-                                   Text="{Binding UsageNotice.Message, FallbackValue={x:Null}}" />
-                        <Button Grid.Column="1" x:Name="UsageNoticeTurnOffButton" Classes="frSecondary" Content="Turn off"
-                                Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}" VerticalAlignment="Center" />
-                        <Button Grid.Column="2" x:Name="UsageNoticeOkButton" Classes="frSecondary" Content="OK"
-                                Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}" VerticalAlignment="Center" />
-                    </Grid>
 
                     <!-- Done page only: the daemon is enabled beside the steps, and its outcome lands here. -->
                     <TextBlock x:Name="LifecycleStatusText" Classes="onboardingNote" Text="{Binding Surface.StatusText}"

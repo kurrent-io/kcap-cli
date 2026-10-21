@@ -5,6 +5,7 @@ using System.Reactive.Subjects;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
+using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -91,7 +92,9 @@ internal sealed record WizardGraphOptions(
     // KCAP_PROFILE, which the app honours and the local installer does not.
     string?                                                                      ProfileOverride = null,
     // The app's one install controller, shared by every wizard it shows; null builds a graph-local one.
-    LocalInstallController?                                                      Install = null);
+    LocalInstallController?                                                      Install = null,
+    // Null, or already acknowledged, leaves the Privacy page out of the run.
+    UsageDataNotice?                                                             UsageNotice = null);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
@@ -257,7 +260,7 @@ internal static class WizardComposition {
                 local,
                 local ? LocalEndpoints.Read(root).Active?.ServerUrl : null);
         }, options.UrlOpener);
-        IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
+        IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, new UsageDataStepViewModel(options.UsageNotice), done];
 
         var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
