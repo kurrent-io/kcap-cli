@@ -236,6 +236,23 @@ public class ScriptUpdaterTests {
             .IsEquivalentTo(["1.1.0", "1.2.0", "1.3.0-beta.1", ".update-12-def", ".staging-34", "notes"]);
     }
 
+    /// <summary>Only the new version and the one it replaced are kept, so a rollback deletes an unused
+    /// newer version too.</summary>
+    [Test]
+    public async Task Pruning_after_a_rollback_deletes_an_unused_newer_version() {
+        using var tmp = new TempDir();
+        var layout = new ScriptInstallLayout(tmp.Path);
+        foreach (var name in new[] { "1.0.0", "1.1.0", "2.0.0" })
+            tmp.CreateFile($"versions/{name}/bin/kcap");
+        var updater = new ScriptUpdater(null!) { InUse = _ => false };
+
+        var pruned = updater.PruneVersions(layout, keep: [layout.VersionDir("1.0.0"), layout.VersionDir("1.1.0")]);
+
+        await Assert.That(pruned).IsEqualTo(1);
+        await Assert.That(Directory.EnumerateDirectories(layout.Versions).Select(p => Path.GetFileName(p)!).ToArray())
+            .IsEquivalentTo(["1.0.0", "1.1.0"]);
+    }
+
     /// <summary>A file someone holds open marks its directory in use; a running binary refuses the same
     /// exclusive write open on Windows and Linux.</summary>
     [Test]

@@ -100,8 +100,8 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
                 return false;
             }
 
-            // A leftover directory of this version is not active, but a process started from it before
-            // `current` moved away may still run there: it is moved aside and kept, never deleted.
+            // A process started from a leftover directory of this version may still run there, so it is
+            // moved aside rather than overwritten; pruning deletes it once nothing uses it.
             var aside = Path.Combine(layout.Versions, $".replaced-{version}-{Guid.NewGuid():N}");
             try {
                 if (Directory.Exists(dest)) Directory.Move(dest, aside);

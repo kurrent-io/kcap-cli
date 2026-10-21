@@ -15,7 +15,9 @@ sha256 against the manifest; any mismatch installs nothing. The release
 goes into its own versions/<version> directory and the `current` link is
 switched to it, so running processes keep the files they started from.
 The new binary then runs `kcap refresh`. The version it replaced stays;
-older ones are deleted unless something still runs from them. A daemon
+every other version is deleted unless something still runs from it. macOS
+cannot tell, so there it is deleted anyway, and a process already running
+from it keeps working. A daemon
 started from a script install restarts on the new version once it is idle,
 Windows included, provided it was started on a release that watches for
 updates there; restart an older Windows daemon once with kcap daemon restart.

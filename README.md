@@ -2764,8 +2764,9 @@ kcap feedback --feedback                               # send feedback; prompts 
 > mismatch. Each release gets its own `versions/<version>` directory and the
 > `current` link is switched to it, so running processes keep the files they
 > started from; then the new binary runs `kcap refresh`. The version it replaced
-> stays; older ones are deleted unless something still runs from them. A daemon
-> started from a script install restarts on the new version once it is idle,
+> stays; every other version is deleted unless something still runs from it.
+> macOS cannot tell, so there it is deleted anyway, and a process already running
+> from it keeps working. A daemon started from a script install restarts on the new version once it is idle,
 > Windows included, provided it was started on a release that watches for updates
 > there; restart an older Windows daemon once with `kcap daemon restart`. A daemon service
 > installed from a script install is moved onto the `current` path, so it
