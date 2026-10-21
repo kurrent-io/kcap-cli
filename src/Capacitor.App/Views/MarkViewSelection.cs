@@ -6,6 +6,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using MarkView.Avalonia;
@@ -80,16 +81,49 @@ static class MarkViewSelection {
     }
 
     static void OnPressed(MarkdownViewer viewer, PointerPressedEventArgs e) {
-        if (e.ClickCount != 2 || !e.GetCurrentPoint(viewer).Properties.IsLeftButtonPressed) return;
+        if (!e.GetCurrentPoint(viewer).Properties.IsLeftButtonPressed) return;
         if (LayerOf(viewer) is not Visual layer) return;
         var point = e.GetPosition(layer);
-        if (HitTestEntry(layer, point) is not { } entry || HitTestOffset(layer, point) is not { } offset) return;
-        var start = AbsStart(entry);
-        var plain = PlainText(entry);
-        var (from, to) = LineSelection.LineBounds(plain[MarkerLength(entry, plain)..], offset - start);
-        Anchor(layer) = start + from;
-        Focus(layer) = start + to;
+        if (e.ClickCount == 2) {
+            if (HitTestEntry(layer, point) is not { } entry || HitTestOffset(layer, point) is not { } offset) return;
+            var start = AbsStart(entry);
+            var plain = PlainText(entry);
+            var (from, to) = LineSelection.LineBounds(plain[MarkerLength(entry, plain)..], offset - start);
+            Anchor(layer) = start + from;
+            Focus(layer) = start + to;
+            layer.InvalidateVisual();
+            return;
+        }
+        if (e.ClickCount != 1 || HitTestOffset(layer, point) is not null || PressedOnControl(e)) return;
+        // Padding sits outside the glyph bounds, so MarkView records no anchor and the drag never starts.
+        if (LeftCodePadding(layer, point) is not { } inside || HitTestOffset(layer, inside) is not { } snapped) return;
+        Anchor(layer) = snapped;
+        Focus(layer) = snapped;
+        IsDragging(viewer) = true;
         layer.InvalidateVisual();
+    }
+
+    static bool PressedOnControl(PointerPressedEventArgs e) {
+        for (var visual = e.Source as Visual; visual is not null; visual = visual.GetVisualParent())
+            if (visual is Button or MarkdownImage { Target: not null }) return true;
+        return false;
+    }
+
+    static Point? LeftCodePadding(Visual layer, Point point) {
+        foreach (var entry in Entries(layer)) {
+            var block = TextBlockOf(entry);
+            if (block.GetVisualParent() is not Border border || !border.Classes.Contains("markdown-code-block")) continue;
+            if (block.TranslatePoint(default, layer) is not { } origin || border.TranslatePoint(default, layer) is not { } edge) continue;
+            var local = point - origin;
+            if (point.X < edge.X + border.BorderThickness.Left || local.X >= block.Padding.Left) continue;
+            var y = block.Padding.Top;
+            foreach (var line in block.TextLayout.TextLines) {
+                if (local.Y >= y && local.Y < y + line.Height)
+                    return new Point(origin.X + block.Padding.Left, point.Y);
+                y += line.Height;
+            }
+        }
+        return null;
     }
 
     /// MarkView moves the selection's end only while the pointer is over a block, and the chat's
