@@ -15,9 +15,13 @@ namespace Capacitor.Cli.Daemon.Services;
 ///
 /// Input writes take the input lane, so a paste and its submit are never interleaved by another
 /// writer; the graceful stop only tries for it (see <see cref="RequestGracefulStopAsync"/>).
+///
+/// <paramref name="promptFile"/> is deleted on dispose, once the PTY is torn down: the PTY's
+/// <c>WaitForExitAsync</c> returns on its timeout too, so it cannot say when the agent is done reading.
 /// </summary>
 internal sealed class PtyHostedAgentRuntime(
-        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false) : IHostedAgentRuntime {
+        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false, string? promptFile = null)
+    : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
@@ -153,7 +157,11 @@ internal sealed class PtyHostedAgentRuntime(
     public Task TerminateAsync(TimeSpan?   timeout = null) => pty.TerminateAsync(timeout);
 
     public async ValueTask DisposeAsync() {
-        await pty.DisposeAsync();
-        _lane.Dispose();
+        try {
+            await pty.DisposeAsync();
+        } finally {
+            if (promptFile is not null) PromptFile.Delete(promptFile);
+            _lane.Dispose();
+        }
     }
 }

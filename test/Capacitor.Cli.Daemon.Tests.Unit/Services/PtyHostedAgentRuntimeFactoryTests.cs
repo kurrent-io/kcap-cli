@@ -5,6 +5,7 @@ using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -119,32 +120,42 @@ public class PtyHostedAgentRuntimeFactoryTests {
 
     static readonly string LongPrompt = new('d', PromptFile.ArgumentBudget + 1);
 
-    (PtyHostedAgentRuntimeFactory Factory, SpyPtyProcessFactory Pty, GatedPty Process, string PromptRoot) NewPromptFactory(bool windows) {
+    (PtyHostedAgentRuntimeFactory Factory, SpyPtyProcessFactory Pty, GatedPty Process, string PromptRoot) NewPromptFactory(
+            bool windows, TimeProvider? time = null) {
+        time ??= TimeProvider.System;
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
-        var process  = new GatedPty();
+        var process  = new GatedPty(time);
         var pty      = new SpyPtyProcessFactory(process);
         var root     = Tmp.PathTo("prompts");
         var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance,
-            TimeProvider.System, windows: windows, promptRoot: root);
+            time, windows: windows, promptRoot: root);
         return (factory, pty, process, root);
     }
 
+    /// <summary>The prompt file outlives every timed exit wait the PTY offers, and goes only once the
+    /// exited agent's PTY has been torn down.</summary>
     [Test]
-    public async Task On_Windows_an_overlong_prompt_is_read_from_a_file_that_is_removed_when_the_agent_exits() {
-        var (factory, pty, process, root) = NewPromptFactory(windows: true);
+    public async Task On_Windows_an_overlong_prompt_file_lasts_until_the_exited_agent_is_torn_down() {
+        var clock = new FakeTimeProvider();
+        var (factory, pty, process, root) = NewPromptFactory(windows: true, clock);
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null) with { Prompt = LongPrompt }, CancellationToken.None);
 
         try {
             var file = Path.Combine(root, "agent-mode-1", "prompt.md");
             await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
+            process.WatchedFile = file;
+
+            clock.Advance(TimeSpan.FromMinutes(1));
+            await process.TimedOutWaitsSettledAsync();
+            await Assert.That(process.HasExited).IsFalse();
             await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo(LongPrompt);
 
             process.Exit();
-            var dir      = Path.GetDirectoryName(file)!;
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-            while (Directory.Exists(dir) && DateTime.UtcNow < deadline) await Task.Delay(20);
-            await Assert.That(Directory.Exists(dir)).IsFalse();
+            await start.Runtime.DisposeAsync();
+
+            await Assert.That(process.PromptExistedAtDispose).IsTrue();
+            await Assert.That(Directory.Exists(Path.GetDirectoryName(file)!)).IsFalse();
         } finally {
             process.Exit();
             await start.Runtime.DisposeAsync();
@@ -180,18 +191,45 @@ public class PtyHostedAgentRuntimeFactoryTests {
     }
 
     /// <summary>A PTY that runs until <see cref="Exit"/>, so a test can look at what exists while the
-    /// agent is alive.</summary>
-    sealed class GatedPty : IPtyProcess {
+    /// agent is alive. Its exit wait keeps the real PTYs' contract: it returns on its timeout, five
+    /// seconds by default, with the agent still running.</summary>
+    sealed class GatedPty(TimeProvider time) : IPtyProcess {
         readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly List<Task>           _waits  = [];
 
         public void Exit() => _exited.TrySetResult();
+
+        public string? WatchedFile            { get; set; }
+        public bool?   PromptExistedAtDispose { get; private set; }
 
         public int  Pid       => 0;
         public bool HasExited => _exited.Task.IsCompleted;
         public int? ExitCode  => HasExited ? 0 : null;
 
-        public ValueTask DisposeAsync() { Exit(); return default; }
-        public Task WaitForExitAsync(TimeSpan? timeout = null) => _exited.Task;
+        public ValueTask DisposeAsync() {
+            PromptExistedAtDispose ??= WatchedFile is { } f && File.Exists(f);
+            Exit();
+            return default;
+        }
+
+        public Task WaitForExitAsync(TimeSpan? timeout = null) {
+            var wait = WaitAsync(timeout ?? TimeSpan.FromSeconds(5));
+            lock (_waits) _waits.Add(wait);
+            return wait;
+        }
+
+        async Task WaitAsync(TimeSpan timeout) {
+            try { await _exited.Task.WaitAsync(timeout, time); } catch (TimeoutException) { }
+        }
+
+        /// <summary>Lets anything chained onto a timed-out wait run before the test looks.</summary>
+        public async Task TimedOutWaitsSettledAsync() {
+            Task[] waits;
+            lock (_waits) waits = [.. _waits];
+            await Task.WhenAll(waits);
+            await Task.Delay(100);
+        }
+
         public Task TerminateAsync(TimeSpan?   timeout = null) { Exit(); return Task.CompletedTask; }
 
         public async IAsyncEnumerable<byte[]> ReadOutputAsync(
