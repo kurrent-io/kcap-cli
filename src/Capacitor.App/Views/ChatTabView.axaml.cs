@@ -20,10 +20,11 @@ public partial class ChatTabView : UserControl {
     const double WheelStep = 50;
     const double SmoothHalfLifeSeconds = 0.032;
 
+    readonly HashSet<MarkdownView> _selectedMarkdown = [];
+    IDisposable? _sendSubscription;
     ScrollViewer? _scroll;
     TextPresenter? _composerPresenter;
     AttachmentDropPaste? _attachments;
-    IDisposable? _sent;
     bool _followTail = true;
     /// Armed by a gesture inside the list and released once the dispatcher queue drains past
     /// layout, so it covers exactly the scroll changes that gesture produced — an expansion click
@@ -62,6 +63,7 @@ public partial class ChatTabView : UserControl {
         // than the press, by which time a flag armed on the press alone has been released.
         ChatItems.AddHandler(PointerPressedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerMovedEvent, OnSelectionDrag, RoutingStrategies.Bubble, handledEventsToo: true);
+        ChatItems.AddHandler(PointerMovedEvent, OnSelectionMove, RoutingStrategies.Bubble, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnSelectionDragEnded, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerWheelChangedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -96,6 +98,7 @@ public partial class ChatTabView : UserControl {
     /// the same view, and a behaviour disposed on the way out has to come back with it.
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
         base.OnAttachedToVisualTree(e);
+        ObserveSending();
         _pointerRoot = TopLevel.GetTopLevel(this);
         _pointerRoot?.AddHandler(PointerReleasedEvent, OnPrimaryReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
         _pointerRoot?.AddHandler(PointerCaptureLostEvent, OnPrimaryCaptureLost, RoutingStrategies.Direct | RoutingStrategies.Bubble, handledEventsToo: true);
@@ -115,22 +118,12 @@ public partial class ChatTabView : UserControl {
         _readerGesture = false;
         _dragSelecting = false;
         _dragView = null;
+        _selectedMarkdown.Clear();
         _primaryPointer = null;
         _tailDeferred = false;
         _followTail = true;
         base.OnDataContextChanged(e);
-        _sent?.Dispose();
-        _sent = DataContext is ChatTabViewModel vm ? Observable.FromEvent(h => vm.TurnSubmitted += h, h => vm.TurnSubmitted -= h).Subscribe(_ => FollowSentTurn()) : null;
-    }
-
-    /// A send brings its turn to the top even when the reader had scrolled back.
-    void FollowSentTurn() {
-        CancelSmoothScroll();
-        DropToggleAnchor();
-        _thumbFraction = null;
-        _followTail = true;
-        EnsureChatScroll();
-        _scroll?.ScrollToEnd();
+        ObserveSending();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
@@ -140,6 +133,8 @@ public partial class ChatTabView : UserControl {
         _thumbFraction = null;
         _dragSelecting = false;
         _dragView = null;
+        _sendSubscription?.Dispose();
+        _sendSubscription = null;
         _primaryPointer = null;
         _tailDeferred = false;
         _pointerRoot?.RemoveHandler(PointerReleasedEvent, OnPrimaryReleased);
@@ -149,6 +144,30 @@ public partial class ChatTabView : UserControl {
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
+    }
+
+    void ObserveSending() {
+        _sendSubscription?.Dispose();
+        _sendSubscription = DataContext is ChatTabViewModel vm
+            ? Observable.FromEvent(h => vm.TurnSubmitted += h, h => vm.TurnSubmitted -= h)
+                .Subscribe(_ => ResumeFollowing())
+            : null;
+    }
+
+    void ResumeFollowing() {
+        DropToggleAnchor();
+        CancelSmoothScroll();
+        _thumbDragging = false;
+        _thumbFraction = null;
+        _readerGesture = false;
+        _dragSelecting = false;
+        _dragView = null;
+        _primaryPointer = null;
+        _tailDeferred = false;
+        foreach (var markdown in _selectedMarkdown.ToArray()) markdown.ClearSelection();
+        _followTail = true;
+        EnsureChatScroll();
+        _scroll?.ScrollToEnd();
     }
 
     internal int ListInputVersion => _listInputVersion;
@@ -166,6 +185,7 @@ public partial class ChatTabView : UserControl {
             CancelSmoothScroll();
             return;
         }
+        if (e.RoutedEvent == PointerWheelChangedEvent || e.RoutedEvent == ScrollGestureEvent) DropToggleAnchor();
         if (e.RoutedEvent == PointerWheelChangedEvent || e.RoutedEvent == ScrollGestureEvent || e is KeyEventArgs) _thumbFraction = null;
         if (e.RoutedEvent == ScrollGestureEvent || e.RoutedEvent == PointerPressedEvent || e is KeyEventArgs) CancelSmoothScroll();
         // A press, or Enter or Space, inside a pending card is answering it — an option, Next, a step
@@ -176,7 +196,10 @@ public partial class ChatTabView : UserControl {
         if (e.RoutedEvent == PointerPressedEvent) CaptureToggleAnchor(e.Source);
         if (_readerGesture) return;
         _readerGesture = true;
-        Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+        Dispatcher.UIThread.Post(() => {
+            _readerGesture = false;
+            RefreshSelectionFollowTail();
+        }, DispatcherPriority.Background);
     }
 
     void OnPrimaryReleased(object? sender, PointerReleasedEventArgs e) {
@@ -199,7 +222,7 @@ public partial class ChatTabView : UserControl {
         Dispatcher.UIThread.Post(() => {
             if (PrimaryDown || !_followTail || _dragSelecting || _anchorItem is not null
                 || _thumbFraction is not null || ListTextBoxOwnsFocus()
-                || !ReferenceEquals(context, DataContext) || _pointerRoot is null) return;
+                || SelectionHeld() || !ReferenceEquals(context, DataContext) || _pointerRoot is null) return;
             _scroll?.ScrollToEnd();
         }, DispatcherPriority.Background);
     }
@@ -459,7 +482,8 @@ public partial class ChatTabView : UserControl {
         var extentOnlyWhilePressed = PrimaryDown && _followTail
             && e.ExtentDelta.Y > 0 && Math.Abs(e.OffsetDelta.Y) <= 0.5;
         _followTail = extentOnlyWhilePressed || (_readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd);
-        if (_followTail && !atBottom) {
+        if (SelectionHeld()) _followTail = false;
+        else if (_followTail && !atBottom) {
             if (PrimaryDown) _tailDeferred = true;
             else scroll.ScrollToEnd();
         }
@@ -520,6 +544,38 @@ public partial class ChatTabView : UserControl {
         }
         QueueEdgeScroll();
     }
+
+    void OnSelectionMove(object? sender, PointerEventArgs e) {
+        if (!e.GetCurrentPoint(ChatItems).Properties.IsLeftButtonPressed || !OriginatesFromMarkdown(e)) return;
+        RefreshSelectionFollowTail();
+    }
+
+    void RefreshSelectionFollowTail() {
+        if (SelectionHeld()) {
+            _followTail = false;
+            return;
+        }
+        if (_scroll is null || _anchorItem is not null || _thumbFraction is not null
+            || IsSmoothScrolling || ListTextBoxOwnsFocus()) return;
+        if (_scroll.Offset.Y + _scroll.Viewport.Height >= _scroll.Extent.Height - BottomTolerance)
+            _followTail = true;
+    }
+
+    internal void UpdateSelection(MarkdownView view) {
+        if (view.HasSelection) {
+            _selectedMarkdown.Add(view);
+            if (view.IsEffectivelyVisible) _followTail = false;
+        } else RemoveSelection(view);
+    }
+
+    internal void RemoveSelection(MarkdownView view) {
+        if (_selectedMarkdown.Remove(view)) RefreshSelectionFollowTail();
+    }
+
+    bool SelectionHeld() => _selectedMarkdown.Any(static view => view.IsEffectivelyVisible);
+
+    static bool OriginatesFromMarkdown(RoutedEventArgs e) =>
+        e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<MarkdownView>().Any();
 
     static bool OriginatesFromTextBox(RoutedEventArgs e) =>
         e.Source is Visual visual && (visual is TextBox || visual.GetVisualAncestors().OfType<TextBox>().Any());
