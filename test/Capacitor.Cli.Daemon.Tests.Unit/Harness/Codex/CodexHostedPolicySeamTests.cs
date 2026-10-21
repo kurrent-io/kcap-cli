@@ -71,6 +71,8 @@ public class CodexHostedPolicySeamTests : IDisposable {
         ["threadId"] = ThreadId, ["turnId"] = "turn-1", ["itemId"] = item, ["startedAtMs"] = 1,
     });
 
+    static JsonObject Move(string destination) => new() { ["type"] = "update", ["move_path"] = destination };
+
     static JsonElement Element(JsonNode node) => JsonDocument.Parse(node.ToJsonString()).RootElement.Clone();
 
     const string CommandApproval = "item/commandExecution/requestApproval";
@@ -116,16 +118,27 @@ public class CodexHostedPolicySeamTests : IDisposable {
             .IsEqualTo(CodexHostedVerdict.Decline);
     }
 
-    /// A rename touches its destination too, so a path rule binds there; a change naming no path leaves the item unknown.
+    /// A rename touches its destination too, so a path rule binds there; a change naming no path, a destination that
+    /// cannot resolve, or a later empty snapshot leaves the item unknown.
     [Test]
     [Arguments("rename", "Decline")]
     [Arguments("pathless", "Forward")]
+    [Arguments("empty_destination", "Forward")]
+    [Arguments("empty_snapshot", "Forward")]
     public async Task Every_path_a_file_change_touches_is_checked(string shape, string verdict) {
-        var seam   = Seam();
-        var change = shape == "rename"
-            ? new JsonObject { ["path"] = "/wt/src/key.txt", ["kind"] = new JsonObject { ["type"] = "update", ["move_path"] = "/wt/config/secrets/key.txt" } }
-            : new JsonObject { ["kind"] = new JsonObject { ["type"] = "add" } };
-        seam.Paths.Observe("patch-3", Element(new JsonArray(new JsonObject { ["path"] = "/wt/src/other.txt", ["kind"] = "update" }, change)));
+        // The judge allows anything it sees and the earlier snapshot is denied, so only an unknown item forwards.
+        Judge("allow");
+        var seam  = Seam();
+        var other = new JsonObject { ["path"] = "/wt/src/other.txt", ["kind"] = "update" };
+        var snapshot = shape switch {
+            "rename"            => new JsonArray(other, new JsonObject { ["path"] = "/wt/src/key.txt", ["kind"] = Move("/wt/config/secrets/key.txt") }),
+            "pathless"          => new JsonArray(other, new JsonObject { ["kind"] = new JsonObject { ["type"] = "add" } }),
+            "empty_destination" => new JsonArray(other, new JsonObject { ["path"] = "/wt/src/key.txt", ["kind"] = Move("") }),
+            _                   => new JsonArray(),
+        };
+        if (shape == "empty_snapshot")
+            seam.Paths.Observe("patch-3", Element(new JsonArray(new JsonObject { ["path"] = "/wt/config/secrets/key.txt", ["kind"] = "add" })));
+        seam.Paths.Observe("patch-3", Element(snapshot));
 
         await Assert.That((await seam.EvaluateAsync(FileApproval, FileChange("patch-3"), CancellationToken.None)).ToString()).IsEqualTo(verdict);
     }

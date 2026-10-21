@@ -13,30 +13,31 @@ internal sealed class CodexPatchPaths {
 
     /// <summary>From <c>item/fileChange/patchUpdated</c> (<c>params.changes</c>) or a started file-change item
     /// (<c>item.changes</c>): each change names its <c>path</c>, and a rename its destination in <c>kind.move_path</c>.
-    /// A later snapshot replaces an earlier one; one with a change naming no path leaves the item's paths unknown.</summary>
+    /// A later snapshot replaces an earlier one; an empty one, or one with a change naming no path, leaves the item's
+    /// paths unknown. A destination is kept even when empty, so it fails to resolve rather than going unchecked.</summary>
     public void Observe(string itemId, JsonElement changes) {
         if (!changes.IsArray) return;
 
-        var paths = new List<string>();
+        List<string>? paths = [];
         foreach (var change in changes.EnumerateArray()) {
             if (change.Str("path") is not { Length: > 0 } path) {
-                lock (_gate) _paths.Remove(itemId);
-                return;
+                paths = null;
+                break;
             }
 
             paths.Add(path);
-            if (change.Obj("kind") is { } kind && kind.Str("move_path") is { Length: > 0 } destination) paths.Add(destination);
+            if (change.Obj("kind") is { } kind && kind.Str("move_path") is { } destination) paths.Add(destination);
         }
-        if (paths.Count == 0) return;
 
         lock (_gate) {
             if (!_paths.ContainsKey(itemId)) _order.Enqueue(itemId);
-            _paths[itemId] = [.. paths.Distinct(StringComparer.Ordinal)];
+            _paths[itemId] = paths is null ? [] : [.. paths.Distinct(StringComparer.Ordinal)];
             if (_order.Count > MaxItems) _paths.Remove(_order.Dequeue());
         }
     }
 
+    /// <summary>False until the item's latest snapshot names every path it touches.</summary>
     public bool TryPaths(string itemId, out IReadOnlyList<string> paths) {
-        lock (_gate) return _paths.TryGetValue(itemId, out paths!);
+        lock (_gate) return _paths.TryGetValue(itemId, out paths!) && paths.Count > 0;
     }
 }
