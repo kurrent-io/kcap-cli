@@ -31,6 +31,15 @@ public class PermissionRefusalLedgerTests {
         await Assert.That(declared.Entries).IsEmpty();
     }
 
+    /// A request the bridge failed on before it knew the session was denied without it, in some session.
+    [Test]
+    public async Task A_request_lost_before_its_session_was_known_makes_every_session_incomplete() {
+        var ledger = Marked();
+        ledger.MarkAllIncomplete();
+
+        await Assert.That(ledger.Declare(Session).Complete).IsFalse();
+    }
+
     [Test]
     public async Task A_marked_session_with_no_refusals_declares_complete() =>
         await Assert.That(Marked().Declare(Session).Complete).IsTrue();

@@ -475,7 +475,8 @@ internal sealed partial class LocalPermissionBridge(
 
                         var submitBody = await ReadCappedBodyAsync(context.Request.InputStream, MaxSubmitBodyBytes, ct);
                         if (submitBody is null) {
-                            context.Response.StatusCode = 413;
+                            _refusals.MarkAllIncomplete();
+                context.Response.StatusCode = 413;
                             context.Response.Close();
 
                             return;
@@ -741,6 +742,8 @@ internal sealed partial class LocalPermissionBridge(
             await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
         } catch (Exception ex) {
             LogBridgeHandlerError(logger, ex);
+            // The hook denies what the bridge could not answer, and the session may not be known here.
+            _refusals.MarkAllIncomplete();
 
             try {
                 context.Response.StatusCode = 500;

@@ -53,8 +53,7 @@ partial class WatchCommand(
     /// whenever it moves, rewinds included.
     internal void PublishAckedLines(string sessionId, string? agentId, string vendor, WatchState state) {
         if (agentId is not null || vendor != "codex" || state.LinesProcessed == _ackCursorWritten) return;
-        _ackCursor.Write(sessionId, state.LinesProcessed);
-        _ackCursorWritten = state.LinesProcessed;
+        if (_ackCursor.Write(sessionId, state.LinesProcessed)) _ackCursorWritten = state.LinesProcessed;
     }
 
     internal void RetireAckCursor(string sessionId, string? agentId, string vendor) {

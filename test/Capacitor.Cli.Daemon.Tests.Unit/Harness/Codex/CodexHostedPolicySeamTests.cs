@@ -51,7 +51,7 @@ public class CodexHostedPolicySeamTests : IDisposable {
             () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)), _server.Url, TimeProvider.System);
         _refusals.MarkBridgedSinceStart(Session);
         return new(Snapshot(Policy), withJudge ? gateway : null, _decisions.Add, _refusals, () => probe, "agent-1", TimeProvider.System,
-            NullLogger.Instance);
+            NullLogger.Instance, "/wt");
     }
 
     void Judge(string outcome) =>
@@ -112,6 +112,16 @@ public class CodexHostedPolicySeamTests : IDisposable {
         seam.Paths.Observe("patch-1", Element(new JsonArray(new JsonObject { ["path"] = "/wt/config/secrets/key.txt", ["kind"] = "update" })));
 
         await Assert.That(await seam.EvaluateAsync(FileApproval, FileChange("patch-1"), CancellationToken.None))
+            .IsEqualTo(CodexHostedVerdict.Decline);
+    }
+
+    /// A file-change approval names no directory, so a relative patch path resolves against the agent's own.
+    [Test]
+    public async Task A_relative_patch_path_resolves_against_the_agents_directory() {
+        var seam = Seam();
+        seam.Paths.Observe("patch-2", Element(new JsonArray(new JsonObject { ["path"] = "config/secrets/key.txt", ["kind"] = "add" })));
+
+        await Assert.That(await seam.EvaluateAsync(FileApproval, FileChange("patch-2"), CancellationToken.None))
             .IsEqualTo(CodexHostedVerdict.Decline);
     }
 

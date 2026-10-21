@@ -24,6 +24,13 @@ internal sealed class PermissionRefusalLedger {
 
     readonly Lock _gate = new();
     readonly Dictionary<string, Session> _sessions = new(StringComparer.Ordinal);
+    bool _lostRequest;
+
+    /// <summary>A request this bridge failed on before it knew the session, which its hook then denied: any session
+    /// may now hold a refusal no entry records.</summary>
+    public void MarkAllIncomplete() {
+        lock (_gate) _lostRequest = true;
+    }
 
     /// <summary>Called once, where the bridge starts the session's runtime itself — never on a resume.</summary>
     public void MarkBridgedSinceStart(string sessionId) {
@@ -70,7 +77,7 @@ internal sealed class PermissionRefusalLedger {
 
             var entries = session.Entries.ToArray();
             Array.Reverse(entries);
-            return new(session.BridgedSinceStart && !session.Incomplete, PolicyJudgeRefusalsV1.SourceBridge, entries);
+            return new(session.BridgedSinceStart && !session.Incomplete && !_lostRequest, PolicyJudgeRefusalsV1.SourceBridge, entries);
         }
     }
 

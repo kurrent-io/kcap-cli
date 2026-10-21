@@ -10,6 +10,7 @@ public static class PolicySeams {
     public const string CodexPreToolUse = "codex_pre_tool_use";
     public const string CodexPermissionRequest = "codex_permission_request";
     public const string HostedCodexApproval = "hosted_codex_approval";
+    public const string HostedCodexPermission = "hosted_codex_permission";
 }
 
 public sealed record PolicyActionV1(

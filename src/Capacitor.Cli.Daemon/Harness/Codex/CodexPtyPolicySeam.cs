@@ -33,7 +33,7 @@ internal static class CodexPtyPolicySeam {
         try {
             var wire = PolicyWire.ToWire(action);
             judged = await judge.ConsultAsync(budgetMs => new PolicyJudgeRequestV1(
-                    call.SessionId, call.AgentId, Vendor, PolicySeams.HostedCodexApproval, snapshot.Id, PolicyEngine.Version, wire,
+                    call.SessionId, call.AgentId, Vendor, PolicySeams.HostedCodexPermission, snapshot.Id, PolicyEngine.Version, wire,
                     null, refusals.Declare(call.SessionId), PolicyWire.ToUpload(call.SessionId, snapshot), budgetMs),
                 judgeBudget, ct).ConfigureAwait(false);
         } catch (Exception ex) {
@@ -50,7 +50,7 @@ internal static class CodexPtyPolicySeam {
 
         ClaudeHostedPolicyResult Result(PolicyOutcome outcome, string requested, string effective, PolicyJudgeResult? j) =>
             new(outcome, PolicyWire.Decision(
-                sessionId: call.SessionId, agentId: call.AgentId, vendor: Vendor, seam: PolicySeams.HostedCodexApproval,
+                sessionId: call.SessionId, agentId: call.AgentId, vendor: Vendor, seam: PolicySeams.HostedCodexPermission,
                 snapshot: snapshot, mode: EvaluationMode.Full, requestedOutcome: requested, effectiveOutcome: effective,
                 action: PolicyWire.ToWire(action), matchedRules: PolicyWire.ToWire(evaluation.MatchedRules), time: time,
                 failureClass: j?.FailureClass, judge: j?.Consultation));

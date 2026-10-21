@@ -14,10 +14,10 @@ internal sealed class CodexPatchPaths {
     /// <summary>From <c>item/fileChange/patchUpdated</c> (<c>params.changes</c>) or a started file-change item
     /// (<c>item.changes</c>): each change names its <c>path</c>. A later snapshot replaces an earlier one.</summary>
     public void Observe(string itemId, JsonElement changes) {
-        if (changes.ValueKind != JsonValueKind.Array) return;
+        if (!changes.IsArray) return;
 
         var paths = changes.EnumerateArray()
-            .Select(c => c.ValueKind == JsonValueKind.Object ? c.Str("path") : null)
+            .Select(c => c.Str("path"))
             .OfType<string>()
             .Where(p => p.Length > 0)
             .Distinct(StringComparer.Ordinal)

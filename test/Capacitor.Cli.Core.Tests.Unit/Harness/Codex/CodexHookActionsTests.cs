@@ -28,6 +28,14 @@ public class CodexHookActionsTests {
         await Assert.That(action.Paths).IsEquivalentTo(new[] { "/repo/notes.txt", "/repo/src/a.cs", "/repo/src/b.cs", "/repo/old.txt" });
     }
 
+    /// Indentation around a header, or a header naming nothing, does not hide the files the patch does name.
+    [Test]
+    public async Task An_indented_header_still_names_its_file_and_a_blank_one_is_skipped() {
+        var patch = "*** Begin Patch\n  *** Update File: secrets/key.txt\n*** Add File: \n*** End Patch";
+
+        await Assert.That(CodexHookActions.Normalize("apply_patch", Input(patch), "/repo").Paths).IsEquivalentTo(new[] { "/repo/secrets/key.txt" });
+    }
+
     /// A patch whose file cannot be placed must not read as an edit of only the files that could be.
     [Test]
     public async Task A_patch_with_no_resolvable_file_is_other() =>

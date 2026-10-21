@@ -69,7 +69,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
      && !string.Equals(approval, "never", StringComparison.Ordinal)
             ? new CodexHostedPolicySeam(snapshot, _policyJudge, evt => _ = connection.AppendAgentRunEventAsync(ctx.AgentId, evt),
                 new PermissionRefusalLedger(), ctx.PersistenceProbe ?? (() => null), ctx.AgentId, _time,
-                _loggerFactory.CreateLogger<CodexHostedPolicySeam>())
+                _loggerFactory.CreateLogger<CodexHostedPolicySeam>(), ctx.Worktree.Path)
             : null;
 
     public string Vendor => "codex";

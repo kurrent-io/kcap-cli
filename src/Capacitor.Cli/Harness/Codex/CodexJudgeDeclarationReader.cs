@@ -26,38 +26,40 @@ internal static class CodexJudgeDeclarationReader {
 
     public static async Task<CodexDeclaration> ReadAsync(
             string transcriptPath, string sessionId, WatchAckCursor cursor, TimeProvider time, TimeSpan reReadBudget, CancellationToken ct) {
+        // One scan per consultation: only the count moves while it waits.
+        var scan = Scan(transcriptPath);
+        if (scan.Reason is { } reason) return new(null, reason);
+
         var deadline = time.GetUtcNow() + reReadBudget;
-
+        int acked;
         while (true) {
-            if (cursor.TryRead(sessionId) is not { } acked) return new(null, "no_ack_cursor");
-
-            var scan = Scan(transcriptPath, acked);
-            if (scan.Reason is { } reason) return new(null, reason);
+            if (cursor.TryRead(sessionId) is not { } count) return new(null, "no_ack_cursor");
+            acked = count;
 
             // The newest human line is not yet acknowledged: the watcher is about to send it.
-            if (scan.NewestHuman > acked && time.GetUtcNow() < deadline) {
-                await Task.Delay(Poll, time, ct).ConfigureAwait(false);
-                continue;
-            }
-
-            if (scan.Covered.Count == 0) return new(null, "no_turns");
-
-            var declared = new List<PolicyJudgeDeclaredTurnV1>(scan.Covered.Count);
-            foreach (var line in scan.Covered) {
-                var sent = SecretRedactor.RedactLineWithOutcome(line.Raw);
-                if (sent.Loss is not null) return new(null, "redaction_incomplete");
-                declared.Add(new(TranscriptIds.CodexRecord(sent.Line).ToString(), line.TurnId));
-            }
-
-            return new(new PolicyJudgeTurnSetV1([.. declared], null), null);
+            if (scan.NewestHuman <= acked || time.GetUtcNow() >= deadline) break;
+            await Task.Delay(Poll, time, ct).ConfigureAwait(false);
         }
+
+        var covered = scan.Recent.Where(line => line.Number <= acked).ToList();
+        if (covered.Count == 0) return new(null, "no_turns");
+
+        var declared = new List<PolicyJudgeDeclaredTurnV1>(covered.Count);
+        foreach (var line in covered) {
+            var sent = SecretRedactor.RedactLineWithOutcome(line.Raw);
+            if (sent.Loss is not null) return new(null, "redaction_incomplete");
+            declared.Add(new(TranscriptIds.CodexRecord(sent.Line).ToString(), line.TurnId));
+        }
+
+        return new(new PolicyJudgeTurnSetV1([.. declared], null), null);
     }
 
-    sealed record ScanResult(IReadOnlyList<HumanLine> Covered, int NewestHuman, string? Reason);
+    /// <summary>The newest human lines, oldest first; those past the count are left out once it is known.</summary>
+    sealed record ScanResult(IReadOnlyList<HumanLine> Recent, int NewestHuman, string? Reason);
 
-    static ScanResult Scan(string path, int acked) {
-        var covered = new Queue<HumanLine>();
-        var newest  = 0;
+    static ScanResult Scan(string path) {
+        var recent = new Queue<HumanLine>();
+        var newest = 0;
 
         try {
             using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
@@ -70,16 +72,14 @@ internal static class CodexJudgeDeclarationReader {
                 if (HumanTurn(raw) is not { } turnId) continue;
 
                 newest = number;
-                if (number > acked) continue;
-
-                covered.Enqueue(new(number, raw, turnId.Length == 0 ? null : turnId));
-                if (covered.Count > MaxTurns) covered.Dequeue();
+                recent.Enqueue(new(number, raw, turnId.Length == 0 ? null : turnId));
+                if (recent.Count > MaxTurns) recent.Dequeue();
             }
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             return new([], 0, "transcript_unreadable");
         }
 
-        return new([.. covered], newest, null);
+        return new([.. recent], newest, null);
     }
 
     /// <summary>The line's turn id ("" when it carries none) when it is a human user message, else null.</summary>
@@ -90,20 +90,16 @@ internal static class CodexJudgeDeclarationReader {
         try {
             using var doc = JsonDocument.Parse(raw);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !Is(root, "type", "response_item")
-             || !root.TryGetProperty("payload", out var payload) || payload.ValueKind != JsonValueKind.Object
-             || !Is(payload, "type", "message") || !Is(payload, "role", "user"))
+            if (root.Str("type") != "response_item" || root.Obj("payload") is not { } payload
+             || payload.Str("type") != "message" || payload.Str("role") != "user")
                 return null;
 
-            IReadOnlyList<string>? kinds = null;
-            string? turnId = null;
-            if (payload.TryGetProperty("internal_chat_message_metadata_passthrough", out var pass) && pass.ValueKind == JsonValueKind.Object) {
-                if (pass.TryGetProperty("turn_id", out var t) && t.ValueKind == JsonValueKind.String) turnId = t.GetString();
-                if (pass.TryGetProperty("content_item_kinds", out var k) && k.ValueKind == JsonValueKind.Array)
-                    kinds = [.. k.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!)];
-            }
+            var pass  = payload.Obj("internal_chat_message_metadata_passthrough");
+            IReadOnlyList<string>? kinds = pass?.Arr("content_item_kinds") is { } k
+                ? [.. k.EnumerateArray().Where(e => e.IsString).Select(e => e.GetString()!)]
+                : null;
 
-            return CodexPrelude.IsHuman(Text(payload), kinds) ? turnId ?? "" : null;
+            return CodexPrelude.IsHuman(Text(payload), kinds) ? pass?.Str("turn_id") ?? "" : null;
         } catch (JsonException) {
             return null;
         }
@@ -111,20 +107,14 @@ internal static class CodexJudgeDeclarationReader {
 
     // Joined as the server's normalizer joins them, so both sides judge the same text.
     static string Text(JsonElement payload) {
-        if (!payload.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) return "";
+        if (payload.Arr("content") is not { } content) return "";
 
         var sb = new StringBuilder();
         foreach (var block in content.EnumerateArray()) {
-            if (block.ValueKind != JsonValueKind.Object || !block.TryGetProperty("type", out var type)
-             || type.GetString() is not ("input_text" or "output_text" or "text")
-             || !block.TryGetProperty("text", out var text) || text.ValueKind != JsonValueKind.String)
-                continue;
+            if (block.Str("type") is not ("input_text" or "output_text" or "text") || block.Str("text") is not { } text) continue;
             if (sb.Length > 0) sb.Append('\n');
-            sb.Append(text.GetString());
+            sb.Append(text);
         }
         return sb.ToString();
     }
-
-    static bool Is(JsonElement e, string name, string value) =>
-        e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String && p.GetString() == value;
 }

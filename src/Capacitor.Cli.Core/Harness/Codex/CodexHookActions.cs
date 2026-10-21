@@ -13,7 +13,7 @@ public static class CodexHookActions {
     static readonly string[] FileHeaders = ["*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: "];
 
     public static CanonicalAction Normalize(string? toolName, JsonElement? toolInput, string? cwd) {
-        if (toolName == "apply_patch" && Patch(toolInput) is { } patch) {
+        if (toolName == "apply_patch" && toolInput?.Str("command") is { } patch) {
             var paths = PatchPaths(patch, cwd);
             // A patch naming a file that cannot be resolved is evaluated as Other, where no path rule can pass it.
             if (paths is { Count: > 0 })
@@ -23,20 +23,18 @@ public static class CodexHookActions {
         return ClaudeActionNormalizer.Normalize(toolName, toolInput, cwd) with { Vendor = Vendor };
     }
 
-    static string? Patch(JsonElement? toolInput) =>
-        toolInput is { ValueKind: JsonValueKind.Object } input && input.TryGetProperty("command", out var command)
-     && command.ValueKind == JsonValueKind.String
-            ? command.GetString()
-            : null;
-
-    /// Null when any header names a path that cannot be resolved.
+    /// Null when any header names a path that cannot be resolved: an edit only partly placed must not be allowed
+    /// by the part that was. A header naming no file at all is not a file the patch touches.
     static IReadOnlyList<string>? PatchPaths(string patch, string? cwd) {
         var paths = new List<string>();
 
-        foreach (var line in patch.Split('\n')) {
-            var header = FileHeaders.FirstOrDefault(h => line.StartsWith(h, StringComparison.Ordinal));
+        foreach (var raw in patch.Split('\n')) {
+            var line   = raw.Trim();
+            var header = FileHeaders.FirstOrDefault(h => line.StartsWith(h.TrimEnd(), StringComparison.Ordinal));
             if (header is null) continue;
-            if (LexicalPaths.TryResolve(cwd, line[header.Length..].TrimEnd('\r')) is not { } resolved) return null;
+            var path = line[header.TrimEnd().Length..].Trim();
+            if (path.Length == 0) continue;
+            if (LexicalPaths.TryResolve(cwd, path) is not { } resolved) return null;
             if (!paths.Contains(resolved, StringComparer.Ordinal)) paths.Add(resolved);
         }
 

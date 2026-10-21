@@ -357,11 +357,10 @@ public class CodexHookCommandTests : IDisposable {
     public async Task PreToolUse_answers_a_deny_rule_in_every_mode(bool hostedAppServer) {
         File.WriteAllText(Config.Root.Path("approvals.yaml"),
             "version: 1\nrules:\n  - match: { kind: shell, command: \"rm -rf *\" }\n    outcome: deny\n");
-        var previousMarker = Environment.GetEnvironmentVariable("KCAP_HOSTED_APPSERVER");
+        using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", hostedAppServer ? "1" : null);
         using var capture = ConsoleOutput.StartCapture();
 
-        try {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", hostedAppServer ? "1" : null);
+        {
             var payload = """{"hook_event_name":"PreToolUse","session_id":"01a15cd7-3e2d-75b2-ad28-c00f7dbcf5d0","tool_name":"Bash","tool_input":{"command":"rm -rf build"},"tool_use_id":"exec-1","cwd":"/tmp"}""";
 
             var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
@@ -369,8 +368,6 @@ public class CodexHookCommandTests : IDisposable {
             await Assert.That(exit).IsEqualTo(0);
             var output = JsonDocument.Parse(capture.GetCapturedOutput()).RootElement.GetProperty("hookSpecificOutput");
             await Assert.That(output.GetProperty("permissionDecision").GetString()).IsEqualTo("deny");
-        } finally {
-            Environment.SetEnvironmentVariable("KCAP_HOSTED_APPSERVER", previousMarker);
         }
     }
 

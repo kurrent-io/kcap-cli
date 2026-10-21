@@ -8,9 +8,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
-/// <summary>What the hosted seam made of an approval: answer Codex now, or hand it to the card as before.</summary>
-internal enum CodexHostedVerdict { Accept, Decline, Forward }
-
 /// <summary>
 /// The approval policy at a hosted Codex app-server's approval requests: rules first, then the judge on a call no
 /// rule decided, before anything reaches a card. Fail-open toward the human: anything it cannot decide or does
@@ -18,7 +15,7 @@ internal enum CodexHostedVerdict { Accept, Decline, Forward }
 /// </summary>
 internal sealed class CodexHostedPolicySeam(
         PolicySnapshot snapshot, PolicyJudgeGateway? judge, Action<PolicyDecisionEventV1> emit, PermissionRefusalLedger refusals,
-        Func<IAcpPersistenceProbe?> probe, string agentId, TimeProvider time, ILogger logger) {
+        Func<IAcpPersistenceProbe?> probe, string agentId, TimeProvider time, ILogger logger, string? workingDirectory = null) {
     const string Vendor = "codex";
 
     /// <summary>The agent is already waiting on an approval, so the judge gets the server's full ceiling.</summary>
@@ -89,20 +86,22 @@ internal sealed class CodexHostedPolicySeam(
         }
     }
 
-    /// <summary>Null for a request this seam does not govern, or a file change whose paths are not yet known:
-    /// those reach the card unevaluated, so a path rule can never be skipped by notification order.</summary>
+    /// <summary>Null for a request this seam does not govern, or a file change whose paths are not yet known or cannot
+    /// all be placed: those reach the card unevaluated, so a path rule can never be skipped by notification order or
+    /// passed by the part of an edit it could place. A file-change approval names no directory, so its paths resolve
+    /// against the one the agent runs in.</summary>
     CanonicalAction? Action(string method, JsonElement request) {
-        var cwd = request.Str("cwd");
+        var cwd = request.Str("cwd") ?? workingDirectory;
         switch (ItemType(method)) {
             case "commandExecution" when request.Str("command") is { Length: > 0 } command: {
                 using var input = JsonDocument.Parse(new JsonObject { ["command"] = command }.ToJsonString());
                 return CodexHookActions.Normalize("Bash", input.RootElement.Clone(), cwd);
             }
-            case "fileChange" when request.Str("itemId") is { } itemId && Paths.TryPaths(itemId, out var paths):
-                return new CanonicalAction {
-                    Kind        = ActionKind.FileEdit, Vendor = Vendor, Cwd = cwd, RawToolName = "apply_patch",
-                    Paths       = [.. paths.Select(p => cwd is not null && !Path.IsPathRooted(p) ? Path.GetFullPath(Path.Combine(cwd, p)) : p)],
-                };
+            case "fileChange" when request.Str("itemId") is { } itemId && Paths.TryPaths(itemId, out var paths): {
+                var resolved = paths.Select(p => LexicalPaths.TryResolve(cwd, p)).ToArray();
+                if (resolved.Length == 0 || resolved.Any(p => p is null)) return null;
+                return new CanonicalAction { Kind = ActionKind.FileEdit, Vendor = Vendor, Cwd = cwd, RawToolName = "apply_patch", Paths = [.. resolved!] };
+            }
             default:
                 return null;
         }

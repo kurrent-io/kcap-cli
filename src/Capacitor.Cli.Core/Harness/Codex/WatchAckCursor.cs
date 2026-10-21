@@ -14,13 +14,16 @@ public sealed class WatchAckCursor(ConfigRoot config) {
     public string Path(string sessionId) =>
         config.Path(DirName, Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sessionId)))[..32] + ".acked");
 
-    /// A failed write only costs the judge its window: the hook reads a missing or stale count as fewer turns.
-    public void Write(string sessionId, int lines) {
+    /// <returns>False when the count did not reach disk, so a caller tries again rather than assume it did.</returns>
+    public bool Write(string sessionId, int lines) {
         try {
             var path = Path(sessionId);
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
             AtomicFile.Replace(path, lines.ToString(CultureInfo.InvariantCulture));
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            return true;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return false;
+        }
     }
 
     public int? TryRead(string sessionId) {
