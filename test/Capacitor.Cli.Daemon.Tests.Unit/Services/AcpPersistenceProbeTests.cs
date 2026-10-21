@@ -63,6 +63,21 @@ public class AcpPersistenceProbeTests {
         await run;
     }
 
+    /// A forwarder that stopped stores nothing more, so a waiter returns at once rather than spending its budget.
+    [Test]
+    public async Task A_waiter_returns_at_once_when_the_forwarder_stops() {
+        var channel   = Channel.CreateUnbounded<AcpEventEnvelope>();
+        var forwarder = Forwarder(channel, batch => new AcpBatchAck(batch[^1].Seq, 0));
+        var run = forwarder.RunAsync(CancellationToken.None);
+
+        channel.Writer.TryWrite(User("m1"));
+        var waiting = forwarder.AwaitPersistedAsync(["m1"], TimeSpan.FromMinutes(1), CancellationToken.None);
+        channel.Writer.Complete();
+        await run;
+
+        await Assert.That(await waiting.WaitAsync(TimeSpan.FromSeconds(5))).IsEmpty();
+    }
+
     [Test]
     public async Task A_rejected_binding_persists_nothing() {
         var channel   = Channel.CreateUnbounded<AcpEventEnvelope>();

@@ -122,6 +122,7 @@ internal sealed class AcpTranscriptForwarder : IAcpPersistenceProbe {
     readonly Dictionary<string, long>         _userMessageSeqs = new(StringComparer.Ordinal);
     readonly Queue<string>                    _userMessageOrder = new();
     long                                      _persistedSeq    = -1;
+    bool                                      _stopped;
     TaskCompletionSource                      _progress        = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public async Task<IReadOnlyDictionary<string, long>> AwaitPersistedAsync(
@@ -131,8 +132,10 @@ internal sealed class AcpTranscriptForwarder : IAcpPersistenceProbe {
         while (true) {
             Task progress;
             Dictionary<string, long> stored;
+            bool stopped;
 
             lock (_persistence) {
+                stopped = _stopped;
                 stored = itemIds
                     .Where(id => _userMessageSeqs.TryGetValue(id, out var seq) && seq <= _persistedSeq)
                     .Distinct(StringComparer.Ordinal)
@@ -141,7 +144,7 @@ internal sealed class AcpTranscriptForwarder : IAcpPersistenceProbe {
             }
 
             var left = deadline - _time.GetUtcNow();
-            if (stored.Count == itemIds.Distinct(StringComparer.Ordinal).Count() || left <= TimeSpan.Zero || IsTerminal) return stored;
+            if (stored.Count == itemIds.Distinct(StringComparer.Ordinal).Count() || left <= TimeSpan.Zero || stopped) return stored;
 
             try {
                 await progress.WaitAsync(left, _time, ct).ConfigureAwait(false);
@@ -353,7 +356,10 @@ internal sealed class AcpTranscriptForwarder : IAcpPersistenceProbe {
         } finally {
             _firstAccepted.TrySetResult(false);
             // A stopped forwarder stores nothing more; a waiter returns what is stored now.
-            lock (_persistence) Signal();
+            lock (_persistence) {
+                _stopped = true;
+                Signal();
+            }
         }
     }
 
