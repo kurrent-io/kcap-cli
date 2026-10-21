@@ -567,16 +567,24 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             // A connect clears the progress lines back to the standing identity report, whichever of the two the
             // main thread happens to see first.
             string? identity = null;
+            // Each lifecycle lane's line until it is withdrawn, or a connect or identity report replaces it.
+            var laneLines = new string?[2];
             identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(report => {
                     var shown = identity;
                     identity = report;
-                    if (report is not null) StartMessage = report;
+                    if (report is not null) {
+                        laneLines.AsSpan().Clear();
+                        StartMessage = report;
+                    }
                     else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
                 })
                 .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = identity)
+                .Subscribe(_ => {
+                    laneLines.AsSpan().Clear();
+                    StartMessage = identity;
+                })
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while
@@ -591,14 +599,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             // Status (start-action one-liners) and Attention (mutation-outcome presentation) both
             // land on StartMessage so the launcher banner is never mute after a Start daemon click.
-            void BindStartMessage(IObservable<string?>? source) =>
+            // A null takes back that lane's own line, if nothing has replaced it since, and shows
+            // the other lane's line again when it is still standing.
+            void BindStartMessage(IObservable<string?>? source, int lane) =>
                 source?.ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Where(msg => msg is not null)
-                    .Subscribe(msg => StartMessage = msg)
+                    .Subscribe(msg => {
+                        var posted = laneLines[lane];
+                        laneLines[lane] = msg;
+                        if (msg is not null) StartMessage = msg;
+                        else if (posted is not null && ReferenceEquals(StartMessage, posted)) StartMessage = laneLines[1 - lane] ?? identity;
+                    })
                     .DisposeWith(disposables);
 
-            BindStartMessage(lifecycleStatus);
-            BindStartMessage(lifecycleAttention);
+            BindStartMessage(lifecycleStatus, 0);
+            BindStartMessage(lifecycleAttention, 1);
         });
     }
 

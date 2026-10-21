@@ -10,7 +10,9 @@ public sealed class PathFixViewModel : ReactiveObject {
     readonly string?           _target;
     readonly Func<bool>        _onLocalPath;
 
+    Task<bool>? _running;
     bool    _offerClaimed;
+    bool    _cancelled;
     bool    _fixed;
     string? _message;
 
@@ -38,17 +40,36 @@ public sealed class PathFixViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
-    /// Installs the terminal command and reports whether the login shell can now run it.
+    /// Settles with why the last link did not finish, or null when it did, none ran, or the user
+    /// cancelled it. The app's startup offer waits on it, since setup may never have shown it.
+    public async Task<string?> UnfinishedAsync() {
+        if (_running is null) return null;
+        await _running.ConfigureAwait(true);
+        return Fixed || _cancelled ? null : Message;
+    }
+
+    /// Installs the terminal command and reports whether the login shell can now run it. A call
+    /// while one is running joins it, so the admin prompt never shows twice.
     public async Task<bool> InstallAsync(CancellationToken ct = default) {
+        if (_target is not null) await ClaimOfferedOnceAsync().ConfigureAwait(true);
+        return await LinkAsync(ct).ConfigureAwait(true);
+    }
+
+    /// Like InstallAsync, but claims no offer: a failure nobody was shown is left for the app's
+    /// startup offer to raise.
+    public Task<bool> LinkAsync(CancellationToken ct) =>
+        _running is { IsCompleted: false } running ? running : _running = RunInstallAsync(ct);
+
+    async Task<bool> RunInstallAsync(CancellationToken ct) {
         if (Fixed) return true;
         if (_target is null) {
             Message = "This machine could not find its own kcap, so nothing changed.";
             return false;
         }
 
-        Message = null;
+        Message    = null;
+        _cancelled = false;
         try {
-            await ClaimOfferedOnceAsync().ConfigureAwait(true);
             Apply(await _installer.InstallAsync(_target, ct).ConfigureAwait(true));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             return false;
@@ -66,6 +87,7 @@ public sealed class PathFixViewModel : ReactiveObject {
     }
 
     void Apply(ShimResult result) {
+        _cancelled = result.Outcome == ShimOutcome.Cancelled;
         switch (result.Outcome) {
             case ShimOutcome.Installed:
                 Fixed   = true;
