@@ -103,6 +103,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent, then restart the daemon."
         : $"No coding agents were found on {remoteMachine}. Install one there, then restart its daemon.";
 
+    internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
+
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
     const string IncompatibleReason = "daemon_incompatible";
@@ -514,6 +516,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _harnesses = harnessOptions
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.Harnesses, HostedHarnessCatalog.Build(null))
+            .DisposeWith(_disposables);
+        // A daemon that restarts with a different set can leave the chip on a vendor it no longer hosts.
+        harnessOptions
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(RevalidateVendor)
             .DisposeWith(_disposables);
 
         // The machine catalog follows the selection: the local snapshot's, or the selected remote
@@ -1112,8 +1119,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Resets SelectedVendor to the first vendor Available in supportedVendors' Build() when the
     /// current one isn't — shared so a machine's OWN advertised set is what a selection (either
     /// direction) is checked against, never whatever a PRIOR machine last set it to.
-    void RevalidateVendorAgainst(string[]? supportedVendors) {
-        var options = HostedHarnessCatalog.Build(supportedVendors);
+    void RevalidateVendorAgainst(string[]? supportedVendors) => RevalidateVendor(HostedHarnessCatalog.Build(supportedVendors));
+
+    void RevalidateVendor(IReadOnlyList<HarnessOption> options) {
         var current = options.FirstOrDefault(o => string.Equals(o.Vendor, SelectedVendor, StringComparison.OrdinalIgnoreCase));
         if (current is not { Available: true })
             SetVendor(options.FirstOrDefault(o => o.Available)?.Vendor ?? DefaultVendor);
@@ -1237,6 +1245,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         if (draft.Files.Count > 0 && !CanAttachFor(draft)) {
             StartError = AttachHintFor(_signedIn, false);
+            return;
+        }
+
+        // Execute() does not gate on CanExecute, and a remembered vendor restored with a repository
+        // is never checked against what the machine hosts.
+        var harness = Harnesses.FirstOrDefault(o => string.Equals(o.Vendor, draft.Vendor, StringComparison.OrdinalIgnoreCase));
+        if (harness is not { Available: true }) {
+            StartError = Harnesses.Any(o => o.Available)
+                ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor)
+                : NoHarnessesNotice(draft.Remote ? draft.Machine : null);
             return;
         }
 
