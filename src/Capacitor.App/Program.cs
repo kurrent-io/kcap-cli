@@ -2,6 +2,7 @@ using Avalonia;
 using Capacitor.App.Services;
 using Capacitor.App.Services.Notifications;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Install;
 using ReactiveUI.Avalonia.Reactive;
 using Velopack;
 
@@ -24,15 +25,18 @@ internal static class Program
     public static void Main(string[] args) {
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
         // during those operations. Auto-apply stays off: pending packages are applied by
-        // UpdateCoordinator after the install-location guard and the prerelease rule.
-        var velopack = VelopackApp.Build()
-            .SetAutoApplyOnStartup(false)
-            .OnRestarted(_ => UpdateRelaunch = true);
-        if (OperatingSystem.IsWindows())
-            velopack = velopack.OnBeforeUninstallFastCallback(_ => {
-                if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory);
-            });
-        velopack.Run();
+        // UpdateCoordinator after the install-location guard and the prerelease rule. A snap has
+        // no Velopack install to hook: snapd updates it.
+        if (SnapLayout.OfRunningBinary() is null) {
+            var velopack = VelopackApp.Build()
+                .SetAutoApplyOnStartup(false)
+                .OnRestarted(_ => UpdateRelaunch = true);
+            if (OperatingSystem.IsWindows())
+                velopack = velopack.OnBeforeUninstallFastCallback(_ => {
+                    if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory);
+                });
+            velopack.Run();
+        }
 
         if (OperatingSystem.IsWindows() && Environment.ProcessPath is { } exe) {
             var relaunch = UpdateRelaunch || args.Contains(SingleInstanceGuard.RelaunchArg, StringComparer.Ordinal);

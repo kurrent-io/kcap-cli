@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Kurrent Capacitor
+Comment=kcap records each coding-agent session as a durable event stream, then turns it into memory your whole team can draw on
+Exec=kcap.desktop
+Icon=${SNAP}/meta/gui/icon.png
+Terminal=false
+Categories=Development;
+StartupWMClass=Kurrent Capacitor

@@ -28,3 +28,7 @@ TestResults/
 # Probe harness bytecode
 __pycache__/
 *.pyc
+
+# Snap packaging (scripts/build-snap.sh)
+/build/
+*.snap

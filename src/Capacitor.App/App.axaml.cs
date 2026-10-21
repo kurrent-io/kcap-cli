@@ -18,6 +18,7 @@ using Capacitor.App.Services.Mutation;
 using Capacitor.App.Services.Notifications;
 using Capacitor.App.Services.Onboarding;
 using Capacitor.App.Services.Update;
+using Capacitor.Cli.Core.Install;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
@@ -232,8 +233,11 @@ public partial class App : Application {
     int _exitCode;
 
     // Outside a packed bundle Velopack reports not-installed and the coordinator stays inert; a
-    // constructor failure degrades the same way rather than taking startup down.
+    // constructor failure degrades the same way rather than taking startup down. In a snap, snapd
+    // owns updates and the install is a read-only mount, so Velopack is never consulted.
     static IAppUpdater CreateUpdater() {
+        if (SnapLayout.OfRunningBinary() is not null) return InertAppUpdater.Instance;
+
         try {
             return new VelopackAppUpdater(Environment.GetEnvironmentVariable);
         } catch (Exception ex) {
