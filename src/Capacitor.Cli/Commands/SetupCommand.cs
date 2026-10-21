@@ -2698,8 +2698,11 @@ sealed class SetupCommand(
             }
 
             // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
-            await installer.InstallAsync(new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress,
-                deferral.Token);
+            var committed = await installer.InstallAsync(
+                new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress, deferral.Token);
+
+            // The app's wizard links to the dashboard before it reports anything itself.
+            await PingCliSetupAsync(committed.ServerUrl, profile: "", AuthProvider.None);
 
             return 0;
         } catch (Exception ex) {
@@ -2919,55 +2922,43 @@ sealed class SetupCommand(
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
 
-    // Best-effort signal that this user finished CLI setup; every failure is swallowed, because
-    // the welcome-modal nudge is not part of what `kcap setup` promises.
-    //
-    // Two reliability rules:
-    //   • Take a lane that cannot refresh. A refresh makes HTTP calls that honour no
-    //     CancellationToken and can block far past any CTS timeout. The user logged in moments
-    //     ago in this same command, so a live token is the expected case; a missing or expired
-    //     one skips silently rather than triggering one.
-    //   • Cap the operation with Task.WhenAny(ping, Task.Delay(5s)), so the wall-clock bound holds
-    //     independently of what HttpClient does internally. If the delay wins, disposal on
-    //     method-exit cancels the in-flight POST.
+    // Best-effort signal that this user finished setup; every failure is swallowed, because the
+    // dashboard's install nudge is not part of what `kcap setup` promises. The lane cannot refresh
+    // (a refresh honours no CancellationToken), and the 5s WhenAny bounds the wall clock whatever
+    // HttpClient does internally. KCAP_DEBUG prints the outcome on stderr.
     async Task PingCliSetupAsync(string serverUrl, string profile, string provider) {
-        // The ping is intentionally silent (see method-doc), which also hides why the
-        // dashboard welcome modal never flips when it fails — e.g. a token the server
-        // rejects or maps to a different identity. Set KCAP_DEBUG to surface the
-        // outcome on stderr without changing the best-effort, non-blocking contract.
         var  debug = Environment.GetEnvironmentVariable("KCAP_DEBUG") is { Length: > 0 };
         void Debug(string message) {
             if (debug) Console.Error.WriteLine($"[kcap] cli-setup ping: {message}");
         }
 
-        // A None-provider server neither needs nor should receive a bearer. Setup performs no login
-        // on that path, so any token still in the profile belongs to whatever server it pointed at
-        // before — sending it here would disclose it to an unrelated host.
-        if (provider == AuthProvider.None) {
-            Debug("skipped — server requires no authentication");
-
-            return;
-        }
-
         try {
-            var tokens = await store.LoadAsync(profile);
-            if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
-                Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
+            HttpClient client;
 
-                return;
+            // A no-auth server records the report against its local user. Any token in the profile
+            // belongs to whatever server it pointed at before, so it is never sent there.
+            if (provider == AuthProvider.None) {
+                client = http.Anonymous();
+            } else {
+                var tokens = await store.LoadAsync(profile);
+                if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
+                    Debug(tokens is null ? "skipped — no stored token" : "skipped — token expired");
+
+                    return;
+                }
+
+                // A profile re-pointed at another server must not send the previous server's bearer.
+                if (tokens.ServerUrl is not null && !ServerIdentity.SameServer(tokens.ServerUrl, serverUrl)) {
+                    Debug($"skipped — stored token belongs to {tokens.ServerUrl}");
+
+                    return;
+                }
+
+                client = http.Bearer();
+                client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
             }
 
-            // Re-running setup to point an authenticated profile at a different server would
-            // otherwise send the previous server's bearer to the new one. Checked inline rather
-            // than through the resolving accessor to keep this path refresh-free and time-bound.
-            if (tokens.ServerUrl is not null && !ServerIdentity.SameServer(tokens.ServerUrl, serverUrl)) {
-                Debug($"skipped — stored token belongs to {tokens.ServerUrl}");
-
-                return;
-            }
-
-            using var client = http.Bearer();
-            client.DefaultRequestHeaders.Authorization = new("Bearer", tokens.AccessToken);
+            using var owned = client;
 
             var version = typeof(SetupCommand).Assembly.GetName().Version?.ToString();
             var payload = new StringContent(
@@ -2982,7 +2973,7 @@ sealed class SetupCommand(
                 // Observe the result so any exception is consumed by the outer
                 // catch (instead of surfacing as UnobservedTaskException later).
                 using var resp = await pingTask;
-                Debug($"{(int)resp.StatusCode} {resp.StatusCode} (provider={tokens.Provider})");
+                Debug($"{(int)resp.StatusCode} {resp.StatusCode} (provider={provider})");
             } else {
                 // Wall-clock cap hit. Disposing the client at method-exit cancels the in-flight
                 // POST; observe the orphan so its cancellation exception doesn't go unhandled.

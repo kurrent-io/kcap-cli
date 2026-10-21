@@ -6,7 +6,7 @@ namespace Capacitor.Tests.Helpers;
 /// <summary>Hands back a fresh, unauthenticated <see cref="HttpClient"/> per call — for driving an
 /// API implementation (<c>FeedbackApi</c>, <c>SessionsApi</c>, ...) directly against a stub server,
 /// bypassing the auth-discovery pipeline <c>AddCapacitorHttp</c> wires in production.</summary>
-public sealed class FixedCapacitorHttpClient : ICapacitorHttpClient {
+public sealed class FixedCapacitorHttpClient(HttpMessageHandler? anonymous = null) : ICapacitorHttpClient {
     public Task<HttpClient> ForCommandAsync(CancellationToken ct = default) => Task.FromResult(new HttpClient());
 
     public Task<HttpClient> ForSessionAsync(CancellationToken ct = default) =>
@@ -27,7 +27,7 @@ public sealed class FixedCapacitorHttpClient : ICapacitorHttpClient {
     public Task<HttpClient> ForMemoryAsync(CancellationToken ct = default) =>
         Task.FromResult(new HttpClient());
 
-    public HttpClient Anonymous() => new();
+    public HttpClient Anonymous() => anonymous is null ? new() : new(anonymous, disposeHandler: false);
 
     public HttpClient Loopback() => new();
 
