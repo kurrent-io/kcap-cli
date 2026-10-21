@@ -450,8 +450,15 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     /// that string as a single JSON document.</summary>
     internal static string BuildPublishResult(JsonNode id, string body) {
         var renamed = PageResultKeys.Rename(body);
+        JsonNode? root;
 
-        if (JsonNode.Parse(renamed) is not JsonObject page) return BuildToolResult(id, renamed);
+        try {
+            root = JsonNode.Parse(renamed);
+        } catch (JsonException) {
+            return BuildToolResult(id, renamed);
+        }
+
+        if (root is not JsonObject page) return BuildToolResult(id, renamed);
 
         page["follow_up"] = PublishFollowUp;
 

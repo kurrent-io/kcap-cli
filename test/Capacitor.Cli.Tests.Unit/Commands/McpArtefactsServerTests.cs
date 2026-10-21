@@ -372,6 +372,18 @@ public class McpArtefactsServerTests {
         await Assert.That(response["result"]!["isError"]).IsNull();
     }
 
+    /// <summary>A body that is not JSON comes back as it is, the way the renamer treats it; the
+    /// follow-up has nowhere to go and a thrown parse would fail a publish the server accepted.</summary>
+    [Test]
+    public async Task A_publish_body_that_is_not_json_comes_back_untouched() {
+        var response = JsonNode.Parse(McpArtefactsServer.BuildPublishResult(JsonValue.Create(7)!, "accepted"))!;
+
+        var content = response["result"]!["content"]!.AsArray();
+
+        await Assert.That(content.Count).IsEqualTo(1);
+        await Assert.That(content[0]!["text"]!.GetValue<string>()).IsEqualTo("accepted");
+    }
+
     /// <summary>The link always reaches the user in the reply; the browser tool is an addition
     /// where the harness has one, never a replacement, and never a system browser — a hosted
     /// agent's host is not the user's machine.</summary>
