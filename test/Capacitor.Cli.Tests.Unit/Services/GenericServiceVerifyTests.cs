@@ -25,6 +25,7 @@ public class GenericServiceVerifyTests {
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
         public bool Unanswered;
+        public bool OldUnanswered;
         public readonly List<string> Calls = [];
 
         public string Describe() => "fake task";
@@ -36,7 +37,7 @@ public class GenericServiceVerifyTests {
 
         public ServiceQuery Query(string serviceId) => serviceId == Id
             ? new(Unanswered ? LabelProbe.Unknown : Registered ? LabelProbe.Loaded : LabelProbe.Absent, UnitPresent, State, null, Running ? JobPid : null)
-            : new(OldRegistered ? LabelProbe.Loaded : LabelProbe.Absent, OldRegistered,
+            : new(OldUnanswered ? LabelProbe.Unknown : OldRegistered ? LabelProbe.Loaded : LabelProbe.Absent, OldRegistered,
                 !OldRegistered ? ServiceState.NotInstalled : OldRunning ? ServiceState.Running : ServiceState.Installed,
                 null, OldRunning ? OldJobPid : null);
 
@@ -315,6 +316,19 @@ public class GenericServiceVerifyTests {
         await Assert.That(manager.Calls).IsEquivalentTo(
             ["fence-acquire:old-name", "install", "fence-commit", "uninstall:old-name", "fence-abort", "fence-close"],
             TUnit.Assertions.Enums.CollectionOrdering.Matching);
+    }
+
+    /// <summary>An old unit mid-start or mid-stop may have a live daemon with no pid to fence, so the
+    /// rename refuses before installing anything rather than uninstalling it unfenced.</summary>
+    [Test]
+    public async Task A_rename_refuses_to_retire_an_old_unit_whose_state_is_unknown_and_touches_nothing() {
+        var manager = new FakeManager { OldRegistered = true, OldUnanswered = true };
+
+        var exit = await Verify(manager, unitEnv: Retired("work"))
+            .InstallVerifiedAsync(Spec(), replace: true, expectedVersion: null, retireServiceId: "old-name");
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.RetireRefused);
+        await Assert.That(manager.Calls).IsEmpty();
     }
 
     /// The task manager finds an installed task without the wrapper under this config root, so a task

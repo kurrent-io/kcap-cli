@@ -74,6 +74,10 @@ static class SystemdUnit {
     /// A query from <see cref="ShowStateArgs"/> output. <c>MainPID</c> is the daemon's own pid because
     /// <c>ExecStart</c> runs it directly. A failed <c>systemctl</c> — no user bus over SSH or in a container —
     /// reads <see cref="LabelProbe.Unknown"/>, never Absent: absence would let a verify treat a live unit as free.
+    ///
+    /// <para>Only <c>inactive</c> and <c>failed</c> prove the daemon is gone. Any other state — <c>activating</c>
+    /// during the restart delay, <c>deactivating</c> while a stop is still killing it — is Unknown and
+    /// Running with no pid, so nothing treats a daemon that may be alive as stopped.</para>
     /// </summary>
     public static ServiceQuery QueryFromShow(int exitCode, string output, bool unitPresent, string? binaryPath) {
         if (exitCode != 0) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, binaryPath, null);
@@ -83,7 +87,11 @@ static class SystemdUnit {
             .Where(l => l.Contains('='))
             .ToDictionary(l => l[..l.IndexOf('=')], l => l[(l.IndexOf('=') + 1)..], StringComparer.Ordinal);
 
-        var active  = props.GetValueOrDefault("ActiveState") == "active";
+        var activeState = props.GetValueOrDefault("ActiveState");
+        if (activeState is not ("active" or "reloading" or "inactive" or "failed"))
+            return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.Running, binaryPath, null);
+
+        var active  = activeState is "active" or "reloading";
         var enabled = EnabledFileStates.Contains(props.GetValueOrDefault("UnitFileState"));
         var state   = active ? ServiceState.Running : enabled ? ServiceState.Installed : ServiceState.NotInstalled;
         var pid     = active && int.TryParse(props.GetValueOrDefault("MainPID"), out var p) && p > 0 ? p : (int?)null;

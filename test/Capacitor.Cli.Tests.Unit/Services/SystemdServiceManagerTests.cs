@@ -76,4 +76,16 @@ public class SystemdServiceManagerTests {
         await Assert.That(error).IsNull();
         await Assert.That(File.Exists(path)).IsFalse();
     }
+
+    [Test]
+    public async Task Uninstall_keeps_the_unit_when_a_failed_disable_leaves_it_deactivating() {
+        var path = Home.CreateFile(UnitFile, "unit");
+        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) =>
+            args.Contains("disable") ? (1, "", "Access denied")
+            : args.Contains("show") ? (0, "ActiveState=deactivating\nUnitFileState=enabled\nMainPID=4242\n", "")
+            : (0, "", ""));
+
+        await Assert.That(mgr.Uninstall(Id, out _)).IsFalse();
+        await Assert.That(File.Exists(path)).IsTrue();
+    }
 }

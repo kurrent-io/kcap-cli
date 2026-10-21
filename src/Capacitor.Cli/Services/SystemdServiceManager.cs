@@ -121,11 +121,11 @@ sealed class SystemdServiceManager(
         if (!Install(spec, startNow: true, out var error)) throw new InvalidOperationException(error);
     }
 
-    /// <summary>A failed disable keeps the unit when its daemon may still run, so a rollback never reports
-    /// a removal that left the process behind.</summary>
+    /// <summary>A failed disable keeps the unit unless a query proves its daemon stopped, so a rollback never
+    /// reports a removal that left the process behind.</summary>
     public bool Uninstall(string serviceId, out string? error) {
         if (Systemctl(SystemdUnit.DisableNowArgs(serviceId)) is { } disableError
-         && Query(serviceId) is { Probe: LabelProbe.Unknown } or { State: ServiceState.Running }) {
+         && Query(serviceId) is not { Probe: LabelProbe.Loaded or LabelProbe.Absent, State: not ServiceState.Running }) {
             error = $"{disableError}; the daemon may still be running, so its unit was kept";
             return false;
         }

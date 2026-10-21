@@ -125,6 +125,8 @@ sealed class GenericServiceVerify(
             return (RetireRefusal("unit_unknown"), true, null);
         }
 
+        // A unit whose daemon may be mid-start or mid-stop is neither safe to fence nor safe to call stopped.
+        if (old.Probe == LabelProbe.Unknown) return (RetireRefusal("unit_unknown"), true, null);
         if (old.Probe != LabelProbe.Loaded && !old.UnitPresent) return (null, false, null);
 
         if (unitEnv?.Invoke(retireId) is not { } retiredEnv) return (RetireRefusal("unit_unreadable"), true, null);

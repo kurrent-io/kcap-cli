@@ -106,4 +106,34 @@ public class SystemdUnitTests {
 
         await Assert.That(parsed).IsEquivalentTo(env);
     }
+
+    /// <summary>A daemon in its restart delay or still being stopped may be alive, so it never reads as stopped.</summary>
+    [Test]
+    [Arguments("activating")]
+    [Arguments("deactivating")]
+    [Arguments("maintenance")]
+    [Arguments("")]
+    public async Task QueryFromShow_transitional_state_is_unknown_and_running(string activeState) {
+        var q = SystemdUnit.QueryFromShow(0, $"ActiveState={activeState}\nUnitFileState=enabled\nMainPID=4242\n", unitPresent: true, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Unknown);
+        await Assert.That(q.State).IsEqualTo(ServiceState.Running);
+        await Assert.That(q.JobPid).IsNull();
+    }
+
+    [Test]
+    public async Task QueryFromShow_reloading_unit_is_running_with_its_pid() {
+        var q = SystemdUnit.QueryFromShow(0, "ActiveState=reloading\nUnitFileState=enabled\nMainPID=4242\n", unitPresent: true, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Loaded);
+        await Assert.That(q.JobPid).IsEqualTo(4242);
+    }
+
+    [Test]
+    public async Task QueryFromShow_failed_unit_is_stopped() {
+        var q = SystemdUnit.QueryFromShow(0, "ActiveState=failed\nUnitFileState=enabled\nMainPID=0\n", unitPresent: true, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Loaded);
+        await Assert.That(q.State).IsEqualTo(ServiceState.Installed);
+    }
 }
