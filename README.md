@@ -2179,6 +2179,7 @@ The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok
 - **It runs as its own process,** never through a shared `grok leader`, so stopping the agent stops Grok.
 - **It is recorded once.** kcap's own Grok hook loads inside the hosted child and stands down there, because the daemon already records the session. A `grok` the hosted agent starts itself is still recorded.
 - **Its usage is recorded per turn.** The daemon reads each finished turn's per-model token usage from Grok's `_x.ai/session_notification` extension, so a hosted Grok session is costed like one you run yourself. Usage on `grok-4.7-build-fast` is recorded but shows no cost, since xAI bills it at a different rate.
+- **It can ask you questions.** Each question Grok asks appears on the agent's page as a question card, and your answer goes back to Grok. A question that is cancelled tells Grok you declined, and it carries on without the answer.
 - **Its subagents are recorded as subagents.** Each subagent Grok starts lands on its own sub-session of the hosted session, with its start and finish recorded on the parent.
 
 #### Grok as an unattended review-flow reviewer

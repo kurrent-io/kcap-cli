@@ -523,7 +523,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
             Func<bool, JsonObject>?                                                         sessionNewMeta = null,
             Func<JsonElement, IReadOnlySet<string>, bool>?                                  admissionMatcher = null,
             Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>?                         turnUsageReader = null,
-            Func<AcpNotification, AcpSubagentSignal?>?                                      subagentReader = null
+            Func<AcpNotification, AcpSubagentSignal?>?                                      subagentReader = null,
+            AcpQuestionProtocol?                                                            questionProtocol = null
         ) {
         _sessionNewMeta = sessionNewMeta;
         _turnUsageReader = turnUsageReader;
@@ -580,7 +581,8 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 notifyPolicyDecision,
                 policyCwd,
                 policyJudge,
-                admissionMatcher: admissionMatcher);
+                admissionMatcher: admissionMatcher,
+                questionProtocol: questionProtocol);
         }
 
         // The original launch's incarnation. Every later candidate goes through the same wiring

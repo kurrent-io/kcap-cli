@@ -64,7 +64,9 @@ internal sealed partial class AcpInteractionBridge(
         PolicyJudgeGateway?                                                           policyJudge = null,
         TimeSpan?                                                                     judgeBudget = null,
         // The vendor's own match for an admitted frame; Kiro's title match when unset.
-        Func<JsonElement, IReadOnlySet<string>, bool>?                                admissionMatcher = null
+        Func<JsonElement, IReadOnlySet<string>, bool>?                                admissionMatcher = null,
+        // The vendor's own question method, answered through question cards; unhandled when null.
+        AcpQuestionProtocol?                                                          questionProtocol = null
     ) {
     static readonly IReadOnlySet<string> EmptyAdmitted = new HashSet<string>(StringComparer.Ordinal);
 
@@ -160,8 +162,95 @@ internal sealed partial class AcpInteractionBridge(
         return request.Method switch {
             "session/request_permission" => await HandlePermissionAsync(request, ct).ConfigureAwait(false),
             "elicitation/create"         => await HandleElicitationAsync(request, ct).ConfigureAwait(false),
+            var method when questionProtocol is { } protocol && method == protocol.Method
+                                         => await HandleVendorQuestionAsync(protocol, request, ct).ConfigureAwait(false),
             _                            => null
         };
+    }
+
+    /// <summary>Asks each of a vendor's questions in turn, as a question card, and replies once with every
+    /// answer. A declined card, or one that cannot be read, declines the whole request.</summary>
+    async Task<JsonElement?> HandleVendorQuestionAsync(AcpQuestionProtocol protocol, AcpRequest request, CancellationToken ct) {
+        if (unattendedPolicy == AcpUnattendedInteractionPolicy.AutoApprove) {
+            LogUnattendedElicitationDeclined(agentId);
+
+            return protocol.Reply(null);
+        }
+
+        if (request.Params is not { } p || protocol.Read(p) is not { Questions.Count: > 0 } asked)
+            return protocol.Reply(null);
+
+        var answered = new List<AcpVendorQuestionAnswer>(asked.Questions.Count);
+
+        for (var i = 0; i < asked.Questions.Count; i++) {
+            var question = asked.Questions[i];
+            var options  = question.Options
+                .Select((o, n) => new AcpInteractionOption(n.ToString(System.Globalization.CultureInfo.InvariantCulture), o.Label, o.Description))
+                .ToArray();
+            var multi = question.MultiSelect && options.Length > 0;
+
+            var card = new AcpInteractionRequest(
+                AgentId: agentId,
+                AcpSessionId: asked.SessionId,
+                Kind: "elicitation",
+                ToolName: null,
+                ToolInput: null,
+                ToolCallId: null,
+                Prompt: asked.Questions.Count > 1 ? $"({i + 1} of {asked.Questions.Count}) {question.Text}" : question.Text,
+                Options: options,
+                IsMultiSelect: multi,
+                MinSelections: multi ? 1 : null,
+                MaxSelections: multi ? options.Length : null
+            );
+
+            LogInteractionIssued(agentId, "elicitation");
+            AcpMetrics.RecordBlockingRequest("elicitation");
+
+            AcpInteractionDecision decision;
+
+            try {
+                decision = await requestInteraction(card, ct).ConfigureAwait(false);
+            } catch (Exception ex) {
+                logger.LogDebug(ex, "ACP: {Method} could not be routed for agent {AgentId}; declining", request.Method, agentId);
+                LogInteractionResolved(agentId, "elicitation", "cancel");
+
+                return protocol.Reply(null);
+            }
+
+            var chosen = ChosenAnswers(decision, options, multi);
+            LogInteractionResolved(agentId, "elicitation", chosen is null ? "cancel" : "accept");
+
+            if (chosen is null) return protocol.Reply(null);
+
+            answered.Add(new AcpVendorQuestionAnswer(question, chosen));
+        }
+
+        return protocol.Reply(answered);
+    }
+
+    /// <summary>The labels a decision picked from the offered options, or the typed answer when none were
+    /// offered; null when it declined or names an option that was not offered.</summary>
+    static string[]? ChosenAnswers(AcpInteractionDecision decision, AcpInteractionOption[] options, bool multi) {
+        if (!AffirmativeOutcomes.Contains(decision.Outcome)) return null;
+
+        if (options.Length == 0)
+            return string.IsNullOrWhiteSpace(decision.FreeText) ? null : [decision.FreeText];
+
+        var ids = multi
+            ? decision.SelectedOptionIds ?? (decision.SelectedOptionId is { } scalar ? [scalar] : null)
+            : decision.SelectedOptionId is { } one ? [one] : null;
+
+        if (ids is not { Length: > 0 }) return null;
+
+        var labels = new List<string>(ids.Length);
+
+        foreach (var id in ids.Distinct(StringComparer.Ordinal)) {
+            if (options.FirstOrDefault(o => o.OptionId == id) is not { OptionId: not null } match) return null;
+
+            labels.Add(match.Label);
+        }
+
+        return [.. labels];
     }
 
     async Task<JsonElement?> HandlePermissionAsync(AcpRequest request, CancellationToken ct) {
