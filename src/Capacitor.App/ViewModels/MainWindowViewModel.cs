@@ -80,6 +80,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "";
 
+    // False until a snapshot has a daemon name or a displayable version. The help chip
+    // then shares the status line; a second row with nothing in it would leave the chip
+    // sitting under that line.
+    ObservableAsPropertyHelper<bool>? _showsDaemonLine;
+    public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
+
     internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
@@ -418,6 +424,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             _daemonName = snapshots.Select(s => s.Daemon.Name)
                 .ToProperty(this, x => x.DaemonName, "")
+                .DisposeWith(disposables);
+
+            _showsDaemonLine = snapshots
+                .Select(s => !string.IsNullOrEmpty(s.Daemon.Name) || StripBuildMetadata(s.Daemon.Version).Length > 0)
+                .ToProperty(this, x => x.ShowsDaemonLine, false)
                 .DisposeWith(disposables);
 
             _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))

@@ -16,16 +16,13 @@ sealed class LocalClientCopies(IProcessRunner runner, string? searchPath, string
 
     public static LocalClientCopies ForCurrentProcess(UserHome home, TimeProvider time) {
         string[] apps = OperatingSystem.IsMacOS()
-            ? [.. AppClis("/Applications"), .. AppClis(Path.Combine(home.Path, "Applications"))]
+            ? [AppCli("/Applications"), AppCli(Path.Combine(home.Path, "Applications"))]
             : [];
 
         return new(new ProcessRunner(time), Environment.GetEnvironmentVariable("PATH"), Environment.ProcessPath, apps);
     }
 
-    internal static string[] AppClis(string applications) => [
-        Path.Combine(applications, "kcap.app", "Contents", "MacOS", "kcap"),
-        Path.Combine(applications, "Kurrent Capacitor.app", "Contents", "MacOS", "kcap")
-    ];
+    internal static string AppCli(string applications) => Path.Combine(applications, "kcap.app", "Contents", "MacOS", "kcap");
 
     public IReadOnlyList<ClientCopy> Find() => _found ??= Locate().Select(c => c with { Version = VersionOf(c.Path) }).ToList();
 

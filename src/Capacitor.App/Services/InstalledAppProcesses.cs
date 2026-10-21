@@ -7,17 +7,17 @@ internal static partial class InstalledAppProcesses {
     const string ObjC = "/usr/lib/libobjc.A.dylib";
 
     internal static int[]? Find(string root) {
-        string[] names = ["kcap-desktop", "Kurrent Capacitor"];
-        var executables = names.Select(name => Path.Combine(root, "Contents", "MacOS", name)).ToArray();
+        const string name = "kcap-desktop";
+        var executable = Path.Combine(root, "Contents", "MacOS", name);
         var matches = new List<int>();
         var unknown = false;
-        foreach (var process in names.SelectMany(Process.GetProcessesByName)) {
+        foreach (var process in Process.GetProcessesByName(name)) {
             using (process) {
                 if (process.Id == Environment.ProcessId) continue;
                 try {
                     if (process.HasExited) continue;
-                    if (process.MainModule?.FileName is not { } executable) unknown = true;
-                    else if (executables.Contains(executable)) matches.Add(process.Id);
+                    if (process.MainModule?.FileName is not { } path) unknown = true;
+                    else if (path == executable) matches.Add(process.Id);
                 } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or NotSupportedException) {
                     unknown = true;
                 }

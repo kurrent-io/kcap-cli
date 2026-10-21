@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: build-deb.sh <app-directory> <version> <output.deb>
 # Packages a published Linux app directory (the app, plus bin/ and the kcap/ plugin) as a .deb that
-# installs under /usr/lib/kurrent-capacitor. Velopack does not manage this install: apt or a newer
+# installs under /usr/lib/kcap-desktop. Velopack does not manage this install: apt or a newer
 # .deb updates it, and the app hides its own update item when Velopack is absent.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -18,26 +18,26 @@ deb_version="${deb_version//-/\~}"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 chmod 0755 "$root"
-lib="$root/usr/lib/kurrent-capacitor"
+lib="$root/usr/lib/kcap-desktop"
 mkdir -p "$lib" "$root/usr/bin" "$root/usr/share/applications" "$root/usr/share/icons/hicolor/512x512/apps" "$root/DEBIAN"
 cp -a "$app/." "$lib/"
 chmod -R go-w,a+rX "$lib"
-ln -s "../lib/kurrent-capacitor/kcap-desktop" "$root/usr/bin/kurrent-capacitor"
-cp "$here/../src/Capacitor.App/Assets/kcap-icon.png" "$root/usr/share/icons/hicolor/512x512/apps/kurrent-capacitor.png"
+ln -s "../lib/kcap-desktop/kcap-desktop" "$root/usr/bin/kcap-desktop"
+cp "$here/../src/Capacitor.App/Assets/kcap-icon.png" "$root/usr/share/icons/hicolor/512x512/apps/kcap-desktop.png"
 
-cat > "$root/usr/share/applications/kurrent-capacitor.desktop" <<'EOF'
+cat > "$root/usr/share/applications/kcap-desktop.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=kcap
 Comment=Run and watch coding agents
-Exec=kurrent-capacitor
-Icon=kurrent-capacitor
+Exec=kcap-desktop
+Icon=kcap-desktop
 Terminal=false
 Categories=Development;
 EOF
 
 cat > "$root/DEBIAN/control" <<EOF
-Package: kurrent-capacitor
+Package: kcap-desktop
 Version: $deb_version
 Architecture: amd64
 Maintainer: Kurrent <team@kcap.ai>

@@ -296,7 +296,7 @@ public class LocalPreflightTests {
     public async Task Copies_newer_than_the_floor_pass() {
         var plan = Preflight(copies: [
             new(ClientCopyKind.OnPath, "/usr/local/bin/kcap", "1.3.1-alpha.0.1"),
-            new(ClientCopyKind.DesktopApp, "/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", "9.0.0"),
+            new(ClientCopyKind.DesktopApp, "/Applications/kcap.app/Contents/MacOS/kcap", "9.0.0"),
         ]).Check(Version);
 
         await Assert.That(plan.Hint).IsEqualTo(PlanHint.Install);
@@ -314,11 +314,11 @@ public class LocalPreflightTests {
     [Test]
     public async Task The_desktop_apps_kcap_below_the_floor_is_refused_naming_the_app() {
         var failure = await Refusal(() => Preflight(copies:
-            new ClientCopy(ClientCopyKind.DesktopApp, "/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap", "1.3.0")).Check(Version));
+            new ClientCopy(ClientCopyKind.DesktopApp, "/Applications/kcap.app/Contents/MacOS/kcap", "1.3.0")).Check(Version));
 
         await Assert.That(failure.Code).IsEqualTo(LocalInstallFailureCode.ClientBelowFloor);
         await Assert.That(failure.Message).IsEqualTo(
-            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.3.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
+            "The desktop app's kcap (/Applications/kcap.app/Contents/MacOS/kcap) is 1.3.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
     }
 
     [Test]

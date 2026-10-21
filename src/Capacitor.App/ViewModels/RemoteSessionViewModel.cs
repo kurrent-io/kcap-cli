@@ -138,6 +138,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             if (_sessionEnded == value) return;
             this.RaiseAndSetIfChanged(ref _sessionEnded, value);
+            this.RaisePropertyChanged(nameof(ShowsTerminalButton));
+            this.RaisePropertyChanged(nameof(AccessNote));
             _sessionEndedChanges.OnNext(value);
         }
     }
@@ -181,6 +183,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// transcript, and so does a dropped lane — the access banner has its own row above the panes,
     /// so it reads over the retained rows. A refusal is different: Denied, a session that has not
     /// started and an agent that moved to this machine show the note instead of a pane.
+    /// The terminal is the exception: whether it may show is the server's answer to its own subscribe,
+    /// which it gives before a session too, so its pane shows whenever its tab is selected.
     public bool ShowsPanes =>
         Access is RemoteSessionAccess.Ready or RemoteSessionAccess.Offline && !OriginChangedToLocal;
 
@@ -197,7 +201,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             this.RaisePropertyChanged(nameof(ShowsSubagentPane));
         }
     }
-    public bool ShowsTerminalPane => ShowsPanes && IsTerminalActive;
+    public bool ShowsTerminalPane => IsTerminalActive && !OriginChangedToLocal;
+    public bool ShowsTerminalButton => Access == RemoteSessionAccess.NoSession && ShowsTerminalTab && !SessionEnded && !IsTerminalActive && !OriginChangedToLocal;
     public bool ShowsPullRequestPane => ShowsPanes && IsPullRequestActive;
     public bool ShowsArtefactsPane => ShowsPanes && IsArtefactsActive;
 
@@ -219,6 +224,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         this.RaisePropertyChanged(nameof(ShowsChatPane));
         this.RaisePropertyChanged(nameof(ShowsSubagentPane));
         this.RaisePropertyChanged(nameof(ShowsTerminalPane));
+        this.RaisePropertyChanged(nameof(ShowsTerminalButton));
         _terminalPaneShown.OnNext(ShowsTerminalPane);
     }
 
@@ -226,7 +232,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
-        RemoteSessionAccess.NoSession => "Waiting for the session to start",
+        RemoteSessionAccess.NoSession => ShowsTerminalTab && !SessionEnded
+            ? "Waiting for the session to start — the terminal shows what the agent is doing"
+            : "Waiting for the session to start",
         _ => "",
     };
 
@@ -301,7 +309,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (PullRequests is { } fixHost)
             Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
-            ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, surfaceFactory)
+            ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, time, surfaceFactory)
             : null;
         Apply(row);
 
