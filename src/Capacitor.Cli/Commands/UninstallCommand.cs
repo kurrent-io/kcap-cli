@@ -13,6 +13,7 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Commands;
 
@@ -31,14 +32,18 @@ namespace Capacitor.Cli.Commands;
 /// Per-agent selective cleanup is intentionally out of scope here; this command
 /// covers all known agents.
 /// </summary>
-public sealed class UninstallCommand(
-        DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers,
-        WorkingDirectory workdir, TimeProvider time) {
+sealed class UninstallCommand(
+        DaemonStore store, ConfigRoot config, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries,
+        AgentsPaths agents, WorkingDirectory workdir, IOutgoingRecorders recorders, ILocalStackFactory stacks) {
+#pragma warning disable CA1823 // Held for the local-installation removal step.
+    readonly ILocalStackFactory _stacks = stacks;
+#pragma warning restore CA1823
+
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
         var includeProject = args.Contains("--project");
+        var force          = args.Contains("--force");
 
         string? projectRoot = null;
 
@@ -50,6 +55,18 @@ public sealed class UninstallCommand(
                     $"--project requires a git working tree, but '{workdir.Path}' is not inside one.");
                 await Console.Error.WriteLineAsync(
                     "Re-run from inside your repo, or drop --project to only remove user-level configuration.");
+
+                return 1;
+            }
+        }
+
+        if (!force) {
+            var busy = await recorders.BusyAsync();
+
+            if (busy.Count > 0) {
+                foreach (var line in busy) await Console.Error.WriteLineAsync(line);
+
+                await Console.Error.WriteLineAsync("Stop them, or pass --force to end them. Nothing was changed.");
 
                 return 1;
             }
@@ -111,7 +128,7 @@ public sealed class UninstallCommand(
 
         // Daemons hold lock files inside the config dir we're about to delete; one still running leaves the
         // config dir in place.
-        if (!await new OutgoingRecorders(store, config, profiles, home, harnesses, binaries, watchers, time).StopAsync())
+        if (!await recorders.StopAsync())
             hadFailures = true;
 
         var accountStore  = AccountStore.Beside(store);

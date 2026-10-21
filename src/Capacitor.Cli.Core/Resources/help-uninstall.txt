@@ -23,6 +23,9 @@ Options:
   --keep-config       Don't delete the kcap config directory; only remove
                       the agent-side integrations. Useful when reinstalling
                       while preserving profiles, tokens, and ignore lists.
+  --force             Uninstall even while a daemon is running or starting
+                      agents; they are ended. Without it, uninstall refuses
+                      and changes nothing.
   --yes, -y           Skip the confirmation prompt.
 
 Notes:
