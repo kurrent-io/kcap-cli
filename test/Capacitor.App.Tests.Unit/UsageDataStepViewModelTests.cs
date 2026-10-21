@@ -65,9 +65,10 @@ public class UsageDataStepViewModelTests {
         await Assert.That(probe.Telemetry.Enabled).IsTrue();
     }
 
-    /// <summary>The page holds once to say the opt-out will not last, then lets setup finish.</summary>
+    /// <summary>The page holds once to say the opt-out will not last, then locks the choice and lets setup
+    /// finish with the notice still due: a Share picked afterwards would hide it while nothing sends.</summary>
     [Test]
-    public async Task An_unsaved_opt_out_holds_the_page_once() {
+    public async Task An_unsaved_opt_out_holds_the_page_once_and_keeps_the_notice_due() {
         var probe  = Desktop();
         var notice = new UsageDataNotice(probe.Telemetry, Config.Root);
         var step   = new UsageDataStepViewModel(notice) { DontShare = true };
@@ -78,7 +79,12 @@ public class UsageDataStepViewModelTests {
         await Assert.That(await step.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None)).IsFalse();
         await Assert.That(step.Problem).IsEqualTo(UsageDataNotice.NotSaved);
         await Assert.That(probe.Telemetry.Enabled).IsFalse();
+        await Assert.That(step.CanChoose).IsFalse();
 
+        step.Share = true;
         await Assert.That(await step.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None)).IsTrue();
+
+        await Assert.That(notice.Visible).IsTrue();
+        await Assert.That(notice.Message).IsEqualTo(UsageDataNotice.NotSaved);
     }
 }

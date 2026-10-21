@@ -14,7 +14,7 @@ public sealed class UsageDataNotice : ReactiveObject {
       + "file paths, prompts or transcript content. It can be associated with your workspace and its creator.";
 
     public const string NotSaved =
-        "Usage data is off until the app quits, but the choice couldn't be saved, so it starts again the next time the app opens.";
+        "Usage data is off in this app until it quits, but the choice couldn't be saved, so kcap commands still send it and the app starts again the next time it opens.";
 
     readonly CliTelemetry _telemetry;
     readonly ConfigRoot   _config;

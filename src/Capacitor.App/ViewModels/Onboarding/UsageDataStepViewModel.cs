@@ -5,7 +5,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <summary>
 /// The usage-data disclosure as a page of its own, just before the summary. Shown only while the
 /// notice is still due; Next records the choice. An opt-out that couldn't be saved holds the page once
-/// to say so, then lets setup finish: this process has stopped sending either way.
+/// to say so, then locks the choice and lets setup finish with the notice still due: this process has
+/// already stopped sending, so a Share picked afterwards could not take effect.
 /// </summary>
 public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
     public const string ShareTitle  = "Share usage data";
@@ -50,22 +51,25 @@ public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
         set => Share = !value;
     }
 
+    public bool CanChoose => !_unsavedShown;
+
     public string? Problem => _unsavedShown ? UsageDataNotice.NotSaved : null;
 
     public Task OnEnterAsync(CancellationToken ct) => Task.CompletedTask;
 
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
-        if (direction == WizardNavigation.Back || _notice is not { Visible: true }) return Task.FromResult(true);
+        if (direction == WizardNavigation.Back || _unsavedShown || _notice is not { Visible: true }) return Task.FromResult(true);
 
         if (_share || !ChoiceVisible) {
             _notice.Acknowledge();
             return Task.FromResult(true);
         }
 
-        if (_notice.TurnOff() || _unsavedShown) return Task.FromResult(true);
+        if (_notice.TurnOff()) return Task.FromResult(true);
 
         _unsavedShown = true;
         this.RaisePropertyChanged(nameof(Problem));
+        this.RaisePropertyChanged(nameof(CanChoose));
 
         return Task.FromResult(false);
     }
