@@ -4,8 +4,12 @@ namespace Capacitor.Cli.Core.Harness.Muse;
 
 /// <summary>Reads the served-model catalog Muse caches under <see cref="MusePaths.ModelCatalogDir"/>:
 /// one <c>schema_version</c> 2 document per provider profile, whose <c>rows</c> are the models the
-/// provider currently serves. Only <c>visible</c> rows are launchable from a picker.</summary>
+/// provider currently serves. Only the launch provider's <c>visible</c> rows are launchable from a picker.</summary>
 public static class MuseModelCatalog {
+    /// <summary>The provider every hosted launch names; a catalog cached for another one lists models
+    /// that launch cannot reach.</summary>
+    public const string LaunchProvider = "meta";
+
     const int SupportedSchemaVersion = 2;
 
     /// <summary>The catalog files, sorted by name so every reader sees the same order.</summary>
@@ -42,8 +46,8 @@ public static class MuseModelCatalog {
             .ToArray();
     }
 
-    /// <summary>Appends the visible rows of one document; a document of another schema, or one that is
-    /// not a catalog at all, contributes nothing.</summary>
+    /// <summary>Appends the visible rows of one document. A document of another schema, another
+    /// provider, or one that is not a catalog at all contributes nothing.</summary>
     internal static void Parse(string json, List<Row> rows) {
         JsonDocument doc;
         try { doc = JsonDocument.Parse(json); }
@@ -51,28 +55,19 @@ public static class MuseModelCatalog {
 
         using (doc) {
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return;
-            if (!root.TryGetProperty("schema_version", out var schema)
-             || schema.ValueKind != JsonValueKind.Number
-             || !schema.TryGetInt32(out var version)
-             || version != SupportedSchemaVersion) return;
-            if (!root.TryGetProperty("rows", out var list) || list.ValueKind != JsonValueKind.Array) return;
+            if (root.Num("schema_version") != SupportedSchemaVersion) return;
+            if (root.Str("provider_id") != LaunchProvider) return;
+            if (root.Arr("rows") is not { } list) return;
 
             foreach (var row in list.EnumerateArray()) {
-                if (row.ValueKind != JsonValueKind.Object) continue;
-                if (Str(row, "model_id") is not { Length: > 0 } id) continue;
-                if (Str(row, "visibility") != "visible") continue;
+                if (row.Str("model_id") is not { Length: > 0 } id) continue;
+                if (row.Str("visibility") != "visible") continue;
 
-                int? order = row.TryGetProperty("display_order", out var o) && o.ValueKind == JsonValueKind.Number && o.TryGetInt32(out var n)
-                    ? n
-                    : null;
-                rows.Add(new Row(id, Str(row, "display_label") is { Length: > 0 } label ? label : id, Str(row, "release_date"), order));
+                var order = row.Num("display_order") is { } n && n is >= int.MinValue and <= int.MaxValue ? (int?)n : null;
+                rows.Add(new Row(id, row.Str("display_label") is { Length: > 0 } label ? label : id, row.Str("release_date"), order));
             }
         }
     }
-
-    static string? Str(JsonElement obj, string name) =>
-        obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     internal sealed record Row(string ModelId, string Label, string? ReleaseDate, int? DisplayOrder);
 }

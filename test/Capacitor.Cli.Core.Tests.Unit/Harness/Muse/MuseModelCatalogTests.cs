@@ -15,12 +15,9 @@ public class MuseModelCatalogTests {
           {"model_id":"muse-spark-1.2","display_label":"muse-spark-1.2","visibility":"visible","release_date":"2026-08-05","display_order":null,"is_current":true}]}
         """;
 
-    string Dir => Path.Combine(Tmp.Path, "model-catalog");
+    string Dir => Tmp.PathTo("model-catalog");
 
-    void Write(string name, string json) {
-        Directory.CreateDirectory(Dir);
-        File.WriteAllText(Path.Combine(Dir, name), json);
-    }
+    void Write(string name, string json) => Tmp.CreateFile(["model-catalog", name], json);
 
     [Test]
     public async Task Visible_rows_newest_first_hidden_rows_dropped() {
@@ -37,7 +34,7 @@ public class MuseModelCatalogTests {
     [Test]
     public async Task Display_order_wins_over_release_date_and_a_blank_label_falls_back_to_the_id() {
         Write("a.json", """
-            {"schema_version":2,"rows":[
+            {"schema_version":2,"provider_id":"meta","rows":[
               {"model_id":"old","display_label":"","visibility":"visible","release_date":"2025-01-01","display_order":1},
               {"model_id":"new","display_label":"New","visibility":"visible","release_date":"2026-01-01","display_order":2},
               {"model_id":"unordered","display_label":"Unordered","visibility":"visible","release_date":"2026-06-01","display_order":null}]}
@@ -53,8 +50,8 @@ public class MuseModelCatalogTests {
     /// the row is chosen before the ordering is applied, not after.</summary>
     [Test]
     public async Task Several_profiles_merge_by_id_in_file_name_order() {
-        Write("b.json", """{"schema_version":2,"rows":[{"model_id":"shared","display_label":"From b","visibility":"visible","release_date":"2026-12-01","display_order":1}]}""");
-        Write("a.json", """{"schema_version":2,"rows":[{"model_id":"shared","display_label":"From a","visibility":"visible","release_date":"2026-01-01","display_order":20},{"model_id":"only-a","display_label":"Only a","visibility":"visible","release_date":"2025-01-01","display_order":2}]}""");
+        Write("b.json", """{"schema_version":2,"provider_id":"meta","rows":[{"model_id":"shared","display_label":"From b","visibility":"visible","release_date":"2026-12-01","display_order":1}]}""");
+        Write("a.json", """{"schema_version":2,"provider_id":"meta","rows":[{"model_id":"shared","display_label":"From a","visibility":"visible","release_date":"2026-01-01","display_order":20},{"model_id":"only-a","display_label":"Only a","visibility":"visible","release_date":"2025-01-01","display_order":2}]}""");
 
         var options = MuseModelCatalog.Read(Dir)!;
 
@@ -63,11 +60,25 @@ public class MuseModelCatalogTests {
         await Assert.That(MuseModelCatalog.Files(Dir).Select(f => Path.GetFileName(f)!)).IsEquivalentTo(["a.json", "b.json"], CollectionOrdering.Matching);
     }
 
+    /// <summary>Every hosted launch names the meta provider, so a catalog cached for another provider
+    /// must not put its models in the picker.</summary>
     [Test]
-    [Arguments("""{"schema_version":3,"rows":[{"model_id":"x","visibility":"visible"}]}""")]
-    [Arguments("""{"rows":[{"model_id":"x","visibility":"visible"}]}""")]
-    [Arguments("""{"schema_version":2,"rows":[{"model_id":"x","visibility":"hidden"},{"visibility":"visible"},"junk"]}""")]
-    [Arguments("""{"schema_version":2,"rows":"nope"}""")]
+    public async Task Another_providers_catalog_contributes_nothing() {
+        Write("meta.json", """{"schema_version":2,"provider_id":"meta","rows":[{"model_id":"muse-spark-1.3","display_label":"muse-spark-1.3","visibility":"visible","release_date":"2026-09-02"}]}""");
+        Write("other.json", """{"schema_version":2,"provider_id":"other","rows":[{"model_id":"other-model","display_label":"Other","visibility":"visible","release_date":"2026-12-01"}]}""");
+
+        var options = MuseModelCatalog.Read(Dir)!;
+
+        await Assert.That(options.Select(o => o.Value)).IsEquivalentTo(["muse-spark-1.3"]);
+    }
+
+    [Test]
+    [Arguments("""{"schema_version":3,"provider_id":"meta","rows":[{"model_id":"x","visibility":"visible"}]}""")]
+    [Arguments("""{"provider_id":"meta","rows":[{"model_id":"x","visibility":"visible"}]}""")]
+    [Arguments("""{"schema_version":2,"rows":[{"model_id":"x","visibility":"visible"}]}""")]
+    [Arguments("""{"schema_version":2,"provider_id":"other","rows":[{"model_id":"x","visibility":"visible"}]}""")]
+    [Arguments("""{"schema_version":2,"provider_id":"meta","rows":[{"model_id":"x","visibility":"hidden"},{"visibility":"visible"},"junk"]}""")]
+    [Arguments("""{"schema_version":2,"provider_id":"meta","rows":"nope"}""")]
     [Arguments("""[1,2]""")]
     [Arguments("""not json""")]
     public async Task A_document_that_is_not_a_usable_catalog_yields_null(string json) {
@@ -81,8 +92,7 @@ public class MuseModelCatalogTests {
         await Assert.That(MuseModelCatalog.Read(Dir)).IsNull();
         await Assert.That(MuseModelCatalog.Files(Dir)).IsEmpty();
 
-        Directory.CreateDirectory(Dir);
-        File.WriteAllText(Path.Combine(Dir, "notes.txt"), "ignored");
+        Tmp.CreateFile(["model-catalog", "notes.txt"], "ignored");
 
         await Assert.That(MuseModelCatalog.Read(Dir)).IsNull();
         await Assert.That(MuseModelCatalog.Files(Dir)).IsEmpty();
