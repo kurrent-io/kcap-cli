@@ -1255,10 +1255,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Finish(read, cursor);
     }
 
-    // A queued send is matched as the lines are replayed, and an open group may already be on
-    // screen. Either one stays on the UI thread.
+    // A queued send is matched as the lines are replayed. An open group or shell is already on
+    // screen, and a pending call is the same row a later result settles. Those stay on the UI
+    // thread: settling raises the group's bound lists.
     bool CanProjectAway() =>
         _openGroup is null && _openShell is null && _superseded.Count == 0
+        && _pendingTools.Count == 0
         && !Tracked.Any(static q => !q.IsForeign && !q.Acknowledged);
 
     bool Prepare(int generation, FeedRead read) {

@@ -443,6 +443,32 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Prose closes the group while the call stays pending. The result arrives in a later read,
+    /// and the row it settles is already bound, so that update has to run on the UI thread.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_later_result_settles_the_closed_groups_call_on_the_ui_thread() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [ToolCallLine, AssistantLine]);
+            await h.PushAsync(Dto(path));
+            var call = Group(h.Chat, 0).Calls[0];
+            var onUiThread = false;
+            call.PropertyChanged += (_, e) => {
+                if (e.PropertyName == nameof(ToolCallItem.Outcome))
+                    onUiThread = Dispatcher.UIThread.CheckAccess();
+            };
+
+            File.AppendAllText(path, ToolResultLine + "\n");
+            await h.TickAsync();
+
+            await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
+            await Assert.That(onUiThread).IsTrue();
+            await Assert.That(Group(h.Chat, 0).Calls[0]).IsSameReferenceAs(call);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_reset_and_a_path_switch_start_a_fresh_group_for_later_calls() {
