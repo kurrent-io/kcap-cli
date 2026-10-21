@@ -269,6 +269,42 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(busy.TextHugs).IsTrue();
     }
 
+    /// A card narrower than the message plus the action wraps the action under the message.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connection_banner_keeps_its_action_inside_a_narrow_card() {
+        var (inside, wrapped) = await AvaloniaSession.DispatchAsync(() => {
+            var (vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            vm.AttachDaemonRecovery(
+                ReactiveCommand.Create(() => { }),
+                ReactiveCommand.Create(() => { }),
+                new BehaviorSubject<bool>(true), new BehaviorSubject<bool>(false), Observable.Return<string?>(null));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 480, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var banner = Find<Border>(window, "ConnectionBanner")!;
+            var text = Find<TextBlock>(window, "BannerMessageText")!;
+            var button = Find<Button>(window, "StartDaemonButton")!;
+            var right = button.TranslatePoint(new Point(button.Bounds.Width, 0), banner)!.Value.X;
+            var buttonTop = button.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
+            var textBottom = text.TranslatePoint(new Point(0, text.Bounds.Height), banner)!.Value.Y;
+            var shot = (Inside: right <= banner.Bounds.Width + 1, Wrapped: buttonTop >= textBottom - 1);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return shot;
+        });
+
+        await Assert.That(inside).IsTrue();
+        await Assert.That(wrapped).IsTrue();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task PermissionChip_shows_for_claude_and_hides_for_other_vendors() {

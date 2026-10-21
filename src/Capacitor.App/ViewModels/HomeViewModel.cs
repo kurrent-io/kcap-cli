@@ -299,7 +299,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public bool SignInVisible => _signInVisible.Value;
 
     readonly ObservableAsPropertyHelper<bool> _bannerActionsVisible;
-    /// Start daemon, Reconnect, or Sign in is on the connection banner.
     public bool BannerActionsVisible => _bannerActionsVisible.Value;
 
     /// Lane SignedOut or a 401 launch — the same flag NoticeFor uses for SignInExpiredNotice.
