@@ -5,7 +5,6 @@ using Capacitor.Cli.Core.Telemetry;
 
 namespace Capacitor.App.Tests.Unit;
 
-/// <summary>The wizard's Privacy page: shown only while the disclosure is due, and Continue records the choice.</summary>
 public class UsageDataStepViewModelTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 

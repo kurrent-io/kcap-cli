@@ -2,12 +2,8 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels.Onboarding;
 
-/// <summary>
-/// The usage-data disclosure as a page of its own, just before the summary. Shown only while the
-/// notice is still due; Next records the choice. An opt-out that couldn't be saved holds the page once
-/// to say so in place of the choice, then lets setup finish with the notice still due: this process has
+/// An opt-out that couldn't be saved leaves the notice due and offers no second choice: this process has
 /// already stopped sending, so a Share picked afterwards could not take effect.
-/// </summary>
 public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
     public const string ShareTitle  = "Share usage data";
     public const string ShareDetail = "Shows us which parts of kcap get used and where setup gets stuck.";
