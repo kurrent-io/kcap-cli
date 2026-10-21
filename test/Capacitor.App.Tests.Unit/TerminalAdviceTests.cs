@@ -42,8 +42,8 @@ public class TerminalAdviceTests {
             "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.",
             "The kcap on PATH (/usr/local/bin/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");
         yield return () => (
-            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.",
-            "The desktop app's kcap (/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
+            "The desktop app's kcap (/Applications/kcap.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.",
+            "The desktop app's kcap (/Applications/kcap.app/Contents/MacOS/kcap) is 1.2.0, and a local installation needs a kcap newer than 1.3.0. Update the desktop app before setting up a local installation.");
         yield return () => (
             "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.",
             "The kcap on PATH (/usr/local/bin/kcap) did not report its version, and a local installation needs a kcap newer than 1.3.0. Update or remove it before setting up a local installation.");

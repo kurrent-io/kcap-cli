@@ -94,14 +94,11 @@ jobs:
           for suffix in $INSTALLERS; do
             FILE="releases/kcap-$VERSION-$CHANNEL$suffix"
             aws s3 cp $R2 "$FILE" "$DEST/kcap-$VERSION-$CHANNEL$suffix" --cache-control "public, max-age=31536000, immutable"
-            # Keep legacy download links current while publishing the kcap names.
             for alias in $aliases; do
-              for name in kcap Kurrent-Capacitor; do
-                case "$alias" in
-                  beta)   aws s3 cp $R2 "$FILE" "$DEST/$name-$CHANNEL-beta$suffix" --cache-control "public, max-age=300" ;;
-                  stable) aws s3 cp $R2 "$FILE" "$DEST/$name-$CHANNEL$suffix" --cache-control "public, max-age=300" ;;
-                esac
-              done
+              case "$alias" in
+                beta)   aws s3 cp $R2 "$FILE" "$DEST/kcap-$CHANNEL-beta$suffix" --cache-control "public, max-age=300" ;;
+                stable) aws s3 cp $R2 "$FILE" "$DEST/kcap-$CHANNEL$suffix" --cache-control "public, max-age=300" ;;
+              esac
             done
           done
 

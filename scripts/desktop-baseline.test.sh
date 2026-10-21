@@ -4,10 +4,10 @@ here="$(cd "$(dirname "$0")" && pwd)"
 sh="$here/desktop-baseline.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-make_pkg() { # <dir> <version>  — the real download layout: one full nupkg, no manifest beside it
-  local dir="$1" v="$2" work; work="$(mktemp -d)"
-  printf '<?xml version="1.0"?><package><metadata><id>KurrentCapacitor</id><version>%s</version></metadata></package>' "$v" > "$work/KurrentCapacitor.nuspec"
-  (cd "$work" && zip -q "$dir/KurrentCapacitor-$v-osx-arm64-full.nupkg" KurrentCapacitor.nuspec)
+make_pkg() { # <dir> <version> [id]  — the real download layout: one full nupkg, no manifest beside it
+  local dir="$1" v="$2" id="${3:-kcap}" work; work="$(mktemp -d)"
+  printf '<?xml version="1.0"?><package><metadata><id>%s</id><version>%s</version></metadata></package>' "$id" "$v" > "$work/$id.nuspec"
+  (cd "$work" && zip -q "$dir/$id-$v-osx-arm64-full.nupkg" "$id.nuspec")
   rm -rf "$work"
 }
 
@@ -25,6 +25,10 @@ bash "$sh" "$d" "0.12.2" >/dev/null
 d="$tmp/equal"; mkdir -p "$d"; make_pkg "$d" "0.12.2"
 bash "$sh" "$d" "0.12.2" >/dev/null
 [ "$(count "$d")" = "0" ] || { echo "FAIL: equal baseline should be deleted"; fail=1; }
+
+d="$tmp/other-id"; mkdir -p "$d"; make_pkg "$d" "0.12.1" "SomeOtherApp"
+bash "$sh" "$d" "0.12.2" >/dev/null
+[ "$(count "$d")" = "0" ] || { echo "FAIL: a baseline under another pack id should be deleted"; fail=1; }
 
 d="$tmp/empty"; mkdir -p "$d"
 bash "$sh" "$d" "0.12.2" >/dev/null || { echo "FAIL: empty download should be a no-op"; fail=1; }

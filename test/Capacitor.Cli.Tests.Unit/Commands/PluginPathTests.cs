@@ -11,7 +11,7 @@ public class PluginPathTests {
 
     [Test]
     [Arguments("Capacitor.app/Contents/MacOS/kcap", "Capacitor.app/Contents/Resources/kcap")]
-    [Arguments("KurrentCapacitor/current/kcap.exe", "KurrentCapacitor/current/kcap")]
+    [Arguments("kcap/current/kcap.exe", "kcap/current/kcap")]
     public async Task Bundled_CLI_finds_and_installs_the_app_plugin_without_npm(string executablePath, string pluginPath) {
         var plugin = Tmp.CreateDir(pluginPath.Split('/'));
         plugin.CreateFile([".claude-plugin", "marketplace.json"], """{"name":"kcap","plugins":[{"name":"kcap","source":"./"}]}""");

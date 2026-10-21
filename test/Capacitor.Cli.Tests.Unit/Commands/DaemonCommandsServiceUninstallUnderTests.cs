@@ -21,11 +21,11 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
     [Test]
     public async Task Removes_only_units_whose_daemon_is_inside_the_folder() {
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         var manager = new RecordingServiceManager(new() {
             ["laptop"] = Path.Combine(app, "kcap-daemon.exe"),
             ["npm"]    = Path.GetFullPath("/npm/node_modules/@kurrent/kcap/bin/kcap-daemon.exe"),
-            ["near"]   = Path.GetFullPath("/apps/KurrentCapacitor/current-old/kcap-daemon.exe"),
+            ["near"]   = Path.GetFullPath("/apps/kcap/current-old/kcap-daemon.exe"),
             ["blank"]  = null,
         });
         using var console = ConsoleOutput.StartFullCapture();
@@ -41,7 +41,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task A_running_daemon_is_asked_to_end_its_agents_before_its_unit_is_removed() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         using var child = DummyProcess.StartSleep(120);
         File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
         // Set before the stand-in dies: a bootout that found it gone came after the request.
@@ -124,7 +124,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     [Test]
     public async Task UninstallUnder_of_a_daemon_that_does_not_answer_marks_its_ledger_interrupted() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         using var child = DummyProcess.StartSleep(120);
         File.WriteAllText(Daemons.Store.PidPath("laptop"), $"{child.Pid}\n{ProcessStartToken.ForPid(child.Pid)}\n");
         var ledger = ResumeLedgerStore.For(Daemons.Store, "laptop");
@@ -140,7 +140,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
     [Test]
     public async Task A_unit_another_operation_holds_is_left_and_reported() {
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") });
         using var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
         using var console = ConsoleOutput.StartFullCapture();
@@ -154,7 +154,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
     [Test]
     public async Task A_unit_repointed_while_the_lock_was_held_is_left_alone() {
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         var binaries = new Dictionary<string, string?> { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") };
         var manager = new RecordingServiceManager(binaries);
         var held = await ServiceTxnLock.TryAcquireAsync(Daemons.Store, "laptop", TimeSpan.Zero, TimeProvider.System);
@@ -172,7 +172,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
 
     [Test]
     public async Task A_unit_that_cannot_be_read_does_not_stop_the_others() {
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         var manager = new RecordingServiceManager(new() {
             ["broken"] = Unreadable,
             ["laptop"] = Path.Combine(app, "kcap-daemon.exe"),
@@ -190,7 +190,7 @@ public class DaemonCommandsServiceUninstallUnderTests {
     /// retrying its deleted daemon at every sign-in.</summary>
     [Test]
     public async Task A_listing_that_fails_is_reported_not_taken_as_no_units() {
-        var app = Path.GetFullPath("/apps/KurrentCapacitor/current");
+        var app = Path.GetFullPath("/apps/kcap/current");
         var manager = new RecordingServiceManager(new() { ["laptop"] = Path.Combine(app, "kcap-daemon.exe") }) { ListingFails = true };
         using var console = ConsoleOutput.StartFullCapture();
 

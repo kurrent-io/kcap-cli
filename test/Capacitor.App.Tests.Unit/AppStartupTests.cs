@@ -732,7 +732,7 @@ public class AppStartupTests {
         await Assert.That(stillTracked).IsFalse();
     }
 
-    /// Tray "Open Kurrent Capacitor" on a hidden window re-shows THAT window (no rebuild).
+    /// Tray "Open kcap" on a hidden window re-shows THAT window (no rebuild).
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task ShowMainWindow_reshows_same_instance() {

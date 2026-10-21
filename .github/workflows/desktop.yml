@@ -160,7 +160,7 @@ jobs:
               echo "::warning::WINDOWS_CERTIFICATE_PFX is not configured; the Windows app ships unsigned"
             fi
           fi
-          vpk pack --packId KurrentCapacitor --packVersion "$VERSION" --packTitle "kcap" --packAuthors Kurrent \
+          vpk pack --packId kcap --packVersion "$VERSION" --packTitle "kcap" --packAuthors Kurrent \
             --channel "$RID" --outputDir releases "${args[@]}"
           rm -f "$RUNNER_TEMP/kcap-sign.pfx"
 
@@ -169,7 +169,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p extracted
-          ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
+          ditto -x -k releases/kcap-osx-arm64-Portable.zip extracted
           APP="extracted/kcap.app"
           bash scripts/assert-app-plugin.sh "$APP" "$VERSION"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "$VERSION"
@@ -201,13 +201,13 @@ jobs:
       # does not launch the app, so the smoke below starts it.
       - name: Install the packed app
         if: runner.os == 'Windows'
-        run: bash scripts/install-windows-setup.sh releases/KurrentCapacitor-win-x64-Setup.exe
+        run: bash scripts/install-windows-setup.sh releases/kcap-win-x64-Setup.exe
 
       - name: Assert the installed app
         if: runner.os == 'Windows'
         run: |
           set -euo pipefail
-          install="$(cygpath -u "$LOCALAPPDATA")/KurrentCapacitor"
+          install="$(cygpath -u "$LOCALAPPDATA")/kcap"
           bash scripts/assert-app-plugin.sh "$install/current" "$VERSION"
           bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "$VERSION"
           bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
@@ -222,7 +222,7 @@ jobs:
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\kcap-desktop.exe') -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'kcap\current\kcap-desktop.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force
@@ -231,7 +231,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           set -euo pipefail
-          (cd releases && ./KurrentCapacitor-linux-x64.AppImage --appimage-extract >/dev/null)
+          (cd releases && ./kcap-linux-x64.AppImage --appimage-extract >/dev/null)
           app=releases/squashfs-root/usr/bin
           bash scripts/assert-app-plugin.sh "$app" "$VERSION"
           bash scripts/assert-app-cli-version.sh "$app/bin/kcap" "$VERSION"
@@ -248,7 +248,7 @@ jobs:
           export KCAP_CONFIG_DIR="$RUNNER_TEMP/kcap-smoke" KCAP_APP_UPDATE_URL=http://127.0.0.1:9/ DO_NOT_TRACK=1
           export APPIMAGE_EXTRACT_AND_RUN=1 XDG_DATA_HOME="$RUNNER_TEMP/kcap-data"
           mkdir -p "$KCAP_CONFIG_DIR"
-          xvfb-run -a releases/KurrentCapacitor-linux-x64.AppImage > smoke.log 2>&1 &
+          xvfb-run -a releases/kcap-linux-x64.AppImage > smoke.log 2>&1 &
           pid=$!
           sleep 20
           if ! kill -0 "$pid" 2>/dev/null; then echo "::error::the packed app exited within 20 s"; cat smoke.log; exit 1; fi
@@ -267,14 +267,14 @@ jobs:
           DEB="releases/kcap-$VERSION-linux-x64.deb"
           bash scripts/build-deb.sh publish/app "$VERSION" "$DEB"
           sudo apt-get install -y "./$DEB"
-          app=/usr/lib/kurrent-capacitor
+          app=/usr/lib/kcap-desktop
           bash scripts/assert-app-plugin.sh "$app" "$VERSION"
           bash scripts/assert-app-cli-version.sh "$app/bin/kcap" "$VERSION"
           bash scripts/assert-bundle-digest.sh "$app" trio/bin/daemon.sha256
           export KCAP_CONFIG_DIR="$RUNNER_TEMP/kcap-deb-smoke" KCAP_APP_UPDATE_URL=http://127.0.0.1:9/ DO_NOT_TRACK=1
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/kcap-deb-runtime"
           mkdir -p "$KCAP_CONFIG_DIR" && mkdir -m 0700 -p "$XDG_RUNTIME_DIR"
-          xvfb-run -a kurrent-capacitor > deb-smoke.log 2>&1 &
+          xvfb-run -a kcap-desktop > deb-smoke.log 2>&1 &
           pid=$!
           sleep 20
           if ! kill -0 "$pid" 2>/dev/null; then echo "::error::the installed app exited within 20 s"; cat deb-smoke.log; exit 1; fi
@@ -310,8 +310,8 @@ jobs:
           set -euo pipefail
           cp trio/bin/daemon.sha256 trio/bin/kcap.sha256 releases/
           case "$RUNNER_OS" in
-            Windows) mv "releases/KurrentCapacitor-$RID-Setup.exe" "releases/kcap-$VERSION-$RID-Setup.exe" ;;
-            Linux)   cp "releases/KurrentCapacitor-$RID.AppImage" "releases/kcap-$VERSION-$RID.AppImage" ;;
+            Windows) mv "releases/kcap-$RID-Setup.exe" "releases/kcap-$VERSION-$RID-Setup.exe" ;;
+            Linux)   cp "releases/kcap-$RID.AppImage" "releases/kcap-$VERSION-$RID.AppImage" ;;
           esac
 
       - name: Upload the release set
@@ -328,7 +328,7 @@ jobs:
         with:
           name: app-${{ inputs.rid }}-unsigned
           path: |
-            releases/KurrentCapacitor-osx-arm64-Portable.zip
-            releases/KurrentCapacitor-win-x64-Setup.exe
-            releases/KurrentCapacitor-linux-x64.AppImage
+            releases/kcap-osx-arm64-Portable.zip
+            releases/kcap-win-x64-Setup.exe
+            releases/kcap-linux-x64.AppImage
             releases/kcap-*-linux-x64.deb
