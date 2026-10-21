@@ -148,13 +148,17 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
 
     const double DefaultApprovalTimeoutSeconds = 45;
 
+    // The launch's approval policy, ahead of the card; null for a reviewer or an ungoverned launch.
+    readonly CodexHostedPolicySeam? _policy;
+
     public CodexAppServerHostedAgentRuntime(
             CodexAppServerSpawn spawn, CodexAppServerLaunch launch, AgentActivityClock? clock,
             ILogger logger, TimeProvider timeProvider, TimeSpan? forwardStallTimeout = null,
             bool emitEnvelopeTranscript = false, bool deferFirstTurn = false,
             string? agentId = null,
             Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
-            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null) {
+            TimeSpan? approvalTimeout = null, TranscriptJournal? journal = null, CodexHostedPolicySeam? policy = null) {
+        _policy  = policy;
         _spawn   = spawn;
         _launch  = launch;
         _clock   = clock;
@@ -168,7 +172,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
          && !string.Equals(_launch.Approval, "never", StringComparison.Ordinal)) {
             _approvalBridge = new CodexApprovalBridge(
                 requestInteraction, agentId, logger,
-                approvalTimeout ?? TimeSpan.FromSeconds(DefaultApprovalTimeoutSeconds), timeProvider);
+                approvalTimeout ?? TimeSpan.FromSeconds(DefaultApprovalTimeoutSeconds), timeProvider, policy);
         }
         _dispatcher = new CodexTurnInputDispatcher(
             startTurn: IssueTurnStartAsync, steerTurn: IssueTurnSteerAsync,
@@ -446,6 +450,9 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         _resolvedModel = result.Str("model");
         _clock?.SetLaunchStage(isResume ? "thread_resumed" : "thread_started");
 
+        // A started thread has every approval it will raise pass through this runtime; a resumed one may not.
+        if (!isResume && _threadId is { Length: > 0 } started) _policy?.MarkBridgedSinceStart(started);
+
         if (string.IsNullOrEmpty(_threadId))
             throw new InvalidOperationException($"codex app-server: {method} returned no thread id.");
 
@@ -542,9 +549,26 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         // drain them through the forward buffer. Runs on the read-loop thread, so a full buffer blocks
         // here (a canonical emit) — the intended lossless backpressure onto the app-server's stdout.
         // Gated off until §2.5 activates envelope-source ingestion (see _emitEnvelopeTranscript).
+        if (_policy is { } policy) ObservePolicyFacts(policy, n.Method, n.Params);
+
         if (_emitEnvelopeTranscript)
-            foreach (var env in _mapper.Map(n.Method, n.Params))
+            foreach (var env in _mapper.Map(n.Method, n.Params)) {
+                _policy?.Turns.Observe(env);
                 _forwardBuffer.Emit(env);
+            }
+    }
+
+    /// <summary>A file change's paths arrive on its started item and its patch updates; its approval names none.</summary>
+    static void ObservePolicyFacts(CodexHostedPolicySeam policy, string method, JsonElement? p) {
+        switch (method) {
+            case "item/fileChange/patchUpdated" when p?.Str("itemId") is { } itemId && p.Value.TryGetProperty("changes", out var changes):
+                policy.Paths.Observe(itemId, changes);
+                break;
+            case "item/started" when p?.Obj("item") is { } item && item.Str("type") == "fileChange" && item.Str("id") is { } id
+                                  && item.TryGetProperty("changes", out var started):
+                policy.Paths.Observe(id, started);
+                break;
+        }
     }
 
     // §2.4 stall watchdog: the forward buffer stayed full of canonical envelopes past the stall timeout

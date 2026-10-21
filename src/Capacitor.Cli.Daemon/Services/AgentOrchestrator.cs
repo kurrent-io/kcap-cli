@@ -2859,7 +2859,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 FlowRole: isReviewFlow ? cmd.FlowRole : null,
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
-                RequestedTransport: resume?.Entry.Transport
+                RequestedTransport: resume?.Entry.Transport,
+                PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null
             );
 
             HostedRuntimeStart start;

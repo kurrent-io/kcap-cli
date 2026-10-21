@@ -30,6 +30,11 @@ internal sealed class CodexHostedPolicySeam(
     public CodexPatchPaths Paths { get; } = new();
     public CodexEnvelopeTurns Turns { get; } = new();
 
+    /// <summary>The runtime started this thread itself, so every refusal in it passes through here.</summary>
+    public void MarkBridgedSinceStart(string threadId) {
+        if (SessionIds.Canonical(threadId) is { } sessionId) refusals.MarkBridgedSinceStart(sessionId);
+    }
+
     public async Task<CodexHostedVerdict> EvaluateAsync(string method, JsonElement request, CancellationToken ct) {
         try {
             if (Action(method, request) is not { } action) return CodexHostedVerdict.Forward;

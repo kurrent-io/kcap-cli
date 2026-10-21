@@ -486,7 +486,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 time,
-                connection: sp.GetRequiredService<ServerConnection>()); // §2.3 interactive approvals
+                connection: sp.GetRequiredService<ServerConnection>(), // §2.3 interactive approvals
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>());
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
