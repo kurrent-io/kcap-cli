@@ -894,8 +894,8 @@ switch (command) {
 
         return await Run<CopilotFinalizeDrainCommand>().Run(cfSessionId, cfPath);
     }
-    case "set-title" when args.Length < 2:
-        Console.Error.WriteLine("Usage: kcap set-title <title>");
+    case "set-title" when args.Skip(1).All(a => a == SetTitleCommand.AutoFlag):
+        Console.Error.WriteLine("Usage: kcap set-title [--auto] <title>");
 
         return 1;
     case "set-title": {
@@ -908,8 +908,10 @@ switch (command) {
             return 1;
         }
 
+        var auto = args.Contains(SetTitleCommand.AutoFlag);
+
         // Join all remaining args as the title (supports unquoted multi-word titles)
-        var title = string.Join(' ', args.Skip(1)).Trim();
+        var title = string.Join(' ', args.Skip(1).Where(a => a != SetTitleCommand.AutoFlag)).Trim();
 
         if (string.IsNullOrWhiteSpace(title)) {
             Console.Error.WriteLine("Title cannot be empty");
@@ -917,20 +919,11 @@ switch (command) {
             return 1;
         }
 
-        // Limit to 120 chars
         if (title.Length > 120) {
             title = title[..120];
         }
 
-        try {
-            await Api().SetSessionTitleAsync(stSessionId, title);
-        } catch (CapacitorApiException ex) {
-            Console.Error.WriteLine(ex.Message);
-
-            return 1;
-        }
-
-        return 0;
+        return await Run<SetTitleCommand>().Handle(stSessionId, title, auto, Console.Error);
     }
     // Hidden, tooling-internal: spawned once by the npm wrapper's `runUpdate` right after
     // `npm install` lands the new binary, so the server observes the new version immediately

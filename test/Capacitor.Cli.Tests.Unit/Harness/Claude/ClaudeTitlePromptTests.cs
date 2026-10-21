@@ -28,7 +28,7 @@ public class ClaudeTitlePromptTests {
 
         var output = JsonNode.Parse(first)!["hookSpecificOutput"]!;
         await Assert.That(output["hookEventName"]!.GetValue<string>()).IsEqualTo("UserPromptSubmit");
-        await Assert.That(output["additionalContext"]!.GetValue<string>()).Contains("kcap set-title");
+        await Assert.That(output["additionalContext"]!.GetValue<string>()).Contains("kcap set-title --auto ");
         await Assert.That(second).IsEqualTo("");
     }
 
