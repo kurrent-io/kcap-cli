@@ -67,7 +67,8 @@ public sealed class PathFixViewModel : ReactiveObject {
             return false;
         }
 
-        Message = null;
+        Message    = null;
+        _cancelled = false;
         try {
             Apply(await _installer.InstallAsync(_target, ct).ConfigureAwait(true));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {

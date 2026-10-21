@@ -250,6 +250,31 @@ public class WizardSimpleStepsTests {
         await Assert.That(none).IsNull();
     }
 
+    sealed class SequencedInstaller(params Func<ShimResult>[] attempts) : ICliPathInstaller {
+        int _next;
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(attempts[_next++]());
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_cancel_does_not_hide_a_later_attempts_failure() {
+        var unfinished = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new PathFixViewModel(
+                new SequencedInstaller(
+                    () => new ShimResult(ShimOutcome.Cancelled, null, null),
+                    () => throw new IOException("disk full")),
+                new FakeAppStateStore(), "/x");
+            await vm.LinkAsync(CancellationToken.None);
+            await vm.LinkAsync(CancellationToken.None);
+
+            return await vm.UnfinishedAsync();
+        });
+
+        await Assert.That(unfinished).Contains("disk full");
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Never_installing_never_claims() {

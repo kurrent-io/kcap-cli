@@ -684,9 +684,20 @@ public class MainWindowViewModelTests {
             lifecycleStatus.OnNext("Installing the command-line tool was canceled.");
             lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
             lifecycleStatus.OnNext(null);
+            var replaced = vm.StartMessage;
+
+            lifecycleStatus.OnNext("Installing the command-line tool failed.");
+            lifecycleAttention.OnNext(null);
+            var restored = vm.StartMessage;
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
+            lifecycleAttention.OnNext(null);
 
             await Assert.That(withdrawn).IsNull();
-            await Assert.That(vm.StartMessage).IsEqualTo("The daemon didn't come up cleanly.");
+            await Assert.That(replaced).IsEqualTo("The daemon didn't come up cleanly.");
+            await Assert.That(restored).IsEqualTo("Installing the command-line tool failed.");
+            await Assert.That(vm.StartMessage).IsNull(); // a connect cleared the status line, so nothing comes back
         });
     }
 
