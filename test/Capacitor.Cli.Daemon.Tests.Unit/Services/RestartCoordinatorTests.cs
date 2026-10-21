@@ -130,16 +130,39 @@ public class RestartCoordinatorTests {
     public async Task On_Windows_a_script_install_is_watched_through_current() {
         using var tmp = new TempDir();
         tmp.CreateFile("kcap/install.json", "{}");
-        var running    = tmp.CreateFile("kcap/versions/1.0.0/bin/kcap-daemon", "old");
-        var viaCurrent = tmp.CreateFile("kcap/current/bin/kcap-daemon", "old");
+        var running = tmp.CreateFile("kcap/versions/1.0.0/bin/kcap-daemon", "old");
+        tmp.CreateFile("kcap/current/bin/kcap-daemon", "old");
 
         var before = RestartCoordinator.StatBinaryAt(running, isWindows: true, File.Exists);
-        File.WriteAllText(viaCurrent, "the new version");
+        tmp.CreateFile("kcap/current/bin/kcap-daemon", "the new version");
         var after = RestartCoordinator.StatBinaryAt(running, isWindows: true, File.Exists);
 
         await Assert.That(before).IsNotNull();
         await Assert.That(RestartDecision.BinaryChanged(before, after)).IsTrue();
         await Assert.That(File.ReadAllText(running)).IsEqualTo("old");
+    }
+
+    /// <summary>Two releases' binaries can match on size and mtime, so the switch of <c>current</c> itself
+    /// must register as the change.</summary>
+    [Test]
+    public async Task Switching_current_between_identical_binaries_is_a_change() {
+        Skip.When(OperatingSystem.IsWindows(), "the fixture's current is a symlink; Windows uses a junction");
+        using var tmp = new TempDir();
+        tmp.CreateFile("kcap/install.json", "{}");
+        var mtime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        foreach (var v in new[] { "1.0.0", "1.1.0" })
+            File.SetLastWriteTimeUtc(tmp.CreateFile($"kcap/versions/{v}/bin/kcap-daemon", "same"), mtime);
+        var current = tmp.PathTo("kcap/current");
+        Directory.CreateSymbolicLink(current, "versions/1.0.0");
+        var running = tmp.PathTo("kcap/versions/1.0.0/bin/kcap-daemon");
+
+        var before = RestartCoordinator.StatBinaryAt(running, isWindows: false, File.Exists);
+        Directory.Delete(current);
+        Directory.CreateSymbolicLink(current, "versions/1.1.0");
+        var after = RestartCoordinator.StatBinaryAt(running, isWindows: false, File.Exists);
+
+        await Assert.That(before).IsNotNull();
+        await Assert.That(RestartDecision.BinaryChanged(before, after)).IsTrue();
     }
 
     [Test]

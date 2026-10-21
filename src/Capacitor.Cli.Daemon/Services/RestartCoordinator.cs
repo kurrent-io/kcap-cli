@@ -116,11 +116,13 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     /// </summary>
     internal static BinaryStat? StatBinaryAt(string? processPath, bool isWindows, Func<string, bool> fileExists) {
         if (processPath is null) return null;
-        if (isWindows && ScriptInstallLayout.FromBinary(processPath, fileExists) is null) return null;
+        var layout = ScriptInstallLayout.FromBinary(processPath, fileExists);
+        if (isWindows && layout is null) return null;
 
         try {
-            var fi = new FileInfo(ScriptInstallLayout.Stabilize(processPath, fileExists));
-            return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks) : null;
+            var fi     = new FileInfo(ScriptInstallLayout.Stabilize(processPath, fileExists));
+            var target = layout is null ? null : new DirectoryInfo(layout.Current).LinkTarget;
+            return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks, target) : null;
         } catch {
             return null; // transient (file being swapped mid-install)
         }
