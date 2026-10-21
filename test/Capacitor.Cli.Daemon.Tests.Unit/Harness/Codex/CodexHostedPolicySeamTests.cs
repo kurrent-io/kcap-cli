@@ -138,6 +138,19 @@ public class CodexHostedPolicySeamTests : IDisposable {
             .IsEqualTo(CodexHostedVerdict.Decline);
     }
 
+    /// A grant root asks for writes beyond the edit's own paths, which no rule or judge has seen.
+    [Test]
+    public async Task A_file_change_asking_for_a_grant_root_reaches_the_card_unevaluated() {
+        Judge("allow");
+        var seam = Seam();
+        seam.Paths.Observe("patch-4", Element(new JsonArray(new JsonObject { ["path"] = "/wt/src/other.txt", ["kind"] = "update" })));
+        var request = JsonNode.Parse(FileChange("patch-4").GetRawText())!.AsObject();
+        request["grantRoot"] = "/";
+
+        await Assert.That(await seam.EvaluateAsync(FileApproval, Element(request), CancellationToken.None)).IsEqualTo(CodexHostedVerdict.Forward);
+        await Assert.That(_server.LogEntries).IsEmpty();
+    }
+
     /// A rename touches its destination too, so a path rule binds there; a change naming no path, a destination that
     /// cannot resolve, or a later empty snapshot leaves the item unknown.
     [Test]

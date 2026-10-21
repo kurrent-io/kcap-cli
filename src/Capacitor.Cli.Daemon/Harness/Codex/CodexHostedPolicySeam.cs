@@ -100,7 +100,8 @@ internal sealed class CodexHostedPolicySeam(
                 using var input = JsonDocument.Parse(new JsonObject { ["command"] = command }.ToJsonString());
                 return CodexHookActions.Normalize("Bash", input.RootElement.Clone(), cwd);
             }
-            case "fileChange" when request.Str("itemId") is { } itemId && Paths.TryPaths(itemId, out var paths): {
+            // A grant root asks for writes under it for the rest of the session, beyond this edit's paths.
+            case "fileChange" when !HasValue(request, "grantRoot") && request.Str("itemId") is { } itemId && Paths.TryPaths(itemId, out var paths): {
                 var resolved = paths.Select(p => LexicalPaths.TryResolve(cwd, p)).ToArray();
                 if (resolved.Length == 0 || resolved.Any(p => p is null)) return null;
                 return new CanonicalAction { Kind = ActionKind.FileEdit, Vendor = Vendor, Cwd = cwd, RawToolName = "apply_patch", Paths = [.. resolved!] };
