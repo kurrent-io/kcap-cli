@@ -700,7 +700,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
         _rebind.Disposable = Disposable.Empty;
-        if (Rail is not null) Rail.SelectedAgentId = null;
+        if (Rail is not null) Rail.SelectedSessionKey = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
     }
@@ -708,7 +708,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
-        if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;
+        if (Rail is not null) Rail.SelectedSessionKey = next switch {
+            RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+            null => null,
+            _ => $"local:{next.AgentId}",
+        };
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         // Last, so a watch that fires synchronously on its first element cannot have the swap it

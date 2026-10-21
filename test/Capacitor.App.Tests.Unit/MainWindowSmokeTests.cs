@@ -927,7 +927,7 @@ public class MainWindowSmokeTests {
             await Assert.That(machineLines).Contains(machine);
             await Assert.That(machineLines).Contains("Machine · remote daemon");
             ToolTip.SetIsOpen(row, false);
-            rail.SelectedAgentId = "r1";
+            rail.SelectedSessionKey = "remote:r1";
             Dispatcher.UIThread.RunJobs();
             await Assert.That(badge.IsEffectivelyVisible).IsTrue();
             await Assert.That((label.Foreground as ISolidColorBrush)!.Color).IsEqualTo(restingColor);
