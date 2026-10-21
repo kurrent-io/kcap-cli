@@ -11,6 +11,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     public const string AwaitingPickupNote = "The agent reads it when its current step ends";
     public const string AttachmentsOnlyText = "Attachments only";
     public const string IdlePickupNote = "The agent is not in a step";
+    public const string UnknownPickupNote = "Waiting for delivery confirmation from the agent";
 
     public string Text { get; } = text;
     /// The server's queue item carries no attachments, so a prompt that was only files arrives
@@ -42,7 +43,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         }
     }
 
-    bool _agentIdle;
+    bool? _agentIdle;
     bool _canSendNow;
     /// The agent is idle and the channel can take text, so this row can be delivered instead of waiting.
     public bool CanSendNow {
@@ -55,13 +56,18 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
     }
 
     /// Which wait the row describes. A channel that is still delivering the last paste is not a step.
-    public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle ? IdlePickupNote : AwaitingPickupNote;
+    public string? PickupNote => !IsAwaitingPickup ? null : _agentIdle switch {
+        true => IdlePickupNote,
+        false => AwaitingPickupNote,
+        null => UnknownPickupNote,
+    };
 
-    internal void SetPickup(bool agentIdle, bool canSend) {
+    internal void SetPickup(bool? agentIdle, bool canSend) {
         var idleChanged = _agentIdle != agentIdle;
         _agentIdle = agentIdle;
-        // A server-listed prompt is already a live dispatch: offering Send would submit another.
-        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0 && DispatchId is null;
+        // Recovery is explicit: the original dispatch may still arrive, so the action says
+        // Send again rather than implying that it moves the existing dispatch forward.
+        CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0;
         if (idleChanged) this.RaisePropertyChanged(nameof(PickupNote));
     }
 
@@ -82,7 +88,7 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         this.RaisePropertyChanged(nameof(IsAwaitingPickup));
         this.RaisePropertyChanged(nameof(PickupNote));
     }
-    /// Queued by another client: shown, never acknowledged here, retired when the server drops it.
+    /// A server entry unmatched to this pane's sends. Its originating client is unknown.
     public bool IsForeign { get; private init; }
 
     internal static QueuedChatMessage FromServer(QueuedInputItem item) =>

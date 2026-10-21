@@ -81,9 +81,23 @@ internal sealed class ServerChatInput : ChatInput {
 
     public override async Task InterruptAsync(CancellationToken ct) {
         if (!CanInterrupt || ct.IsCancellationRequested) return;
-        try { await _lane.SendSpecialKeyAsync(_agentId, SpecialKeys.Escape, ct); }
+        try {
+            var outcome = await _lane.SendSpecialKeyAsync(_agentId, SpecialKeys.Escape, ct);
+            if (_disposed) return;
+            _notice = outcome.Result switch {
+                HubCallResult.Ok => "Interrupt requested; waiting for the agent",
+                HubCallResult.Denied => "you cannot interrupt this session",
+                _ => "interrupt delivery unconfirmed — check the agent's terminal",
+            };
+            Raise();
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: composer interrupt failed: {ex.Message}"); }
+        catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: composer interrupt failed: {ex.Message}");
+            if (_disposed) return;
+            _notice = "interrupt delivery unconfirmed — check the agent's terminal";
+            Raise();
+        }
     }
 
     ChatSendOutcome Settle(ChatSendOutcome outcome, string? notice) {

@@ -144,6 +144,21 @@ public class ServerChatInputTests {
     }
 
     [Test]
+    [Arguments(HubCallResult.Ok, "Interrupt requested; waiting for the agent")]
+    [Arguments(HubCallResult.Denied, "you cannot interrupt this session")]
+    [Arguments(HubCallResult.NotConnected, "interrupt delivery unconfirmed — check the agent's terminal")]
+    public async Task Interrupt_reports_the_hub_outcome_without_claiming_the_agent_stopped(HubCallResult result, string hint) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(hasTerminal: true);
+            h.Ready();
+            h.Lane.SpecialKeyHandler = _ => Task.FromResult(new HubCallOutcome(result));
+            await h.Input.InterruptAsync(CancellationToken.None);
+            await Assert.That(h.Input.Hint).IsEqualTo(hint);
+            h.Input.Dispose();
+        });
+    }
+
+    [Test]
     public async Task A_send_while_not_ready_is_rejected_before_it_reaches_the_lane() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
