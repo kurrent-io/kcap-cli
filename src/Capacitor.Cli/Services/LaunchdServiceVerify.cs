@@ -5,82 +5,6 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Services;
 
-/// <summary>Coded, stable exit codes for the <see cref="LaunchdServiceVerify"/> transaction engine.
-/// Every non-<see cref="Ok"/> member has a matching stderr token defined beside it.</summary>
-public static class VerifyExit {
-    public const int Ok = 0;
-
-    /// <summary>Service lock contended (start/install), OR install's pre-mutation probe found the
-    /// label already Loaded — a fresh install without <c>--replace</c> must not clear it.</summary>
-    public const int Contended = 20;
-    public const string ContendedToken = "verify_contended";
-
-    /// <summary>Pre-mutation viability failed before anything on disk was touched: the daemon binary
-    /// is missing, the pinned profile does not resolve to a valid http/https server URL, or the plist
-    /// could not be rendered (e.g. an XML-unrepresentable captured env value). Nothing is touched.</summary>
-    public const int Viability = 21;
-    public const string ViabilityToken = "verify_viability";
-
-    /// <summary>Install-verify's pre-mutation probe classified the label <c>Unknown</c> — neither
-    /// clearly loaded nor clearly absent, so a fresh install refuses to guess and writes nothing.</summary>
-    public const int BootoutUnknown = 22;
-    public const string BootoutUnknownToken = "verify_bootout_unknown";
-
-    /// <summary>Either <c>--replace</c>'s takeover kill couldn't confirm the owner gone, or an owning
-    /// takeover's cleared label never released the daemon name (its validated pid never went null),
-    /// within the forward budget. Nothing is written; the marker is retained at its last phase.</summary>
-    public const int StopUnconfirmed = 23;
-    public const string StopUnconfirmedToken = "verify_stop_unconfirmed";
-
-    /// <summary>Forward cutoff hit and rollback restored the verified-safe state (start: unloaded,
-    /// plist retained; install: label absent AND unit file removed).</summary>
-    public const int ReadinessTimeout = 24;
-    public const string ReadinessTimeoutToken = "verify_readiness_timeout";
-
-    /// <summary>Install-verify's hello was well-formed but reported a wrong name/protocol/version — a
-    /// deterministic mismatch, so rollback fires without waiting out the forward budget.</summary>
-    public const int HelloValidation = 25;
-    public const string HelloValidationToken = "verify_hello_validation";
-
-    /// <summary>A rollback poll ran out with the state genuinely undetermined — the LAST observation
-    /// was <see cref="LabelProbe.Unknown"/>, so there is no way to tell whether the restore happened.
-    /// A timeout, not an observed-wrong state (compare <see cref="RestoreVerification"/>). The marker
-    /// is retained.</summary>
-    public const int RollbackBudget = 26;
-    public const string RollbackBudgetToken = "verify_rollback_budget";
-
-    /// <summary>Rollback (or the final recheck) affirmatively found the wrong state: still Loaded,
-    /// unloaded but the unit file still present, or a plist whose fingerprint doesn't match what this
-    /// transaction wrote (a foreign writer). The marker, and any foreign file, are left alone.</summary>
-    public const int RestoreVerification = 27;
-    public const string RestoreVerificationToken = "verify_restore_verification";
-
-    /// <summary>start --verify's pre-mutation consent-directive gate refused to
-    /// proceed: the invoking launcher set <c>KCAP_CONSENT_SEED_DEFAULT</c> but the installed unit's
-    /// own baked directive, binary digest, or identity evidence didn't satisfy the gate. Fires right
-    /// after the fresh query and BEFORE the marker is even written — nothing is touched. The stderr
-    /// line <c>start_gate_reason=&lt;reason&gt;</c> names which check failed.</summary>
-    public const int StartGate = 28;
-    public const string StartGateToken = "verify_start_gate";
-
-    /// <summary>The gated start path detected drift between the evidence Phase A gated on and what
-    /// bootstrap was about to act on — the unit's plist content changed, or its digest stopped
-    /// matching, in the window between the gate check and the boot-out/bootstrap it authorizes.
-    /// Rolled back the same way a forward-phase failure is (bootout, plist retained).</summary>
-    public const int StartGateDrift = 29;
-    public const string StartGateDriftToken = "verify_start_gate_drift";
-
-    /// <summary><c>--retire</c> refused to remove the named unit: its plist is unreadable, or it is
-    /// not pinned to the profile being installed; or the new id is already taken by an installed unit,
-    /// or its state is unknown. No unit is written for the new id — its own entry-time leftover-marker
-    /// recovery already ran, as on every install. Every refusal but <c>target_claimed</c> leaves both
-    /// units untouched and writes nothing; <c>target_claimed</c> (the new id was taken while the old unit
-    /// was being retired) leaves the old unit retired and a captured marker for the new id. The stderr line
-    /// <c>retire_reason=&lt;reason&gt;</c> names which.</summary>
-    public const int RetireRefused = 30;
-    public const string RetireRefusedToken = "verify_retire_refused";
-}
-
 /// <summary>Why <see cref="LaunchdServiceVerify.EvaluateStartGate"/> refused a gated start. Reported on
 /// stderr as <c>start_gate_reason=&lt;snake_case&gt;</c> beside <see cref="VerifyExit.StartGateToken"/>.</summary>
 internal enum StartGateReason { DirectiveMissing, DirectiveInvalid, IdentityMismatch, ForeignBinary, PackageInconsistent, EvidenceUnreadable }
@@ -109,34 +33,29 @@ sealed class LaunchdServiceVerify(
     Func<string, string?>? gateEnv = null,
     Func<string, bool>? digestMatches = null,
     Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null,
-    Func<string, TimeSpan, Task>? endDaemon = null) {
-    static readonly TimeSpan LockWait      = TimeSpan.FromSeconds(10);
-    static readonly TimeSpan PollInterval  = TimeSpan.FromMilliseconds(500);
-    static readonly TimeSpan KillWait      = TimeSpan.FromSeconds(5);
+    Func<string, TimeSpan, Task>? endDaemon = null) : ServiceVerifyBase {
     static readonly TimeSpan TargetProbeWait = TimeSpan.FromSeconds(5);
-    static readonly TimeSpan FenceWait       = TimeSpan.FromSeconds(3);
 
     /// <summary>How long a retirement waits for the old daemon to end its agents, capped at half the
     /// forward budget; the bootout's own budget starts after it.</summary>
     static readonly TimeSpan EndWait         = TimeSpan.FromSeconds(10);
 
-    public static readonly TimeSpan DefaultForwardBudget   = TimeSpan.FromSeconds(20);
     public static readonly TimeSpan DefaultRollbackReserve = TimeSpan.FromSeconds(10);
 
     /// <summary>The advertised transaction bound (40s at the defaults): a retirement's end wait
     /// (<see cref="EndWait"/>) + forward cutoff + rollback reserve. A caller's kill-timeout (the desktop
     /// app's mutation timeout) MUST sit strictly above this. Two bounded phases can precede it — lock acquisition (≤ 10s) and, only on crash
     /// residue, a recovery pre-phase (≤ the rollback reserve) — so for full headroom a caller should
-    /// allow the sum. The one accepted exception is <see cref="KillWait"/> (≤ 5s) on the manual-owner
+    /// allow the sum. The one accepted exception is <see cref="ServiceVerifyBase.KillWait"/> (≤ 5s) on the manual-owner
     /// takeover kill, whose raw wait sits just outside the forward envelope but well within the
     /// caller's 60s kill-timeout. <c>--retire</c>'s own budget starts only once its own
-    /// <see cref="LockWait"/> is held, so a caller driving a rename must allow one more lock wait
+    /// <see cref="ServiceVerifyBase.LockWait"/> is held, so a caller driving a rename must allow one more lock wait
     /// PLUS one more forward budget PLUS the target probe (<see cref="TargetProbeWait"/>) PLUS the
-    /// old daemon's fence (acquire and commit, each within <see cref="FenceWait"/>) on top of the sum
+    /// old daemon's fence (acquire and commit, each within <see cref="ServiceVerifyBase.FenceWait"/>) on top of the sum
     /// above.</summary>
-    public static readonly TimeSpan AdvertisedBound = EndWait + DefaultForwardBudget + DefaultRollbackReserve;
+    public static readonly TimeSpan AdvertisedBound = EndWait + ForwardBudget + DefaultRollbackReserve;
 
-    readonly TimeSpan _forwardBudget    = forwardBudget ?? DefaultForwardBudget;
+    readonly TimeSpan _forwardBudget    = forwardBudget ?? ForwardBudget;
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
         acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
     readonly TimeSpan _rollbackReserve  = rollbackReserve ?? DefaultRollbackReserve;
@@ -149,7 +68,7 @@ sealed class LaunchdServiceVerify(
     /// readiness observation that lands right at the poll cutoff still gets one confirmation probe
     /// without pushing total forward work (poll + recheck) past the single forward deadline. Capped
     /// at half the forward budget so a pathologically small budget still leaves a poll window.</summary>
-    readonly TimeSpan _confirmReserve   = ConfirmReserveFor(forwardBudget ?? DefaultForwardBudget);
+    readonly TimeSpan _confirmReserve   = ConfirmReserveFor(forwardBudget ?? ForwardBudget);
 
     static TimeSpan ConfirmReserveFor(TimeSpan forward) {
         var reserve = TimeSpan.FromTicks(Math.Min((2 * PollInterval).Ticks, (forward / 2).Ticks));
@@ -219,11 +138,6 @@ sealed class LaunchdServiceVerify(
     const string UrlVar         = ProfileOverrides.UrlVar;
     const string ExpectVar      = "KCAP_EXPECT_SERVER_URL";
 
-    /// <summary>Closed-stdio tolerance: the npm grandchild shares the GUI's pipes, so a broken pipe
-    /// must never abort the transaction.</summary>
-    static void Say(string line) {
-        try { Console.Error.WriteLine(line); } catch (IOException) { }
-    }
 
     /// <summary>Time left before <paramref name="deadline"/>, floored at zero — every launchctl call
     /// and every wait recomputes this immediately before use so the single deadline can never be

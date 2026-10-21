@@ -22,15 +22,8 @@ sealed class GenericServiceVerify(
         Func<bool>? profileViable = null,
         TimeSpan? forwardBudget = null,
         Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null,
-        Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) {
-    static readonly TimeSpan LockWait     = TimeSpan.FromSeconds(10);
-    static readonly TimeSpan FenceWait    = TimeSpan.FromSeconds(3);
-    static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
-    static readonly TimeSpan KillWait     = TimeSpan.FromSeconds(5);
-
-    static readonly TimeSpan DefaultForwardBudget = TimeSpan.FromSeconds(20);
-
-    readonly TimeSpan _forwardBudget = forwardBudget ?? DefaultForwardBudget;
+        Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>>? acquireFence = null) : ServiceVerifyBase {
+    readonly TimeSpan _forwardBudget = forwardBudget ?? ForwardBudget;
 
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
         acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
@@ -234,11 +227,5 @@ sealed class GenericServiceVerify(
     static int Fail(int exit, string token) {
         Say(token);
         return exit;
-    }
-
-    // Closed-stdio tolerant, like the launchd engine: the app reads these lines, and a broken pipe on
-    // one must not turn a settled outcome into a crash.
-    static void Say(string line) {
-        try { Console.Error.WriteLine(line); } catch (IOException) { }
     }
 }

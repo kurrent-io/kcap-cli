@@ -7,7 +7,7 @@ using Capacitor.Cli.Core.Setup;
 namespace Capacitor.App.Services;
 
 /// Mirrors Capacitor.Cli.Services.VerifyExit (source of truth:
-/// src/Capacitor.Cli/Services/LaunchdServiceVerify.cs) plus DaemonCommands' detached-start digest gate. The
+/// src/Capacitor.Cli/Services/VerifyExit.cs) plus DaemonCommands' detached-start digest gate. The
 /// app never references the CLI project, so the coded exits are duplicated here deliberately — the
 /// one shared home for every coded daemon-mutation exit, reused by DaemonMutationLane's classifier.
 internal static class VerifyExitCodes {
