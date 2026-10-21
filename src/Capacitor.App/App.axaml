@@ -20,8 +20,12 @@
             <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border. -->
             <SolidColorBrush x:Key="KcapMutedBrush" Color="#B0B7C6" />
             <SolidColorBrush x:Key="KcapFaintBrush" Color="#949BAA" />
-            <!-- Primary CTAs: near-white fill. Green is status only; a selection uses info blue. -->
+            <!-- Primary CTAs stay on the light ramp. Hover lifts toward white and press steps
+                 to a light off-white; a text grey as the fill drops the near-black label's contrast.
+                 Green is status only; a selection uses info blue. -->
             <SolidColorBrush x:Key="KcapPrimaryBrush" Color="#F1F3F7" />
+            <SolidColorBrush x:Key="KcapPrimaryHoverBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="KcapPrimaryPressedBrush" Color="#E4E7EE" />
             <SolidColorBrush x:Key="KcapOnPrimaryBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSuccessBrush" Color="#5BE0B3" />
             <SolidColorBrush x:Key="KcapSuccessDimBrush" Color="#173F36" />
@@ -457,13 +461,13 @@
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryHoverBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapFaintBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryPressedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
