@@ -4,12 +4,12 @@ using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
-/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu. Avalonia's Windows backend never
-/// raises NativeMenu.NeedsUpdate and shows nothing at all for a menu with no items, so on Windows
-/// the menu is rebuilt on every model change and a left-click opens the main window. Elsewhere it
-/// rebuilds lazily inside NeedsUpdate.
-/// That backend raises nothing on a right-click either, so on Windows the pause state is refreshed on
-/// a timer: a failed first read or a policy changed elsewhere would otherwise stay in the menu.
+/// Wires TrayViewModel.MenuModel into a real TrayIcon/NativeMenu. Only macOS raises
+/// NativeMenu.NeedsUpdate: the Windows backend and the Linux D-Bus exporter never do, and both show
+/// nothing for a menu with no items. So off macOS the menu is rebuilt on every model change and a
+/// left-click opens the main window; on macOS it rebuilds lazily inside NeedsUpdate.
+/// Those backends raise nothing when the menu opens either, so off macOS the pause state is refreshed
+/// on a timer: a failed first read or a policy changed elsewhere would otherwise stay in the menu.
 public sealed class TrayIconManager : IDisposable {
     readonly Application _app;
     readonly TrayIcon _trayIcon;
@@ -22,7 +22,7 @@ public sealed class TrayIconManager : IDisposable {
     static readonly TimeSpan PauseRefreshInterval = TimeSpan.FromSeconds(30);
 
     public TrayIconManager(Application app, TrayViewModel vm)
-        : this(app, vm, rebuildEagerly: OperatingSystem.IsWindows()) { }
+        : this(app, vm, rebuildEagerly: !OperatingSystem.IsMacOS()) { }
 
     public TrayIconManager(Application app, TrayViewModel vm, bool rebuildEagerly, TimeProvider? time = null) {
         _app = app;
