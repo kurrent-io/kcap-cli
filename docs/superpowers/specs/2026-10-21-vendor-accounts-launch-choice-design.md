@@ -26,7 +26,7 @@ before starting, which account has room.
 | Default | Per vendor and per daemon: the directory the daemon's own environment points at. Derived, never written to the registry; published by each daemon as its own fact, apart from the host's registry. |
 | Resolved account | The daemon resolves every launch to a directory before the process starts and keeps that, not the request, on the agent. |
 | Contract | One optional account id appended to the launch request on each hop. Null means the default. An explicit id is honoured or refused at every hop; no hop and no screen substitutes the default for it. |
-| Support gate | A daemon advertises account launches; the server reports that per listed daemon and refuses an explicit id for a daemon without it; the app offers, restores and sends an explicit selection only for a target the server reports as supporting them, and waits for that target's snapshot before Start. |
+| Support gate | A daemon advertises account launches; the server reports that per listed daemon and refuses an explicit id for a daemon without it; the app offers, restores and sends an explicit selection only for a target the server reports as supporting them, and holds Start while that support or the target's snapshot is unknown. |
 | Memory | Per repository, vendor and host, read only from a complete snapshot. No memory means the default, never what another repository used. |
 | Managing accounts | A tab in the Settings window, this machine only. Remote machines are read-only in the launcher. |
 | Account actions | The app runs `kcap accounts` through its mutation lane; the daemon only watches and publishes. Every verb commits a registry revision after its wiring attempt. |
@@ -179,12 +179,22 @@ snapshot on change. The snapshot has two parts:
 - The **host registry**: host id (from `host.json`), registry revision, and the public account view
   per account: id, vendor, directory, label, recording state. Part B appends identity and the
   reading.
-- The **daemon's defaults**: the default directory per vendor, and nothing else. This is the
-  daemon's own fact, carries no revision, and changes only when the daemon starts with another
-  environment. Whether that directory is registered, and under which id, is derived by every reader
-  from the accepted host registry by directory matching (`AccountDirectory.Same`), never carried in
-  this part: an id here would outlive a removal or re-add that the registry part records under a
-  revision the reader may not have accepted yet.
+- The **daemon's defaults**: the default directory per vendor, with its **directory key**, and
+  nothing else. This is the daemon's own fact, carries no revision, and changes only when the daemon
+  starts with another environment. Whether that directory is registered, and under which id, is
+  derived by every reader from the accepted host registry, never carried in this part: an id here
+  would outlive a removal or re-add that the registry part records under a revision the reader may
+  not have accepted yet.
+
+A **directory key** is computed only on the owning host, by the publishing daemon, for every
+registry entry and every default: the directory as `AccountDirectory.Normalize` resolves it there
+(symlinks followed, the host's physical path), case-folded when that host compares paths
+case-insensitively and left as is on Linux. Readers, the local app included, match a default to an
+account by ordinal equality of keys and never resolve or case-fold a remote path themselves:
+`AccountDirectory.Same` resolves against the reader's own filesystem with the reader's own case
+rule, so a macOS app would merge two distinct Linux directories differing only in case, and no
+reader can follow a symlink on another host. Two daemons on one host compute equal keys for one
+directory because they share its filesystem.
 
 A snapshot is **complete** when it carries both parts; the app acts on nothing less.
 `AccountAction` and `AccountActionResult` are not built; Section 7 says why.
@@ -198,8 +208,8 @@ server stores the registry per host behind that gate, and the defaults per daemo
 daemon's latest publication wins, and every connect republishes them, so a daemon restarted with
 another environment updates its defaults without touching the host's revision. Two daemons on one
 host publishing equal revisions in either order leave one registry and two sets of defaults. The
-server serves both to the host's owner only, and a reader composes the targeted daemon's default
-directory with its host's accepted registry to find the default's row and its catalog; a rejected
+server serves both to the host's owner only, and a reader matches the targeted daemon's default
+key against its host's accepted registry to find the default's row and its catalog; a rejected
 older registry part leaves that daemon's defaults accepted, which is safe because they name only
 directories. Part B adds readings to a snapshot that is already flowing. Until the
 server part lands, the panel shows no account rows for a remote machine and the launch goes to its
@@ -221,8 +231,9 @@ the model rows for it. The search field does not match accounts.
 With one row the section is absent and the panel is unchanged, except while the selection is
 invalid (6.3): then the section stays, showing the invalid choice marked as removed beside the rows
 that exist, so the Default row is always reachable. The account Default row is distinct from the
-model list's "Default — Claude chooses" row, which picks a model, not an account. For a target that
-is not account-capable (6.3) the section is absent.
+model list's "Default — Claude chooses" row, which picks a model, not an account. For an
+unsupported target (6.3) the section is absent; while the selection is pending it shows one line,
+"Loading accounts…", in place of rows.
 
 ### 6.2 The chip
 
@@ -231,33 +242,50 @@ The chip label stays "Claude · Opus 4.1" while the chosen account is the defaul
 
 ### 6.3 Selection, the draft and Start
 
-A target is **account-capable** when the listed daemon the server reports for it carries
-`accounts/1` and a complete snapshot (5.1) for its host is at hand. The support flag is read from
-the server's listing for local and remote targets alike; the local socket's snapshot alone does not
-make the local daemon capable, since the launch travels through the server.
+**Support knowledge** for a target is one of three values, held per target and per server
+connection: *unknown* until the current server's daemon listing has answered for that daemon,
+*unsupported* when an authoritative listing shows the daemon without `accounts/1`, and *supported*
+when it shows the flag. Unknown is the state before the first listing, after a failed fetch, and
+after any reconnect or profile switch until the listing answers again; it is never read as
+unsupported. The flag is read from the server's listing for local and remote targets alike: the
+local daemon's readiness and its socket snapshot never stand in for it, since the launch travels
+through the server, and the daemon list is fetched after the connection and apart from local
+readiness. A target is **account-capable** when it is supported and a complete snapshot (5.1) for
+its host is at hand.
 
-`HomeViewModel` keeps the selected account per vendor beside `SelectedModel`. It is set from two
-sources only: a row the person picks, and the restore of Section 6.4, which runs for an
-account-capable target when the repository, vendor or machine changes, before the selection is
-displayed. A target that is not account-capable never carries an explicit selection: its memory
-entries are kept but not restored, and the chip shows the default.
+`HomeViewModel` keeps the selected account per vendor beside `SelectedModel`, in one of four
+states: *default* (no explicit choice), *explicit, valid* (the chosen id is in the latest complete
+snapshot and the target is supported), *explicit, invalid* (chosen, but absent from the snapshot or
+the target is not currently supported), and *pending* (no choice made on this target and no restore
+has resolved yet). It is set from two sources only: a row the person picks, and the restore of
+Section 6.4.
 
-For a target whose listed daemon carries `accounts/1` but whose snapshot has not arrived, the
-selection is **pending**: the chip reads "Account…", Start is disabled with that reason, and no
-draft is captured. The pending state ends only when the complete snapshot arrives and the restore
-has run; there is no timeout that falls through to the default, because that would be the
-substitution this spec forbids, and a daemon that advertises `accounts/1` publishes its snapshot on
-every connect. A snapshot that arrives while a launch is already in flight changes nothing about
-that launch: the draft was captured after the restore resolved.
+**Entering a target**, when the repository, vendor or machine changes: unknown support, or supported
+without a complete snapshot, gives pending; supported with a complete snapshot runs the restore and
+gives default or explicit; unsupported gives default, with memory entries kept but not restored.
+Pending ends only when support and the snapshot resolve and the restore has run. There is no
+timeout that falls through to the default, because that would be the substitution this spec
+forbids, and a daemon that advertises `accounts/1` publishes its snapshot on every connect.
 
-Start captures the selection into the draft and the request carries null for the default. An
-explicit selection fails the launch with a named message in the launcher, the draft keeping the
-account and nothing being sent, when at Start, or when the attachment upload completes, or after a
-reconnect before sending, either the selection is absent from the latest complete snapshot of the
-target host or the target's listed daemon no longer carries `accounts/1`. The message offers **Use
-default**, which sets the selection to the default without launching; the person then presses
-Start again. A restore from memory may fall back to the default silently (6.4); an account the
-person selected for this launch may not, and a refused draft is never cleared to null.
+**While on a target**, a choice the person made stays selected through everything: support
+withdrawn, support unknown again after a reconnect, the snapshot lost or the account gone all turn
+it explicit-invalid, never default, and it returns to valid when the evidence returns and lists the
+account. The chip shows the invalid choice marked as removed or unavailable. Only the person's own
+pick of the Default row, or the Use default action below, makes it default. A default selection
+stays default through the same events.
+
+**Start** is enabled only for a resolved selection: explicit-valid, or default established by a
+resolved state (a restore that found no entry, an authoritative unsupported listing, or the
+person's own pick). Pending disables Start with its reason, and no draft is captured. An
+explicit-invalid selection refuses with a named message in the launcher and sends nothing; the
+message offers **Use default**, which sets the selection to the default without launching, and the
+person presses Start again. Start captures the resolved selection into the draft, null for the
+default; a snapshot or listing that arrives while that launch is in flight changes nothing about
+it. A captured explicit draft is refused the same way, the draft kept and never cleared to null,
+when the attachment upload completes or a reconnect precedes the send and, at that moment, the
+account is absent from the latest complete snapshot or the target is no longer supported. A
+restore from memory may fall back to the default silently (6.4); an account the person chose may
+not.
 
 ### 6.4 Memory per repository
 
@@ -381,7 +409,11 @@ README and `help-*.txt` change with the PR that changes user-facing behaviour.
   republishes defaults without a revision change; a removed and re-added default, followed by the
   other daemon's lower-revision publication, resolves to the accepted registry's row and catalog;
   an unregistered Codex default with no hooks is refused on the PTY and app-server transports and
-  starts and records on both with repository hooks; a registry change reaches the local snapshot and
+  starts and records on both with repository hooks; directory keys are computed on the host, so two
+  Linux directories differing only in case stay distinct rows for a macOS reader with the Default
+  badge on the right one, and a default spelled through a symlink in the daemon's environment
+  matches its registered row, the request carrying null for it and the explicit id for the other;
+  a registry change reaches the local snapshot and
   the server within the throttle; adding, removing and re-adding a Codex account without a restart
   probes, drops and re-probes its catalog, a late probe for a removed account is discarded, and an
   auth or cache change on a non-default account republishes the map alone.
@@ -400,9 +432,14 @@ README and `help-*.txt` change with the PR that changes user-facing behaviour.
   picked since; an entry absent from its host's complete snapshot is dropped, and one is kept
   through a missing snapshot, a disconnect and a switch to another host; the Default pick removes
   the entry; a vendor switch restores the other vendor's entry; a remembered local account with a
-  new daemon behind an old server restores nothing and sends null; Start before the first complete
-  snapshot of an account-capable target is disabled and captures no draft, and a snapshot arriving
-  during an in-flight upload changes nothing; an explicit selection removed before Start, one
+  new daemon behind an old server restores nothing and sends null, but only once that server's
+  listing has answered; a ready local daemon with a delayed or failed first listing and a saved
+  non-default account captures no draft and sends nothing until the listing and the snapshot
+  resolve; a reconnect returns support to unknown and Start waits; a choice made on a supported
+  target survives support withdrawal while idle as explicit-invalid, Start refuses named and sends
+  nothing; Start before the first complete snapshot of a supported target is disabled and captures
+  no draft, and a snapshot arriving during an in-flight upload changes nothing; an explicit
+  selection removed before Start, one
   removed during an attachment upload, and one whose target lost `accounts/1` before sending, fail
   named with no request sent and the draft kept; removing the only non-default account keeps the
   section with the Default row reachable, and Use default in the error lets the next Start succeed
