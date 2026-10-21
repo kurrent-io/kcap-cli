@@ -1,5 +1,7 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using ReactiveUI.Reactive;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -198,6 +200,73 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(bannerVisible).IsTrue();
         await Assert.That(yAfter).IsEqualTo(yBefore);
         await Assert.That(bannerAbove).IsTrue();
+    }
+
+    /// The progress track and the action cluster stay out of the layout until they have something
+    /// to show. An action follows the message; it does not leave a blank run after the words.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connection_banner_follows_its_message_and_drops_idle_chrome() {
+        var (idle, busy) = await AvaloniaSession.DispatchAsync(() => {
+            var (vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            var start = new BehaviorSubject<bool>(true);
+            var retry = new BehaviorSubject<bool>(false);
+            vm.AttachDaemonRecovery(
+                ReactiveCommand.Create(() => { }),
+                ReactiveCommand.Create(() => { }),
+                start, retry, Observable.Return<string?>(null));
+
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var banner = Find<Border>(window, "ConnectionBanner")!;
+            var text = Find<TextBlock>(window, "BannerMessageText")!;
+            var button = Find<Button>(window, "StartDaemonButton")!;
+            var bar = Find<ProgressBar>(window, "BannerBusyBar")!;
+            var actions = Find<StackPanel>(window, "BannerActions")!;
+
+            static double Top(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.Y;
+            static double Left(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.X;
+            static double Right(Control c, Visual rel) => Left(c, rel) + c.Bounds.Width;
+            static double Bottom(Control c, Visual rel) => Top(c, rel) + c.Bounds.Height;
+
+            var gap = Left(button, banner) - Right(text, banner);
+            var idleShot = (
+                BarVisible: bar.IsVisible,
+                TextTop: Top(text, banner),
+                SharesRow: Top(button, banner) < Bottom(text, banner) && Bottom(button, banner) > Top(text, banner),
+                Follows: gap is >= 6 and <= 16);
+
+            start.OnNext(false);
+            service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connecting"));
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var busyShot = (
+                BarVisible: bar.IsVisible,
+                ActionsVisible: actions.IsEffectivelyVisible,
+                BarAbove: Bottom(bar, banner) <= Top(text, banner) + 1,
+                TextHugs: text.Bounds.Width < banner.Bounds.Width - 80);
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (idleShot, busyShot);
+        });
+
+        await Assert.That(idle.BarVisible).IsFalse();
+        await Assert.That(idle.TextTop).IsLessThan(16);
+        await Assert.That(idle.SharesRow).IsTrue();
+        await Assert.That(idle.Follows).IsTrue();
+        await Assert.That(busy.BarVisible).IsTrue();
+        await Assert.That(busy.ActionsVisible).IsFalse();
+        await Assert.That(busy.BarAbove).IsTrue();
+        await Assert.That(busy.TextHugs).IsTrue();
     }
 
     [Test]

@@ -298,6 +298,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ObservableAsPropertyHelper<bool> _signInVisible;
     public bool SignInVisible => _signInVisible.Value;
 
+    readonly ObservableAsPropertyHelper<bool> _bannerActionsVisible;
+    /// Start daemon, Reconnect, or Sign in is on the connection banner.
+    public bool BannerActionsVisible => _bannerActionsVisible.Value;
+
     /// Lane SignedOut or a 401 launch — the same flag NoticeFor uses for SignInExpiredNotice.
     /// An observable (not WhenAnyValue) so MainWindow can fold it into the rail footer without
     /// ReactiveUI's property-change mixins, which a headless test run does not reliably prime.
@@ -311,6 +315,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     // Feeds BannerMessage before AttachDaemonRecovery runs (null) and after (lifecycle lane).
     readonly BehaviorSubject<string?> _daemonStartMessageFeed = new(null);
+    // Same lane for the action cluster: false until AttachDaemonRecovery subscribes the real predicates.
+    readonly BehaviorSubject<bool> _daemonStartVisibleFeed = new(false);
+    readonly BehaviorSubject<bool> _daemonRetryVisibleFeed = new(false);
 
     /// Wired by AttachDaemonRecovery to MainWindow's Start/Reconnect commands.
     public ReactiveCommand<Unit, Unit>? StartDaemonCommand { get; private set; }
@@ -694,10 +701,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .Select(BusyNotice)
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
-        _signInVisible = signInState
+        var signInVisible = signInState
             .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
+                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))));
+        _signInVisible = signInVisible
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
+            .DisposeWith(_disposables);
+        _bannerActionsVisible = _daemonStartVisibleFeed
+            .CombineLatest(_daemonRetryVisibleFeed, signInVisible, (start, retry, signIn) => start || retry || signIn)
+            .ToProperty(this, x => x.BannerActionsVisible, initialValue: false)
             .DisposeWith(_disposables);
 
         // The daemon catching up ends the wait whichever server it serves.
@@ -756,6 +768,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _daemonRetryVisible = retryVisible
             .ToProperty(this, x => x.DaemonRetryVisible, initialValue: false)
             .DisposeWith(_disposables);
+        startVisible.Subscribe(_daemonStartVisibleFeed).DisposeWith(_disposables);
+        retryVisible.Subscribe(_daemonRetryVisibleFeed).DisposeWith(_disposables);
         startMessage
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
@@ -914,6 +928,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         _disposed = true;
         _disposables.Dispose();
         _daemonStartMessageFeed.Dispose();
+        _daemonStartVisibleFeed.Dispose();
+        _daemonRetryVisibleFeed.Dispose();
         _uploadingChanges.Dispose();
         _retentionTimer.Dispose();
         _catchUpTimer.Dispose();
