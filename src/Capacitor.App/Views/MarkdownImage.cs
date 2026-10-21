@@ -51,7 +51,8 @@ public sealed class MarkdownImage : Panel {
         Children.Add(_picture);
         // A transparent fill makes the whole box hit-testable, not just the glyphs or pixels.
         Background = Brushes.Transparent;
-        if (target is not null) Cursor = new Cursor(StandardCursorType.Hand);
+        // Cursor inherits, so an unset value would take the viewer's I-beam. A bare image is not text.
+        Cursor = new Cursor(target is not null ? StandardCursorType.Hand : StandardCursorType.Arrow);
     }
 
     public string Url { get; }

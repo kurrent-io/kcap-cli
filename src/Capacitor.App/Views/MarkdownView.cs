@@ -42,6 +42,7 @@ public sealed class MarkdownView : ContentControl {
     static readonly TextMateExtension Highlighting = new();
     static readonly Cursor IBeamCursor = new(StandardCursorType.Ibeam);
     static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+    static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
 
     readonly MarkdownViewer _viewer = new();
     readonly DetailsState _details = new();
@@ -75,7 +76,7 @@ public sealed class MarkdownView : ContentControl {
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
         // Bubble on the host runs after the viewer's own move, which has already chosen Hand or
-        // the arrow. Selectable prose keeps the I-beam; a link keeps the hand.
+        // the arrow. Prose takes the I-beam and a link the hand; a bare image stays on the arrow.
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
@@ -89,10 +90,14 @@ public sealed class MarkdownView : ContentControl {
 
     void OnPointerMoved(object? sender, PointerEventArgs e) {
         var link = FindHyperlinkAt(_viewer, e.GetPosition(_viewer));
-        var tip = link?.NavigateUri?.ToString() ?? ImageUnder(e.Source as Visual)?.Target;
+        var image = ImageUnder(e.Source as Visual);
+        var tip = link?.NavigateUri?.ToString() ?? image?.Target;
         if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
             ToolTip.SetTip(_viewer, tip);
-        _viewer.Cursor = link is null ? IBeamCursor : HandCursor;
+        // Cursor inherits, so the viewer's value is what a child with none of its own shows.
+        _viewer.Cursor = link is not null || image?.Target is not null ? HandCursor
+            : image is not null ? ArrowCursor
+            : IBeamCursor;
     }
 
     static MarkdownImage? ImageUnder(Visual? visual) {
