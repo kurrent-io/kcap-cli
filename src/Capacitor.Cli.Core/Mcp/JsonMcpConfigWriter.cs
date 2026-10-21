@@ -31,23 +31,20 @@ public static class JsonMcpConfigWriter {
             foreach (var s in servers) {
                 var rendered = RenderEntry(s, shape, cwd, command);
                 if (block[s.Name] is JsonNode existing) {
-                    if (marker.Owns(configPath, s.Name, existing)) {
-                        written.Add(new(s.Name, rendered));                     // kcap-owned → keep recorded
-                        if (JsonNode.DeepEquals(existing, rendered)) continue;  // identical → idempotent no-op
-                        block[s.Name] = rendered;                               // stale/old shape → heal to canonical
-                        changed = true;
-                        continue;
-                    }
-                    // Unowned but EXACTLY the entry this register would write: adopt it. This
-                    // is the recovery lane for config-committed-but-marker-failed (a crash or
-                    // marker-write failure after the config landed): re-claiming a shape
-                    // indistinguishable from our own write strands nothing user-authored —
-                    // uninstall would remove only what registration itself would have written.
-                    if (JsonNode.DeepEquals(existing, rendered)) {
-                        written.Add(new(s.Name, rendered));
-                        adopted = true;
-                    }
-                    continue;                                                   // divergent user look-alike — never clobber
+                    var owned     = marker.Owns(configPath, s.Name, existing);
+                    var identical = JsonNode.DeepEquals(existing, rendered);
+                    // An unowned entry is adopted only when it is something this writer could have
+                    // written: the marker can be lost, predate the entry, or hold a fingerprint that a
+                    // re-pointed command no longer matches, and the harness then keeps spawning a
+                    // binary that is gone. Anything else under kcap's name is the user's.
+                    if (!owned && !identical && !IsKcapRegistration(existing, rendered, s, shape)) continue;
+
+                    written.Add(new(s.Name, rendered));
+                    adopted |= !owned;
+                    if (identical) continue;
+                    block[s.Name] = rendered;
+                    changed = true;
+                    continue;
                 }
                 block[s.Name] = rendered;                                       // missing → add
                 written.Add(new(s.Name, rendered));
@@ -104,6 +101,43 @@ public static class JsonMcpConfigWriter {
         // hard failure (couldn't read/parse the config) so state stays recoverable.
         if (change != Change.Failed) marker.Clear(configPath);
         return change;
+    }
+
+    /// <summary>Whether <paramref name="existing"/> differs from <paramref name="rendered"/> only by a kcap
+    /// command and by the args: the server's own, stamped or not. Every other key must be one this shape
+    /// writes, with the value it writes, so a disabled server, an added env or a pinned cwd stays.</summary>
+    static bool IsKcapRegistration(JsonNode existing, JsonObject rendered, KcapMcpServer s, McpConfigShape shape) {
+        if (existing is not JsonObject entry || entry["command"] is null) return false;
+        if (!shape.CommandAsArgvArray && entry["args"] is null) return false;
+
+        foreach (var (key, value) in entry) {
+            if (!rendered.ContainsKey(key)) return false;
+
+            var matches = key switch {
+                "command" when shape.CommandAsArgvArray =>
+                    value is JsonArray argv && argv.Count > 0 && IsKcapCommand(argv[0]) && IsServerArgs(argv.Skip(1), s),
+                "command" => IsKcapCommand(value),
+                "args" when !shape.CommandAsArgvArray => value is JsonArray args && IsServerArgs(args, s),
+                _ => JsonNode.DeepEquals(value, rendered[key]),
+            };
+            if (!matches) return false;
+        }
+
+        return true;
+    }
+
+    static bool IsKcapCommand(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue<string>(out var command) && KcapBinaryCommand.IsKcap(command);
+
+    static bool IsServerArgs(IEnumerable<JsonNode?> args, KcapMcpServer s) {
+        var given = new List<string>();
+        foreach (var a in args) {
+            if (a is not JsonValue v || !v.TryGetValue<string>(out var text)) return false;
+            given.Add(text);
+        }
+
+        return given.SequenceEqual(s.Args)
+            || given.SequenceEqual(s.Args.TakeWhile(a => a != KcapMcpServers.DriverArg));
     }
 
     static JsonObject RenderEntry(KcapMcpServer s, McpConfigShape shape, string? cwd, string command) {

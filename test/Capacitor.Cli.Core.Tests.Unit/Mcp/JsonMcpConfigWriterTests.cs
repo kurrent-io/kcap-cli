@@ -213,9 +213,6 @@ public class JsonMcpConfigWriterTests {
     public async Task Register_does_not_clobber_user_authored_kcap_lookalike() {
         using var tmp = new TempDir();
         var path = TempConfig(tmp);
-        // A user server literally named kcap-review but pointing elsewhere; FakeMarker.Owns
-        // returns true for the "kcap-" prefix, so replace this with the real marker semantics
-        // in Task 4's integration test. Here we assert the collision path via a non-prefixed name.
         File.WriteAllText(path, """{ "mcpServers": { "kcap-custom": { "command": "mine" } } }""");
         JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, new FakeMarker());
 
@@ -330,6 +327,95 @@ public class JsonMcpConfigWriterTests {
 
     static string CommandOf(string path, string name) =>
         (string)((JsonObject)((JsonObject)JsonNode.Parse(File.ReadAllText(path))!["mcpServers"]!)[name]!)["command"]!;
+
+    /// <summary>An entry kcap's marker does not vouch for — written before ownership was recorded, or
+    /// edited since — is still rewritten when it is exactly a kcap registration at another command: the
+    /// harness otherwise keeps spawning a binary that is gone. Afterwards kcap owns it, so uninstall
+    /// removes it.</summary>
+    [Test]
+    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}""", "kcap-workitems")]
+    [Arguments("""{"command":"kcap","args":["mcp","review"]}""", "kcap-review")]
+    [Arguments("""{"command":"C:\\old\\kcap.exe","args":["mcp","plans"]}""", "kcap-plans")]
+    [Arguments("""{"command":"kcap","args":["mcp","flows"]}""", "kcap-flows")]
+    public async Task Register_rewrites_a_kcap_registration_it_has_no_record_of(string entry, string name) {
+        using var tmp = new TempDir();
+        var path   = tmp.CreateFile("mcp.json", $"{{\"mcpServers\":{{\"{name}\":{entry}}}}}");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+
+        var change = JsonMcpConfigWriter.Register(path, KcapMcpServers.ForHarness("cursor"), McpConfigShape.Standard, null, marker,
+                                                  resolveBinaryPath: () => "/new/kcap");
+
+        await Assert.That(change).IsEqualTo(JsonMcpConfigWriter.Change.Updated);
+        await Assert.That(CommandOf(path, name)).IsEqualTo("/new/kcap");
+        var flowsArgs = ((JsonObject)Read(path)["mcpServers"]!)["kcap-flows"]!["args"]!.AsArray().Select(a => (string)a!);
+        await Assert.That(string.Join(" ", flowsArgs)).IsEqualTo("mcp flows --driver cursor");
+        await Assert.That(marker.Owned(path)).Contains(name);
+    }
+
+    /// <summary>The fingerprint kcap recorded no longer matches because something else re-pointed the
+    /// command, so ownership alone would leave the entry stale forever.</summary>
+    [Test]
+    public async Task Register_rewrites_a_recorded_entry_whose_command_was_repointed_elsewhere() {
+        using var tmp = new TempDir();
+        var path   = tmp.PathTo("mcp.json");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+        var one    = KcapMcpServers.All.Where(s => s.Name == "kcap-workitems").ToArray();
+        JsonMcpConfigWriter.Register(path, one, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/dev/build/kcap");
+        File.WriteAllText(path, """{"mcpServers":{"kcap-workitems":{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}}}""");
+
+        JsonMcpConfigWriter.Register(path, one, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/new/kcap");
+
+        await Assert.That(CommandOf(path, "kcap-workitems")).IsEqualTo("/new/kcap");
+    }
+
+    /// <summary>Anything beyond the command and args differing from what kcap writes is the user's
+    /// choice — an added env, a disabled server, a pinned cwd, a different subcommand, a non-kcap
+    /// command — and the entry is left as it is.</summary>
+    [Test]
+    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"],"env":{"KCAP_URL":"https://x"}}""")]
+    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"],"cwd":"/w/repo"}""")]
+    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","review","--verbose"]}""")]
+    [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","sessions"]}""")]
+    [Arguments("""{"command":"/opt/homebrew/bin/my-kcap-wrapper","args":["mcp","review"]}""")]
+    [Arguments("""{"command":"./kcap","args":["mcp","review"]}""")]
+    [Arguments("""{"command":"kcap"}""")]
+    public async Task Register_leaves_a_kcap_named_entry_the_user_customized(string entry) {
+        using var tmp = new TempDir();
+        var path   = tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-review":""" + entry + "}}");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Standard, null, marker,
+                                     resolveBinaryPath: () => "/new/kcap");
+
+        await Assert.That(JsonNode.DeepEquals(((JsonObject)Read(path)["mcpServers"]!)["kcap-review"], JsonNode.Parse(entry))).IsTrue();
+        await Assert.That(marker.Owned(path)).DoesNotContain("kcap-review");
+    }
+
+    [Test]
+    public async Task Register_leaves_an_opencode_server_the_user_disabled() {
+        using var tmp = new TempDir();
+        var entry  = """{"type":"local","command":["/opt/homebrew/bin/kcap","mcp","review"],"enabled":false}""";
+        var path   = tmp.CreateFile("opencode.json", """{"mcp":{"kcap-review":""" + entry + "}}");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.OpenCode, null, marker,
+                                     resolveBinaryPath: () => "/new/kcap");
+
+        await Assert.That(JsonNode.DeepEquals(((JsonObject)Read(path)["mcp"]!)["kcap-review"], JsonNode.Parse(entry))).IsTrue();
+    }
+
+    [Test]
+    public async Task Register_rewrites_a_stale_opencode_argv() {
+        using var tmp = new TempDir();
+        var path   = tmp.CreateFile("opencode.json", """{"mcp":{"kcap-review":{"type":"local","command":["/opt/homebrew/bin/kcap","mcp","review"],"enabled":true}}}""");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.OpenCode, null, marker,
+                                     resolveBinaryPath: () => "/new/kcap");
+
+        var argv = ((JsonObject)Read(path)["mcp"]!)["kcap-review"]!["command"]!.AsArray().Select(a => (string)a!);
+        await Assert.That(string.Join(" ", argv)).IsEqualTo("/new/kcap mcp review");
+    }
 
     /// <summary>
     /// The full migration chain: a v1 install (marker without fingerprints, command "kcap")
