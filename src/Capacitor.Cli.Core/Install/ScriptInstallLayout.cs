@@ -8,7 +8,7 @@ namespace Capacitor.Cli.Core.Install;
 ///
 /// <para>On macOS and Linux the process path resolves through <c>current</c> to the version directory,
 /// so anything that persists a kcap path (a service unit, an MCP registration, the plugin path) must
-/// go through <see cref="Stabilize(string)"/>: a versioned path keeps running the old build after an update.</para>
+/// go through <see cref="InstallPaths.Stabilize(string)"/>: a versioned path keeps running the old build after an update.</para>
 /// </summary>
 public sealed record ScriptInstallLayout(string Root) {
     public const string MarkerFileName = "install.json";

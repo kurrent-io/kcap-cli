@@ -20,4 +20,18 @@ public class UpdateCommandBundledTests {
         await Assert.That(UpdateCommand.BundledMessage).Contains("Kurrent Capacitor");
         await Assert.That(UpdateCommand.BundledMessage).Contains("Check for Updates…");
     }
+
+    [Test]
+    public async Task Check_json_carries_the_snap_install_tag() {
+        var json = JsonNode.Parse(UpdateCommand.BundledCheckJson("1.4.0", "latest", "snap"))!.AsObject();
+
+        await Assert.That(json["newer"]!.GetValue<bool>()).IsFalse();
+        await Assert.That(json["install_tag"]!.GetValue<string>()).IsEqualTo("snap");
+    }
+
+    [Test]
+    public async Task Snap_message_points_at_snap_refresh() {
+        await Assert.That(UpdateCommand.SnapMessage("kurrent-capacitor")).EndsWith("sudo snap refresh kurrent-capacitor");
+        await Assert.That(UpdateCommand.SnapMessage(null)).EndsWith("sudo snap refresh");
+    }
 }

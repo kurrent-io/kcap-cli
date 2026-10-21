@@ -13,7 +13,14 @@ public sealed class UpdateCommand(
     internal const string BundledMessage =
         "This kcap is bundled with the Kurrent Capacitor desktop app; updates arrive through the app (\"Check for Updates…\" in the menu bar).";
 
+    /// <summary>Printed by `kcap update` in the desktop app's snap, where snapd owns updates.</summary>
+    internal static string SnapMessage(string? snapName) =>
+        $"This kcap is part of the Kurrent Capacitor snap; snapd keeps it up to date. To update now: sudo snap refresh{(snapName is null ? "" : " " + snapName)}";
+
     readonly InstallKind _kind = kind ?? InstallProvenance.Kind();
+
+    /// <summary>The snap to name in <see cref="SnapMessage"/>. A seam: production reads the running binary's.</summary>
+    internal string? SnapName { get; init; } = SnapLayout.OfRunningBinary()?.Name;
 
     bool AppBundled => _kind == InstallKind.App;
 
@@ -79,6 +86,12 @@ public sealed class UpdateCommand(
 
         if (AppBundled) {
             await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel) : BundledMessage);
+
+            return 0;
+        }
+
+        if (_kind == InstallKind.Snap) {
+            await Console.Out.WriteLineAsync(checkOnly ? BundledCheckJson(GetCurrentVersion(), channel, "snap") : SnapMessage(SnapName));
 
             return 0;
         }
@@ -460,13 +473,13 @@ public sealed class UpdateCommand(
     /// The `--check` contract for a bundled CLI: the launcher must see "confidently up to date",
     /// and `install_tag` names the channel that owns the install.
     /// </summary>
-    internal static string BundledCheckJson(string? current, string channel) =>
+    internal static string BundledCheckJson(string? current, string channel, string installTag = "app") =>
         new JsonObject {
             ["current"]     = current,
             ["latest"]      = current,
             ["newer"]       = false,
             ["channel"]     = channel,
-            ["install_tag"] = "app",
+            ["install_tag"] = installTag,
         }.ToJsonString();
 
     static string? GetCurrentVersion() {

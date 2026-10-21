@@ -115,7 +115,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
         try {
             // A script install flips `current` rather than replacing this file, so watch the path through it.
-            var p = Environment.ProcessPath is { } exe ? ScriptInstallLayout.Stabilize(exe) : null;
+            var p = Environment.ProcessPath is { } exe ? InstallPaths.Stabilize(exe) : null;
             if (p is null) return null;
             var fi = new FileInfo(p);
             return fi.Exists ? new BinaryStat(fi.Length, fi.LastWriteTimeUtc.Ticks) : null;

@@ -19,7 +19,7 @@ static class UnitIdentity {
         var ext     = OperatingSystem.IsWindows() ? ".exe" : "";
         var sibling = Path.Combine(dir, $"kcap-daemon{ext}");
 
-        return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
+        return File.Exists(sibling) ? InstallPaths.Stabilize(sibling) : null;
     }
 
     /// <summary>Whether a unit's binary is <paramref name="daemonBinary"/>, by its version directory, the
@@ -30,7 +30,7 @@ static class UnitIdentity {
         unitBinary is not null && string.Equals(Canonical(unitBinary), Canonical(daemonBinary),
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
-    static string Canonical(string path) => PhysicalPath.Of(ScriptInstallLayout.Stabilize(Path.GetFullPath(path)));
+    static string Canonical(string path) => PhysicalPath.Of(InstallPaths.Stabilize(Path.GetFullPath(path)));
 
     /// <summary>config.json path for a baked <c>KCAP_CONFIG_DIR</c>, or the default config root
     /// when the unit baked none.</summary>
