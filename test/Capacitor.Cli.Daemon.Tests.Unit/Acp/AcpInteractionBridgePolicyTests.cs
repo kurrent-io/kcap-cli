@@ -165,8 +165,10 @@ public class AcpInteractionBridgePolicyTests {
     }
 
     [Test]
-    public async Task Ask_skips_a_preset_that_would_otherwise_auto_approve_the_kind() {
-        var h = Build(Governed, AcpPermissionPresets.Edit);
+    [Arguments(AcpPermissionPresets.Edit)]
+    [Arguments(AcpPermissionPresets.Auto)]
+    public async Task Ask_skips_a_preset_that_would_otherwise_auto_approve_the_call(string preset) {
+        var h = Build(Governed, preset);
 
         var outcome = await h.HandleAsync(PathFrame("edit", "/wt/secrets.env", Standard));
 
@@ -181,10 +183,15 @@ public class AcpInteractionBridgePolicyTests {
     }
 
     [Test]
-    public async Task Deny_beats_a_preset_that_covers_the_kind() {
-        var h = Build(Governed, AcpPermissionPresets.Edit);
+    [Arguments(AcpPermissionPresets.Edit, "edit")]
+    [Arguments(AcpPermissionPresets.Auto, "edit")]
+    [Arguments(AcpPermissionPresets.Auto, "execute")]
+    public async Task Deny_beats_a_preset_that_would_approve_the_call(string preset, string kind) {
+        var h = Build(Governed, preset);
 
-        var outcome = await h.HandleAsync(PathFrame("edit", "/wt/src/main.cs", Standard));
+        var outcome = await h.HandleAsync(kind == "execute"
+            ? ShellFrame(kind, "git push --force", Standard)
+            : PathFrame(kind, "/wt/src/main.cs", Standard));
 
         await Assert.That(Harness.Outcome(outcome)).IsEqualTo("selected");
         await Assert.That(Harness.OptionId(outcome)).IsEqualTo("reject-once");
