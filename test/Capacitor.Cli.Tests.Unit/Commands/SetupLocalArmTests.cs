@@ -74,7 +74,7 @@ internal sealed class SetupLocalArmTests : IDisposable {
         return new SetupCommand(
             Config.Root, Resolutions.None(Config.Root),
             AuthFixtures.NewTokenStore(Config.Root),
-            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(),
+            new RecordingBrowser(), Home, TestHarnesses.Under(Home), new AgentsPaths(Home), new FixedCapacitorHttpClient(Server),
             new TenantProvisioningClient(new HttpClient(), ClientAgent.Cli),
             new AuthProviderDiscovery(http, TimeProvider.System), NoTelemetry.Facade, AuthEndpoints.Defaults,
             new FakeFacadeFactory(_ => throw new InvalidOperationException("a local setup signs in nowhere")),
@@ -160,6 +160,27 @@ internal sealed class SetupLocalArmTests : IDisposable {
         await Assert.That(profile.ServerUrl).IsEqualTo(last["server_url"]!.GetValue<string>());
         await Assert.That(profile.DefaultVisibility).IsEqualTo("private");
         await Assert.That(profile.Daemon).IsNull();
+    }
+
+    /// <summary>Pins the report that clears the dashboard's install nudge: the app's wizard links to the dashboard
+    /// straight after the install-only run, and a no-auth server gets the report without a bearer.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Committed_install_reports_cli_setup_without_a_bearer(bool wholeRun) {
+        string? authorization = null;
+        Server.Override = path => path == "/api/users/me/cli-setup" ? new(System.Net.HttpStatusCode.NoContent) : null;
+        Server.OnCliSetupReport = request => authorization ??= request.Headers.Authorization?.ToString() ?? "";
+
+        string[] args = wholeRun
+            ? ["setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags]
+            : ["setup", "--local", "--json", "--single-user", "--yes"];
+
+        var (exit, _, _, stderr) = await Run(args);
+
+        await Assert.That(exit).IsEqualTo(wholeRun ? SetupExit.Done : 0).Because(stderr);
+        await Assert.That(_log).Contains("POST /api/users/me/cli-setup").Because(stderr);
+        await Assert.That(authorization).IsEqualTo("");
     }
 
     [Test]
