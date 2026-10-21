@@ -393,7 +393,7 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row(id: "a2", sessionId: null));
             await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.NoSession);
             await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
-            await Assert.That(vm.ShowsChatPane).IsFalse();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
             await Assert.That(h.Lane.AccessWatches).IsEmpty();
 
             h.Directory.Rows.Remove("remote:a2");
@@ -404,24 +404,24 @@ public class RemoteSessionViewModelTests {
     }
 
     /// A startup dialog holds the session back and only the terminal can show it, but a normal start
-    /// has no session for a few seconds too: the terminal is offered rather than switched to, opening
-    /// it asks the server, and the session's start leaves a live terminal as it is.
+    /// has no session for a few seconds too: the empty chat offers the terminal rather than switching
+    /// to it, opening it asks the server, and the session's start leaves a live terminal as it is.
     [Test]
-    public async Task Before_the_session_the_terminal_is_offered_and_carries_on_when_it_starts() {
+    public async Task Before_the_session_the_chat_offers_the_terminal_and_it_carries_on_when_the_session_starts() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
             var row = Harness.Row(sessionId: null, vendor: "claude");
             var vm = h.Build(row);
-            await Assert.That(vm.IsChatActive).IsTrue();
-            await Assert.That(vm.ShowsTerminalButton).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
+            await Assert.That(vm.Chat.ShowsTerminalOffer).IsTrue();
+            await Assert.That(await vm.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
             await Assert.That(vm.ShowsTerminalPane).IsFalse();
-            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start — the terminal shows what the agent is doing");
             await Task.Delay(50);
             await Assert.That(h.Lane.TerminalSubscribes).IsEmpty();
 
-            await vm.ShowTerminalCommand.Execute();
+            await vm.Chat.ShowTerminalCommand.Execute();
             await Assert.That(vm.ShowsTerminalPane).IsTrue();
-            await Assert.That(vm.ShowsTerminalButton).IsFalse();
             await WaitUntilAsync(() => vm.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
             var surface = vm.Terminal!.Surface;
 
@@ -435,19 +435,26 @@ public class RemoteSessionViewModelTests {
         });
     }
 
-    /// An agent that ends before its session starts has no terminal left to open.
+    /// The agent's own session id can arrive before anything is recorded under it, so the chat
+    /// offers the terminal while it is empty, whatever access says; an agent that ends, or one with
+    /// no terminal, offers nothing.
     [Test]
-    public async Task An_agent_that_ends_before_its_session_offers_no_terminal() {
+    public async Task An_empty_chat_offers_the_terminal_until_the_agent_ends() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
-            var vm = h.Build(Harness.Row(sessionId: null, vendor: "claude"));
-            await Assert.That(vm.ShowsTerminalButton).IsTrue();
+            var row = Harness.Row(vendor: "claude");
+            var vm = h.Build(row);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await Assert.That(vm.Chat.ShowsTerminalOffer).IsTrue();
 
-            h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: null, status: "Completed", vendor: "claude"));
+            h.Directory.Rows.AddOrUpdate(row with { Status = "Completed" });
             await WaitUntilAsync(() => vm.SessionEnded, what: "ended");
-            await Assert.That(vm.ShowsTerminalButton).IsFalse();
-            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
+            await Assert.That(vm.Chat.ShowsTerminalOffer).IsFalse();
             await vm.TeardownAsync();
+
+            var noTerminal = h.Build(Harness.Row(id: "a2", vendor: "gemini"));
+            await Assert.That(noTerminal.Chat.ShowsTerminalOffer).IsFalse();
+            await noTerminal.TeardownAsync();
         });
     }
 

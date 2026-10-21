@@ -234,6 +234,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _                        => "",
     };
 
+    /// Nothing in the chat yet can mean the agent is held at a prompt only its terminal shows, so
+    /// an empty chat points there, whatever its note says, unless the terminal-menu card already does.
+    public bool ShowsTerminalOffer => ShowTerminal is not null && _items.Count == 0 && !_ended && !ShowsTerminalMenu;
+
     /// The chips staged for the next prompt. A send clears the ones it carried, never the tray.
     public AttachmentTray Tray { get; } = new();
 
@@ -353,7 +357,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The menu card. A pending hook card hides the screen's copy of the dialog it raised.
     public bool ShowsTerminalMenu {
         get => _showsTerminalMenu;
-        private set => this.RaiseAndSetIfChanged(ref _showsTerminalMenu, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsTerminalMenu, value);
+            this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+        }
     }
 
     public string TerminalMenuTitle {
@@ -372,7 +379,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set => this.RaiseAndSetIfChanged(ref _terminalMenuScreen, value);
     }
 
-    /// Set by the workspace hosting this chat; the card's fallback sends the user there.
+    /// Set by the workspace hosting this chat when the agent has a terminal; the menu card's fallback
+    /// and the empty chat's offer send the user there.
     public Action? ShowTerminal { get; set; }
     /// Called with the session id as a prompt goes out; the action it returns runs only if the
     /// channel accepts the prompt. A reply answers the session's open questions, and no permission
@@ -890,7 +898,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         _status = info.Status;
         _interruption = info.Interruption;
-        _ended = info.Ended;
+        if (_ended != info.Ended) {
+            _ended = info.Ended;
+            this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+        }
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
@@ -1443,8 +1454,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _items.Add(new PendingCardItem(card, packsWithPrevious: first && trailingGroup is not null && !suppressGroup));
                 first = false;
             }
-            if (wasEmpty != (_items.Count == 0))
+            if (wasEmpty != (_items.Count == 0)) {
                 this.RaisePropertyChanged(nameof(PhaseNote));
+                this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+            }
         }
 
         if (!ReferenceEquals(_flaggedGroup, trailingGroup) && _flaggedGroup is { } stale) {

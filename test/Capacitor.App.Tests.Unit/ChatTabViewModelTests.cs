@@ -3173,6 +3173,28 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// An empty chat can mean the agent is held at a prompt only its terminal shows, so it points
+    /// there, unless the agent has no terminal or the dialog card already does.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_empty_chat_offers_the_terminal_until_the_dialog_card_does() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            try {
+                await Assert.That(h.Chat.ShowsTerminalOffer).IsFalse();
+                h.Chat.ShowTerminal = () => { };
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                await Assert.That(h.Chat.PhaseNote).IsEqualTo("Waiting for chat…");
+                await Assert.That(h.Chat.ShowsTerminalOffer).IsTrue();
+
+                var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.ShowsTerminalOffer).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     /// Pins the hook card's precedence: while a card asks the question, the screen's copy of the
     /// same dialog is not offered, and the composer stays shut because that dialog is still on
     /// the terminal. The card comes back once the hook card is gone and the dialog is not.
