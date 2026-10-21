@@ -203,11 +203,11 @@
                                 </SelectableTextBlock.IsVisible>
                             </SelectableTextBlock>
                             <Panel Grid.Column="2">
-                                <Border x:Name="ToolStatusPill" Classes="toolStatus" Width="14" Height="8"
+                                <Border x:Name="ToolStatusPill" Classes="toolStatus" Width="8" Height="8"
                                         CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
                                         IsVisible="{Binding IsSettled}"
                                         Background="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
-                                <Border Classes="toolRunning toolStatus" Width="14" Height="8"
+                                <Border Classes="toolRunning toolStatus" Width="8" Height="8"
                                         CornerRadius="4" Margin="16,0,0,0" VerticalAlignment="Center"
                                         IsVisible="{Binding IsRunning}" views:PulseClock.IsActive="{Binding IsRunning}"
                                         Background="{StaticResource KcapWarningBrush}" />
@@ -260,8 +260,6 @@
                                         Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
                                     <views:ChatKindHeader Label="{Binding SummaryLine}" IconKind="{Binding HeaderIconKind}">
                                         <views:ChatKindHeader.Status>
-                                            <!-- Both chevrons are drawn centred in their own 12x12 box, so
-                                                 the glyph must not carry a nudge of its own. -->
                                             <Panel Width="12" Height="12" VerticalAlignment="Center">
                                                 <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
                                                                Foreground="{StaticResource KcapMutedBrush}" />
@@ -310,7 +308,7 @@
                         BorderThickness="1" CornerRadius="8" IsVisible="{Binding HasRunningRuns}">
                     <Grid ColumnDefinitions="Auto,*">
                         <Border Classes="toolRunning" Width="8" Height="8" CornerRadius="4" Margin="0,0,8,0" VerticalAlignment="Center"
-                                Background="{StaticResource KcapWarningBrush}" RenderTransform="translateY(-1.5px)"
+                                Background="{StaticResource KcapWarningBrush}"
                                 views:PulseClock.IsActive="{Binding HasRunningRuns}" />
                         <!-- The name gives way on a narrow pane; the state line with its timer never does. -->
                         <Grid x:Name="RunningSubagentText" Grid.Column="1" ColumnDefinitions="*,Auto" HorizontalAlignment="Left" VerticalAlignment="Center"

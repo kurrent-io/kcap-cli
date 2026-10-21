@@ -585,10 +585,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     /// The dedup is per pane, not per feed: a projection failure that survives a transcript switch
     /// would otherwise be logged again by every feed the pane opens.
-    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time) {
+    static Func<string, IChatTranscriptFeed> LocalFeed(string agentId, IChatTranscriptProjection projection, TimeProvider time, LocalTranscripts? transcripts) {
         var logged = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
-        return path => new LocalTranscriptFeed(path, projection, agentId, time,
-            reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); });
+        Action<string> log = reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: chat transcript: {reason}"); };
+        return path => transcripts?.Open(path, projection, agentId, time, log) ?? new LocalTranscriptFeed(path, projection, agentId, time, log);
     }
 
     /// Test-only seam: the read in flight, or the last one started. A switch that loses the
@@ -604,9 +604,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IChatTranscriptProjection? projection, IUrlOpener opener, TimeProvider time, IPermissionService permissions,
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null)
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
-               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time), opener, time, permissions,
+               input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
                drafts: drafts) { }
 
@@ -1301,6 +1301,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
         _planActivity?.Apply(read.Lines.Select(line => line.Projection));
         var fresh = new List<ChatItemViewModel>();
+        var restored = new List<ChatProjectionResult>(read.Lines.Count);
         foreach (var (line, offset) in read.Lines) {
             var projected = line.RestoreSubmittedInputs(text => {
                 if (!Tracked.Any(q => !q.IsForeign && !q.Acknowledged && q.Matches(text, _inputGeneration, offset))
@@ -1308,7 +1309,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _literalInputHistory.Add((offset, text));
                 return true;
             }, text => _literalInputHistory.Contains((offset, text)));
-            _runs.Apply(projected);
+            restored.Add(projected);
             foreach (var text in projected.SubmittedInputs) {
                 _history.Observe(AttachmentTrailer.Strip(text));
                 if (TakeSupersededEcho(text, offset)) continue;
@@ -1394,6 +1395,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
             }
         }
+        _runs.ApplyAll(restored);
         if (fresh.Count > 0) _items.AddRange(fresh);
         ApplyFeedRuns(read);
         RefreshQueue();
@@ -1565,7 +1567,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// <summary>Gives up a local feed to whoever carries on reading it after this tab closes. Only between reads,
     /// so two readers never share it; null otherwise, and the caller reads afresh. The tab reads nothing after.</summary>
     public TranscriptFeedHandoff? ReleaseFeed() {
-        if (_lease is not { Feed: LocalTranscriptFeed } lease || _feedKey is not { } key) return null;
+        if (_lease is not { Feed: LocalTranscriptFeed or LocalTranscripts.Reader } lease || _feedKey is not { } key) return null;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return null;
         Interlocked.Increment(ref _generation);
         _feedReleased = true;

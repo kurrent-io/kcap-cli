@@ -688,13 +688,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
-        WatchOrigin(next);
+        WatchOpen(next);
     }
 
-    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
-    /// Nothing here ends a session — the row that wins says whether it did.
-    void WatchOrigin(ISessionWorkspace? workspace) {
-        var watch = workspace switch {
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use,
+    /// and closes once its session ends: the rail has already dropped it.
+    void WatchOpen(ISessionWorkspace? workspace) {
+        var moves = workspace switch {
             RemoteSessionViewModel remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
@@ -706,6 +706,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
+        var ended = workspace?.Ended
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); });
+        var watch = new CompositeDisposable(moves, ended ?? Disposable.Empty);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;

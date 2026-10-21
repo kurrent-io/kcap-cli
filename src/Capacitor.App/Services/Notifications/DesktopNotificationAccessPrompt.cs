@@ -39,7 +39,7 @@ public sealed class DesktopNotificationAccessPrompt : IDisposable {
                 return;
             }
             await _access.RequestAsync();
-        } catch (Exception error) { NativeDesktopNotificationSink.Report(error); }
+        } catch (Exception error) { DesktopNotifications.Report(error); }
     }
 
     public void Dispose() {

@@ -209,7 +209,7 @@ public class GitHubCliReaderProviderTests {
     }
 
     [Test]
-    public async Task Concurrent_discoveries_share_a_single_spawn_and_reuse_for_ten_seconds_unless_reset() {
+    public async Task Concurrent_discoveries_share_a_spawn_and_serve_the_last_list_while_refetching_unless_reset() {
         var h = new GhHarness(Tmp); h.SignedIn("github.com");
         var pending = new TaskCompletionSource<ProcessResult>();
         h.Process.WhenPending(["pr", "list"], pending);
@@ -224,9 +224,15 @@ public class GitHubCliReaderProviderTests {
         h.Time.Advance(TimeSpan.FromSeconds(9));
         await h.Provider.DiscoverAsync(Repository, "feature", default);
         await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(1);
+        h.Time.Advance(TimeSpan.FromSeconds(2));
+        var refetch = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "list"], refetch);
+        await Assert.That((await h.Provider.DiscoverAsync(Repository, "feature", default)).Count).IsEqualTo(2);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        refetch.SetResult(new(0, GhHarness.Fixture("pr-list.json"), "", false));
         h.Provider.ResetSession("session");
         h.Process.When(["pr", "list"], GhHarness.Fixture("pr-list.json"));
         await h.Provider.DiscoverAsync(Repository, "feature", default);
-        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(3);
     }
 }

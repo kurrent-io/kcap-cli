@@ -37,7 +37,7 @@
                         AutomationProperties.Name="Open pull request in browser">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
-                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal prAfterLabel" />
+                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal" />
                     </StackPanel>
                 </Button>
             </Grid>

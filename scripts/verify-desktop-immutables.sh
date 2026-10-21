@@ -22,6 +22,8 @@ names=(
   "KurrentCapacitor-$version-$channel-delta.nupkg"
   "kcap-$version-$channel.dmg"
   "kcap-$version-$channel-Setup.exe"
+  "kcap-$version-$channel.AppImage"
+  "kcap-$version-$channel.deb"
 )
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 for name in "${names[@]}"; do

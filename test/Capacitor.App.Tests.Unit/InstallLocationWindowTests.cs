@@ -1,7 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
-using Capacitor.App.Services;
+using Capacitor.App.Platform.Mac;
 using Capacitor.App.Views;
 
 namespace Capacitor.App.Tests.Unit;

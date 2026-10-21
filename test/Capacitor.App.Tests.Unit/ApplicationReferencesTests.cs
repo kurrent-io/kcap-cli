@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using Capacitor.App.Platform.Mac;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 

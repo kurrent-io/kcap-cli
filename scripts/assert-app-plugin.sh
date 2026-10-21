@@ -9,6 +9,9 @@ source_dir="$here/../kcap"
 if [ -d "$bundle/Contents/Resources" ]; then
   plugin="$bundle/Contents/Resources/kcap"
   cli="$bundle/Contents/MacOS/kcap"
+elif [ -d "$bundle/bin" ]; then
+  plugin="$bundle/kcap"
+  cli="$bundle/bin/kcap"
 else
   plugin="$bundle/kcap"
   cli="$bundle/kcap.exe"

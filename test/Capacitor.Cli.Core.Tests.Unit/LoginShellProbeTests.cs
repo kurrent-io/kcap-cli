@@ -1,3 +1,4 @@
+using TUnit.Core.Enums;
 using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Core.Tests.Unit;
@@ -65,6 +66,20 @@ public class LoginShellProbeTests {
         await Assert.That(runner.Calls[0].FileName).IsEqualTo("/bin/bash");
         await Assert.That(runner.Calls[0].Args[0]).IsEqualTo("-lic");
         await Assert.That(runner.Calls[0].Options.Timeout).IsEqualTo(TimeSpan.FromSeconds(5));
+    }
+
+    [Test, RunOn(OS.Linux | OS.MacOs)]
+    public async Task A_setsid_on_PATH_runs_the_shell_without_a_controlling_terminal() {
+        using var tmp = new TempDir();
+        var setsid = tmp.CreateExecutable("setsid", "#!/bin/sh\n");
+        var runner = new FakeProcessRunner();
+        runner.Enqueue(new ProcessResult(0, Wrap("/usr/bin"), "", false));
+        var probe = new LoginShellProbe(runner, name => name switch { "SHELL" => "/bin/bash", "PATH" => tmp.Path, _ => null });
+
+        await probe.TerminalPathAsync(CancellationToken.None);
+
+        await Assert.That(runner.Calls[0].FileName).IsEqualTo(setsid);
+        await Assert.That(runner.Calls[0].Args.Take(3)).IsEquivalentTo(["-w", "/bin/bash", "-lic"]);
     }
 
     [Test]

@@ -157,10 +157,6 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Kind" Value="ExternalLink" />
     </Style>
-    <!-- Beside a label: centred on the line box the icon lands a pixel under the glyphs' visual centre. -->
-    <Style Selector="views|AppIcon.prExternal.prAfterLabel">
-        <Setter Property="RenderTransform" Value="translateY(-1px)" />
-    </Style>
     <Style Selector="views|AppIcon.prChevron">
         <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         <Setter Property="VerticalAlignment" Value="Center" />

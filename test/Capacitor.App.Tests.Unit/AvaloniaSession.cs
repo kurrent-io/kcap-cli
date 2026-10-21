@@ -17,8 +17,10 @@ internal static class AvaloniaSession {
     sealed class TestAppBuilder {
         public static AppBuilder BuildAvaloniaApp() =>
             AppBuilder.Configure<Capacitor.App.App>()
+                .UseSkia()
+                .WithAppFont()
                 .UseReactiveUI(_ => { })
-                .UseHeadless(new AvaloniaHeadlessPlatformOptions());
+                .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false });
     }
 
     /// One application for the whole assembly, not one per test: per-test isolation releases
