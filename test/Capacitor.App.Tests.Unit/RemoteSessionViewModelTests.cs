@@ -435,16 +435,16 @@ public class RemoteSessionViewModelTests {
         });
     }
 
-    /// The agent's own session id can arrive before anything is recorded under it, so the chat
-    /// offers the terminal while it is empty, whatever access says; an agent that ends, or one with
-    /// no terminal, offers nothing.
+    /// The agent's own session id can arrive before anything is recorded under it, so the chat's
+    /// note offers the terminal, whatever access says; an agent that ends, or one with no terminal,
+    /// offers nothing.
     [Test]
     public async Task An_empty_chat_offers_the_terminal_until_the_agent_ends() {
         await RunOnUiAsync(async () => {
-            using var h = new Harness();
+            using var h = new Harness { Detail = new(null, NotFound: true) };
             var row = Harness.Row(vendor: "claude");
             var vm = h.Build(row);
-            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await WaitUntilAsync(() => vm.Chat.PhaseNote == RemoteSessionViewModel.MissingNote, what: "no transcript yet");
             await Assert.That(vm.Chat.ShowsTerminalOffer).IsTrue();
 
             h.Directory.Rows.AddOrUpdate(row with { Status = "Completed" });

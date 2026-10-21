@@ -221,7 +221,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set {
             if (_phase == value) return;
             this.RaiseAndSetIfChanged(ref _phase, value);
-            this.RaisePropertyChanged(nameof(PhaseNote));
+            RaisePhaseNote();
             RefreshActivityNote();
         }
     }
@@ -235,8 +235,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     };
 
     /// Nothing in the chat yet can mean the agent is held at a prompt only its terminal shows, so
-    /// an empty chat points there, whatever its note says, unless the terminal-menu card already does.
-    public bool ShowsTerminalOffer => ShowTerminal is not null && _items.Count == 0 && !_ended && !ShowsTerminalMenu;
+    /// the empty chat's note points there, unless the terminal-menu card already does.
+    public bool ShowsTerminalOffer => ShowTerminal is not null && PhaseNote.Length > 0 && !_ended && !ShowsTerminalMenu;
+
+    void RaisePhaseNote() {
+        this.RaisePropertyChanged(nameof(PhaseNote));
+        this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+    }
 
     /// The chips staged for the next prompt. A send clears the ones it carried, never the tray.
     public AttachmentTray Tray { get; } = new();
@@ -1015,7 +1020,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Phase = ChatTabPhase.Waiting;
         // The rows are gone, so the view has to re-read what stands in for them even when the phase
         // is unchanged — and only then, since the setter itself raises the note on a real change.
-        if (wasWaiting) this.RaisePropertyChanged(nameof(PhaseNote));
+        if (wasWaiting) RaisePhaseNote();
         SyncPendingCardItems();
         OnTick();
     }
@@ -1270,7 +1275,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 // the reason beneath them.
                 if (_items.Count == 0) Phase = ChatTabPhase.Failed;
                 if (changed) {
-                    this.RaisePropertyChanged(nameof(PhaseNote));
+                    RaisePhaseNote();
                     RefreshActivityNote();
                 }
                 return;
@@ -1454,10 +1459,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _items.Add(new PendingCardItem(card, packsWithPrevious: first && trailingGroup is not null && !suppressGroup));
                 first = false;
             }
-            if (wasEmpty != (_items.Count == 0)) {
-                this.RaisePropertyChanged(nameof(PhaseNote));
-                this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
-            }
+            if (wasEmpty != (_items.Count == 0))
+                RaisePhaseNote();
         }
 
         if (!ReferenceEquals(_flaggedGroup, trailingGroup) && _flaggedGroup is { } stale) {
