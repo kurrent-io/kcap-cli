@@ -276,7 +276,11 @@ public sealed class CliTelemetry {
         // link the two sides of it. An id that cannot be read just now sends nothing, as an unreadable choice does.
         if (!TelemetryDeviceId.TryReadPersisted(_config, out var saved)) return false;
         if (saved == _deviceId) return true;
-        DiscardAndDisable();
+        // The opt-out in between already cleared the spool; what is there now was queued under the new id.
+        try {
+            _sink.Abandon();
+            Enabled = false;
+        } catch { }
         return false;
     }
 

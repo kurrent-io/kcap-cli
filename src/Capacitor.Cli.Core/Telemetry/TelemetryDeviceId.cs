@@ -51,7 +51,7 @@ public static class TelemetryDeviceId {
             return true;
         } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
             return true;
-        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
             return false;
         }
     }

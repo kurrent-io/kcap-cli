@@ -120,6 +120,9 @@ public class DesktopTelemetryTests {
 
         await Assert.That(sink.Events).IsEmpty();
         await Assert.That(telemetry.Enabled).IsFalse();
+        // The spool now holds what the CLI queued under the new id; this stop is this process's own.
+        await Assert.That(sink.Abandoned).IsTrue();
+        await Assert.That(sink.Discarded).IsFalse();
     }
 
     /// <summary>A device id that cannot be read just now is not a replaced one: nothing is sent on it, but the app

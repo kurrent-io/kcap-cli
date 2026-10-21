@@ -34,13 +34,15 @@ public sealed class TelemetryClient(
     /// </summary>
     public void Discard() => Drop(latch: true);
 
+    public void Abandon() => Drop(latch: true, clearSpool: false);
+
     /// <summary>
     /// A consent another process withdrew: what is queued or spooled goes, but the client is not shut, so
     /// events captured after the choice goes back on are sent as usual.
     /// </summary>
     void Withdraw() => Drop(latch: false);
 
-    void Drop(bool latch) {
+    void Drop(bool latch, bool clearSpool = true) {
         lock (_discardLock) {
             if (latch) _discarded = true;
             // First, and inside the lock: a send registered but not yet begun then fails its token check
@@ -48,7 +50,7 @@ public sealed class TelemetryClient(
             // source is live here; its callbacks never take this lock.
             try { _sending?.Cancel(); } catch (ObjectDisposedException) { }
             lock (_queue) _queue.Clear();
-            try { spool.Clear(); } catch { }
+            if (clearSpool) try { spool.Clear(); } catch { }
         }
     }
 

@@ -245,20 +245,24 @@ public class TelemetryClientTests {
     }
 
     /// <summary>An opt-out leaves nothing for a later flush to send: neither what was queued nor what an
-    /// earlier failure parked on disk.</summary>
+    /// earlier failure parked on disk. A stop that is only this process's own drops its queue but leaves the
+    /// spool other processes share.</summary>
     [Test]
-    public async Task After_a_discard_a_flush_sends_nothing_and_the_spool_is_empty() {
+    [Arguments(true, 0)]
+    [Arguments(false, 1)]
+    public async Task After_a_stop_a_flush_sends_nothing_and_only_an_opt_out_empties_the_spool(bool optOut, int parked) {
         var handler = new StubHandler(HttpStatusCode.OK);
         using var tmp = TempDir.WithPathTo("spool.jsonl", out var spoolPath);
         var client  = Client(handler, spoolPath, out var spool);
         spool.Append([Event("parked_event")]);
         client.Enqueue(Event("queued_event"));
 
-        client.Discard();
+        if (optOut) client.Discard();
+        else client.Abandon();
         await client.FlushAsync("device-1", null, TimeSpan.FromSeconds(2));
 
         await Assert.That(handler.Calls).IsEqualTo(0);
-        await Assert.That(spool.DrainAll().Count).IsEqualTo(0);
+        await Assert.That(spool.DrainAll().Count).IsEqualTo(parked);
     }
 
     /// <summary>A request already on the wire cannot be recalled, but if it fails it must not park its

@@ -38,7 +38,7 @@ public static class TelemetryState {
             return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.TelemetryStateFile);
         } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
             return default(TelemetryStateFile);
-        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
             return null;
         }
     }
@@ -129,7 +129,7 @@ public static class TelemetryState {
             return JsonSerializer.Deserialize(File.ReadAllText(path), CapacitorJsonContext.Default.TelemetryStateFile);
         } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
             return default(TelemetryStateFile);
-        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
             return null;
         }
     }
