@@ -173,6 +173,21 @@ public class HomeViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_restored_repository_never_keeps_a_harness_the_daemon_lacks() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System);
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(supportedVendors: ["codex"]));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            await vm.SelectRepositoryAsync("/repo/a");
+
+            await Assert.That(vm.SelectedVendor).IsEqualTo("codex");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_direct_start_with_no_harness_sends_nothing() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var daemon = new FakeDaemonClientService();
@@ -1049,6 +1064,31 @@ public class HomeViewModelTests {
             await Assert.That(vm.ConnectionNotice).IsNull();
             await Assert.That(vm.BannerMessage ?? "").DoesNotContain("Sign in");
             await Assert.That(vm.SignInVisible).IsFalse();
+        });
+    }
+
+    /// The local server can report down while the daemon still says connected, leaving no raw
+    /// notice for the stopped-server rule to hide.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stopped_local_server_shows_no_agents_notice_before_the_daemon_notices() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", supportedVendors: []));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(local.Visible).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsNull();
         });
     }
 

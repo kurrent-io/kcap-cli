@@ -687,12 +687,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
-        // The no-harness fallback goes in ahead of NoticeForLocalServer, whose null for a stopped
-        // local server must stay null.
+        // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
+        // out of it whether or not the daemon has noticed the server is gone.
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
             .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
                 (notice, none, local, down, sel) => NoticeForLocalServer(
-                    notice ?? (none ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null), local, down, sel.Remote ? sel.Name : null));
+                    notice ?? (none && !(local && down && !sel.Remote) ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null),
+                    local, down, sel.Remote ? sel.Name : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -1214,17 +1215,30 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Sets the repository and restores that repository's remembered harness, or DefaultVendor
     /// when none — never the vendor a DIFFERENT repository had selected. In remote mode the local
-    /// HarnessByRepo store is never consulted: the vendor is instead revalidated against the
-    /// selected remote machine's own advertised set (RevalidateVendorAgainst).
+    /// HarnessByRepo store is never consulted. Either way the result is revalidated against the
+    /// selected machine's current harnesses.
     public async Task SelectRepositoryAsync(string repoPath) {
         SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath : PlatformPaths.Normalize(repoPath);
         if (RemoteMachineSelected) {
-            RevalidateVendorAgainst(_selectedRemoteMachine?.SupportedVendors);
+            RevalidateVendor(Harnesses);
             return;
         }
 
         var saved = await _state.LoadAsync();
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
+        RevalidateVendor(Harnesses);
+    }
+
+    /// Read against the draft's machine, not the current selection, which may have moved during an upload.
+    string? HarnessErrorFor(LaunchDraft draft) {
+        var options = HostedHarnessCatalog.Build(draft.Remote
+            ? FindMachine(_currentDaemons, draft.Machine, _lastViewerId)?.SupportedVendors
+            : _currentLocalVendors);
+        var harness = options.FirstOrDefault(o => string.Equals(o.Vendor, draft.Vendor, StringComparison.OrdinalIgnoreCase));
+        if (harness is { Available: true }) return null;
+        return options.Any(o => o.Available)
+            ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor)
+            : NoHarnessesNotice(draft.Remote ? draft.Machine : null);
     }
 
     /// The one place a vendor change lands, so the model-reset invariant (ids are
@@ -1250,11 +1264,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         // Execute() does not gate on CanExecute, and a remembered vendor restored with a repository
         // is never checked against what the machine hosts.
-        var harness = Harnesses.FirstOrDefault(o => string.Equals(o.Vendor, draft.Vendor, StringComparison.OrdinalIgnoreCase));
-        if (harness is not { Available: true }) {
-            StartError = Harnesses.Any(o => o.Available)
-                ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor)
-                : NoHarnessesNotice(draft.Remote ? draft.Machine : null);
+        if (HarnessErrorFor(draft) is { } harnessError) {
+            StartError = harnessError;
             return;
         }
 
@@ -1297,6 +1308,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             }
             if (!CanAttachFor(draft)) {
                 StartError = AttachHintFor(_signedIn, false);
+                return;
+            }
+            if (HarnessErrorFor(draft) is { } withdrawn) {
+                StartError = withdrawn;
                 return;
             }
         }
