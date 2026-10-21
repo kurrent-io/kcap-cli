@@ -212,6 +212,22 @@ public class WizardSimpleStepsTests {
         await Assert.That(updates).IsEqualTo(1);
     }
 
+    /// A background link's failure is shown to nobody, so the app's startup offer must stay free to raise it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_background_link_claims_no_offer() {
+        var updates = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new ShimHarness();
+            h.Runner.Enqueue(new ProcessResult(1, "", "Permission denied", false));
+
+            await h.Vm.LinkAsync(CancellationToken.None);
+
+            return h.Store.Updates;
+        });
+
+        await Assert.That(updates).IsEqualTo(0);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Never_installing_never_claims() {

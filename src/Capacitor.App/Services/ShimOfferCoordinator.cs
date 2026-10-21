@@ -24,6 +24,9 @@ public sealed class ShimOfferCoordinator {
     readonly CancellationToken _lifetime;
     // True only for a gate-Incomplete startup — Offerable/manual install still work, only the once-ever auto-offer DIALOG is skipped.
     readonly bool _autoOfferSuppressed;
+    readonly Task _pendingLink;
+    // The warning this coordinator last posted, taken back once an install succeeds.
+    string? _warning;
 
     readonly BehaviorSubject<bool> _offerable = new(false);
 
@@ -34,7 +37,8 @@ public sealed class ShimOfferCoordinator {
     /// </param>
     public ShimOfferCoordinator(
             Task phaseClosed, ILoginShellProbe probe, ICliPathInstaller? installer, IAppStateStore store,
-            ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false) {
+            ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false,
+            Task? pendingLink = null) {
         _phaseClosed          = phaseClosed;
         _probe                = probe;
         _installer            = installer;
@@ -43,6 +47,7 @@ public sealed class ShimOfferCoordinator {
         _target               = installer is null ? null : target;
         _lifetime             = lifetime;
         _autoOfferSuppressed  = autoOfferSuppressed;
+        _pendingLink          = pendingLink ?? Task.CompletedTask;
     }
 
     /// True while the tray's "Install command-line tool…" item should show: applicable (an
@@ -62,6 +67,8 @@ public sealed class ShimOfferCoordinator {
     async Task RunAsync() {
         try {
             await _phaseClosed.ConfigureAwait(false);
+            // A probe before the setup wizard's link settles would offer what is about to exist.
+            await AwaitPendingLinkAsync().ConfigureAwait(false);
             if (_target is null) return; // nothing to link — offer and menu item both stay off
 
             var onPath = await _probe.KcapOnPathAsync(_lifetime).ConfigureAwait(false);
@@ -104,6 +111,7 @@ public sealed class ShimOfferCoordinator {
     async Task RunInstallAsync() {
         try {
             if (_target is null || _installer is null) return; // defensive — the menu item is never shown without one
+            await AwaitPendingLinkAsync().ConfigureAwait(false);
             var result = await _installer.InstallAsync(_target, _lifetime).ConfigureAwait(false);
             await SurfaceResultAsync(result).ConfigureAwait(false);
         } catch (OperationCanceledException) {
@@ -128,8 +136,12 @@ public sealed class ShimOfferCoordinator {
 
     Task Installed() {
         _offerable.OnNext(false);
+        if (_warning is { } warning) _surface.Withdraw(warning);
+        _warning = null;
         return Task.CompletedTask;
     }
+
+    Task AwaitPendingLinkAsync() => _pendingLink.WaitAsync(_lifetime);
 
     async Task ClaimDeniedThenStatus(string message) {
         await ClaimDeniedAsync().ConfigureAwait(false);
@@ -137,6 +149,7 @@ public sealed class ShimOfferCoordinator {
     }
 
     Task Status(string message) {
+        _warning = message;
         _surface.Status(message);
         return Task.CompletedTask;
     }

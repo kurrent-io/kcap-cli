@@ -39,9 +39,19 @@ public sealed class PathFixViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
+    /// The link in flight, or a completed task; the app's startup offer waits on it before probing.
+    public Task Running => _running ?? Task.CompletedTask;
+
     /// Installs the terminal command and reports whether the login shell can now run it. A call
     /// while one is running joins it, so the admin prompt never shows twice.
-    public Task<bool> InstallAsync(CancellationToken ct = default) =>
+    public async Task<bool> InstallAsync(CancellationToken ct = default) {
+        if (_target is not null) await ClaimOfferedOnceAsync().ConfigureAwait(true);
+        return await LinkAsync(ct).ConfigureAwait(true);
+    }
+
+    /// Like InstallAsync, but claims no offer: a failure nobody was shown is left for the app's
+    /// startup offer to raise.
+    public Task<bool> LinkAsync(CancellationToken ct) =>
         _running is { IsCompleted: false } running ? running : _running = RunInstallAsync(ct);
 
     async Task<bool> RunInstallAsync(CancellationToken ct) {
@@ -53,7 +63,6 @@ public sealed class PathFixViewModel : ReactiveObject {
 
         Message = null;
         try {
-            await ClaimOfferedOnceAsync().ConfigureAwait(true);
             Apply(await _installer.InstallAsync(_target, ct).ConfigureAwait(true));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             return false;

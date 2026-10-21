@@ -591,11 +591,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             // Status (start-action one-liners) and Attention (mutation-outcome presentation) both
             // land on StartMessage so the launcher banner is never mute after a Start daemon click.
-            void BindStartMessage(IObservable<string?>? source) =>
+            // A null takes back that lane's own line, if nothing has replaced it since.
+            void BindStartMessage(IObservable<string?>? source) {
+                string? posted = null;
                 source?.ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Where(msg => msg is not null)
-                    .Subscribe(msg => StartMessage = msg)
+                    .Subscribe(msg => {
+                        if (msg is not null) StartMessage = posted = msg;
+                        else if (posted is not null && ReferenceEquals(StartMessage, posted)) StartMessage = identity;
+                    })
                     .DisposeWith(disposables);
+            }
 
             BindStartMessage(lifecycleStatus);
             BindStartMessage(lifecycleAttention);

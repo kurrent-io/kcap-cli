@@ -141,6 +141,8 @@ public partial class App : Application {
     // No disposal needed — it holds no subscription, only a one-shot await chain that cancelling
     // _shutdown stops.
     ShimOfferCoordinator? _shimOffer;
+    // The wizard's PATH link, which can outlive the wizard; the shim offer waits on it.
+    Task _wizardPathLink = Task.CompletedTask;
     // No disposal needed — its Status subscription dies with _service's own subject disposal below.
     ConsentFlipCoordinator? _consentFlip;
     // Inert outside a packed bundle (CreateUpdater degrades a construction failure the same way);
@@ -552,10 +554,14 @@ public partial class App : Application {
         // The controller's attach subscription must be live BEFORE service.Start() begins pumping,
         // or the startup phase could miss the first terminal outcome it hinges on.
         var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe, lifecycleCli) = BuildLifecycleController(
-            service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext,
-            // One lock for setting and withdrawing, so a withdrawal never erases a message set beside it.
+            service, ops, autoActionsPermanentlyClosed,
+            // One lock per lane for setting and withdrawing, so a withdrawal never erases a message set beside it.
+            message => { lock (lifecycleStatus) lifecycleStatus.OnNext(message); },
             message => { lock (lifecycleAttention) lifecycleAttention.OnNext(message); },
-            message => { lock (lifecycleAttention) if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null); },
+            message => {
+                lock (lifecycleStatus) if (ReferenceEquals(lifecycleStatus.Value, message)) lifecycleStatus.OnNext(null);
+                lock (lifecycleAttention) if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null);
+            },
             lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
         lifecycle.Start();
         _lifecycle = lifecycle;
@@ -1153,6 +1159,7 @@ public partial class App : Application {
             WizardAttentionCopyFor);
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
+        if (graph.PathFix is { } pathFix) _wizardPathLink = pathFix.Running;
         var quiesced = await HandoffAfterWizardAsync(
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
@@ -1563,7 +1570,7 @@ public partial class App : Application {
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
             lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
-            _shutdown.Token, autoActionsPermanentlyClosed);
+            _shutdown.Token, autoActionsPermanentlyClosed, _wizardPathLink);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config
         // lock this delegate then reads under.

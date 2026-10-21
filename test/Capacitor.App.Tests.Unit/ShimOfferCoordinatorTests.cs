@@ -71,7 +71,7 @@ public class ShimOfferCoordinatorTests {
 
         public Harness(
                 bool immediatePhaseClosed = false, bool noTarget = false, bool noInstaller = false,
-                bool autoOfferSuppressed = false) {
+                bool autoOfferSuppressed = false, Task? pendingLink = null) {
             Target      = noTarget ? null : Path.Combine(TempDir, "target-cli");
             Destination = Path.Combine(TempDir, "kcap");
             Installer   = new PathShimInstaller(Runner, Probe, Destination);
@@ -79,7 +79,7 @@ public class ShimOfferCoordinatorTests {
             var phaseClosed = immediatePhaseClosed ? Task.CompletedTask : PhaseClosedSource.Task;
             Coordinator = new ShimOfferCoordinator(
                 phaseClosed, Probe, noInstaller ? null : Installer, Store, Surface, Target, CancellationToken.None,
-                autoOfferSuppressed);
+                autoOfferSuppressed, pendingLink);
             Coordinator.Offerable.Subscribe(OfferableValues.Add);
         }
 
@@ -102,6 +102,23 @@ public class ShimOfferCoordinatorTests {
 
         h.ClosePhase();
         await WaitUntilAsync(() => probed, what: "the probe to run once the phase closes");
+    }
+
+    /// The setup wizard's link can still be running when the app starts; probing first would offer
+    /// what is about to exist.
+    [Test]
+    public async Task Offer_waits_for_the_wizard_link_before_probing() {
+        var link = new TaskCompletionSource();
+        using var h = new Harness(immediatePhaseClosed: true, pendingLink: link.Task);
+        var probed = false;
+        h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(true); };
+        h.Coordinator.Start();
+
+        await Task.Delay(50);
+        await Assert.That(probed).IsFalse();
+
+        link.SetResult();
+        await WaitUntilAsync(() => probed, what: "the probe to run once the link settles");
     }
 
     [Test]
@@ -438,6 +455,23 @@ public class ShimOfferCoordinatorTests {
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
         // The auto-offer never ran (no confirm dialog) — this was a direct manual click.
         await Assert.That(h.Surface.Prompts).IsEmpty();
+    }
+
+    /// The banner a connected daemon never clears would otherwise keep saying the install failed.
+    [Test]
+    public async Task A_successful_retry_withdraws_the_earlier_warning() {
+        using var h = new Harness(immediatePhaseClosed: true);
+        h.Store.State = h.Store.State with { ShimOffered = true };
+        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
+        h.Runner.Enqueue(new ProcessResult(1, "", "administrator privileges denied", false));
+        await h.Coordinator.RunManualInstallAsync();
+
+        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(true);
+        h.Runner.Enqueue(new ProcessResult(0, "", "", false));
+        await h.Coordinator.RunManualInstallAsync();
+
+        await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
+        await Assert.That(h.Surface.Withdrawn).IsEquivalentTo(h.Surface.StatusMessages);
     }
 
     [Test]

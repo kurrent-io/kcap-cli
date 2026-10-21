@@ -662,6 +662,34 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A connected daemon never clears the banner, so a withdrawn line has to; a line another
+    /// sender set since stays.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_withdrawn_lifecycle_line_clears_only_while_it_is_still_shown() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var lifecycleStatus = new Subject<string?>();
+            var lifecycleAttention = new Subject<string?>();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                lifecycleStatus: lifecycleStatus, lifecycleAttention: lifecycleAttention);
+            using var activation = vm.Activator.Activate();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+
+            lifecycleStatus.OnNext("Installing the command-line tool was canceled.");
+            lifecycleStatus.OnNext(null);
+            var withdrawn = vm.StartMessage;
+
+            lifecycleStatus.OnNext("Installing the command-line tool was canceled.");
+            lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
+            lifecycleStatus.OnNext(null);
+
+            await Assert.That(withdrawn).IsNull();
+            await Assert.That(vm.StartMessage).IsEqualTo("The daemon didn't come up cleanly.");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Lifecycle_attention_also_lands_on_the_start_message_lane() {
