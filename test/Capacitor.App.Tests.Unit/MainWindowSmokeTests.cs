@@ -1431,7 +1431,7 @@ public class MainWindowSmokeTests {
 
             var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
             await Assert.That(help.IsEnabled).IsTrue();
-            await Assert.That(DockPanel.GetDock(help)).IsEqualTo(Dock.Right);
+            await Assert.That(Grid.GetColumn(help)).IsEqualTo(1);
             await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
             await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
 
@@ -1715,13 +1715,58 @@ public class MainWindowSmokeTests {
             new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
     }
 
-    /// A dot belongs BETWEEN two fragments, never dangling: the count drops out the moment the
-    /// attach does (the service keeps its snapshot, so name and version stay), and its separator
-    /// has to leave with it.
+    /// No daemon identity yet: the help chip shares the status line. A second row with nothing
+    /// in it would leave the chip sitting under "Unreachable".
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_help_shares_the_status_line_when_the_daemon_line_is_absent() {
+        var (sharesLine, rowHidden) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent");
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var status = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var daemon = rail.FindControl<Panel>("RailDaemonRow")!;
+            var statusMid = status.TranslatePoint(new Point(0, status.Bounds.Height / 2), rail)!.Value.Y;
+            var helpMid = help.TranslatePoint(new Point(0, help.Bounds.Height / 2), rail)!.Value.Y;
+            var shares = Math.Abs(statusMid - helpMid) <= help.Bounds.Height / 2;
+            var hidden = !daemon.IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (shares, hidden);
+        });
+
+        await Assert.That(rowHidden).IsTrue();
+        await Assert.That(sharesLine).IsTrue();
+    }
+
+    /// Name, then the agent count, then the version. The dot shares the count's parent, so a
+    /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
+    /// stays, so the name and version remain with nothing between them.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Rail_daemon_row_separators_leave_with_the_fragment_they_precede() {
-        var (connected, detached) = await AvaloniaSession.DispatchAsync(() => {
+        static IEnumerable<string> VisibleFooterTexts(Control control) {
+            if (!control.IsVisible) yield break;
+            if (control is TextBlock block) {
+                yield return block.Text ?? "";
+                yield break;
+            }
+            if (control is Panel panel)
+                foreach (var child in panel.Children.OfType<Control>())
+                    foreach (var text in VisibleFooterTexts(child))
+                        yield return text;
+        }
+
+        var (connected, detached, dotSharesCountParent) = await AvaloniaSession.DispatchAsync(() => {
             var service = new FakeDaemonClientService();
             service.SnapshotsSubject.OnNext(Snap(
                 daemon: "daemon-a", version: "1.2.3", serverUrl: "http://localhost:9999",
@@ -1734,23 +1779,27 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
 
             var row = window.FindDescendantOfType<SessionRailView>()!.FindControl<Panel>("RailDaemonRow")!;
-            string[] Fragments() => row.Children.OfType<TextBlock>()
-                .Where(t => t.IsVisible).Select(t => t.Text ?? "").ToArray();
+            string[] Fragments() => VisibleFooterTexts(row).ToArray();
 
             var whileConnected = Fragments();
+            var count = row.FindControl<TextBlock>("RailAgentCountText")!;
+            var sharesParent = count.Parent is Panel parent
+                && !ReferenceEquals(parent, row)
+                && parent.Children.OfType<TextBlock>().Any(t => t.Classes.Contains("footerDot"));
             service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
             Dispatcher.UIThread.RunJobs();
             var whileDetached = Fragments();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
-            return (whileConnected, whileDetached);
+            return (whileConnected, whileDetached, sharesParent);
         });
 
         await Assert.That(connected).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1.2.3", "\u00b7", "1 of 5 agents" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "\u00b7", "1 of 5 agents", "1.2.3" }, CollectionOrdering.Matching);
+        await Assert.That(dotSharesCountParent).IsTrue();
         await Assert.That(detached).IsEquivalentTo(
-            new[] { "daemon-a", "\u00b7", "1.2.3" }, CollectionOrdering.Matching);
+            new[] { "daemon-a", "1.2.3" }, CollectionOrdering.Matching);
     }
 
     /// A queued daemon update is the version's own status: warning paint on the semver, the
