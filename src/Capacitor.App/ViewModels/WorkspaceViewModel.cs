@@ -248,7 +248,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         presence.Select(p => p.Dto).Subscribe(dto => {
             _latestDto = dto;
             // Only Claude Code files a subagent's transcript beside its parent's, so only its rows open here.
-            if (dto is not null) runs.OpensSubagents = FilesSubagentsBesideItself(dto);
+            runs.OpensSubagents = dto is not null && FilesSubagentsBesideItself(dto);
         }).DisposeWith(_disposables);
 
         // Replays through presence, which the cards pipeline relies on: its filter admits nothing

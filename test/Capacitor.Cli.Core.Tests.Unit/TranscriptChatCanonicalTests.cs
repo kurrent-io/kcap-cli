@@ -51,7 +51,6 @@ public class TranscriptChatCanonicalTests {
         await Assert.That(TranscriptChat.Project(Event(CanonicalEventTypes.SubagentStarted, new SubagentStarted()), ClaudeChatRules.Instance).Runs).IsEmpty();
     }
 
-    /// Every other vendor's subagents have no row of their own, so the start record starts one, named for the agent.
     [Test]
     [Arguments("codex")]
     [Arguments("gemini")]

@@ -198,8 +198,6 @@ public class SessionRunsTests {
         await Assert.That(s.RunningCount).IsEqualTo(0);
     }
 
-    /// A vendor with no subagent rows of its own gets one from the start record: named, openable, ended by its
-    /// completion, and still one row when the record is replayed.
     [Test]
     public async Task A_start_record_row_is_named_and_ended_by_its_agent() {
         var s     = new SessionRuns(Clock());
@@ -216,7 +214,6 @@ public class SessionRunsTests {
         await Assert.That(s.RunningCount).IsEqualTo(0);
     }
 
-    /// An id starting a second run after its first ended gets a row of its own, which its completion ends.
     [Test]
     public async Task A_second_start_for_the_same_agent_is_its_own_row() {
         var s = new SessionRuns(Clock());
