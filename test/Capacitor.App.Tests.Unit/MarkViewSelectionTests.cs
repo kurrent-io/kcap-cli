@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Capacitor.App.Views;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
@@ -144,17 +145,65 @@ public class MarkViewSelectionTests {
     }
 
     [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_drag_starting_in_left_padding_selects_from_the_nearest_character() {
+    [Arguments(0, "hello worl")]
+    [Arguments(1, "second lin")]
+    [NotInParallel]
+    public async Task A_drag_starting_in_left_padding_selects_from_the_nearest_character(int line, string expected) {
         await RunOnUiAsync(async () => {
-            var (window, view, _) = Show("```\nhello world\n```");
+            var (window, view, _) = Show("```\nhello world\nsecond line\n```");
             try {
                 var block = All<TextBlock>(view).First(t => Reads(t).Contains("hello", StringComparison.Ordinal));
-                var mid = block.TextLayout.HitTestTextPosition(0);
+                var offset = line * 12;
+                var mid = block.TextLayout.HitTestTextPosition(offset);
                 var origin = block.TranslatePoint(new Point(mid.X, mid.Y + mid.Height / 2), window)!.Value;
-                var end = block.TranslatePoint(new Point(block.TextLayout.HitTestTextPosition(10).X, mid.Y + mid.Height / 2), window)!.Value;
+                var end = block.TranslatePoint(new Point(block.TextLayout.HitTestTextPosition(offset + 10).X, mid.Y + mid.Height / 2), window)!.Value;
                 Drag(window, new Point(origin.X - 8, origin.Y), end);
-                await Assert.That(await Copied(view)).Contains("hello");
+                await Assert.That(await Copied(view)).IsEqualTo(expected);
+            } finally { window.Close(); }
+        });
+    }
+
+    [Test]
+    [Arguments("above")]
+    [Arguments("below")]
+    [Arguments("left")]
+    [Arguments("right")]
+    [NotInParallel]
+    public async Task A_drag_outside_code_line_padding_does_not_start_selection(string side) {
+        await RunOnUiAsync(async () => {
+            var (window, view, _) = Show("```\nhello world\n```\n\nNearby text");
+            try {
+                var block = BlockReading(view, "hello world");
+                var border = (Border)block.GetVisualParent()!;
+                var origin = border.TranslatePoint(default, window)!.Value;
+                var line = At(window, block, -8);
+                var start = side switch {
+                    "above" => new Point(line.X, origin.Y + 2),
+                    "below" => new Point(line.X, origin.Y + border.Bounds.Height - 2),
+                    "left" => new Point(origin.X - 8, line.Y),
+                    _ => At(window, block, block.Bounds.Width + 8),
+                };
+                Drag(window, start, At(window, block, 30));
+                await Assert.That(MarkViewSelection.HasSelection(Viewer(view))).IsFalse();
+                await Assert.That(MarkViewSelection.IsSelecting(Viewer(view))).IsFalse();
+            } finally { window.Close(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Dragging_a_linked_block_image_does_not_select_nearby_text() {
+        await RunOnUiAsync(async () => {
+            var (window, view, _) = Show("[![picture](https://example.com/image.png)](https://example.com)\n\nNearby text", MarkdownFlavor.GitHub);
+            try {
+                var image = Images(view).Single();
+                var start = image.TranslatePoint(new Point(image.Bounds.Width / 2, image.Bounds.Height / 2), window)!.Value;
+                window.MouseMove(start);
+                window.MouseDown(start, MouseButton.Left);
+                await Assert.That(MarkViewSelection.IsSelecting(Viewer(view))).IsFalse();
+                window.MouseMove(At(window, BlockReading(view, "Nearby text"), 30), RawInputModifiers.LeftMouseButton);
+                await Assert.That(MarkViewSelection.HasSelection(Viewer(view))).IsFalse();
+                window.MouseUp(start, MouseButton.Left);
             } finally { window.Close(); }
         });
     }
