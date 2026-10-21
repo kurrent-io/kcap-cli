@@ -233,7 +233,7 @@ invalid (6.3): then the section stays, showing the invalid choice marked as remo
 that exist, so the Default row is always reachable. The account Default row is distinct from the
 model list's "Default — Claude chooses" row, which picks a model, not an account. For an
 unsupported target (6.3) the section is absent; while the selection is pending it shows one line,
-"Loading accounts…", in place of rows.
+"Loading accounts…", in place of rows, with a Retry action once a fetch has failed.
 
 ### 6.2 The chip
 
@@ -247,7 +247,13 @@ connection: *unknown* until the current server's daemon listing has answered for
 *unsupported* when an authoritative listing shows the daemon without `accounts/1`, and *supported*
 when it shows the flag. Unknown is the state before the first listing, after a failed fetch, and
 after any reconnect or profile switch until the listing answers again; it is never read as
-unsupported. The flag is read from the server's listing for local and remote targets alike: the
+unsupported. The listing service refreshes only on connection changes and daemon-change
+notifications today, so a transient failure on a healthy connection would leave support unknown for
+good: while support is unknown for the selected target, the app retries the listing fetch with a
+bounded backoff, starting at a few seconds and capped at half a minute, and the pending line offers
+**Retry**, which fetches at once. Retries and their results are scoped to the current server
+connection and target; a result from a superseded connection is rejected. A failure never becomes
+unsupported and never selects the default. The flag is read from the server's listing for local and remote targets alike: the
 local daemon's readiness and its socket snapshot never stand in for it, since the launch travels
 through the server, and the daemon list is fetched after the connection and apart from local
 readiness. A target is **account-capable** when it is supported and a complete snapshot (5.1) for
@@ -435,7 +441,10 @@ README and `help-*.txt` change with the PR that changes user-facing behaviour.
   new daemon behind an old server restores nothing and sends null, but only once that server's
   listing has answered; a ready local daemon with a delayed or failed first listing and a saved
   non-default account captures no draft and sends nothing until the listing and the snapshot
-  resolve; a reconnect returns support to unknown and Start waits; a choice made on a supported
+  resolve, and with the connection kept up and no daemon-change notification the retry, or Retry,
+  fetches again, after which the remembered account restores and Start is available without a
+  restart or a reconnect; a result from a superseded connection is ignored; a reconnect returns
+  support to unknown and Start waits; a choice made on a supported
   target survives support withdrawal while idle as explicit-invalid, Start refuses named and sends
   nothing; Start before the first complete snapshot of a supported target is disabled and captures
   no draft, and a snapshot arriving during an in-flight upload changes nothing; an explicit
