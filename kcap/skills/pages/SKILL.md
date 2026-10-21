@@ -26,7 +26,9 @@ artifact" — which you honor as asked.
   image as a data URI. An external URL renders as nothing, silently.
 - `title` is required; `description` is one line saying what the page is for.
 - A page is private to its owner. Set `visibility` (`org`, or `scoped` with
-  `grants`) when the user said who else should open it; otherwise leave it.
+  `grants`) when the user said who else should open it. When they asked for
+  something to share but named nobody, ask who should open it before you
+  publish. A request that mentions no one else stays private.
 - A revision of a page you already published is `publish_page` with
   `update_id` — the URL does not change.
 - To ask the readers something, declare a `response_schema`; then
@@ -37,7 +39,8 @@ artifact" — which you honor as asked.
 The result carries the page's `url`. Do both of these, in this order:
 
 1. **Put the link in your reply.** Every time, whatever else happens; it is
-   what the user forwards.
+   what the user forwards. A private page opens only for them: say so when
+   you left it private.
 2. **Open it in your harness's browser tool, if it has one.** Claude Code's
    desktop app has a browser pane (`navigate` or `preview_start` with the
    URL); Cursor and Antigravity have browsers of their own. Use that tool with

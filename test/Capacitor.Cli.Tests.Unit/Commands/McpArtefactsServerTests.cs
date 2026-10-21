@@ -354,16 +354,21 @@ public class McpArtefactsServerTests {
     public async Task Every_steering_surface_claims_a_request_for_an_artifact(string surface, string text) =>
         await Assert.That(text.Contains("artifact", StringComparison.OrdinalIgnoreCase)).IsTrue().Because(surface);
 
+    /// <summary>One JSON block, not two content items: harnesses join a result's blocks into one
+    /// string, and the desktop app's page card parses that string as a single JSON document.</summary>
     [Test]
-    public async Task A_published_page_comes_back_with_its_record_and_what_to_do_with_the_link() {
+    public async Task A_published_page_comes_back_as_one_json_block_carrying_the_follow_up() {
         var response = JsonNode.Parse(McpArtefactsServer.BuildPublishResult(
             JsonValue.Create(7)!, """{"artefact":{"artefact_id":"a1","url":"https://kcap.test/pages/a1"}}"""))!;
 
         var content = response["result"]!["content"]!.AsArray();
 
-        await Assert.That(content.Count).IsEqualTo(2);
-        await Assert.That(content[0]!["text"]!.GetValue<string>()).Contains("\"page_id\"");
-        await Assert.That(content[1]!["text"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.PublishFollowUp);
+        await Assert.That(content.Count).IsEqualTo(1);
+
+        var result = JsonNode.Parse(content[0]!["text"]!.GetValue<string>())!.AsObject();
+
+        await Assert.That(result["page"]!["page_id"]!.GetValue<string>()).IsEqualTo("a1");
+        await Assert.That(result["follow_up"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.PublishFollowUp);
         await Assert.That(response["result"]!["isError"]).IsNull();
     }
 

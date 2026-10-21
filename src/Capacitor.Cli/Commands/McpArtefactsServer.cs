@@ -445,9 +445,18 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         "Put this link in your reply. If your harness has a browser tool, also open the link there now; "
       + "do not open a system browser.";
 
-    internal static string BuildPublishResult(JsonNode id, string body) =>
-        ToResponse<McpToolCallResult>(
-            id, new([new("text", PageResultKeys.Rename(body)), new("text", PublishFollowUp)]), McpJsonContext.Default.McpToolCallResult);
+    /// <summary>The follow-up rides inside the one JSON block rather than as a second content item:
+    /// harnesses join a result's blocks into one string, and the page card is built by parsing
+    /// that string as a single JSON document.</summary>
+    internal static string BuildPublishResult(JsonNode id, string body) {
+        var renamed = PageResultKeys.Rename(body);
+
+        if (JsonNode.Parse(renamed) is not JsonObject page) return BuildToolResult(id, renamed);
+
+        page["follow_up"] = PublishFollowUp;
+
+        return BuildToolResult(id, page.ToJsonString(PageResultKeys.Output));
+    }
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
         ToResponse<McpToolCallResult>(id, new([new("text", text)], isError ? true : null), McpJsonContext.Default.McpToolCallResult);
