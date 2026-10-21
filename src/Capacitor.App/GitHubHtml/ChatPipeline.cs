@@ -1,6 +1,7 @@
 using Markdig;
 using Markdig.Renderers;
 using Markdig.Syntax;
+using Markdig.Syntax.Inlines;
 using MarkView.Avalonia;
 
 namespace Capacitor.App.GitHubHtml;
@@ -19,7 +20,16 @@ public static class ChatPipeline {
 
         static void Process(MarkdownDocument document) {
             foreach (var leaf in document.Descendants<LeafBlock>())
-                if (leaf.Inline is { } root) LinkHoister.Hoist(root);
+                if (leaf.Inline is { } root) {
+                    foreach (var auto in root.Descendants<AutolinkInline>().ToArray()) {
+                        var link = new LinkInline(auto.IsEmail ? "mailto:" + auto.Url : auto.Url, "") {
+                            IsAutoLink = true, IsClosed = true,
+                        };
+                        link.AppendChild(new LiteralInline(auto.Url));
+                        auto.ReplaceBy(link, copyChildren: false);
+                    }
+                    LinkHoister.Hoist(root, includeImages: false);
+                }
         }
     }
 }

@@ -5,18 +5,18 @@ namespace Capacitor.App.GitHubHtml;
 /// Lifts links above their emphasis ancestors. MarkView activates only a hyperlink that is a
 /// direct inline of its text block, and the emphasis renders the same from inside the link.
 static class LinkHoister {
-    public static void Hoist(ContainerInline root) {
+    public static void Hoist(ContainerInline root, bool includeImages = true) {
         var links = new List<LinkInline>();
-        Collect(root, links);
+        Collect(root, links, includeImages);
         // Last link first: what follows a link inside its emphasis moves to a trailing copy, and
         // going backwards leaves each inline to be moved once rather than once per earlier link.
         for (var i = links.Count - 1; i >= 0; i--) HoistOne(links[i]);
     }
 
-    static void Collect(ContainerInline container, List<LinkInline> links) {
+    static void Collect(ContainerInline container, List<LinkInline> links, bool includeImages) {
         for (var child = container.FirstChild; child is not null; child = child.NextSibling) {
-            if (child is LinkInline link) links.Add(link);
-            if (child is ContainerInline nested) Collect(nested, links);
+            if (child is LinkInline link && (includeImages || !link.IsImage)) links.Add(link);
+            if (child is ContainerInline nested) Collect(nested, links, includeImages);
         }
     }
 

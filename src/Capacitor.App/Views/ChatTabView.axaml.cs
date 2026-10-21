@@ -35,7 +35,10 @@ public partial class ChatTabView : UserControl {
     MarkdownView? _dragView;
     /// A press is in flight. Follow-tail must not move the transcript under that pointer, or a
     /// link click is measured as a drag and dropped.
-    bool _primaryDown;
+    IPointer? _primaryPointer;
+    TopLevel? _pointerRoot;
+    bool _tailDeferred;
+    bool PrimaryDown => _primaryPointer is not null;
     double? _thumbFraction;
     double _smoothRemaining;
     bool _smoothFrameQueued;
@@ -91,6 +94,10 @@ public partial class ChatTabView : UserControl {
     /// the same view, and a behaviour disposed on the way out has to come back with it.
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
         base.OnAttachedToVisualTree(e);
+        _pointerRoot = TopLevel.GetTopLevel(this);
+        _pointerRoot?.AddHandler(PointerReleasedEvent, OnPrimaryReleased, RoutingStrategies.Tunnel, handledEventsToo: true);
+        _pointerRoot?.AddHandler(PointerCaptureLostEvent, OnPrimaryCaptureLost, RoutingStrategies.Direct | RoutingStrategies.Bubble, handledEventsToo: true);
+        if (_pointerRoot is Window window) window.Deactivated += OnWindowDeactivated;
         _attachments ??= AttachmentDropPaste.Attach(
             ComposerCard, ComposerInput, AttachButton,
             () => (DataContext as ChatTabViewModel)?.Attachments, TimeProvider.System);
@@ -106,7 +113,8 @@ public partial class ChatTabView : UserControl {
         _readerGesture = false;
         _dragSelecting = false;
         _dragView = null;
-        _primaryDown = false;
+        _primaryPointer = null;
+        _tailDeferred = false;
         _followTail = true;
         base.OnDataContextChanged(e);
     }
@@ -118,7 +126,12 @@ public partial class ChatTabView : UserControl {
         _thumbFraction = null;
         _dragSelecting = false;
         _dragView = null;
-        _primaryDown = false;
+        _primaryPointer = null;
+        _tailDeferred = false;
+        _pointerRoot?.RemoveHandler(PointerReleasedEvent, OnPrimaryReleased);
+        _pointerRoot?.RemoveHandler(PointerCaptureLostEvent, OnPrimaryCaptureLost);
+        if (_pointerRoot is Window window) window.Deactivated -= OnWindowDeactivated;
+        _pointerRoot = null;
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
@@ -129,10 +142,9 @@ public partial class ChatTabView : UserControl {
     internal bool CanPreserveReadingPosition => !_followTail && _anchorItem is null && _thumbFraction is null;
 
     void OnReaderGesture(object? sender, RoutedEventArgs e) {
-        if (e.RoutedEvent == PointerPressedEvent)
-            _primaryDown = e is PointerPressedEventArgs pressed && pressed.GetCurrentPoint(ChatItems).Properties.IsLeftButtonPressed;
-        else if (e.RoutedEvent == PointerReleasedEvent)
-            _primaryDown = false;
+        if (e is PointerPressedEventArgs pressed && _primaryPointer is null
+            && pressed.GetCurrentPoint(ChatItems).Properties.PointerUpdateKind == PointerUpdateKind.LeftButtonPressed)
+            _primaryPointer = pressed.Pointer;
         _listInputVersion++;
         // A TextBox in the list (Other…, free-text) is editing, not reading: arming follow-tail
         // would ScrollToEnd and recycle its virtualizing row, which drops the caret.
@@ -151,6 +163,31 @@ public partial class ChatTabView : UserControl {
         if (_readerGesture) return;
         _readerGesture = true;
         Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+    }
+
+    void OnPrimaryReleased(object? sender, PointerReleasedEventArgs e) {
+        if (ReferenceEquals(e.Pointer, _primaryPointer) && e.InitialPressMouseButton == MouseButton.Left)
+            CompletePrimaryPress();
+    }
+
+    void OnPrimaryCaptureLost(object? sender, PointerCaptureLostEventArgs e) {
+        if (ReferenceEquals(e.Pointer, _primaryPointer)) CompletePrimaryPress();
+    }
+
+    void OnWindowDeactivated(object? sender, EventArgs e) => CompletePrimaryPress();
+
+    void CompletePrimaryPress() {
+        _primaryPointer = null;
+        _dragSelecting = false;
+        if (!_tailDeferred) return;
+        _tailDeferred = false;
+        var context = DataContext;
+        Dispatcher.UIThread.Post(() => {
+            if (PrimaryDown || !_followTail || _dragSelecting || _anchorItem is not null
+                || _thumbFraction is not null || ListTextBoxOwnsFocus()
+                || !ReferenceEquals(context, DataContext) || _pointerRoot is null) return;
+            _scroll?.ScrollToEnd();
+        }, DispatcherPriority.Background);
     }
 
     void OnChatWheelChanged(object? sender, PointerWheelEventArgs e) {
@@ -405,8 +442,13 @@ public partial class ChatTabView : UserControl {
         // same layout pass. That still counts as the reader returning to the bottom.
         var reachedEstimatedEnd = e.OffsetDelta.Y > 0 && e.ExtentDelta.Y > 0
             && ChatItems.ItemsPanelRoot is ChatVirtualizingPanel { MeasuredAtEstimatedEnd: true };
-        _followTail = _readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd;
-        if (_followTail && !atBottom && !_primaryDown) scroll.ScrollToEnd();
+        var extentOnlyWhilePressed = PrimaryDown && _followTail
+            && e.ExtentDelta.Y > 0 && Math.Abs(e.OffsetDelta.Y) <= 0.5;
+        _followTail = extentOnlyWhilePressed || (_readerGesture ? atBottom || reachedEstimatedEnd : _followTail || atBottom || reachedEstimatedEnd);
+        if (_followTail && !atBottom) {
+            if (PrimaryDown) _tailDeferred = true;
+            else scroll.ScrollToEnd();
+        }
     }
 
     void OnSelectionDrag(object? sender, PointerEventArgs e) {
