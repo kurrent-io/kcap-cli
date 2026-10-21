@@ -91,6 +91,8 @@ public class AcpInteractionBridgeJudgeTests : IDisposable {
             policyCwd: "/wt",
             policyJudge: withJudge ? gateway : null,
             judgeBudget: budget ?? TimeSpan.FromSeconds(30));
+        // What the runtime does once its session/new answers.
+        harness.Bridge.MarkBridgedSinceStart(AcpSessionId);
 
         return harness;
     }

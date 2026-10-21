@@ -1536,7 +1536,12 @@ public readonly record struct AcpEventEnvelope(
         // The subagent an event belongs to, and on subagent_started its role; null for the hosted
         // agent's own events. A server without these fields records a subagent's events as the parent's.
         string? AgentId   = null,
-        string? AgentType = null
+        string? AgentType = null,
+
+        // user_message — the vendor turn it opens. Sent only when set, so a server that predates it sees the
+        // shape it always has.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        string? TurnId = null
     );
 
 /// <summary>

@@ -5,6 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
@@ -57,6 +58,9 @@ public class CodexHookCommandTests : IDisposable {
         var root = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
         await Assert.That(root.GetProperty("session_id").GetString()).IsEqualTo("019e032205fc7570be6575719c3ea861");
         await Assert.That(root.GetProperty("home_dir").GetString()).IsNotNull();
+
+        // The approval policy is frozen at session start, under the key PreToolUse reads it by.
+        await Assert.That(new PolicySnapshotStore(Config.Root).TryLoad("019e032205fc7570be6575719c3ea861")).IsNotNull();
 
         // SessionStart also writes Codex's required JSON output to stdout.
         // We can't reliably capture stdout here because the test path spawns a
@@ -348,6 +352,27 @@ public class CodexHookCommandTests : IDisposable {
 
         // No HTTP requests should have been issued.
         await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+    }
+
+    /// A deny rule must bind a call Codex runs unasked wherever it runs, the hosted app-server included.
+    [Test, NotInParallel]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task PreToolUse_answers_a_deny_rule_in_every_mode(bool hostedAppServer) {
+        File.WriteAllText(Config.Root.Path("approvals.yaml"),
+            "version: 1\nrules:\n  - match: { kind: shell, command: \"rm -rf *\" }\n    outcome: deny\n");
+        using var marker  = EnvScope.Exclusive("KCAP_HOSTED_APPSERVER", hostedAppServer ? "1" : null);
+        using var capture = ConsoleOutput.StartCapture();
+
+        {
+            var payload = """{"hook_event_name":"PreToolUse","session_id":"01a15cd7-3e2d-75b2-ad28-c00f7dbcf5d0","tool_name":"Bash","tool_input":{"command":"rm -rf build"},"tool_use_id":"exec-1","cwd":"/tmp"}""";
+
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+
+            await Assert.That(exit).IsEqualTo(0);
+            var output = JsonDocument.Parse(capture.GetCapturedOutput()).RootElement.GetProperty("hookSpecificOutput");
+            await Assert.That(output.GetProperty("permissionDecision").GetString()).IsEqualTo("deny");
+        }
     }
 
     [Test]
