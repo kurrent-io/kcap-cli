@@ -230,6 +230,10 @@ internal record AgentInstance(
     /// Null when no provider was wired, or when the build failed.</summary>
     public PolicySnapshot?      PolicySnapshot    { get; init; }
 
+    /// <summary>Launched fresh by this daemon process, so every permission it raised passed through this
+    /// daemon's bridges; never for a resume or an adopted agent, whose earlier refusals this process never saw.</summary>
+    public bool                 BridgedSinceStart { get; init; }
+
     /// <summary>The runtime transport this agent actually launched on, reported to the server on
     /// AgentRegistered so it can validate its launch decision. Each runtime owns its own transport
     /// (<see cref="IHostedAgentRuntime.RuntimeTransport"/>), so this reports the same value on initial
@@ -1107,21 +1111,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (query.AgentId is { Length: > 0 } rawId) {
             var raw = live.Where(a => string.Equals(a.Id, rawId, StringComparison.Ordinal)).ToList();
-            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot);
+            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot, raw[0].BridgedSinceStart);
             if (PermissionWire.Canonical(rawId) is { } canonicalId) {
                 var canon = live.Where(a => PermissionWire.Canonical(a.Id) == canonicalId).ToList();
-                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot);
+                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot, canon[0].BridgedSinceStart);
             }
         }
 
         var bySession = live.Where(a => a.SessionId is { } s && PermissionWire.Canonical(s) == canonicalSession).ToList();
-        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot);
+        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot, bySession[0].BridgedSinceStart);
 
         if (query.Cwd is { Length: > 0 } cwd) {
             var wanted = Path.TrimEndingDirectorySeparator(cwd);
             var byCwd = live.Where(a => string.Equals(
                 Path.TrimEndingDirectorySeparator(a.Worktree.Path), wanted, RepoPathStore.PathComparison)).ToList();
-            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot);
+            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot, byCwd[0].BridgedSinceStart);
         }
 
         return null;
@@ -2985,6 +2989,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // interactive ACP launch (the policy above rejects any other shape).
                 PermissionPreset    = cmd.AcpPermissionPreset,
                 PolicySnapshot      = policySnapshot,
+                BridgedSinceStart   = resume is null && cmd.ResumeSessionId is null,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,
                 Placement           = placement,

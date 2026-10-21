@@ -14,7 +14,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 internal readonly record struct PermissionAttribution(string? AgentId, string SessionId, string? Cwd);
-internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null);
+internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null, bool BridgedSinceStart = false);
 
 /// <summary>
 /// Localhost-only HTTP bridge that fronts the server's permission flow for spawned
@@ -658,6 +658,8 @@ internal sealed partial class LocalPermissionBridge(
                 var canonicalSessionId = PermissionWire.Canonical(sessionId);
                 var attributed = canonicalSessionId is null ? null : AttributeHandler?.Invoke(new PermissionAttribution(
                     node["agent_id"]?.GetValue<string>(), canonicalSessionId, node["cwd"]?.GetValue<string>()));
+                // Every prompt of a run this daemon launched fresh passes through here, so its refusals are all known.
+                if (attributed is { BridgedSinceStart: true }) _refusals.MarkBridgedSinceStart(canonicalSessionId!);
                 var pending = attributed is { } a
                     ? BuildPending(Guid.NewGuid().ToString("N"), a.AgentId, canonicalSessionId!, vendor, toolName, toolInput, suggestions,
                         time.GetUtcNow().ToString("O"), ToolUseIdOf(node))

@@ -32,13 +32,13 @@ public class LocalPermissionBridgeJudgeTests {
         public HttpClient             Client { get; } = new() { Timeout = TimeSpan.FromSeconds(30) };
         public LocalPermissionBridge  Bridge { get; }
 
-        public Harness() {
+        public Harness(bool bridgedSinceStart = true) {
             var gateway = new PolicyJudgeGateway(
                 () => Task.FromResult(new AuthAttempt(new HttpClient(), AuthStatus.NoAuthRequired)), Judge.Url, TimeProvider.System);
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance,
                 TimeProvider.System, Broker, new PermissionDecisionLog(Tmp.Path, NullLogger.Instance), gateway,
                 new ConfigRoot(Tmp.CreateDir("config").Path)) {
-                AttributeHandler = _ => new AttributedAgent("agent-1", Governed),
+                AttributeHandler = _ => new AttributedAgent("agent-1", Governed, bridgedSinceStart),
                 // Far above production's: a cold first consultation under a loaded suite can outlive
                 // it and park the request on a card nothing settles.
                 JudgeBudget = TimeSpan.FromSeconds(20),
@@ -156,5 +156,19 @@ public class LocalPermissionBridgeJudgeTests {
         await Assert.That(refused.GetProperty("tool_use_id").GetString()).IsEqualTo("toolu_1");
         await Assert.That(refused.GetProperty("tool").GetString()).IsEqualTo("Bash");
         await Assert.That(refused.GetProperty("target").GetString()).IsEqualTo("git push");
+    }
+
+    /// A resumed or adopted agent may have been refused before this daemon saw it, so its refusals are never complete.
+    [Test]
+    public async Task An_agent_this_daemon_did_not_launch_fresh_declares_incomplete_refusals() {
+        await using var h = new Harness(bridgedSinceStart: false);
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        var call = h.PostAsync("make release", "toolu_1");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+        await call;
+
+        await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsFalse();
     }
 }
