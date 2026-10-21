@@ -24,6 +24,8 @@ public class LocalPermissionBridgeJudgeTests {
         new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Rules,
             PolicyDocumentBinder.Bind(Rules, PolicyScope.Repo))], false, []);
 
+    static PolicySnapshot Ungoverned => new("snap-0", [], false, []);
+
     sealed class Harness : IAsyncDisposable {
         public WireMockServer         Judge  { get; } = WireMockServer.Start();
         public PolicyServerConnection Server { get; } = new();
@@ -38,7 +40,11 @@ public class LocalPermissionBridgeJudgeTests {
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance,
                 TimeProvider.System, Broker, new PermissionDecisionLog(Tmp.Path, NullLogger.Instance), gateway,
                 new ConfigRoot(Tmp.CreateDir("config").Path)) {
-                AttributeHandler = a => a.AgentId == "agent-1" ? new AttributedAgent("agent-1", Governed, bridgedSinceStart) : null,
+                AttributeHandler = a => a.AgentId switch {
+                    "agent-1"          => new AttributedAgent("agent-1", Governed, bridgedSinceStart),
+                    "agent-ungoverned" => new AttributedAgent("agent-ungoverned", Ungoverned, bridgedSinceStart),
+                    _                  => null,
+                },
                 // Far above production's: a cold first consultation under a loaded suite can outlive
                 // it and park the request on a card nothing settles.
                 JudgeBudget = TimeSpan.FromSeconds(20),
@@ -218,16 +224,21 @@ public class LocalPermissionBridgeJudgeTests {
         await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsTrue();
     }
 
-    /// A deny no agent could be attributed for cannot be described, but it still happened in the session.
+    /// A deny the ledger cannot describe, for an agent nobody could attribute or one no judge governs, still
+    /// happened in the session.
     [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
-    public async Task An_unattributed_deny_leaves_the_sessions_refusals_incomplete() {
+    [Arguments("agent-unknown")]
+    [Arguments("agent-ungoverned")]
+    public async Task A_deny_the_ledger_cannot_describe_leaves_the_sessions_refusals_incomplete(string agentId) {
         await using var h = new Harness();
         h.Answer("uncertain");
         await h.StartAsync();
 
         h.Server.UnattributedAnswer = new PermissionDecision("deny", null, null);
-        var first = await h.PostAsync("git push", "toolu_1", agentId: "agent-unknown");
-        await Assert.That(await Harness.BehaviorOf(first)).IsEqualTo("deny");
+        var first = h.PostAsync("git push", "toolu_1", agentId);
+        if (agentId == "agent-ungoverned")
+            h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("deny", null, null), "deny", "app");
+        await Assert.That(await Harness.BehaviorOf(await first)).IsEqualTo("deny");
 
         var retry = h.PostAsync("git push", "toolu_2");
         h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");

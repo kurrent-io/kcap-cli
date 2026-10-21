@@ -884,13 +884,11 @@ internal sealed partial class LocalPermissionBridge(
         if (vendor is not ("claude" or "codex") || behavior != PermissionSettlements.Deny || sessionId is null)
             return;
 
-        if (attributed is null) {
+        // A deny the ledger cannot describe still happened in the session, whichever agent it was attributed to.
+        if (attributed is not { PolicySnapshot.JudgeEnabled: true } governed) {
             _refusals.MarkIncomplete(sessionId);
             return;
         }
-
-        if (attributed is not { PolicySnapshot.JudgeEnabled: true } governed)
-            return;
 
         try {
             var call = new ClaudeHostedPermissionCall(sessionId, governed.AgentId,
@@ -899,6 +897,7 @@ internal sealed partial class LocalPermissionBridge(
             else ClaudeHostedPolicySeam.RecordRefusal(_refusals, call);
         } catch (Exception ex) {
             logger.LogDebug(ex, "Recording a hosted refusal for session {SessionId} failed", sessionId);
+            _refusals.MarkIncomplete(sessionId);
         }
     }
 
