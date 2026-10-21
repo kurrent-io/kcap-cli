@@ -138,6 +138,20 @@ public class ShimOfferCoordinatorTests {
         await Assert.That(h.Surface.StatusMessages).IsEquivalentTo([why]);
     }
 
+    /// The link can fail its own check yet leave kcap reachable; a fresh probe that finds it has
+    /// nothing to warn about.
+    [Test]
+    public async Task An_unfinished_wizard_link_says_nothing_once_kcap_is_found() {
+        using var h = new Harness(immediatePhaseClosed: true, pendingLink: Task.FromResult<string?>("Could not finish."));
+        var probed = false;
+        h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(true); };
+        h.Coordinator.Start();
+
+        await WaitUntilAsync(() => probed, what: "the startup probe");
+        await Task.Delay(50); // give a wrongly-posted warning every chance to appear
+        await Assert.That(h.Surface.StatusMessages).IsEmpty();
+    }
+
     [Test]
     public async Task Offer_proceeds_immediately_when_PhaseClosed_is_already_completed() {
         using var h = new Harness(immediatePhaseClosed: true);

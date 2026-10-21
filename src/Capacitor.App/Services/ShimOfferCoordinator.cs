@@ -67,14 +67,16 @@ public sealed class ShimOfferCoordinator {
     async Task RunAsync() {
         try {
             await _phaseClosed.ConfigureAwait(false);
-            // A probe before the setup wizard's link settles would offer what is about to exist. Its
-            // failure is said here: setup may never have shown it, and the preflight below can
-            // return without a dialog.
-            if (await AwaitPendingLinkAsync().ConfigureAwait(false) is { } unfinished) await Status(unfinished).ConfigureAwait(false);
+            // A probe before the setup wizard's link settles would offer what is about to exist.
+            var unfinished = await AwaitPendingLinkAsync().ConfigureAwait(false);
             if (_target is null) return; // nothing to link — offer and menu item both stay off
 
             var onPath = await _probe.KcapOnPathAsync(_lifetime).ConfigureAwait(false);
-            if (onPath != false) return; // true (already on PATH) or unknown → never auto-offer, item stays hidden
+            if (onPath == true) return;
+            // Said here because setup may never have shown it, and the preflight below can return
+            // without a dialog.
+            if (unfinished is not null) await Status(unfinished).ConfigureAwait(false);
+            if (onPath is null) return; // unknown → never auto-offer, item stays hidden
 
             _offerable.OnNext(true); // applicable-but-absent — the menu item is live from here on
 
