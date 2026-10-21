@@ -579,22 +579,65 @@ public class ChatTabViewSmokeTests {
     public async Task A_link_in_an_assistant_row_opens_through_the_tabs_command() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("link.jsonl", [AssistantLinkLine]));
+            var path = Tmp.CreateFile("link.jsonl", Enumerable.Repeat(UserLine, 40).Append(AssistantLinkLine).ToArray());
+            await host.LoadAsync(path);
 
-            await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
+            await Assert.That(host.Chat.Items).Count().IsEqualTo(41);
 
-            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph"));
+            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph") && MarkdownViewHarness.Reads(t).Contains("docs", StringComparison.Ordinal));
             var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
             var origin = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), host.Window)!.Value;
             host.Window.MouseMove(origin);
             host.Window.MouseDown(origin, MouseButton.Left);
+            await host.AppendAndTickAsync(path, 4);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
             host.Window.MouseUp(origin, MouseButton.Left);
-            Dispatcher.UIThread.RunJobs();
+            host.Settle();
 
+            await Assert.That(host.AtBottom()).IsTrue();
             await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { "https://example.com/docs" });
             await host.CloseAsync();
         });
     }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Follow_tail_resumes_after_a_primary_press(bool releaseOutside, bool loseCapture) => RunOnUiAsync(async () => {
+        var host = new Host();
+        try {
+            var path = Tmp.CreateFile("press-tail.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
+            await host.LoadAsync(path);
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var point = PresentAndLocate(host, items);
+            host.Window.MouseMove(point);
+            host.Window.MouseDown(point, MouseButton.Left);
+            await host.AppendAndTickAsync(path, 4);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
+            host.Window.MouseDown(point, MouseButton.Right, RawInputModifiers.LeftMouseButton);
+            host.Window.MouseUp(point, MouseButton.Right, RawInputModifiers.LeftMouseButton);
+            await host.AppendAndTickAsync(path, 2);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
+            if (loseCapture) {
+                IPointer? pointer = null;
+                host.Window.AddHandler(InputElement.PointerMovedEvent, (_, e) => pointer = e.Pointer, RoutingStrategies.Tunnel);
+                host.Window.MouseMove(point, RawInputModifiers.LeftMouseButton);
+                pointer!.Capture(items);
+                pointer.Capture(null);
+            } else {
+                var release = releaseOutside ? PresentAndLocate(host, host.Composer) : point;
+                host.Window.MouseUp(release, MouseButton.Left);
+            }
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+            if (loseCapture) host.Window.MouseUp(point, MouseButton.Left);
+        } finally { await host.CloseAsync(); }
+    });
 
     /// A labelled row shows its verb phrase beside the detail; once the result lands the same item
     /// renders as a card with the page's name and its actions, and the plain row is gone.
