@@ -28,6 +28,7 @@ public sealed class SessionRuns(TimeProvider time) {
     readonly int[] _counts = new int[Enum.GetValues<RunState>().Length];
     int _runningBackground;
     bool _sessionOver;
+    bool _opensSubagents = true;
 
     public IAvaloniaReadOnlyList<RunRow> Rows => _rows;
     /// The rows of Rows that present as running, in arrival order.
@@ -49,6 +50,16 @@ public sealed class SessionRuns(TimeProvider time) {
             if (_sessionOver == value) return;
             _sessionOver = value;
             Refresh();
+        }
+    }
+
+    /// Whether this lane can open a subagent's own transcript; a row offers to open only when it can.
+    public bool OpensSubagents {
+        get => _opensSubagents;
+        set {
+            if (_opensSubagents == value) return;
+            _opensSubagents = value;
+            foreach (var row in _rows) row.Openable = value;
         }
     }
 
@@ -118,7 +129,7 @@ public sealed class SessionRuns(TimeProvider time) {
     }
 
     RunRow Add(RunSignal.Started started) {
-        var row = new RunRow(started.CallId, started.Name, started.Description, started.At, started.Kind);
+        var row = new RunRow(started.CallId, started.Name, started.Description, started.At, started.Kind) { Openable = _opensSubagents };
         _byCall[started.CallId] = row;
         _rows.Add(row);
         if (row.Kind == RunKind.Agent) {

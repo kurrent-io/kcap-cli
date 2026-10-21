@@ -19,6 +19,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     readonly bool _ownTranscript;
 
+    public bool StartsSubagentRows => true;
+
     const string StoppedTaskMessage = "Successfully stopped task";
     const string HandbackPointer = "This agent's report was delivered to you as a message";
 
