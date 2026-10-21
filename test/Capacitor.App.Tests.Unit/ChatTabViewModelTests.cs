@@ -24,6 +24,46 @@ namespace Capacitor.App.Tests.Unit;
 public class ChatTabViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Read_paths_wrap_but_Edit_paths_keep_compact_previews() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = "/repo/" + new string('a', 80) + "/parent/file.cs";
+            await h.PushAsync(Dto(Tmp.CreateFile("read-edit-paths.jsonl", [
+                $$$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"{{{{path}}}}"}},{"type":"tool_use","id":"edit","name":"Edit","input":{"file_path":"{{{{path}}}}","old_string":"a","new_string":"b"}}]}}""",
+            ])));
+            var calls = Group(h.Chat, 0).Calls;
+            await Assert.That(calls[0].Category).IsEqualTo(ToolCategory.Read);
+            await Assert.That(calls[0].DetailIsPath).IsTrue();
+            await Assert.That(calls[0].Detail.EndsWith("/parent/file.cs", StringComparison.Ordinal)).IsTrue();
+            await Assert.That(calls[1].Category).IsEqualTo(ToolCategory.Edit);
+            await Assert.That(calls[1].DetailIsPath).IsFalse();
+            var folded = new ToolGroupItem();
+            folded.Add(calls[1]);
+            folded.Add(new ToolCallItem("Read", "other.cs", ToolCategory.Read) { Outcome = ToolOutcome.Done });
+            calls[1].Outcome = ToolOutcome.Done;
+            await Assert.That(folded.SummaryLine.Split(" · ")[1].Length).IsLessThanOrEqualTo(56);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_path_formatted_details_get_path_rendering() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            await h.PushAsync(Dto(Tmp.CreateFile("path-details.jsonl", [
+                """{"type":"assistant","message":{"content":[{"type":"tool_use","id":"p1","name":"Read","input":{"path":"/a/b.cs"}},{"type":"tool_use","id":"p2","name":"mcp__linear__save_issue","input":{"path":"/a/b.cs"}},{"type":"tool_use","id":"p3","name":"mcp__plugin_kcap_kcap-artefacts__publish_artefact","input":{"path":"/a/b.cs","title":"Page"}}]}}""",
+            ])));
+            var calls = Group(h.Chat, 0).Calls;
+            await Assert.That(calls[0].DetailIsPath).IsTrue();
+            await Assert.That(calls[1].DetailIsPath).IsFalse();
+            await Assert.That(calls[2].DetailIsPath).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task A_remote_feed_switch_drains_after_the_previous_read_without_a_poll() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
@@ -264,7 +304,7 @@ public class ChatTabViewModelTests {
             await Assert.That(((UserTurnItem)h.Chat.Items[0]).Text).IsEqualTo("hello");
             await Assert.That(Group(h.Chat, 2).Calls[0].Detail).IsEqualTo("ls -la");
             await Assert.That(Group(h.Chat, 2).Calls[0].Outcome).IsEqualTo(ToolOutcome.Running);
-            await Assert.That(Group(h.Chat, 2).Calls[0].Category).IsEqualTo(ToolCategory.Search);
+            await Assert.That(Group(h.Chat, 2).Calls[0].Category).IsEqualTo(ToolCategory.Command);
             await h.TeardownAsync();
         });
     }
@@ -425,7 +465,7 @@ public class ChatTabViewModelTests {
             File.AppendAllText(path, ToolResultLine + "\n");
             await h.TickAsync();
             await Assert.That(group.LiveCalls.Select(c => c.Name)).IsEquivalentTo(new[] { "Read" });
-            await Assert.That(group.Summary).IsEqualTo("Searched files");
+            await Assert.That(group.Summary).IsEqualTo("Ran a command");
             await Assert.That(group.HasSummary).IsTrue();
             await Assert.That(group.HasFailure).IsFalse();
 
@@ -436,7 +476,7 @@ public class ChatTabViewModelTests {
             File.AppendAllText(path, ToolErrorLine.Replace("t1", "t2") + "\n");
             await h.TickAsync();
             await Assert.That(group.LiveCalls).IsEmpty();
-            await Assert.That(group.Summary).IsEqualTo("Searched files, read a file");
+            await Assert.That(group.Summary).IsEqualTo("Ran a command, read a file");
             await Assert.That(group.HasFailure).IsTrue();
             await Assert.That(group.IsExpanded).IsTrue();
             await h.TeardownAsync();
@@ -511,7 +551,7 @@ public class ChatTabViewModelTests {
     public async Task A_foreign_mcp_call_reads_as_server_and_tool_with_its_first_argument(string name, string label, string chip) {
         await RunOnUiAsync(async () => {
             var h = Claude();
-            var line = LinearCallLine.Replace("mcp__plugin_linear_linear__save_issue", name, StringComparison.Ordinal);
+            var line = LinearCallLine.Replace("\"title\":\"Add tests\"", "\"title\":\"Add tests\",\"description\":\"Add tests\",\"command\":\"echo ready\"", StringComparison.Ordinal).Replace("mcp__plugin_linear_linear__save_issue", name, StringComparison.Ordinal);
             await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [line])));
 
             var group = Group(h.Chat, 0);
@@ -521,6 +561,12 @@ public class ChatTabViewModelTests {
             await Assert.That(call.Label).IsEqualTo(label);
             await Assert.That(call.Detail).IsEqualTo("Add tests");
             await Assert.That(call.Category).IsEqualTo(ToolCategory.Other);
+            await Assert.That(call.CommandText).IsEqualTo("echo ready");
+            await Assert.That(call.HasCommandBody).IsTrue();
+            File.AppendAllText(Tmp.PathTo("t.jsonl"), """{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_lin","content":"ready"}]}}""" + "\n");
+            await h.TickAsync();
+            await Assert.That(call.ResultText).IsEqualTo("ready");
+            await Assert.That(group.KindChip).IsEqualTo(chip);
             await h.TeardownAsync();
         });
     }

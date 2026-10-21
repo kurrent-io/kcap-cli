@@ -15,6 +15,24 @@ public static class TextElision {
         return string.Concat(text.AsSpan(0, head), "\u2026", text.AsSpan(text.Length - tail));
     }
 
+    /// One cut that keeps the last two path segments — the parent directory and the file — and a
+    /// short head. A second ellipsis must not be applied on top of this.
+    public static string PathTail(string text, int max) {
+        if (text.Length <= max || max < 4) return text;
+        var file = text.LastIndexOf('/');
+        var parent = file > 0 ? text.LastIndexOf('/', file - 1) : -1;
+        var tail = parent >= 0 ? text[parent..] : file >= 0 ? text[file..] : text;
+        if (tail.Length >= max - 1) {
+            var start = text.Length - max + 1;
+            if (char.IsLowSurrogate(text[start])) start++;
+            return "…" + text[start..];
+        }
+        var head = max - tail.Length - 1;
+        if (head > 0 && char.IsHighSurrogate(text[head - 1])) head--;
+        if (head < 1) return "…" + tail;
+        return string.Concat(text.AsSpan(0, head), "…", tail);
+    }
+
     public static string End(string text, int max) {
         if (text.Length <= max || max < 2) return text;
         var head = max - 1;

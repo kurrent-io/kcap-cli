@@ -62,7 +62,7 @@ public class ToolSummaryTests {
     [Arguments("Read", """{"file_path":"/repo/SKILL.md.bak"}""", ToolCategory.Read)]
     [Arguments("exec_command", """{"cmd":"sed -n '1,40p' a.cs"}""", ToolCategory.Read)]
     [Arguments("exec_command", """{"cmd":"rg foo src"}""", ToolCategory.Search)]
-    [Arguments("exec_command", """{"cmd":"ls src"}""", ToolCategory.Search)]
+    [Arguments("exec_command", """{"cmd":"ls src"}""", ToolCategory.Command)]
     [Arguments("exec_command", """{"cmd":"find . -name '*.cs'"}""", ToolCategory.Search)]
     [Arguments("exec_command", """{"cmd":"find . -delete"}""", ToolCategory.Command)]
     [Arguments("exec_command", """{"cmd":"find . -exec rm {} +"}""", ToolCategory.Command)]

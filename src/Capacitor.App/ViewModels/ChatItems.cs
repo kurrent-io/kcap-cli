@@ -103,8 +103,11 @@ public sealed class ShellCommandItem : ChatItemViewModel {
 public enum ToolOutcome { Running, Done, Error }
 
 public sealed class ToolCallItem(string name, string detail, ToolCategory category, string? label = null,
-        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null, string? chip = null) : ChatItemViewModel {
+        ToolCardKind cardKind = ToolCardKind.None, string? inputJson = null, string? chip = null,
+        string? command = null, bool detailIsPath = false) : ChatItemViewModel {
     public string Name { get; } = name;
+    public string? CommandText { get; } = string.IsNullOrEmpty(command) ? null : command;
+    public bool DetailIsPath { get; } = detailIsPath;
     /// Lone-call header when the category word ("Tool") would hide which server this is.
     public string? Chip { get; } = chip;
     public string Detail { get; } = detail;
@@ -180,6 +183,79 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// True while the call is in flight and not waiting on a permission prompt — drives the
     /// pulsing status pill so a live row is never blank.
     public bool IsRunning => _outcome == ToolOutcome.Running && !_isAwaitingPermission;
+
+    public bool HasCommandBody => !string.IsNullOrEmpty(CommandText) && CommandText != Detail;
+
+    string? _resultText;
+    public string? ResultText {
+        get => _resultText;
+        private set => this.RaiseAndSetIfChanged(ref _resultText, value);
+    }
+
+    string? _resultNotice;
+    public string? ResultNotice {
+        get => _resultNotice;
+        private set => this.RaiseAndSetIfChanged(ref _resultNotice, value);
+    }
+
+    public bool HasResult => !string.IsNullOrEmpty(_resultText);
+    public bool HasResultNotice => !string.IsNullOrEmpty(_resultNotice);
+    public string ResultHeading => IsError ? "Error" : "Output";
+    public bool CanExpand => HasCommandBody || HasResult || IsError;
+
+    public string BodyToggleName => $"{(IsExpanded ? "Hide" : "Show")} {Name} details";
+
+    bool _isExpanded;
+    public bool IsExpanded {
+        get => _isExpanded;
+        private set {
+            if (_isExpanded == value) return;
+            this.RaiseAndSetIfChanged(ref _isExpanded, value);
+            this.RaisePropertyChanged(nameof(BodyToggleName));
+        }
+    }
+
+    ReactiveCommand<Unit, Unit>? _toggleBody;
+    public ReactiveCommand<Unit, Unit> ToggleBodyCommand => _toggleBody ??= ReactiveCommand.Create(ToggleBody);
+
+    public const int ShownResultLines = 200;
+    public const int ShownResultCharacters = 16_000;
+
+    public void ToggleBody() {
+        if (!CanExpand) return;
+        IsExpanded = !IsExpanded;
+    }
+
+    public void SetResult(string? text, bool error) {
+        string? notice = null;
+        var body = text;
+        if (string.IsNullOrEmpty(body)) {
+            body = error ? "The tool failed." : null;
+        } else {
+            body = body.TrimEnd('\r', '\n');
+            var lines = 1;
+            var length = Math.Min(body.Length, ShownResultCharacters);
+            for (var i = 0; i < length; i++) {
+                if (body[i] != '\n') continue;
+                if (++lines <= ShownResultLines) continue;
+                length = i > 0 && body[i - 1] == '\r' ? i - 1 : i;
+                notice = $"Showing the first {ShownResultLines} lines.";
+                break;
+            }
+            if (length < body.Length) {
+                if (length > 0 && char.IsHighSurrogate(body[length - 1])) length--;
+                body = body[..length];
+                notice ??= "Output truncated.";
+            }
+        }
+        ResultText = body;
+        ResultNotice = notice;
+        if (error) IsExpanded = true;
+        this.RaisePropertyChanged(nameof(HasResult));
+        this.RaisePropertyChanged(nameof(HasResultNotice));
+        this.RaisePropertyChanged(nameof(CanExpand));
+        this.RaisePropertyChanged(nameof(ResultHeading));
+    }
 
 }
 
@@ -343,7 +419,9 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     string? PeekDetail() {
         var first = _calls.FirstOrDefault(c => c.IsSettled);
         if (first is null) return null;
-        return first.DetailIsProse ? TextElision.End(first.LineText, 56) : TextElision.Middle(first.LineText, 56);
+        var line = first.LineText;
+        if (first.DetailIsPath) return line;
+        return first.DetailIsProse ? TextElision.End(line, 56) : TextElision.Middle(line, 56);
     }
 }
 

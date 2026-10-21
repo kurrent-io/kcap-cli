@@ -61,7 +61,9 @@ public static class ToolSummary {
             var hint = CodexCommandClassifier.Classify(ToolCommandText.From(root));
             return hint?.Type switch {
                 "read"                   => IsSkillFile(hint.Name) ? ToolCategory.Skill : ToolCategory.Read,
-                "search" or "list_files" => ToolCategory.Search,
+                "search" => ToolCategory.Search,
+                // `ls` is a command, not a search. Leaving it on Search makes a bash group say "Searched files".
+                "list_files" => ToolCategory.Command,
                 _                        => category,
             };
         } catch (JsonException) {

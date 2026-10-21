@@ -1376,7 +1376,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                             : ToolDetail.From(e.ToolInputJson, _root, category);
                         var label = entry?.Label ?? (isToolSearch ? "Looked up tools" : foreignLabel ?? ToolSummary.RowLabel(name, category, e.ToolInputJson));
                         var chip = foreignLabel is not null ? KcapToolCatalogue.ForeignServer(name) : null;
-                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson, chip);
+                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson,
+                            chip: chip, command: ToolDetail.CommandOf(e.ToolInputJson),
+                            detailIsPath: entry is null && !isToolSearch && foreignLabel is null
+                                && category == ToolCategory.Read && ToolDetail.ShowsPath(e.ToolInputJson));
                         if (e.ToolCallId is { } id) {
                             _pendingTools[id] = item;
                             if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
@@ -1397,6 +1400,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                                 && ToolCards.Build(call.CardKind, call.InputJson, e.ToolResult) is { } card)
                                 call.SetCard(card, CardOpener(card));
                             call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
+                            call.SetResult(e.ToolResult, e.ToolIsError);
                         }
                         break;
                 }
