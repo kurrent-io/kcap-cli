@@ -45,6 +45,7 @@ public partial class App : Application {
     // DetachedPollInterval is 1s) — short enough that a handful of polls still fit inside the
     // lane's 10s DetachedConfirmWindow.
     static readonly TimeSpan OneShotProbeTimeout = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan UninstallTerminalPathTimeout = TimeSpan.FromSeconds(2);
 
     // Linked to the app's shutdown sequence below; the token StartDaemonCommand's WAIT is built
     // against — never CancellationToken.None, or an unbounded wait would survive app exit.
@@ -232,6 +233,7 @@ public partial class App : Application {
     bool _shutdownStarted;
     bool _shutdownConfirmed;
     bool _setupRestarting;
+    bool _uninstallRelaunching;
     // 0 = normal shutdown. Set to 1 on a startup failure so the DEFERRED shutdown path (Cmd+Q /
     // platform shutdown while the error window is showing — OnShutdownRequested ->
     // DisposeAndShutdownAsync) still reports failure, instead of TryShutdown()'s platform
@@ -866,6 +868,10 @@ public partial class App : Application {
             : null;
         ConfigureSettingsMenu(openSettings);
         _appMenu.SetSetupAction(() => _ = RestartForSetupAsync(desktop));
+        if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {
+            var facts = UninstallFactsFor(bundleRoot, service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
+            _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
+        }
 
         // LAST, deliberately: anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
@@ -883,7 +889,7 @@ public partial class App : Application {
     internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
 
     async Task RestartForSetupAsync(IClassicDesktopStyleApplicationLifetime desktop) {
-        if (_setupRestarting || _shutdownStarted) return;
+        if (_setupRestarting || _uninstallRelaunching || _shutdownStarted) return;
         _setupRestarting = true;
         try {
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window,
@@ -901,6 +907,42 @@ public partial class App : Application {
             _setupRestarting = false;
             Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}");
             _coordinator?.Window?.Notifier?.Notify("Could not reopen setup. Please try again.");
+        }
+    }
+
+    UninstallFactsSource UninstallFactsFor(string bundleRoot, string daemonName, string? profileServerUrl,
+            DaemonLifecycleController lifecycle, ILoginShellProbe probe) => new(
+        LocalServerUrl: () => LocalEndpoints.Read(_localRoot).Active?.ServerUrl,
+        Activity: () => lifecycle.LatestActivity,
+        DaemonRunning: () => DaemonPidLiveness.IsRunning(_daemonStore, daemonName),
+        HostedServerUrl: () => profileServerUrl is { Length: > 0 } && !IsLocalServer(profileServerUrl, _localRoot) ? profileServerUrl : null,
+        TerminalPath: probe.TerminalPathAsync,
+        BundleRoot: bundleRoot,
+        TerminalPathTimeout: UninstallTerminalPathTimeout,
+        Time: _time,
+        Log: Console.Error);
+
+    // The relaunched copy runs the uninstall: this process must be gone before the bundle is.
+    async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
+        if (_uninstallRelaunching || _setupRestarting || _shutdownStarted) return;
+        _uninstallRelaunching = true;
+        try {
+            var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
+            if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) {
+                _uninstallRelaunching = false;
+                return;
+            }
+            var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
+            desktop.Exit += (_, _) => {
+                try { Process.Start(start); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
+            };
+            desktop.TryShutdown();
+        } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
+        } catch (Exception ex) {
+            _uninstallRelaunching = false;
+            Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}");
+            _coordinator?.Window?.Notifier?.Notify("Could not start the uninstall. Please try again.");
         }
     }
 
@@ -2124,7 +2166,7 @@ public partial class App : Application {
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
-                applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });
+                applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });
         } else {
             await DisposeLifecycleAndServiceAsync();
             _shutdownConfirmed = true;
