@@ -180,8 +180,12 @@ internal sealed partial class AcpInteractionBridge(
             return protocol.Reply(null);
         }
 
-        if (request.Params is not { } p || protocol.Read(p) is not { Questions.Count: > 0 } asked)
+        if (request.Params is not { } p || protocol.Read(p) is not { Questions.Count: > 0 } asked) {
+            logger.LogWarning("ACP: {Method} for agent {AgentId} could not be read as questions; declining", request.Method, agentId);
+            AcpMetrics.RecordElicitationUnrenderable("vendor_malformed_request");
+
             return protocol.Reply(null);
+        }
 
         // The vendor keys each answer by its question's text, so a repeated question is asked once.
         var questions = asked.Questions.DistinctBy(q => q.Text, StringComparer.Ordinal).ToList();
@@ -194,6 +198,7 @@ internal sealed partial class AcpInteractionBridge(
             logger.LogWarning(
                 "ACP: {Method} for agent {AgentId} asked a question too large for a question card ({Options} options); declining",
                 request.Method, agentId, oversized.Options.Count);
+            AcpMetrics.RecordElicitationUnrenderable("vendor_question_too_large");
 
             return protocol.Reply(null);
         }
