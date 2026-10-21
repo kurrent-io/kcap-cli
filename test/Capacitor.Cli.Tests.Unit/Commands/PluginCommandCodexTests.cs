@@ -674,7 +674,7 @@ public class PluginCommandCodexInstallIntegrationTests {
     public async Task Refresh_relocates_owned_MCP_without_adding_recording_hooks_or_changing_custom_entries() {
         using var home = new TempDir();
         var config = home.GetResolvedPath(".codex", "config.toml");
-        CodexConfigToml.RegisterKcapMcpServers(config, () => "/Applications/Kurrent Capacitor.app/Contents/MacOS/kcap");
+        CodexConfigToml.RegisterKcapMcpServers(config, () => "/Users/someone/Applications/kcap.app/Contents/MacOS/kcap");
         File.AppendAllText(config, "\n[mcp_servers.user-tool]\ncommand = \"custom\"\n");
         var env = TestEnv(home.GetResolvedPath()) with { ResolveMcpBinaryPath = () => "/Applications/kcap.app/Contents/MacOS/kcap" };
         var exit = await new PluginCommand(env, new WorkingDirectory(home.GetResolvedPath())).HandleAsync(
@@ -682,7 +682,7 @@ public class PluginCommandCodexInstallIntegrationTests {
         await Assert.That(exit).IsEqualTo(0);
         var text = File.ReadAllText(config);
         await Assert.That(text).Contains("/Applications/kcap.app/Contents/MacOS/kcap");
-        await Assert.That(text).DoesNotContain("Kurrent Capacitor.app");
+        await Assert.That(text).DoesNotContain("/Users/someone/Applications/kcap.app");
         await Assert.That(text).Contains("custom");
         await Assert.That(File.Exists(home.GetResolvedPath(".codex", "hooks.json"))).IsFalse();
     }

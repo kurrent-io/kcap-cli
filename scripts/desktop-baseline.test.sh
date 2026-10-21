@@ -6,8 +6,8 @@ tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 make_pkg() { # <dir> <version>  — the real download layout: one full nupkg, no manifest beside it
   local dir="$1" v="$2" work; work="$(mktemp -d)"
-  printf '<?xml version="1.0"?><package><metadata><id>KurrentCapacitor</id><version>%s</version></metadata></package>' "$v" > "$work/KurrentCapacitor.nuspec"
-  (cd "$work" && zip -q "$dir/KurrentCapacitor-$v-osx-arm64-full.nupkg" KurrentCapacitor.nuspec)
+  printf '<?xml version="1.0"?><package><metadata><id>kcap</id><version>%s</version></metadata></package>' "$v" > "$work/kcap.nuspec"
+  (cd "$work" && zip -q "$dir/kcap-$v-osx-arm64-full.nupkg" kcap.nuspec)
   rm -rf "$work"
 }
 

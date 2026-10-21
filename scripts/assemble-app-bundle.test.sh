@@ -15,7 +15,7 @@ cmp "$tmp/publish/kcap" "$bundle/Contents/MacOS/kcap"
 cmp "$tmp/publish/kcap-desktop" "$bundle/Contents/MacOS/kcap-desktop"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$bundle/Contents/Info.plist")" == kcap-desktop ]]
 [[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleDisplayName' "$bundle/Contents/Info.plist")" == kcap ]]
-[[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$bundle/Contents/Info.plist")" == io.kurrent.capacitor ]]
+[[ "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$bundle/Contents/Info.plist")" == io.kurrent.kcap ]]
 test -f "$bundle/Contents/Resources/kcap-icon.icns"
 bash "$here/assert-app-plugin.sh" "$bundle" 1.3.0-beta.7 >/dev/null
 if bash "$here/assemble-app-bundle.sh" "$tmp/publish" "$bundle" 1.3.0-beta.8 >/dev/null 2>&1; then

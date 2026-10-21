@@ -859,7 +859,7 @@ jobs:
           AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
-          KEY="desktop/osx-arm64/KurrentCapacitor-${{ steps.version.outputs.VERSION }}-osx-arm64-full.nupkg"
+          KEY="desktop/osx-arm64/kcap-${{ steps.version.outputs.VERSION }}-osx-arm64-full.nupkg"
           set +e
           ERR="$(aws s3api head-object --endpoint-url "${{ secrets.R2_ENDPOINT }}" --bucket "${{ secrets.R2_BUCKET }}" --key "$KEY" 2>&1 >/dev/null)"
           rc=$?
@@ -910,7 +910,7 @@ jobs:
       - name: Pack, sign the bundle, notarize
         shell: bash
         run: >
-          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
+          vpk pack --packId kcap --packVersion "${{ steps.version.outputs.VERSION }}"
           --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop"
           --packDir "publish/kcap.app"
           --channel osx-arm64 --noInst --outputDir releases
@@ -922,7 +922,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p extracted
-          ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
+          ditto -x -k releases/kcap-osx-arm64-Portable.zip extracted
           APP="extracted/kcap.app"
           bash scripts/assert-app-plugin.sh "$APP" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
@@ -1020,11 +1020,10 @@ jobs:
           DMG="releases/kcap-$V-osx-arm64.dmg"
           aws s3 cp $R2 "$DMG" "$DEST/kcap-$V-osx-arm64.dmg" --cache-control "public, max-age=31536000, immutable"
           aws s3 cp $R2 "$DEST/releases.osx-arm64.json" merged.json
-          # Keep legacy download links current while publishing the kcap names.
           for alias in $(bash scripts/promote-desktop-aliases.sh merged.json "$V"); do
             case "$alias" in
-              beta)   aws s3 cp $R2 "$DMG" "$DEST/kcap-osx-arm64-beta.dmg" --cache-control "public, max-age=300"; aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64-beta.dmg" --cache-control "public, max-age=300" ;;
-              stable) aws s3 cp $R2 "$DMG" "$DEST/kcap-osx-arm64.dmg" --cache-control "public, max-age=300"; aws s3 cp $R2 "$DMG" "$DEST/Kurrent-Capacitor-osx-arm64.dmg" --cache-control "public, max-age=300" ;;
+              beta)   aws s3 cp $R2 "$DMG" "$DEST/kcap-osx-arm64-beta.dmg" --cache-control "public, max-age=300" ;;
+              stable) aws s3 cp $R2 "$DMG" "$DEST/kcap-osx-arm64.dmg" --cache-control "public, max-age=300" ;;
             esac
           done
 
@@ -1078,7 +1077,7 @@ jobs:
           AWS_DEFAULT_REGION: auto
         run: |
           set -euo pipefail
-          KEY="desktop/win-x64/KurrentCapacitor-${{ steps.version.outputs.VERSION }}-win-x64-full.nupkg"
+          KEY="desktop/win-x64/kcap-${{ steps.version.outputs.VERSION }}-win-x64-full.nupkg"
           set +e
           ERR="$(aws s3api head-object --endpoint-url "${{ secrets.R2_ENDPOINT }}" --bucket "${{ secrets.R2_BUCKET }}" --key "$KEY" 2>&1 >/dev/null)"
           rc=$?
@@ -1127,7 +1126,7 @@ jobs:
           else
             echo "::warning::WINDOWS_CERTIFICATE_PFX is not configured; the Windows app ships unsigned"
           fi
-          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}" \
+          vpk pack --packId kcap --packVersion "${{ steps.version.outputs.VERSION }}" \
             --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop.exe" \
             --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico \
             --channel win-x64 --outputDir releases "${sign[@]}"
@@ -1136,17 +1135,17 @@ jobs:
       # The gates check the tree Setup.exe installs, which is what a user runs. A silent install
       # does not launch the app, so the smoke below starts it.
       - name: Install the packed app
-        run: bash scripts/install-windows-setup.sh releases/KurrentCapacitor-win-x64-Setup.exe
+        run: bash scripts/install-windows-setup.sh releases/kcap-win-x64-Setup.exe
 
       - name: Assert the installed app
         run: |
           set -euo pipefail
-          install="$(cygpath -u "$LOCALAPPDATA")/KurrentCapacitor"
+          install="$(cygpath -u "$LOCALAPPDATA")/kcap"
           bash scripts/assert-app-plugin.sh "$install/current" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$install" trio/bin/daemon.sha256
           "$install/current/kcap-daemon.exe" --version
-          mv releases/KurrentCapacitor-win-x64-Setup.exe "releases/kcap-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe"
+          mv releases/kcap-win-x64-Setup.exe "releases/kcap-${{ steps.version.outputs.VERSION }}-win-x64-Setup.exe"
           cp trio/bin/daemon.sha256 trio/bin/kcap.sha256 releases/
 
       - name: Smoke the installed app
@@ -1155,7 +1154,7 @@ jobs:
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\kcap-desktop.exe') -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'kcap\current\kcap-desktop.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force
@@ -1239,11 +1238,10 @@ jobs:
           SETUP="releases/kcap-$V-win-x64-Setup.exe"
           aws s3 cp $R2 "$SETUP" "$DEST/kcap-$V-win-x64-Setup.exe" --cache-control "public, max-age=31536000, immutable"
           aws s3 cp $R2 "$DEST/releases.win-x64.json" merged.json
-          # Keep legacy download links current while publishing the kcap names.
           for alias in $(bash scripts/promote-desktop-aliases.sh merged.json "$V"); do
             case "$alias" in
-              beta)   aws s3 cp $R2 "$SETUP" "$DEST/kcap-win-x64-beta-Setup.exe" --cache-control "public, max-age=300"; aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-win-x64-beta-Setup.exe" --cache-control "public, max-age=300" ;;
-              stable) aws s3 cp $R2 "$SETUP" "$DEST/kcap-win-x64-Setup.exe" --cache-control "public, max-age=300"; aws s3 cp $R2 "$SETUP" "$DEST/Kurrent-Capacitor-win-x64-Setup.exe" --cache-control "public, max-age=300" ;;
+              beta)   aws s3 cp $R2 "$SETUP" "$DEST/kcap-win-x64-beta-Setup.exe" --cache-control "public, max-age=300" ;;
+              stable) aws s3 cp $R2 "$SETUP" "$DEST/kcap-win-x64-Setup.exe" --cache-control "public, max-age=300" ;;
             esac
           done
 

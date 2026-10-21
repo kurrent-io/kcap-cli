@@ -28,7 +28,7 @@ public class LocalClientCopiesTests {
     [Test]
     public async Task Finds_the_kcap_on_path_and_the_desktop_apps_with_their_versions() {
         var onPath = Kcap("bin");
-        var app    = Kcap("Kurrent Capacitor.app/Contents/MacOS");
+        var app    = Kcap("kcap.app/Contents/MacOS");
         var runner = new FakeRunner(new() { [onPath] = Prints("1.2.0"), [app] = Prints("1.3.0+abc") });
 
         var copies = new LocalClientCopies(runner, Tmp.PathTo("bin"), self: null, [app, Tmp.PathTo("Elsewhere.app/Contents/MacOS/kcap")]).Find();
@@ -38,21 +38,6 @@ public class LocalClientCopiesTests {
             new ClientCopy(ClientCopyKind.DesktopApp, app, "1.3.0+abc"),
         ]);
         await Assert.That(runner.Ran).Contains($"{onPath} --version --no-update-check");
-    }
-
-    [Test]
-    public async Task Finds_both_rebranded_and_legacy_desktop_copies() {
-        var current = Kcap("Applications/kcap.app/Contents/MacOS");
-        var legacy = Kcap("Applications/Kurrent Capacitor.app/Contents/MacOS");
-        var runner = new FakeRunner(new() { [current] = Prints("1.3.0"), [legacy] = Prints("1.2.0") });
-
-        var copies = new LocalClientCopies(runner, searchPath: null, self: null,
-            LocalClientCopies.AppClis(Tmp.PathTo("Applications"))).Find();
-
-        await Assert.That(copies).IsEquivalentTo([
-            new ClientCopy(ClientCopyKind.DesktopApp, current, "1.3.0"),
-            new ClientCopy(ClientCopyKind.DesktopApp, legacy, "1.2.0")
-        ]);
     }
 
     [Test]
@@ -70,7 +55,7 @@ public class LocalClientCopiesTests {
 
     [Test]
     public async Task A_path_link_to_the_desktop_apps_kcap_is_one_copy_of_the_app() {
-        var app = Kcap("Kurrent Capacitor.app/Contents/MacOS");
+        var app = Kcap("kcap.app/Contents/MacOS");
         Tmp.CreateDir("bin");
         File.CreateSymbolicLink(Tmp.PathTo("bin", "kcap"), app);
         var runner = new FakeRunner(new() { [app] = Prints("1.2.0") });

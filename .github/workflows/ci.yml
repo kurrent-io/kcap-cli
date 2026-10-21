@@ -249,7 +249,7 @@ jobs:
       - name: Pack (unsigned)
         shell: bash
         run: >
-          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
+          vpk pack --packId kcap --packVersion "${{ steps.version.outputs.VERSION }}"
           --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop"
           --packDir "publish/kcap.app"
           --channel osx-arm64 --noInst --outputDir releases
@@ -259,7 +259,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p extracted
-          ditto -x -k releases/KurrentCapacitor-osx-arm64-Portable.zip extracted
+          ditto -x -k releases/kcap-osx-arm64-Portable.zip extracted
           APP="extracted/kcap.app"
           bash scripts/assert-app-plugin.sh "$APP" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$APP/Contents/MacOS/kcap" "${{ steps.version.outputs.VERSION }}"
@@ -290,7 +290,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: app-osx-arm64-unsigned
-          path: releases/KurrentCapacitor-osx-arm64-Portable.zip
+          path: releases/kcap-osx-arm64-Portable.zip
 
   app-bundle-windows:
     name: App bundle (win-x64)
@@ -355,18 +355,18 @@ jobs:
 
       - name: Pack (unsigned)
         run: >
-          vpk pack --packId KurrentCapacitor --packVersion "${{ steps.version.outputs.VERSION }}"
+          vpk pack --packId kcap --packVersion "${{ steps.version.outputs.VERSION }}"
           --packTitle "kcap" --packAuthors Kurrent --mainExe "kcap-desktop.exe"
           --packDir publish/app --icon src/Capacitor.App/Assets/kcap-icon.ico
           --channel win-x64 --outputDir releases
 
       - name: Install the bundle
-        run: bash scripts/install-windows-setup.sh releases/KurrentCapacitor-win-x64-Setup.exe
+        run: bash scripts/install-windows-setup.sh releases/kcap-win-x64-Setup.exe
 
       - name: Assert the installed bundle
         run: |
           set -euo pipefail
-          install="$(cygpath -u "$LOCALAPPDATA")/KurrentCapacitor"
+          install="$(cygpath -u "$LOCALAPPDATA")/kcap"
           bash scripts/assert-app-plugin.sh "$install/current" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-app-cli-version.sh "$install/current/kcap.exe" "${{ steps.version.outputs.VERSION }}"
           bash scripts/assert-bundle-digest.sh "$install" publish/daemon.sha256
@@ -382,7 +382,7 @@ jobs:
           $cfg = Join-Path $env:RUNNER_TEMP 'kcap-smoke'
           New-Item -ItemType Directory -Force $cfg | Out-Null
           $env:KCAP_CONFIG_DIR = $cfg; $env:KCAP_APP_UPDATE_URL = 'http://127.0.0.1:9/'; $env:DO_NOT_TRACK = '1'
-          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'KurrentCapacitor\current\kcap-desktop.exe') -PassThru
+          $p = Start-Process (Join-Path $env:LOCALAPPDATA 'kcap\current\kcap-desktop.exe') -PassThru
           Start-Sleep 15
           if ($p.HasExited) { Write-Error "the packed app exited within 15 s (exit $($p.ExitCode))"; exit 1 }
           Stop-Process -Id $p.Id -Force
@@ -391,4 +391,4 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: app-win-x64-unsigned
-          path: releases/KurrentCapacitor-win-x64-Setup.exe
+          path: releases/kcap-win-x64-Setup.exe

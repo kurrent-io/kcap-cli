@@ -5,9 +5,8 @@ public enum ApplicationsInstallAction { Install, Update, OpenInstalled, Blocked 
 public sealed record ApplicationsInstallPlan(
     ApplicationsInstallAction Action, string Target, string? SourceVersion = null,
     string? InstalledVersion = null, string? Error = null, string? ExistingPath = null, string? PayloadPath = null) {
-    public bool Migrates => ExistingPath is not null && ExistingPath != Target;
     public string Title => Action switch {
-        ApplicationsInstallAction.Update => Migrates ? "Upgrade to kcap" : "Update kcap",
+        ApplicationsInstallAction.Update => "Update kcap",
         ApplicationsInstallAction.OpenInstalled => "kcap is already installed",
         ApplicationsInstallAction.Blocked => "Cannot install kcap",
         _ => "Install kcap",
@@ -20,9 +19,7 @@ public sealed record ApplicationsInstallPlan(
     };
 
     public string Detail => Action switch {
-        ApplicationsInstallAction.Update => (Migrates
-            ? "Kurrent Capacitor will be replaced with kcap, and the updated app will open."
-            : "kcap will be updated and reopened.")
+        ApplicationsInstallAction.Update => "kcap will be updated and reopened."
             + " Your settings and sign-in will stay intact.\n\n"
             + "The app will quit and its daemon will restart. This interrupts active turns; resumable agents restart unless auto-resume is off.",
         ApplicationsInstallAction.OpenInstalled => "The installed copy of kcap will open. Your settings and sign-in will stay intact.",

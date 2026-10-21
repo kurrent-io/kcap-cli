@@ -5,7 +5,7 @@ sh="$here/verify-desktop-immutables.sh"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 v="0.12.0-beta.2"
 local_dir="$tmp/local"; remote="$tmp/remote"; mkdir -p "$local_dir" "$remote"
-printf 'full' > "$local_dir/KurrentCapacitor-$v-osx-arm64-full.nupkg"
+printf 'full' > "$local_dir/kcap-$v-osx-arm64-full.nupkg"
 printf 'dmg'  > "$local_dir/kcap-$v-osx-arm64.dmg"
 fetch="$tmp/fetch.sh"
 printf '#!/usr/bin/env bash\n[ -f "%s/$1" ] || exit 44\ncp "%s/$1" "$2"\n' "$remote" "$remote" > "$fetch"; chmod +x "$fetch"
@@ -15,7 +15,7 @@ assert() { local rc; set +e; bash "$sh" "$local_dir" "$v" "$fetch" >/dev/null 2>
   if [ "$rc" != "$2" ]; then echo "FAIL: $1 -> rc=$rc (want $2)"; fail=1; fi; }
 
 assert "nothing published yet passes" 0
-cp "$local_dir/KurrentCapacitor-$v-osx-arm64-full.nupkg" "$remote/"
+cp "$local_dir/kcap-$v-osx-arm64-full.nupkg" "$remote/"
 assert "identical bytes already published passes (retry)" 0
 printf 'other-bytes' > "$remote/kcap-$v-osx-arm64.dmg"
 assert "different bytes already published fails" 1

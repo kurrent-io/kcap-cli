@@ -6,7 +6,7 @@ using Avalonia.Threading;
 namespace Capacitor.App.Services.Notifications;
 
 public sealed class NativeDesktopNotificationSink : IDesktopNotificationSink, IDesktopNotificationAccess {
-    const string AppUserModelId = "io.kurrent.capacitor";
+    const string AppUserModelId = "io.kurrent.kcap";
 
     static bool _labsAvailable;
     readonly IDesktopNotificationSink _backend;

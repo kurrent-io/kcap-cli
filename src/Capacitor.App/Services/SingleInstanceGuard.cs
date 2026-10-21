@@ -26,7 +26,7 @@ public sealed partial class SingleInstanceGuard : IDisposable {
     // The path is hashed because a kernel object name cannot contain a backslash.
     public static string NameFor(string executablePath) {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(executablePath).ToUpperInvariant()));
-        return $"KurrentCapacitor-{Convert.ToHexStringLower(hash.AsSpan(0, 16))}";
+        return $"kcap-{Convert.ToHexStringLower(hash.AsSpan(0, 16))}";
     }
 
     /// Null when another copy kept the lock for the whole wait; that copy has been asked to show
