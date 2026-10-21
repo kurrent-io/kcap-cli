@@ -926,23 +926,24 @@ public partial class App : Application {
     async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
         if (_uninstallRelaunching || _setupRestarting || _shutdownStarted) return;
         _uninstallRelaunching = true;
+        // Left set only once the relaunch is registered: it also stops an ordinary quit applying a pending update.
+        var relaunchRegistered = false;
         try {
             var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
-            if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) {
-                _uninstallRelaunching = false;
-                return;
-            }
+            if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) return;
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
                 catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
             };
+            relaunchRegistered = true;
             desktop.TryShutdown();
         } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
         } catch (Exception ex) {
-            _uninstallRelaunching = false;
             Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}");
             _coordinator?.Window?.Notifier?.Notify("Could not start the uninstall. Please try again.");
+        } finally {
+            if (!relaunchRegistered) _uninstallRelaunching = false;
         }
     }
 
