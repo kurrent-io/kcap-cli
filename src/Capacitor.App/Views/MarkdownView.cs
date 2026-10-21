@@ -113,6 +113,11 @@ public sealed class MarkdownView : ContentControl {
         await clipboard.SetTextAsync(text);
     }
 
+    internal void ClearSelection() {
+        if (Content is SelectableTextBlock plain) plain.ClearSelection();
+        else _viewer.ClearSelection();
+    }
+
     public void SelectAll() {
         if (Content is SelectableTextBlock plain) plain.SelectAll();
         else _viewer.SelectAll();

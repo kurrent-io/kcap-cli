@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using System.Reactive.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
@@ -19,6 +20,7 @@ public partial class ChatTabView : UserControl {
     const double WheelStep = 50;
     const double SmoothHalfLifeSeconds = 0.032;
 
+    IDisposable? _sendSubscription;
     ScrollViewer? _scroll;
     TextPresenter? _composerPresenter;
     AttachmentDropPaste? _attachments;
@@ -89,6 +91,7 @@ public partial class ChatTabView : UserControl {
     /// the same view, and a behaviour disposed on the way out has to come back with it.
     protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
         base.OnAttachedToVisualTree(e);
+        ObserveSending();
         _attachments ??= AttachmentDropPaste.Attach(
             ComposerCard, ComposerInput, AttachButton,
             () => (DataContext as ChatTabViewModel)?.Attachments, TimeProvider.System);
@@ -106,6 +109,7 @@ public partial class ChatTabView : UserControl {
         _dragView = null;
         _followTail = true;
         base.OnDataContextChanged(e);
+        ObserveSending();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
@@ -115,9 +119,33 @@ public partial class ChatTabView : UserControl {
         _thumbFraction = null;
         _dragSelecting = false;
         _dragView = null;
+        _sendSubscription?.Dispose();
+        _sendSubscription = null;
         _attachments?.Dispose();
         _attachments = null;
         base.OnDetachedFromVisualTree(e);
+    }
+
+    void ObserveSending() {
+        _sendSubscription?.Dispose();
+        _sendSubscription = (DataContext as ChatTabViewModel)?.SendCommand.IsExecuting
+            .Where(static executing => executing)
+            .Subscribe(_ => ResumeFollowing());
+    }
+
+    void ResumeFollowing() {
+        DropToggleAnchor();
+        CancelSmoothScroll();
+        _thumbDragging = false;
+        _thumbFraction = null;
+        _readerGesture = false;
+        _dragSelecting = false;
+        _dragView = null;
+        foreach (var markdown in ChatItems.GetVisualDescendants().OfType<MarkdownView>())
+            markdown.ClearSelection();
+        _followTail = true;
+        EnsureChatScroll();
+        _scroll?.ScrollToEnd();
     }
 
     internal int ListInputVersion => _listInputVersion;

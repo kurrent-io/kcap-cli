@@ -564,6 +564,37 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Sending_from_a_scrolled_up_chat_resumes_following(bool clickSend) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("send-scroll.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
+                await host.AttachAsync(path);
+                WheelUp(host);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsFalse();
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>().First(v => v.IsEffectivelyVisible);
+                markdown.SelectAll();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                host.Type("continue");
+                if (clickSend) Click(host, host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SendButton"));
+                else host.PressEnter(RawInputModifiers.None);
+                host.Time.Advance(CrDelay);
+                await host.Terminal.PendingDeliveryForTesting!;
+                host.Settle();
+                await Assert.That(markdown.HasSelection).IsFalse();
+                await Assert.That(host.AtBottom()).IsTrue();
+                await host.AppendAndTickAsync(path, 10);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     /// The window reuses one view for every session it opens: a reader who scrolled up in one
     /// session must not open the next one scrolled up and off the tail.
     [Test]
