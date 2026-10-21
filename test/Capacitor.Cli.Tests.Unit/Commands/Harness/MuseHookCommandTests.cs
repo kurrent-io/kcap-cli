@@ -550,7 +550,7 @@ public class MuseHookCommandTests : IDisposable {
 
     /// <summary>Muse kills the hook at 5 s, well inside the POST's default 30 s of retries. The memory
     /// route answers, so a missing fragment could only mean the stalled POST kept the hook from writing.</summary>
-    [Test, NotInParallel("AuthProviderDiscoveryCache")]
+    [Test, NotInParallel]
     public async Task SessionStart_against_a_stalled_server_spools_the_start_and_still_writes_the_fragment() {
         _server.Given(Request.Create().WithPath("/hooks/*").UsingPost())
             .RespondWith(Response.Create().WithStatusCode(200).WithDelay(TimeSpan.FromSeconds(10)));
@@ -558,9 +558,10 @@ public class MuseHookCommandTests : IDisposable {
         StageParentLog();
         var stdout  = new StringWriter();
         await WarmServer();
+        var command = Command(time: TimeProvider.System);
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
 
-        var exit = await Command(time: TimeProvider.System).Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
+        var exit = await command.Handle(new StringReader(SessionStartPayload("startup")), stdout, _ => null, Today);
 
         elapsed.Stop();
         await Assert.That(exit).IsEqualTo(0);

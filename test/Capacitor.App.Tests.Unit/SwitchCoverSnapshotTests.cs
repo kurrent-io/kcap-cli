@@ -94,8 +94,10 @@ public class SwitchCoverSnapshotTests {
         var b1 = Marshal.ReadByte(at, 1);
         var b2 = Marshal.ReadByte(at, 2);
         var b3 = bpp > 3 ? Marshal.ReadByte(at, 3) : (byte)255;
-        return format == PixelFormat.Rgba8888
-            ? $"rgba({b0},{b1},{b2},{b3})"
-            : $"{format}({b0},{b1},{b2},{b3})";
+        if (format == PixelFormat.Rgba8888)
+            return $"rgba({b0},{b1},{b2},{b3})";
+        if (format == PixelFormat.Bgra8888)
+            return $"rgba({b2},{b1},{b0},{b3})";
+        return $"{format}({b0},{b1},{b2},{b3})";
     }
 }
