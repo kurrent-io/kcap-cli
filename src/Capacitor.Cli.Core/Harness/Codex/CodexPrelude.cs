@@ -10,10 +10,10 @@ public static class CodexPrelude {
     ];
 
     /// With content kinds (Codex 0.155+), a message is a person's only when every part is a <c>user.</c> kind;
-    /// without them, when it does not open with a prelude marker. A prelude with text after it is not human.
+    /// without any, when it does not open with a prelude marker. A prelude with text after it is not human.
     public static bool IsPrelude(string text, IReadOnlyList<string>? contentItemKinds) =>
-        contentItemKinds is not null
-            ? contentItemKinds.Count == 0 || contentItemKinds.Any(k => !k.StartsWith("user.", StringComparison.Ordinal))
+        contentItemKinds is { Count: > 0 }
+            ? contentItemKinds.Any(k => !k.StartsWith("user.", StringComparison.Ordinal))
             : Markers.Any(m => text.AsSpan().TrimStart().StartsWith(m, StringComparison.Ordinal));
 
     public static bool IsHuman(string text, IReadOnlyList<string>? contentItemKinds) => !IsPrelude(text, contentItemKinds);
