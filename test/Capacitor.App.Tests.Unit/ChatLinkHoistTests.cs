@@ -10,6 +10,7 @@ public class ChatLinkHoistTests {
     [Test]
     [Arguments("See **[docs](https://example.com/docs)** now.")]
     [Arguments("See **<https://example.com/docs>** now.")]
+    [Arguments("See **https://example.com/docs** now.")]
     [NotInParallel("AvaloniaSession")]
     public async Task A_bold_markdown_link_is_clickable(string markdown) {
         await RunOnUiAsync(async () => {
