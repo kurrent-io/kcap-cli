@@ -27,6 +27,15 @@ public class ToolCardsTests {
         await Assert.That(card.Url).IsEqualTo("https://kurrent.kcap.ai/artefacts/01eccca1dfac4da596db71feead98dc8");
     }
 
+    /// The pages tool appends a `follow_up` key beside `page`; the card reads the page record only.
+    [Test]
+    public async Task A_follow_up_beside_the_page_record_does_not_cost_the_card() {
+        var withFollowUp = PublishResult.Replace("\"artefact\":", "\"page\":")
+            .Replace("\"sources\":{\"session_ids\":[],\"hidden_count\":0}}", "\"sources\":{\"session_ids\":[],\"hidden_count\":0},\"follow_up\":\"Put this link in your reply.\"}");
+        var card = ToolCards.Build(ToolCardKind.Page, "{}", withFollowUp)!;
+        await Assert.That(card.Url).IsEqualTo("https://kurrent.kcap.ai/artefacts/01eccca1dfac4da596db71feead98dc8");
+    }
+
     [Test]
     public async Task A_second_version_reads_updated_and_a_private_or_scoped_audience_is_named() {
         var v3 = PublishResult.Replace("\"latest_version\":1", "\"latest_version\":3").Replace("\"visibility\":\"org\"", "\"visibility\":\"none\"");

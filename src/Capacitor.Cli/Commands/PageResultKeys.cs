@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 /// submitted and may carry any key at all. Values are never touched.
 /// </summary>
 static class PageResultKeys {
-    static readonly JsonSerializerOptions Output = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    internal static readonly JsonSerializerOptions Output = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     static readonly Dictionary<string, string> Roots = new(StringComparer.Ordinal) {
         ["artefact"]  = "page",
