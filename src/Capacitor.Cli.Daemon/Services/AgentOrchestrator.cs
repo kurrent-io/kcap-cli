@@ -1100,14 +1100,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _statusNotifier.Pulse();
     }
 
-    /// The attribution ladder: the payload's agent id (raw, then canonical GUID), the resolved
-    /// vendor session id, the worktree path — each rung only on exactly one live match. Live is
-    /// "present in _agents"; teardown withdraws whatever was attributed during that window.
     /// <summary>Only the session a fresh agent reported as its own started under this daemon: a request naming another
     /// one, such as an older session resumed inside the agent, may carry refusals this daemon never saw.</summary>
     static bool FreshIn(AgentInstance agent, string canonicalSession) =>
         agent.BridgedSinceStart && agent.SessionId is { } own && PermissionWire.Canonical(own) == canonicalSession;
 
+    /// The attribution ladder: the payload's agent id (raw, then canonical GUID), the resolved
+    /// vendor session id, the worktree path — each rung only on exactly one live match. Live is
+    /// "present in _agents"; teardown withdraws whatever was attributed during that window.
     internal AttributedAgent? HandleAttributePermission(PermissionAttribution query) {
         var canonicalSession = PermissionWire.Canonical(query.SessionId);
         if (canonicalSession is null) return null;

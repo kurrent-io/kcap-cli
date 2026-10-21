@@ -18,7 +18,14 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class LocalPermissionBridgeJudgeTests {
     const string Session = "6ba7b8109dad11d180b400c04fd430c8";
 
-    const string Rules = "version: 1\njudge:\n  mode: unmatched\n";
+    const string Rules = """
+        version: 1
+        judge:
+          mode: unmatched
+        rules:
+          - match: { kind: shell, command: "rm -rf *" }
+            outcome: deny
+        """;
 
     static PolicySnapshot Governed => new("snap-1", [
         new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Rules,
@@ -162,6 +169,24 @@ public class LocalPermissionBridgeJudgeTests {
         await Assert.That(refused.GetProperty("tool_use_id").GetString()).IsEqualTo("toolu_1");
         await Assert.That(refused.GetProperty("tool").GetString()).IsEqualTo("Bash");
         await Assert.That(refused.GetProperty("target").GetString()).IsEqualTo("git push");
+    }
+
+    /// A rule's deny reaches the agent as a hook deny too, so it is declared like a human's.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task A_rule_deny_is_declared_to_the_next_consultation_in_the_session() {
+        await using var h = new Harness();
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        await Assert.That(await Harness.BehaviorOf(await h.PostAsync("rm -rf build", "toolu_1"))).IsEqualTo("deny");
+
+        var retry = h.PostAsync("git push", "toolu_2");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+        await retry;
+
+        var refusals = h.JudgeRequestFor("toolu_2").GetProperty("refusals");
+        await Assert.That(refusals.GetProperty("complete").GetBoolean()).IsTrue();
+        await Assert.That(refusals.GetProperty("entries").EnumerateArray().Single().GetProperty("tool_use_id").GetString()).IsEqualTo("toolu_1");
     }
 
     /// A resumed or adopted agent may have been refused before this daemon saw it, so its refusals are never complete.

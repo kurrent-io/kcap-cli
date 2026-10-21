@@ -12,21 +12,26 @@ internal sealed class CodexPatchPaths {
     readonly Queue<string> _order = new();
 
     /// <summary>From <c>item/fileChange/patchUpdated</c> (<c>params.changes</c>) or a started file-change item
-    /// (<c>item.changes</c>): each change names its <c>path</c>. A later snapshot replaces an earlier one.</summary>
+    /// (<c>item.changes</c>): each change names its <c>path</c>, and a rename its destination in <c>kind.move_path</c>.
+    /// A later snapshot replaces an earlier one; one with a change naming no path leaves the item's paths unknown.</summary>
     public void Observe(string itemId, JsonElement changes) {
         if (!changes.IsArray) return;
 
-        var paths = changes.EnumerateArray()
-            .Select(c => c.Str("path"))
-            .OfType<string>()
-            .Where(p => p.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        if (paths.Length == 0) return;
+        var paths = new List<string>();
+        foreach (var change in changes.EnumerateArray()) {
+            if (change.Str("path") is not { Length: > 0 } path) {
+                lock (_gate) _paths.Remove(itemId);
+                return;
+            }
+
+            paths.Add(path);
+            if (change.Obj("kind") is { } kind && kind.Str("move_path") is { Length: > 0 } destination) paths.Add(destination);
+        }
+        if (paths.Count == 0) return;
 
         lock (_gate) {
             if (!_paths.ContainsKey(itemId)) _order.Enqueue(itemId);
-            _paths[itemId] = paths;
+            _paths[itemId] = [.. paths.Distinct(StringComparer.Ordinal)];
             if (_order.Count > MaxItems) _paths.Remove(_order.Dequeue());
         }
     }

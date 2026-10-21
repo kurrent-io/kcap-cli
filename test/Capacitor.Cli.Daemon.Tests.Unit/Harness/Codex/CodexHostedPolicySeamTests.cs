@@ -116,6 +116,20 @@ public class CodexHostedPolicySeamTests : IDisposable {
             .IsEqualTo(CodexHostedVerdict.Decline);
     }
 
+    /// A rename touches its destination too, so a path rule binds there; a change naming no path leaves the item unknown.
+    [Test]
+    [Arguments("rename", "Decline")]
+    [Arguments("pathless", "Forward")]
+    public async Task Every_path_a_file_change_touches_is_checked(string shape, string verdict) {
+        var seam   = Seam();
+        var change = shape == "rename"
+            ? new JsonObject { ["path"] = "/wt/src/key.txt", ["kind"] = new JsonObject { ["type"] = "update", ["move_path"] = "/wt/config/secrets/key.txt" } }
+            : new JsonObject { ["kind"] = new JsonObject { ["type"] = "add" } };
+        seam.Paths.Observe("patch-3", Element(new JsonArray(new JsonObject { ["path"] = "/wt/src/other.txt", ["kind"] = "update" }, change)));
+
+        await Assert.That((await seam.EvaluateAsync(FileApproval, FileChange("patch-3"), CancellationToken.None)).ToString()).IsEqualTo(verdict);
+    }
+
     /// A file-change approval names no directory, so a relative patch path resolves against the agent's own.
     [Test]
     public async Task A_relative_patch_path_resolves_against_the_agents_directory() {
