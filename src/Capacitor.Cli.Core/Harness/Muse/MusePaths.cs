@@ -18,6 +18,9 @@ public sealed class MusePaths {
     public string SkillsDir    => Path.Combine(ConfigRoot, "skills");
     public string SessionsDir  => Path.Combine(DataRoot, "sessions");
 
+    /// <summary>Muse's cache of each provider's served-model catalog, one JSON file per provider profile.</summary>
+    public string ModelCatalogDir => Path.Combine(DataRoot, "model-catalog");
+
     /// <summary>Null for an id that is not a single path segment, so nothing can climb out of
     /// <see cref="SessionsDir"/>.</summary>
     public string? SessionLogPath(string sessionId, DateOnly day) =>

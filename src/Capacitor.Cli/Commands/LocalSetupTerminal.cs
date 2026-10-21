@@ -120,7 +120,7 @@ sealed class LocalSetupTerminal(ILocalInstallerFactory factory, LocalSetupArgs a
 
         var chosen = AnsiConsole.Prompt(new TextPrompt<string>("Embedding model:")
             .DefaultValue(OllamaClient.DefaultModel)
-            .Validate(m => LocalSetupArgs.IsModelName(m) ? ValidationResult.Success() : ValidationResult.Error("Not an Ollama model name.")));
+            .Validate(m => LocalEmbeddingModelName.IsValid(m) ? ValidationResult.Success() : ValidationResult.Error("Not an Ollama model name.")));
 
         return new LocalEmbeddingAnswer.Ollama(chosen);
     }

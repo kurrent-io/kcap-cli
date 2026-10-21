@@ -62,6 +62,7 @@ internal sealed class StatusDaemonDriftTests {
         public string? UnitBinary(string serviceId) =>
             binaries[serviceId] ?? throw new InvalidOperationException($"cannot read {serviceId}");
         public ServiceStatus Status(string serviceId) => throw new NotSupportedException();
+        public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) => null;
         public ServiceQuery Query(string serviceId) => throw new NotSupportedException();
         public bool Install(ServiceSpec spec, bool startNow, out string? error) => throw new NotSupportedException();
         public void WriteAndBootstrap(ServiceSpec spec) => throw new NotSupportedException();

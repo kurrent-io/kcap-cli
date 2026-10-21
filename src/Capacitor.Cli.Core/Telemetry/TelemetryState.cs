@@ -27,19 +27,24 @@ public static class TelemetryState {
 
     static string StatePath(ConfigRoot config) => config.Path(StateFileName);
 
-    public static TelemetryStateFile Read(ConfigRoot config) {
-        var path = StatePath(config);
-        if (!File.Exists(path)) return default;
+    public static TelemetryStateFile Read(ConfigRoot config) => TryRead(config) ?? default;   // corrupt or locked → defaults, never throw
 
+    /// <summary>The saved state, defaults when nothing is saved, or null when a saved file cannot be read:
+    /// for a caller that must not mistake an opt-out it cannot read for no choice at all.</summary>
+    public static TelemetryStateFile? TryRead(ConfigRoot config) {
+        // Read outright rather than asked whether it exists, which answers false for a file it cannot see.
         try {
-            var json = File.ReadAllText(path);
+            var json = File.ReadAllText(StatePath(config));
             return JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.TelemetryStateFile);
-        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
-            return default;   // corrupt or transiently locked → defaults, never throw
+        } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
+            return default(TelemetryStateFile);
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+            return null;
         }
     }
 
-    public static bool? PersistedEnabled(ConfigRoot config) => Read(config).Enabled;
+    /// <summary>The saved choice; false when the file cannot be read, since it may hold an opt-out.</summary>
+    public static bool? PersistedEnabled(ConfigRoot config) => TryRead(config) is { } state ? state.Enabled : false;
 
     /// <summary>
     /// Persists the enable flag. Disabling also deletes the device id file (see
@@ -49,13 +54,31 @@ public static class TelemetryState {
     /// <see cref="TelemetryDeviceId.GetOrCreate"/> call, which is more private than resurrecting the
     /// discarded one.
     /// </summary>
-    public static void SetEnabled(bool enabled, ConfigRoot config) {
-        Mutate(config, state => state with { Enabled = enabled });
-        if (!enabled) TelemetryDeviceId.Delete(config);
+    /// <returns>Whether the choice was written: every write failure is swallowed, so a caller that must
+    /// not report an unsaved choice as saved reads it here.</returns>
+    public static bool SetEnabled(bool enabled, ConfigRoot config) {
+        var saved = Mutate(config, state => (state ?? default) with { Enabled = enabled });
+        if (!enabled) {
+            TelemetryDeviceId.Delete(config);
+            // Events another process spooled before the opt-out would otherwise go out after a later opt-in.
+            TelemetrySpool.For(config).Clear();
+        }
+
+        return saved;
     }
 
-    public static void MarkNoticeShown(ConfigRoot config) =>
-        Mutate(config, state => state with { NoticeShown = true });
+    /// <returns>Whether this call set the marker: false when it was already set, so of processes racing
+    /// past the notice only one sees true.</returns>
+    public static bool MarkNoticeShown(ConfigRoot config) {
+        var set = false;
+        // A file it cannot read may hold an opt-out, which writing defaults over it would erase.
+        var saved = Mutate(config, state => {
+            if (state is not { } current || current.NoticeShown) return null;
+            set = true;
+            return current with { NoticeShown = true };
+        });
+        return saved && set;
+    }
 
     /// <summary>
     /// Acquires a cross-process lock, reads current state, applies the mutation, and writes
@@ -64,7 +87,7 @@ public static class TelemetryState {
     /// On lock-acquisition failure, falls back to unlocked read-modify-write to ensure changes
     /// like SetEnabled(false) are never silently dropped.
     /// </summary>
-    static void Mutate(ConfigRoot config, Func<TelemetryStateFile, TelemetryStateFile?> apply) {
+    static bool Mutate(ConfigRoot config, Func<TelemetryStateFile?, TelemetryStateFile?> apply) {
         var path = StatePath(config);
         var dir = Path.GetDirectoryName(path)!;
 
@@ -73,44 +96,41 @@ public static class TelemetryState {
                 Directory.CreateDirectory(dir);
                 var currentState = ReadLocked(path);
                 var newState = apply(currentState);
-                if (newState.HasValue) {
-                    WriteLocked(path, newState.Value);
-                }
+                return !newState.HasValue || WriteLocked(path, newState.Value);
             }
         } catch (Exception) {
             // Lock acquisition failed (timeout, foreign-owned mutex, path errors, etc.)
             // or an exception escaped from inside the lock (should not happen, but catch broadly
             // per global constraint: telemetry must never throw to NativeAOT runtime).
             // Degrade to unlocked read-modify-write rather than silently dropping the change.
-            MutateUnlocked(path, dir, apply);
+            return MutateUnlocked(path, dir, apply);
         }
     }
 
-    static void MutateUnlocked(string path, string dir, Func<TelemetryStateFile, TelemetryStateFile?> apply) {
+    static bool MutateUnlocked(string path, string dir, Func<TelemetryStateFile?, TelemetryStateFile?> apply) {
         try {
             Directory.CreateDirectory(dir);
             var currentState = ReadLocked(path);
             var newState = apply(currentState);
-            if (newState.HasValue) {
-                WriteLocked(path, newState.Value);
-            }
             // Note: without cross-process locking in this fallback path, two concurrent writers can
             // race read-modify-write and last-writer-wins on disk, dropping whichever change lost.
             // This is acceptable as a graceful degradation when the lock mechanism is unavailable,
             // and is documented so future readers don't conclude the re-read was omitted by oversight.
+            return !newState.HasValue || WriteLocked(path, newState.Value);
         } catch (Exception) {
             // Best effort. Telemetry must never throw to the NativeAOT runtime.
+            return false;
         }
     }
 
-    static TelemetryStateFile ReadLocked(string path) {
-        if (!File.Exists(path)) return default;
+    /// Null when a saved file cannot be read, so a mutation can tell it from no file at all.
+    static TelemetryStateFile? ReadLocked(string path) {
         try {
-            var json = File.ReadAllText(path);
-            var deserialized = JsonSerializer.Deserialize(json, CapacitorJsonContext.Default.TelemetryStateFile);
-            return deserialized;
-        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException) {
-            return default;
+            return JsonSerializer.Deserialize(File.ReadAllText(path), CapacitorJsonContext.Default.TelemetryStateFile);
+        } catch (Exception e) when (e is FileNotFoundException or DirectoryNotFoundException) {
+            return default(TelemetryStateFile);
+        } catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) {
+            return null;
         }
     }
 
@@ -126,7 +146,7 @@ public static class TelemetryState {
     /// next to the target so the rename stays on one volume (required for it to be atomic), and a
     /// reader then only ever sees the fully-old or fully-new file, never a torn one.
     /// </summary>
-    static void WriteLocked(string path, TelemetryStateFile state) {
+    static bool WriteLocked(string path, TelemetryStateFile state) {
         var dir      = Path.GetDirectoryName(path) ?? "";
         var tempPath = Path.Combine(dir, $".{Path.GetFileName(path)}.tmp-{Guid.NewGuid():N}");
 
@@ -134,10 +154,12 @@ public static class TelemetryState {
             var json = JsonSerializer.Serialize(state, CapacitorJsonContext.Default.TelemetryStateFile);
             File.WriteAllText(tempPath, json);
             File.Move(tempPath, path, overwrite: true);
+            return true;
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             // Best effort. Clean up the temp file so a failed write doesn't leave debris behind —
             // itself best-effort, since we're already in the never-throw fallback path.
             try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            return false;
         }
     }
 }

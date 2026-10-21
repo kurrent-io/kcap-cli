@@ -1,13 +1,8 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Capacitor.App.Views.ProductWordmark"
-             Width="61.25" Height="31"
-             AutomationProperties.Name="kcap by Kurrent">
-    <Viewbox Stretch="Uniform">
-        <Rectangle Width="245" Height="124" Fill="{DynamicResource KcapTextBrush}">
-            <Rectangle.OpacityMask>
-                <ImageBrush Source="avares://kcap-desktop/Assets/kcap-by-kurrent.png" Stretch="Uniform" />
-            </Rectangle.OpacityMask>
-        </Rectangle>
-    </Viewbox>
+             Width="104.06" Height="31"
+             AutomationProperties.Name="kcap">
+    <Image Source="avares://kcap-desktop/Assets/kcap-logo-on-dark.png"
+           Stretch="Uniform" RenderOptions.BitmapInterpolationMode="HighQuality" />
 </UserControl>

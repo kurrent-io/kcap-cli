@@ -50,18 +50,10 @@
                        FontSize="13.5" LineHeight="21"
                        Foreground="{StaticResource KcapMutedBrush}" />
 
-            <Border x:Name="LocationPanel" IsVisible="False" Margin="0,16,0,0" Padding="12,9"
-                    CornerRadius="8" BorderThickness="1"
-                    Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}">
-                <SelectableTextBlock x:Name="LocationPath" Width="382" TextWrapping="Wrap"
-                                     FontFamily="{StaticResource FrMonoFont}" FontSize="12" LineHeight="18"
-                                     Foreground="{StaticResource KcapMutedBrush}" />
-            </Border>
-
             <StackPanel x:Name="DestinationPanel" IsVisible="False" Margin="0,18,0,0" Spacing="8">
                 <TextBlock Text="Install location" Foreground="{StaticResource KcapTextBrush}" />
                 <ComboBox x:Name="DestinationPicker" Classes="kcapField" HorizontalAlignment="Stretch"
-                          FontFamily="{StaticResource FrMonoFont}" FontSize="12"
+                          FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
                           PlaceholderText="Select a destination…" />
             </StackPanel>
 

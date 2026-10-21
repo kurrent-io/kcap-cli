@@ -532,8 +532,6 @@ public static class OAuthLoginFlow {
         return await RunDeviceFlowAsync(github, clientId, launcher, time, ct, progress, openBrowser: !forceDevice);
     }
 
-    internal const string WorkOSApiBase = "https://api.workos.com";
-
     /// <summary>
     /// Builds OidcClient options for the WorkOS AuthKit authorization-code-with-PKCE flow.
     /// Authorize + token both on the API domain (never the AuthKit UI domain). WorkOS is a
@@ -571,10 +569,10 @@ public static class OAuthLoginFlow {
     /// WorkOS AuthKit authorization-code-with-PKCE login via OidcClient. Org-scoped when
     /// <paramref name="organizationId"/> is set. Maps the raw token response (which carries WorkOS's
     /// non-standard organization_id/user and no id_token) into <see cref="WorkOSAuthResponse"/> via the
-    /// source-gen context — omitted/nullable fields don't throw. <paramref name="apiBase"/> is the test seam.
+    /// source-gen context — omitted/nullable fields don't throw.
     /// </summary>
     public static async Task<WorkOSAuthResponse?> AuthenticateWorkOSAsync(
-            string clientId, string? organizationId, IBrowser browser, string apiBase = WorkOSApiBase,
+            string clientId, string? organizationId, IBrowser browser, string apiBase,
             CancellationToken ct = default, IAuthProgress? progress = null) {
         progress ??= ConsoleAuthProgress.Instance;
 
@@ -604,16 +602,16 @@ public static class OAuthLoginFlow {
     }
 
     /// <summary>
-    /// RFC 8628 against AuthKit (<c>api.workos.com/user_management/*</c>), NOT Connect's
+    /// RFC 8628 against AuthKit at <paramref name="apiBase"/><c>/user_management/*</c>, NOT Connect's
     /// <c>{authkit-domain}/oauth2/*</c> — that one returns no organization and requires a client secret.
     /// Public client: no secret anywhere in this flow, so the proxy is not involved.
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> RunWorkOSDeviceFlowAsync(
-            WorkOSClient workos, string clientId, IBrowserLauncher launcher, TimeProvider time,
+            WorkOSClient workos, string apiBase, string clientId, IBrowserLauncher launcher, TimeProvider time,
             CancellationToken ct = default, IAuthProgress? progress = null, bool openBrowser = true) {
         progress ??= ConsoleAuthProgress.Instance;
 
-        var authorize = await workos.AuthorizeDeviceAsync(clientId, ct);
+        var authorize = await workos.AuthorizeDeviceAsync(apiBase, clientId, ct);
 
         if (!authorize.IsSuccessStatusCode) {
             // Step 1 failing is the rollout hazard, not a user error: if CLI Auth is not enabled on this
@@ -666,7 +664,7 @@ public static class OAuthLoginFlow {
             prefilled: browserOpened && !string.IsNullOrEmpty(device.VerificationUriComplete));
 
         var token = await PollDeviceGrantAsync(
-            workos.PollForTokenAsync,
+            (form, pollCt) => workos.PollForTokenAsync(apiBase, form, pollCt),
             new() { ["client_id"] = clientId, ["device_code"] = device.DeviceCode },
             CapacitorJsonContext.Default.WorkOSAuthResponse,
             r => (string.IsNullOrEmpty(r.AccessToken) ? null : r, r.Error),
@@ -687,15 +685,15 @@ public static class OAuthLoginFlow {
     /// channel would ignore it. Mirrors <see cref="AcquireGitHubTokenAsync(GitHubOAuthClient,string,string?,bool,IBrowserLauncher,Telemetry.ILoopbackJoin,TimeProvider,CancellationToken,IAuthProgress?)"/>.
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> AcquireWorkOSAsync(
-            WorkOSClient workos, string clientId, string? organizationId, bool forceDevice,
+            WorkOSClient workos, string apiBase, string clientId, string? organizationId, bool forceDevice,
             IBrowserLauncher launcher, ILoopbackJoin join,
-            TimeProvider time, IBrowser? browser = null, string apiBase = WorkOSApiBase,
+            TimeProvider time, IBrowser? browser = null,
             CancellationToken ct = default, IAuthProgress? progress = null, IKeyWatcher? keys = null) {
         progress ??= ConsoleAuthProgress.Instance;
         keys     ??= ConsoleKeyWatcher.Instance;
 
         if (ChooseWorkOSFlow(forceDevice) is WorkOSFlow.Device) {
-            return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, time, ct, progress, openBrowser: false);
+            return await RunWorkOSDeviceFlowAsync(workos, apiBase, clientId, launcher, time, ct, progress, openBrowser: false);
         }
 
         using var escape = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -708,9 +706,7 @@ public static class OAuthLoginFlow {
         // injected test seam.
         //
         // Scoped to the whole ladder, not to the login task: the fall-through paths below still run
-        // with it alive. That gives the drain only Dispose's own bounded wait once login succeeds,
-        // rather than the longer tail the facade used to provide — enough in practice (the production
-        // round trip merged in under a second) but genuinely tighter, not equivalent.
+        // with it alive, and once login succeeds the drain gets only Dispose's own bounded wait.
         using LoopbackBrowser? created = browser is null
             ? new LoopbackBrowser(
                 launcher, time, progress, keys.CanWatch ? WorkOSBrowserHint() : null, join)
@@ -743,7 +739,7 @@ public static class OAuthLoginFlow {
             await watch;
         }
 
-        return await RunWorkOSDeviceFlowAsync(workos, clientId, launcher, time, ct, progress);
+        return await RunWorkOSDeviceFlowAsync(workos, apiBase, clientId, launcher, time, ct, progress);
     }
 
     /// <summary>
@@ -796,13 +792,13 @@ public static class OAuthLoginFlow {
     /// server-bound tokens WITHOUT saving them. <c>null</c> means the reason is already reported.
     /// </summary>
     internal static async Task<(StoredTokens Tokens, string Username)?> WorkOSTokensForServerAsync(
-            WorkOSClient workos, string serverUrl, string clientId, string? organizationId, bool forceDevice,
-            IBrowserLauncher launcher, ILoopbackJoin join,
+            WorkOSClient workos, string apiBase, string serverUrl, string clientId, string? organizationId,
+            bool forceDevice, IBrowserLauncher launcher, ILoopbackJoin join,
             IBrowser? browser, CancellationToken ct, IAuthProgress progress, TimeProvider time,
-            string apiBase = WorkOSApiBase, IKeyWatcher? keys = null) {
+            IKeyWatcher? keys = null) {
         // AcquireWorkOSAsync already reported the specific failure reason.
         var json = await AcquireWorkOSAsync(
-            workos, clientId, organizationId, forceDevice, launcher, join, time, browser, apiBase, ct, progress, keys);
+            workos, apiBase, clientId, organizationId, forceDevice, launcher, join, time, browser, ct, progress, keys);
         if (json is null) return null;
 
         // Org gate: a multi-org user must not be "logged in" to the wrong org — every API call would
@@ -814,7 +810,7 @@ public static class OAuthLoginFlow {
             // the human picks at the AuthKit screen and the CLI cannot constrain it — telling them to
             // re-run would send them back to the same unconstrained screen. The switch is gated on
             // their own membership, so a user with no claim to the org still lands on the error below.
-            json = await CorrectWorkOSOrgAsync(workos, clientId, json, organizationId, ct);
+            json = await CorrectWorkOSOrgAsync(workos, apiBase, clientId, json, organizationId, ct);
 
             if (json is null) {
                 progress.Error("Error: Signed in to the wrong workspace. Sign in again and choose the one this server belongs to.");
@@ -838,7 +834,8 @@ public static class OAuthLoginFlow {
             ClientId       = clientId,
             // The kcap server we authenticated FOR — not api.workos.com, which issued the
             // token but says nothing about which kcap server will accept it.
-            ServerUrl      = canonical
+            ServerUrl      = canonical,
+            WorkOSApiBase  = WorkOSApiBaseRule.Stamp(apiBase)
         }, username);
     }
 
@@ -858,11 +855,11 @@ public static class OAuthLoginFlow {
     /// server rejects on every call.
     /// </summary>
     internal static async Task<WorkOSAuthResponse?> CorrectWorkOSOrgAsync(
-            WorkOSClient workos, string clientId, WorkOSAuthResponse signedIn,
+            WorkOSClient workos, string apiBase, string clientId, WorkOSAuthResponse signedIn,
             string organizationId, CancellationToken ct) {
         if (string.IsNullOrEmpty(signedIn.RefreshToken)) return null;
 
-        var switched = await workos.SwitchOrganizationAsync(clientId, signedIn.RefreshToken, organizationId, ct);
+        var switched = await workos.SwitchOrganizationAsync(apiBase, clientId, signedIn.RefreshToken, organizationId, ct);
 
         if (switched is null
          || string.IsNullOrEmpty(switched.AccessToken)

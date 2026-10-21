@@ -1025,7 +1025,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"still working"}]}}"""]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None, time: TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, 2, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Contains("toolu_big")).IsTrue();
     }
@@ -1037,7 +1037,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, OversizedToolResult()]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 2, CancellationToken.None, time: TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, 2, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
@@ -1051,7 +1051,7 @@ public class ClaudeToolTrackingSourceTests {
         await File.WriteAllLinesAsync(path, [ToolUse, OversizedToolResult()]);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, CancellationToken.None, time: TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, 1, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Contains("toolu_big")).IsTrue();
     }
@@ -1071,41 +1071,17 @@ public class ClaudeToolTrackingSourceTests {
         var lines = new List<string> { ToolUse };  // never resolved, then buried by later activity
         lines.AddRange(Enumerable.Repeat(
             """{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"later"}]}}""",
-            WatchCommand.ToolBackfillWindowLines + 10));
+            TranscriptReplay.WindowLines + 10));
 
         await File.WriteAllLinesAsync(path, lines);
 
         var pending = new HashSet<string>(StringComparer.Ordinal);
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, lines.Count, CancellationToken.None, TimeProvider.System);
+        await TranscriptReplay.ReplayAsync(path, lines.Count, [WatchCommand.ClaudePendingToolCallsReplay(pending)], CancellationToken.None, _ => { });
 
         await Assert.That(pending.Count).IsEqualTo(0);
     }
 
-    [Test]
-    public async Task Backfill_returns_silently_when_already_cancelled() {
-        using var tmp = new TempDir();
-        var path = tmp.PathTo("backfill.jsonl");
-        await File.WriteAllLinesAsync(path, [ToolUse]);
 
-        var pending = new HashSet<string>(StringComparer.Ordinal);
-        using var cancelled = new CancellationTokenSource();
-        await cancelled.CancelAsync();
-
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(pending, path, upToLine: 1, cancelled.Token, time: TimeProvider.System);
-
-        await Assert.That(pending.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task Backfill_on_a_missing_file_is_a_silent_no_op() {
-        using var tmp = TempDir.WithPathTo("missing.jsonl", out var missing);
-        var pending = new HashSet<string>(StringComparer.Ordinal);
-
-        await WatchCommand.BackfillClaudePendingToolCallsAsync(
-            pending, missing, upToLine: 5, CancellationToken.None, time: TimeProvider.System);
-
-        await Assert.That(pending.Count).IsEqualTo(0);
-    }
 }
 
 public class CodexTranscriptExtractionTests {

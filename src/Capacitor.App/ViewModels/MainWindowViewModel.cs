@@ -80,6 +80,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "";
 
+    // False until a snapshot has a daemon name or a displayable version. The help chip
+    // then shares the status line; a second row with nothing in it would leave the chip
+    // sitting under that line.
+    ObservableAsPropertyHelper<bool>? _showsDaemonLine;
+    public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
+
     internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
@@ -208,7 +214,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
 
-    public string AppVersionLabel { get; } = $"kcap {AppVersion.Display}";
+    public string AppVersionLabel { get; } = $"Desktop app {AppVersion.Display}";
 
     /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
     /// flyout opens the app's own.
@@ -322,6 +328,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? identityReport = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
@@ -417,6 +424,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             _daemonName = snapshots.Select(s => s.Daemon.Name)
                 .ToProperty(this, x => x.DaemonName, "")
+                .DisposeWith(disposables);
+
+            _showsDaemonLine = snapshots
+                .Select(s => !string.IsNullOrEmpty(s.Daemon.Name) || StripBuildMetadata(s.Daemon.Version).Length > 0)
+                .ToProperty(this, x => x.ShowsDaemonLine, false)
                 .DisposeWith(disposables);
 
             _versionDisplay = snapshots.Select(s => StripBuildMetadata(s.Daemon.Version))
@@ -552,8 +564,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
+            // A connect clears the progress lines back to the standing identity report, whichever of the two the
+            // main thread happens to see first.
+            string? identity = null;
+            // Each lifecycle lane's line until it is withdrawn, or a connect or identity report replaces it.
+            var laneLines = new string?[2];
+            identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(report => {
+                    var shown = identity;
+                    identity = report;
+                    if (report is not null) {
+                        laneLines.AsSpan().Clear();
+                        StartMessage = report;
+                    }
+                    else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
+                })
+                .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = null)
+                .Subscribe(_ => {
+                    laneLines.AsSpan().Clear();
+                    StartMessage = identity;
+                })
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while
@@ -568,14 +599,20 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
             // Status (start-action one-liners) and Attention (mutation-outcome presentation) both
             // land on StartMessage so the launcher banner is never mute after a Start daemon click.
-            void BindStartMessage(IObservable<string?>? source) =>
+            // A null takes back that lane's own line, if nothing has replaced it since, and shows
+            // the other lane's line again when it is still standing.
+            void BindStartMessage(IObservable<string?>? source, int lane) =>
                 source?.ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Where(msg => msg is not null)
-                    .Subscribe(msg => StartMessage = msg)
+                    .Subscribe(msg => {
+                        var posted = laneLines[lane];
+                        laneLines[lane] = msg;
+                        if (msg is not null) StartMessage = msg;
+                        else if (posted is not null && ReferenceEquals(StartMessage, posted)) StartMessage = laneLines[1 - lane] ?? identity;
+                    })
                     .DisposeWith(disposables);
 
-            BindStartMessage(lifecycleStatus);
-            BindStartMessage(lifecycleAttention);
+            BindStartMessage(lifecycleStatus, 0);
+            BindStartMessage(lifecycleAttention, 1);
         });
     }
 
@@ -663,7 +700,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
         _rebind.Disposable = Disposable.Empty;
-        if (Rail is not null) Rail.SelectedAgentId = null;
+        if (Rail is not null) Rail.SelectedSessionKey = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
     }
@@ -671,18 +708,22 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void SwapTo(ISessionWorkspace? next) {
         var outgoing = CurrentWorkspace;
         CurrentWorkspace = next;
-        if (Rail is not null) Rail.SelectedAgentId = next?.AgentId;
+        if (Rail is not null) Rail.SelectedSessionKey = next switch {
+            RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
+            null => null,
+            _ => $"local:{next.AgentId}",
+        };
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
-        WatchOrigin(next);
+        WatchOpen(next);
     }
 
-    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
-    /// Nothing here ends a session — the row that wins says whether it did.
-    void WatchOrigin(ISessionWorkspace? workspace) {
-        var watch = workspace switch {
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use,
+    /// and closes once its session ends: the rail has already dropped it.
+    void WatchOpen(ISessionWorkspace? workspace) {
+        var moves = workspace switch {
             RemoteSessionViewModel remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
@@ -694,6 +735,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
+        var ended = workspace?.Ended
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); });
+        var watch = new CompositeDisposable(moves, ended ?? Disposable.Empty);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;

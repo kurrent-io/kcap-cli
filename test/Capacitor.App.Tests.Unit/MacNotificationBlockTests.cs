@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
-using Capacitor.App.Services.Notifications;
+
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 

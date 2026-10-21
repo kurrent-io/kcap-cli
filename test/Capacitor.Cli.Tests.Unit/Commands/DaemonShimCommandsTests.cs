@@ -88,7 +88,7 @@ public class DaemonShimCommandsTests {
 
     [Test]
     public async Task ResolveLinkTarget_on_Windows_uses_the_running_binary_outside_npm() {
-        var native = Path.GetFullPath("/Users/someone/AppData/Local/KurrentCapacitor/current/kcap.exe");
+        var native = Path.GetFullPath("/Users/someone/AppData/Local/kcap/current/kcap.exe");
         var target = DaemonShimCommands.ResolveLinkTarget(() => native, _ => false, windows: true);
         await Assert.That(target).IsEqualTo(native);
     }

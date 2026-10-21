@@ -1,7 +1,7 @@
-using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Time.Testing;
 using TUnit.Assertions.Enums;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 

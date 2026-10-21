@@ -1,5 +1,5 @@
-using Capacitor.App.Services;
 using Capacitor.Cli.Core;
+using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -33,11 +33,19 @@ public class ApplicationsMoverTests {
         CompleteBundle(root, "1.0.0");
     }
 
-    static void CompleteBundle(string root, string version, string id = "io.kurrent.capacitor") {
+    static void CompleteBundle(string root, string version, string id = "io.kurrent.kcap") {
         Directory.CreateDirectory(Path.Combine(root, "Contents", "MacOS"));
         File.WriteAllText(Path.Combine(root, "Contents", "Info.plist"),
             $"<plist><dict><key>CFBundleIdentifier</key><string>{id}</string><key>CFBundleVersion</key><string>{version}</string></dict></plist>");
         File.WriteAllText(Path.Combine(root, "Contents", "MacOS", "kcap-desktop"), "exe");
+    }
+
+    static bool MoveSwap(string from, string to) {
+        var aside = to + ".aside";
+        Directory.Move(to, aside);
+        Directory.Move(from, to);
+        Directory.Move(aside, from);
+        return true;
     }
 
     static bool MovePromote(string from, string to) {
@@ -61,105 +69,10 @@ public class ApplicationsMoverTests {
     }
 
     [Test]
-    public async Task Rebrand_migrates_the_legacy_install_to_kcap_app() {
-        var apps = Tmp.CreateDir("Applications");
-        var installed = Tmp.PathTo("Applications/Kurrent Capacitor.app");
-        CompleteBundle(installed);
-        File.Move(Path.Combine(installed, "Contents", "MacOS", "kcap-desktop"),
-            Path.Combine(installed, "Contents", "MacOS", "Kurrent Capacitor"));
-        var source = Tmp.PathTo("Downloads/kcap.app");
-        CompleteBundle(source, "1.1.0");
-        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")),
-            MovePromote, apps);
-
-        await Assert.That(mover.Inspect(source).Action).IsEqualTo(ApplicationsInstallAction.Update);
-        var outcome = await mover.MoveAsync(source, CancellationToken.None);
-
-        await Assert.That(outcome.Moved).IsTrue();
-        await Assert.That(outcome.InstalledPath).IsEqualTo(Path.Combine(apps, "kcap.app"));
-        await Assert.That(File.Exists(Path.Combine(apps, "kcap.app", "Contents", "MacOS", "kcap-desktop"))).IsTrue();
-        await Assert.That(Directory.Exists(installed)).IsFalse();
-        await Assert.That(Directory.GetDirectories(apps).Length).IsEqualTo(1);
-    }
-
-    [Test]
-    [Arguments("dmg", false)]
-    [Arguments("dmg", true)]
-    [Arguments("system", false)]
-    [Arguments("user", true)]
-    public async Task Legacy_upgrade_targets_the_existing_install_from_the_DMG_or_a_copy_in_the_same_folder(string sourceLocation, bool perUser) {
-        if (!OperatingSystem.IsMacOS()) return;
+    public async Task An_unverified_user_bundle_is_not_selected_for_update() {
         var systemApps = Tmp.CreateDir("SystemApplications");
         var userApps = Tmp.CreateDir("UserApplications");
-        var apps = perUser ? userApps : systemApps;
-        var installed = Path.Combine(apps, "Kurrent Capacitor.app");
-        CompleteBundle(installed);
-        File.Move(Path.Combine(installed, "Contents", "MacOS", "kcap-desktop"),
-            Path.Combine(installed, "Contents", "MacOS", "Kurrent Capacitor"));
-        var source = sourceLocation switch {
-            "system" => Path.Combine(systemApps, "kcap.app"),
-            "user" => Path.Combine(userApps, "kcap.app"),
-            _ => Tmp.PathTo("Downloads/kcap.app"),
-        };
-        var kind = sourceLocation switch {
-            "system" => InstallLocationKind.Applications,
-            "user" => InstallLocationKind.UserApplications,
-            _ => InstallLocationKind.DmgVolume,
-        };
-        CompleteBundle(source, "1.1.0");
-
-        var choices = ApplicationsMover.ApplicationDirectories(source, userApps, systemApps);
-        await Assert.That(choices).Contains(apps);
-        var selected = apps;
-        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")),
-            MovePromote, selected, ApplicationsMover.SwapAtomic, userApplicationsDir: userApps);
-        var plan = mover.Inspect(source);
-
-        await Assert.That(selected).IsEqualTo(apps);
-        await Assert.That(plan.Target).IsEqualTo(Path.Combine(apps, "kcap.app"));
-        await Assert.That(plan.Action).IsEqualTo(ApplicationsInstallAction.Update);
-        await Assert.That(App.ShouldPromptToInstall(kind, source, plan)).IsTrue();
-        var outcome = await mover.MoveAsync(source, CancellationToken.None);
-        await Assert.That(outcome.Moved).IsTrue();
-        await Assert.That(outcome.InstalledPath).IsEqualTo(Path.Combine(apps, "kcap.app"));
-        await Assert.That(File.ReadAllText(Path.Combine(apps, "kcap.app", "Contents", "Info.plist"))).Contains("1.1.0");
-        await Assert.That(File.Exists(Path.Combine(apps, "kcap.app", "Contents", "MacOS", "kcap-desktop"))).IsTrue();
-        await Assert.That(Directory.Exists(installed)).IsFalse();
-        await Assert.That(File.Exists(Path.Combine(installed, "Contents", "MacOS", "Kurrent Capacitor"))).IsFalse();
-    }
-
-    [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task Opening_a_canonical_install_keeps_its_folder_when_only_a_legacy_copy_is_elsewhere(bool perUser) {
-        var system = Tmp.CreateDir("SystemApplications");
-        var user = Tmp.CreateDir("UserApplications");
-        var home = perUser ? user : system;
-        var other = perUser ? system : user;
-        var source = Path.Combine(home, "kcap.app");
-        var legacy = Path.Combine(other, "Kurrent Capacitor.app");
-        CompleteBundle(source, "1.1.0");
-        CompleteBundle(legacy);
-        File.Move(Path.Combine(legacy, "Contents", "MacOS", "kcap-desktop"),
-            Path.Combine(legacy, "Contents", "MacOS", "Kurrent Capacitor"));
-
-        var selected = ApplicationsMover.ApplicationDirectories(source, user, system).Single();
-        var mover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, selected);
-        var plan = mover.Inspect(source);
-
-        await Assert.That(selected).IsEqualTo(home);
-        await Assert.That(plan.Action).IsEqualTo(ApplicationsInstallAction.OpenInstalled);
-        await Assert.That(App.ShouldPromptToInstall(
-            perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
-            source, plan)).IsFalse();
-        await Assert.That(File.Exists(Path.Combine(legacy, "Contents", "MacOS", "Kurrent Capacitor"))).IsTrue();
-    }
-
-    [Test]
-    public async Task An_unverified_user_legacy_bundle_is_not_selected_for_upgrade() {
-        var systemApps = Tmp.CreateDir("SystemApplications");
-        var userApps = Tmp.CreateDir("UserApplications");
-        CompleteBundle(Path.Combine(userApps, "Kurrent Capacitor.app"), "1.0.0", "another.application");
+        CompleteBundle(Path.Combine(userApps, "kcap.app"), "1.0.0", "another.application");
         var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
 
@@ -171,7 +84,7 @@ public class ApplicationsMoverTests {
     }
 
     [Test]
-    public async Task An_installed_kcap_without_a_legacy_copy_starts_without_an_install_prompt() {
+    public async Task An_installed_kcap_starts_without_an_install_prompt() {
         var systemApps = Tmp.CreateDir("SystemApplications");
         var userApps = Tmp.CreateDir("UserApplications");
         var source = Path.Combine(userApps, "kcap.app");
@@ -205,33 +118,6 @@ public class ApplicationsMoverTests {
             perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
             source, mover.Inspect(source))).IsFalse();
         await Assert.That(ApplicationsMover.ApplicationDirectories(Tmp.PathTo("Downloads/kcap.app"), user, system).Count).IsEqualTo(2);
-
-        CompleteBundle(Path.Combine(other, "Kurrent Capacitor.app"));
-        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Single()).IsEqualTo(home);
-        CompleteBundle(Path.Combine(home, "Kurrent Capacitor.app"));
-        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
-    }
-
-    [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task Migrating_one_of_two_legacy_copies_does_not_prompt_again_on_ordinary_launch(bool perUser) {
-        var system = Tmp.CreateDir("SystemApplications");
-        var user = Tmp.CreateDir("UserApplications");
-        var selected = perUser ? user : system;
-        var other = perUser ? system : user;
-        var source = Tmp.PathTo("Downloads/kcap.app");
-        CompleteBundle(source, "1.1.0");
-        CompleteBundle(Path.Combine(system, "Kurrent Capacitor.app"));
-        CompleteBundle(Path.Combine(user, "Kurrent Capacitor.app"));
-        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
-        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")), MovePromote, selected);
-        var outcome = await mover.MoveAsync(source, CancellationToken.None);
-        await Assert.That(outcome.Moved).IsTrue();
-        await Assert.That(Directory.Exists(Path.Combine(other, "Kurrent Capacitor.app"))).IsTrue();
-        await Assert.That(ApplicationsMover.ApplicationDirectories(outcome.InstalledPath!, user, system).Single()).IsEqualTo(selected);
-        await Assert.That(App.ShouldPromptToInstall(perUser ? InstallLocationKind.UserApplications : InstallLocationKind.Applications,
-            outcome.InstalledPath!, mover.Inspect(outcome.InstalledPath!))).IsFalse();
     }
 
     [Test]
@@ -257,45 +143,45 @@ public class ApplicationsMoverTests {
         var user = Tmp.CreateDir("UserApplications");
         var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
-        CompleteBundle(Path.Combine(user, "Kurrent Capacitor.app"));
+        CompleteBundle(Path.Combine(user, "kcap.app"));
         CompleteBundle(Path.Combine(system, "kcap.app"));
         await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
         CompleteBundle(Path.Combine(system, "kcap.app"), "1.0.0", "another.application");
         await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Count).IsEqualTo(2);
         var userMover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, user);
-        await Assert.That(userMover.Inspect(source).Migrates).IsTrue();
+        await Assert.That(userMover.Inspect(source).Action).IsEqualTo(ApplicationsInstallAction.Update);
         var systemMover = new ApplicationsMover(new FakeDitto(CompleteBundle), MovePromote, system);
         await Assert.That(systemMover.Inspect(source).Action).IsEqualTo(ApplicationsInstallAction.Blocked);
     }
 
     [Test]
-    public async Task An_older_download_migrates_the_newer_legacy_bundle_without_downgrading() {
+    public async Task An_older_download_opens_the_newer_install_without_downgrading() {
         var apps = Tmp.CreateDir("Applications");
-        var legacy = Path.Combine(apps, "Kurrent Capacitor.app");
-        CompleteBundle(legacy, "2.0.0");
+        var installed = Path.Combine(apps, "kcap.app");
+        CompleteBundle(installed, "2.0.0");
         var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.0.0");
-        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "2.0.0")), MovePromote, apps);
-        await Assert.That(mover.Inspect(source).PayloadPath).IsEqualTo(legacy);
+        var ditto = new FakeDitto(root => CompleteBundle(root, "1.0.0"));
+        var mover = new ApplicationsMover(ditto, MovePromote, apps);
+        await Assert.That(mover.Inspect(source).Action).IsEqualTo(ApplicationsInstallAction.OpenInstalled);
         var outcome = await mover.MoveAsync(source, CancellationToken.None);
         await Assert.That(outcome.Moved).IsTrue();
-        await Assert.That(File.ReadAllText(Path.Combine(apps, "kcap.app", "Contents", "Info.plist"))).Contains("2.0.0");
-        await Assert.That(Directory.Exists(legacy)).IsFalse();
+        await Assert.That(ditto.Calls).IsEqualTo(0);
+        await Assert.That(File.ReadAllText(Path.Combine(installed, "Contents", "Info.plist"))).Contains("2.0.0");
     }
 
     [Test]
-    public async Task A_failed_launch_restores_the_legacy_bundle_and_does_not_remove_the_download() {
+    public async Task A_failed_launch_restores_the_installed_bundle_and_does_not_remove_the_download() {
         var apps = Tmp.CreateDir("Applications");
-        var legacy = Tmp.PathTo("Applications/Kurrent Capacitor.app");
-        CompleteBundle(legacy, "1.0.0");
+        var installed = Tmp.PathTo("Applications/kcap.app");
+        CompleteBundle(installed, "1.0.0");
         var source = Tmp.PathTo("Downloads/kcap.app");
         CompleteBundle(source, "1.1.0");
         var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")), MovePromote, apps,
-            activate: (_, _) => Task.FromResult(false));
+            MoveSwap, activate: (_, _) => Task.FromResult(false));
         var outcome = await mover.MoveAsync(source, CancellationToken.None);
         await Assert.That(outcome.Moved).IsFalse();
-        await Assert.That(Directory.Exists(legacy)).IsTrue();
-        await Assert.That(Directory.Exists(Path.Combine(apps, "kcap.app"))).IsFalse();
+        await Assert.That(File.ReadAllText(Path.Combine(installed, "Contents", "Info.plist"))).Contains("1.0.0");
         await Assert.That(Directory.Exists(source)).IsTrue();
         await Assert.That(Directory.GetDirectories(apps).Length).IsEqualTo(1);
     }

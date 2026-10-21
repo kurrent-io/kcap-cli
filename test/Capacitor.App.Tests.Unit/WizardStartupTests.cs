@@ -140,6 +140,7 @@ static class WizardFixtures {
         public bool ShimApplicable = true;
         public string? CliPath = "/opt/kcap/bin/kcap";
         public string? ShimTarget = "/opt/kcap/bin/kcap";
+        public ICliPathInstaller? ShimInstaller;
         public IReadOnlySet<HarnessId> Detected = VendorDetection.Build("claude");
         public TimeProvider Time = TimeProvider.System;
         // Matches DefaultDaemonName, so a sign-in keeps the name and writes no config of its own.
@@ -188,7 +189,7 @@ static class WizardFixtures {
             RunMutation: Lane.RunAsync,
             Observation: Observation,
             AppState: new NoopAppStateStore(),
-            ShimInstaller: new PathShimInstaller(new NoopProcessRunner(), Probe),
+            ShimInstaller: ShimInstaller ?? new PathShimInstaller(new NoopProcessRunner(), Probe),
             UrlOpener: UrlOpener,
             Probe: Probe,
             // A NEW feed per call: a composition that built one per step is caught by the factory
@@ -378,6 +379,22 @@ public class WizardStartupTests {
     }
 
     // ── the consumer runs unchanged over the wizard's own surface ─────────────
+
+    /// A withdrawn line clears only while it is still the one shown; a newer line stays.
+    [Test]
+    public async Task The_wizard_surface_withdraws_only_the_line_it_still_shows() {
+        var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
+        const string report = "Daemon daemon-a is running for another server.";
+
+        surface.Attention(report);
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsNull();
+
+        surface.Attention(report);
+        surface.Attention("newer");
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsEqualTo("newer");
+    }
 
     [Test]
     public async Task The_outcome_consumer_presents_through_the_wizard_surface() {
@@ -761,6 +778,7 @@ public class WizardStartupTests {
         var root = new LocalRoot(Config.PathTo("local"));
         root.EnsureCreated();
         Config.CreateFile("local/journal.json", "{not json");
+        LocalEmbeddingFile.Write(root, new LocalEmbeddingSetting("mxbai-embed-large"));
         harness.LocalRoot = root;
         harness.Cli.SetupLocalBehavior = LocalSetupScript.Prints(1, LocalSetupScript.Failed("registry_unreadable", "The journal cannot be read."));
         using var shutdown = new CancellationTokenSource();

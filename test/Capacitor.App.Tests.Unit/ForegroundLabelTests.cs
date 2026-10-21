@@ -7,9 +7,13 @@ public class ForegroundLabelTests {
         new(name, detail, ToolCategory.Command, label);
 
     [Test]
-    public async Task Thinking_names_the_elapsed_time_when_nothing_is_running() {
-        await Assert.That(ChatTabViewModel.ForegroundLabel([], TimeSpan.FromSeconds(130)))
-            .IsEqualTo("Thinking… 2m 10s");
+    [Arguments(5, "Thinking… 5s")]
+    [Arguments(65, "Thinking… 1m 05s")]
+    [Arguments(130, "Thinking… 2m 10s")]
+    [Arguments(3600, "Thinking… 1h 00m")]
+    public async Task Thinking_names_the_elapsed_time_when_nothing_is_running(int seconds, string expected) {
+        await Assert.That(ChatTabViewModel.ForegroundLabel([], TimeSpan.FromSeconds(seconds)))
+            .IsEqualTo(expected);
     }
 
     [Test]

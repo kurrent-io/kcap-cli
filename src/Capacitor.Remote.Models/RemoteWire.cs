@@ -52,6 +52,8 @@ public static class ApiRoutes {
     public const string ModelOptions   = "api/agents/model-options";
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
+    public static string SubagentEvents(string sessionId, string agentId, long from) =>
+        $"api/sessions/{Uri.EscapeDataString(sessionId)}/agents/{Uri.EscapeDataString(agentId)}/events?from={from}";
     public static string PermissionResponse(string sessionId, string requestId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/permission-response/{Uri.EscapeDataString(requestId)}";
 }

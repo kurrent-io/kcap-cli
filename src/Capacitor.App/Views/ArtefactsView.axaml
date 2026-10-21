@@ -42,7 +42,7 @@
                             <DataTemplate x:DataType="vm:DocumentRow">
                                 <Button Classes="artefactRow" Classes.selected="{Binding IsSelected}"
                                         Command="{Binding $parent[ItemsControl].((vm:ArtefactsTabViewModel)DataContext).SelectCommand}"
-                                        CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}">
+                                        CommandParameter="{Binding}" ToolTip.Tip="{Binding Path}" AutomationProperties.Name="{Binding FileName}">
                                     <StackPanel Spacing="2">
                                         <TextBlock Text="{Binding FileName}" FontSize="13" Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                         <StackPanel Orientation="Horizontal" Spacing="6">

@@ -24,6 +24,9 @@ public sealed class ShimOfferCoordinator {
     readonly CancellationToken _lifetime;
     // True only for a gate-Incomplete startup — Offerable/manual install still work, only the once-ever auto-offer DIALOG is skipped.
     readonly bool _autoOfferSuppressed;
+    readonly Task<string?> _pendingLink;
+    // The warning this coordinator last posted, taken back once an install succeeds.
+    string? _warning;
 
     readonly BehaviorSubject<bool> _offerable = new(false);
 
@@ -34,7 +37,8 @@ public sealed class ShimOfferCoordinator {
     /// </param>
     public ShimOfferCoordinator(
             Task phaseClosed, ILoginShellProbe probe, ICliPathInstaller? installer, IAppStateStore store,
-            ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false) {
+            ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false,
+            Task<string?>? pendingLink = null) {
         _phaseClosed          = phaseClosed;
         _probe                = probe;
         _installer            = installer;
@@ -43,6 +47,7 @@ public sealed class ShimOfferCoordinator {
         _target               = installer is null ? null : target;
         _lifetime             = lifetime;
         _autoOfferSuppressed  = autoOfferSuppressed;
+        _pendingLink          = pendingLink ?? Task.FromResult<string?>(null);
     }
 
     /// True while the tray's "Install command-line tool…" item should show: applicable (an
@@ -62,10 +67,16 @@ public sealed class ShimOfferCoordinator {
     async Task RunAsync() {
         try {
             await _phaseClosed.ConfigureAwait(false);
+            // A probe before the setup wizard's link settles would offer what is about to exist.
+            var unfinished = await AwaitPendingLinkAsync().ConfigureAwait(false);
             if (_target is null) return; // nothing to link — offer and menu item both stay off
 
             var onPath = await _probe.KcapOnPathAsync(_lifetime).ConfigureAwait(false);
-            if (onPath != false) return; // true (already on PATH) or unknown → never auto-offer, item stays hidden
+            if (onPath == true) return;
+            // Said here because setup may never have shown it, and the preflight below can return
+            // without a dialog.
+            if (unfinished is not null) await Status(unfinished).ConfigureAwait(false);
+            if (onPath is null) return; // unknown → never auto-offer, item stays hidden
 
             _offerable.OnNext(true); // applicable-but-absent — the menu item is live from here on
 
@@ -104,6 +115,7 @@ public sealed class ShimOfferCoordinator {
     async Task RunInstallAsync() {
         try {
             if (_target is null || _installer is null) return; // defensive — the menu item is never shown without one
+            await AwaitPendingLinkAsync().ConfigureAwait(false);
             var result = await _installer.InstallAsync(_target, _lifetime).ConfigureAwait(false);
             await SurfaceResultAsync(result).ConfigureAwait(false);
         } catch (OperationCanceledException) {
@@ -114,11 +126,10 @@ public sealed class ShimOfferCoordinator {
     }
 
     Task SurfaceResultAsync(ShimResult result) => result.Outcome switch {
-        // Confirmed on-PATH: the item is no longer applicable-but-absent (Offerable's own
-        // contract), on both the auto-offer accept path and the manual tray-install path — both
-        // route through here. InstalledButNotOnPath deliberately does NOT reset it: kcap is still
-        // absent from the terminal PATH, so the item stays offerable for a retry.
-        ShimOutcome.Installed => InstalledStatus(),
+        // InstalledButNotOnPath keeps the item offerable: kcap is still absent from the terminal
+        // PATH. Success posts no line — the status lane is the launcher's warning banner, and
+        // nothing clears it while the daemon stays connected.
+        ShimOutcome.Installed => Installed(),
         ShimOutcome.InstalledButNotOnPath => Status(result.Detail ?? "kcap was linked, but is not yet on your terminal PATH."),
         ShimOutcome.Cancelled => ClaimDeniedThenStatus("Installing the command-line tool was canceled."),
         ShimOutcome.Failed => Status(result.SudoFallback is null
@@ -127,10 +138,14 @@ public sealed class ShimOfferCoordinator {
         _ => Task.CompletedTask,
     };
 
-    Task InstalledStatus() {
+    Task Installed() {
         _offerable.OnNext(false);
-        return Status("kcap is now on your terminal PATH.");
+        if (_warning is { } warning) _surface.Withdraw(warning);
+        _warning = null;
+        return Task.CompletedTask;
     }
+
+    Task<string?> AwaitPendingLinkAsync() => _pendingLink.WaitAsync(_lifetime);
 
     async Task ClaimDeniedThenStatus(string message) {
         await ClaimDeniedAsync().ConfigureAwait(false);
@@ -138,6 +153,7 @@ public sealed class ShimOfferCoordinator {
     }
 
     Task Status(string message) {
+        _warning = message;
         _surface.Status(message);
         return Task.CompletedTask;
     }

@@ -48,6 +48,7 @@ public class DetailsViewTests {
                 var header = Header(root, 0);
                 await Assert.That(header.IsChecked).IsFalse();
                 await Assert.That(HeaderText(header)).Contains("Agent Prompt");
+                await Assert.That(Avalonia.Automation.AutomationProperties.GetName(header)).IsEqualTo("Agent Prompt");
                 await Assert.That(Spans<Avalonia.Controls.Documents.Bold>(Label(header).Inlines!).Count()).IsEqualTo(1);
                 await Assert.That(All<TextBlock>(root).Select(Reads).Any(t => t.Contains("hidden body"))).IsFalse();
                 await Assert.That(All<Border>(root).Count(b => b.Classes.Contains("markdown-details"))).IsEqualTo(1);

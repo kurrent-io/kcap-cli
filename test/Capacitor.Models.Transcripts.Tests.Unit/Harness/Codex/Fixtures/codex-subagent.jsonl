@@ -1,0 +1,6 @@
+{"timestamp":"2026-09-04T09:00:39.000Z","type":"session_meta","payload":{"id":"0199a000-0000-7000-8000-000000000002","session_id":"0199a000-0000-7000-8000-000000000001","thread_source":"subagent","cwd":"/work/repo","source":"cli"}}
+{"timestamp":"2026-09-04T09:00:40.000Z","type":"session_meta","payload":{"id":"0199a000-0000-7000-8000-000000000003","cwd":"/work/repo","source":{"subagent":{"parent_thread_id":"0199a000-0000-7000-8000-000000000001","depth":1}}}}
+{"timestamp":"2026-09-04T09:00:41.000Z","type":"turn_context","payload":{"model":"gpt-5-codex"}}
+{"timestamp":"2026-09-04T09:00:42.000Z","type":"response_item","payload":{"type":"agent_message","author":"/root","recipient":"/root/reviewer","content":[{"type":"input_text","text":"Review the diff."}]}}
+{"timestamp":"2026-09-04T09:00:43.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"On it."}]}}
+{"timestamp":"2026-09-04T09:00:44.000Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":15,"reasoning_output_tokens":0,"total_tokens":315},"last_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":15,"reasoning_output_tokens":0,"total_tokens":315}}}}

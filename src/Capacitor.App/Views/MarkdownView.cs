@@ -40,6 +40,9 @@ public sealed class MarkdownView : ContentControl {
     // The extension builds its TextMate highlighters on first use and keeps them, so one
     // instance serves the app; a per-view instance rebuilds them on every render.
     static readonly TextMateExtension Highlighting = new();
+    static readonly Cursor IBeamCursor = new(StandardCursorType.Ibeam);
+    static readonly Cursor HandCursor = new(StandardCursorType.Hand);
+    static readonly Cursor ArrowCursor = new(StandardCursorType.Arrow);
 
     readonly MarkdownViewer _viewer = new();
     readonly DetailsState _details = new();
@@ -72,6 +75,8 @@ public sealed class MarkdownView : ContentControl {
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
         MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
+        // Bubble on the host runs after the viewer's own move, which has already chosen Hand or
+        // the arrow. Prose takes the I-beam and a link the hand; a bare image stays on the arrow.
         AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
@@ -84,10 +89,15 @@ public sealed class MarkdownView : ContentControl {
     }
 
     void OnPointerMoved(object? sender, PointerEventArgs e) {
-        var tip = FindHyperlinkAt(_viewer, e.GetPosition(_viewer))?.NavigateUri?.ToString()
-            ?? ImageUnder(e.Source as Visual)?.Target;
+        var link = FindHyperlinkAt(_viewer, e.GetPosition(_viewer));
+        var image = ImageUnder(e.Source as Visual);
+        var tip = link?.NavigateUri?.ToString() ?? image?.Target;
         if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
             ToolTip.SetTip(_viewer, tip);
+        // Cursor inherits, so the viewer's value is what a child with none of its own shows.
+        _viewer.Cursor = link is not null || image?.Target is not null ? HandCursor
+            : image is not null ? ArrowCursor
+            : IBeamCursor;
     }
 
     static MarkdownImage? ImageUnder(Visual? visual) {

@@ -42,10 +42,14 @@ public sealed class LocalInstallController(
     /// Raised once per run, through <c>post</c>, after <see cref="Outcome"/> is set.
     public event Action<LocalInstallOutcome>? Settled;
 
+    /// What the last run was told about search by meaning; a retry tells the next one the same.
+    public LocalEmbeddingChoice? Embeddings { get; private set; }
+
     /// Spawns the child and returns; a no-op while a run is in flight.
-    public Task StartAsync(CancellationToken ct) {
+    public Task StartAsync(LocalEmbeddingChoice embeddings, CancellationToken ct) {
         if (Running) return Task.CompletedTask;
 
+        Embeddings = embeddings;
         var progress = new LocalSetupProgress();
         var interrupt = new CancellationTokenSource();
         _interrupt = interrupt;
@@ -55,7 +59,7 @@ public sealed class LocalInstallController(
         Running    = true;
 
         funnel.LocalInstallStarted();
-        _ = RunAsync(progress, interrupt.Token, _exited, ct);
+        _ = RunAsync(embeddings, progress, interrupt.Token, _exited, ct);
 
         return Task.CompletedTask;
     }
@@ -64,7 +68,7 @@ public sealed class LocalInstallController(
         if (Running) return Task.CompletedTask;
 
         funnel.LocalInstallRetried();
-        return StartAsync(ct);
+        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Default, ct);
     }
 
     /// Settles a refusal decided before any child would start, through the same path a run's failure takes.
@@ -87,12 +91,14 @@ public sealed class LocalInstallController(
         return _exited.Task;
     }
 
-    async Task RunAsync(LocalSetupProgress progress, CancellationToken interrupt, TaskCompletionSource exited, CancellationToken ct) {
+    async Task RunAsync(
+            LocalEmbeddingChoice embeddings, LocalSetupProgress progress, CancellationToken interrupt, TaskCompletionSource exited,
+            CancellationToken ct) {
         var kcap = cli();
         var unexplained = kcap.CliPath is null ? "cli_missing" : "no_failure_line";
         StreamingResult result;
         try {
-            result = await kcap.SetupLocalAsync(line => {
+            result = await kcap.SetupLocalAsync(embeddings, line => {
                 if (line.Kind != ProcessStreamKind.Stdout || LocalSetupLine.Parse(line.Text) is not { } parsed) return;
 
                 post(() => progress.Apply(parsed));

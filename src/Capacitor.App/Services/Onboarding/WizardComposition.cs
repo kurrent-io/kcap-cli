@@ -44,7 +44,7 @@ internal sealed record WizardFacadeSpec(
 internal sealed record WizardGraph(
     OnboardingViewModel ViewModel, WizardAuthService Auth, IReadOnlyList<IWizardStep> Steps,
     HistoryStepViewModel History, ConnectChoiceViewModel Connect, DaemonEnabler Daemon,
-    LocalInstallController Install);
+    LocalInstallController Install, PathFixViewModel? PathFix = null);
 
 /// <summary>Everything wizard-first mode is composed from; the daemon-facing entries are factories so a call never lands on a stale daemon.</summary>
 internal sealed record WizardGraphOptions(
@@ -107,7 +107,8 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, null, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition);
+            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition,
+            spec.Telemetry.Funnel);
 
     /// The ONE façade a wizard run signs in through, with the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.
@@ -166,13 +167,17 @@ internal static class WizardComposition {
         void OnSettling(LocalSetupSnapshot snapshot) => durable.OnNext(snapshot);
         install.Settling += OnSettling;
 
+        var committedLocalAtStart = CommittedLocal();
+        // A workspace already signed in at start is this run's: setup neither moves it to the other edition
+        // nor signs it in again.
+        var signedInAtStart = options.AlreadyAuthenticated && !committedLocalAtStart;
         var edition = new EditionStepViewModel(
             options.Bridges.Telemetry.Funnel,
             () => {
                 RefreshDurable();
                 return LocalUnavailableReason(options.LocalEditionSupported, options.Root, root);
             },
-            locked: () => Installed() || Pending() || CommittedLocal());
+            locked: () => signedInAtStart || Installed() || Pending() || CommittedLocal());
         bool OnLocalPath() => edition.Choice == EditionChoice.Local || Pending() || CommittedLocal();
         var installStep = new InstallStepViewModel(
             install,
@@ -181,13 +186,14 @@ internal static class WizardComposition {
                 ? config.ActiveName
                 : null,
             // A committed machine has nothing left to install.
-            onLocalPath: () => OnLocalPath() && !CommittedLocal());
+            onLocalPath: () => OnLocalPath() && !CommittedLocal(),
+            recorded: () => LocalEmbeddingFile.Read(root),
+            resuming: Pending);
         var connect  = new ConnectChoiceViewModel();
         var signIn   = new SignInStepViewModel(
             auth, connect, options.Bridges, claims, options.AppState, options.UrlOpener, time: options.Time,
-            passThrough: OnLocalPath, signingUp: () => edition.Choice == EditionChoice.Cloud);
-        var committedLocalAtStart = CommittedLocal();
-        if (options.AlreadyAuthenticated && !committedLocalAtStart) signIn.RestoreCommitted();
+            passThrough: () => signedInAtStart || OnLocalPath(), signingUp: () => edition.Choice == EditionChoice.Cloud);
+        if (signedInAtStart) signIn.RestoreCommitted();
         var pathFix  = options.ShimApplicable && options.ShimInstaller is { } installer
             ? new PathFixViewModel(installer, options.AppState, options.ShimTarget, OnLocalPath)
             : null;
@@ -227,9 +233,12 @@ internal static class WizardComposition {
         signIn.WhenAnyValue(x => x.Satisfied)
             .Where(satisfied => satisfied)
             .Subscribe(signedIn => _ = daemon.EnsureAsync(options.ShutdownToken));
-        // Only the settled outcome counts: a progress line is not an installed server.
+        // Only the settled outcome counts: a progress line is not an installed server. The terminal
+        // command is part of a local install, harnesses or not; the harness step joins this run.
         void OnInstallSettled(LocalInstallOutcome outcome) {
-            if (outcome is LocalInstallOutcome.Installed) _ = daemon.EnsureAsync(options.ShutdownToken);
+            if (outcome is not LocalInstallOutcome.Installed) return;
+            _ = daemon.EnsureAsync(options.ShutdownToken);
+            _ = pathFix?.LinkAsync(options.ShutdownToken);
         }
         install.Settled += OnInstallSettled;
         if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);
@@ -253,28 +262,28 @@ internal static class WizardComposition {
         }, options.UrlOpener);
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, done];
 
-        var startAt = Pending() ? WizardStepId.Install
-            : options.AlreadyAuthenticated || committedLocalAtStart ? WizardStepId.Harnesses
-            : (WizardStepId?)null;
         var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
             .Merge(durable.Select(_ => Unit.Default))
             .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
         var wizard = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
+            steps, options.ShutdownToken, options.Surface, canFinishLater: canFinishLater, restate: durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
         };
+        var funnel = WizardFunnel.Attach(wizard, options.Bridges.Telemetry.Funnel,
+            daemon.WhenAnyValue(x => x.Satisfied, x => x.Row, (satisfied, row) => (satisfied, row == DaemonRow.AlreadyEnabled)));
         wizard.CloseRequested += signIn.EndSignUpWait;
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
             install.Settling -= OnSettling;
             install.Settled -= OnInstallSettled;
             installStep.Detach();
+            funnel.Dispose();
         };
 
-        return new WizardGraph(wizard, auth, steps, history, connect, daemon, install);
+        return new WizardGraph(wizard, auth, steps, history, connect, daemon, install, pathFix);
 
         bool Connected() => signIn.Satisfied || Installed() || CommittedLocal();
     }

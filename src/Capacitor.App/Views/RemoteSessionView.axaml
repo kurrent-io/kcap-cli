@@ -57,14 +57,27 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,10"
                 IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
-                       FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
+                           FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                <Button x:Name="AccessOpenTerminal" Grid.Column="1" Classes="kcapChip" Content="Open Terminal"
+                        Command="{Binding ShowTerminalCommand}" Margin="12,0,0,0" VerticalAlignment="Center"
+                        IsVisible="{Binding ShowsTerminalButton}" />
+            </Grid>
         </Border>
 
         <Grid Grid.Row="2">
             <!-- The active-tab flag lives on this VM, which is not the pane's DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsChatPane}" />
+            <!-- Built only while a subagent is open, so the closed pane adds no second chat to the tree. -->
+            <ContentControl x:Name="SubagentHost" Content="{Binding Subagent}" IsVisible="{Binding ShowsSubagentPane}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:SubagentPaneViewModel">
+                        <views:SubagentPaneView IsVisible="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).ShowsSubagentPane}" />
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
 
             <Grid x:Name="TerminalPane" RowDefinitions="*,Auto" IsVisible="{Binding ShowsTerminalPane}">
                 <!-- FontFamily MUST be set: the control's default is "Cascadia Mono", which only

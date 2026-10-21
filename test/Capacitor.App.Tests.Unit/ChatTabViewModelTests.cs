@@ -34,8 +34,8 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Running: ls -la");
                 await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo(h.Chat.AgentStatus.Label);
                 await Assert.That(h.Chat.AgentStatus.Facts[0].Text).IsEqualTo(h.Chat.AgentStatus.Label);
-                await Assert.That(h.Chat.AgentStatus.Facts[1].Text).IsEqualTo("Working for 0m 2s");
-                await Assert.That(h.Chat.AgentStatus.Tip).Contains("Working for 0m 2s");
+                await Assert.That(h.Chat.AgentStatus.Facts[1].Text).IsEqualTo("Working for 2s");
+                await Assert.That(h.Chat.AgentStatus.Tip).Contains("Working for 2s");
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -49,10 +49,10 @@ public class ChatTabViewModelTests {
             try {
                 await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false });
                 h.Time.Advance(TimeSpan.FromSeconds(65));
-                await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Thinking… 1m 5s");
+                await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Thinking… 1m 05s");
                 await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo(h.Chat.AgentStatus.Label);
                 await Assert.That(h.Chat.AgentStatus.Facts[0].Text).IsEqualTo(h.Chat.AgentStatus.Label);
-                await Assert.That(h.Chat.AgentStatus.Facts[1].Text).IsEqualTo("Working for 1m 5s");
+                await Assert.That(h.Chat.AgentStatus.Facts[1].Text).IsEqualTo("Working for 1m 05s");
                 var status = h.Chat.AgentStatus;
                 await h.TeardownAsync();
                 tornDown = true;
@@ -225,12 +225,12 @@ public class ChatTabViewModelTests {
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
-                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
+                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts, transcripts: transcripts);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -262,6 +262,25 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.HasPendingCards).IsTrue();
             await Assert.That(CardRows(h.Chat).Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r1" });
             await Assert.That(h.Chat.PhaseNote).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_closing_local_tab_hands_off_its_feed_whether_or_not_it_reads_through_the_shared_cache(bool shared) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"), transcripts: shared ? new LocalTranscripts() : null);
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [UserLine, AssistantLine])));
+            await WaitUntilAsync(() => h.Chat.Items.Count > 0, what: "the initial load");
+
+            var handoff = h.Chat.ReleaseFeed();
+
+            await Assert.That(handoff).IsNotNull();
+            await Assert.That(handoff!.Runs).IsSameReferenceAs(h.Runs);
+            handoff.Feed.Dispose();
             await h.TeardownAsync();
         });
     }
@@ -1662,6 +1681,30 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Pins that only a send the channel did not refuse counts as a submitted turn.
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted, 1)]
+    [Arguments(ChatSendOutcome.Unconfirmed, 1)]
+    [Arguments(ChatSendOutcome.Rejected, 0)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task TurnSubmitted_fires_only_for_a_send_the_channel_did_not_refuse(ChatSendOutcome outcome, int expected) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.Journal, input: input);
+            await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running" });
+            var submitted = 0;
+            h.Chat.TurnSubmitted += () => submitted++;
+
+            h.Chat.ComposerText = "hello";
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(submitted).IsEqualTo(0);
+            input.Pending!.SetResult(outcome);
+            await send;
+            await Assert.That(submitted).IsEqualTo(expected);
+            await h.TeardownAsync();
+        });
+    }
+
     /// A send that went out is recallable whether or not the transcript has echoed it yet; a
     /// rejected one never left the box, so there is nothing to recall.
     [Test]
@@ -2467,7 +2510,7 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("Starting Pi…");
 
             await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0s");
 
             File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "hi")) + "\n");
             await h.TickAsync();
@@ -2477,7 +2520,7 @@ public class ChatTabViewModelTests {
             await h.PushAsync(Hosted(path, "Running", awaitingInput: true));
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
             await h.PushAsync(Hosted(path, "Running", awaitingInput: false));
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0s");
 
             // Output does not end the timer; only a turn verdict does.
             File.AppendAllText(path, EnvelopeJournalFormat.Write(new AcpEventEnvelope(Kind: AcpEventKind.AssistantText, Text: "on it")) + "\n");
@@ -2495,14 +2538,14 @@ public class ChatTabViewModelTests {
             var dto = Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false };
             await h.PushAsync(dto);
             h.Time.Advance(TimeSpan.FromSeconds(65));
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
             await h.PushAsync(dto); // repeated snapshots must not restart the clock
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
             await h.PushAsync(dto with { AwaitingInput = true });
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
             h.Time.Advance(TimeSpan.FromSeconds(30));
             await h.PushAsync(dto);
-            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0s");
             await h.PushAsync(dto with { AwaitingInput = null });
             await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
             await h.PushAsync(dto);
@@ -2685,9 +2728,9 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
                 h.Permissions.Remove("r1");
                 await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
                 h.Time.Advance(TimeSpan.FromSeconds(2));
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 7s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 07s");
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -2702,11 +2745,11 @@ public class ChatTabViewModelTests {
             try {
                 var waiting = Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = true };
                 await h.PushAsync(waiting with { LiveSubagents = 2 });
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0s");
                 h.Time.Advance(TimeSpan.FromSeconds(65));
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
                 await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Working");
-                await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo("Working for 1m 5s");
+                await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo("Working for 1m 05s");
                 await Assert.That(h.Chat.AgentStatus.Facts.Any(fact => fact.Text == "Waiting for input.")).IsTrue();
                 await Assert.That(h.Chat.AgentStatus.Facts.Any(fact => fact.Text == "2 subagents running")).IsTrue();
 
@@ -2714,7 +2757,7 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
 
                 await h.PushAsync(waiting with { LiveSubagents = 1 });
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0m 0s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0s");
 
                 await h.PushAsync(waiting with { LiveSubagents = null });
                 await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
@@ -2732,7 +2775,7 @@ public class ChatTabViewModelTests {
             try {
                 await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = true, LiveSubagents = 1 });
                 h.Time.Advance(TimeSpan.FromSeconds(65));
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
 
                 h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
                 await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
@@ -2741,9 +2784,9 @@ public class ChatTabViewModelTests {
 
                 h.Permissions.Remove("r1");
                 await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 5s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
                 h.Time.Advance(TimeSpan.FromSeconds(2));
-                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 7s");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 07s");
             } finally { await h.TeardownAsync(); }
         });
     }

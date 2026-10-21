@@ -245,9 +245,9 @@ public class RailSessionViewModelTests {
             var selected = new BehaviorSubject<string?>(null);
             using var row = new RailSessionViewModel(Row(id: "a1"), selected, NoPending, NotStale, _ => { }, _ => { }, TimeProvider.System);
             await Assert.That(row.IsSelected).IsFalse();
-            selected.OnNext("a1");
+            selected.OnNext("local:a1");
             await Assert.That(row.IsSelected).IsTrue();
-            selected.OnNext("other");
+            selected.OnNext("remote:a1");
             await Assert.That(row.IsSelected).IsFalse();
         });
     }

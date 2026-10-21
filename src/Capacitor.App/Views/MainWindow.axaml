@@ -139,7 +139,7 @@
                                 </Button>
                             </Grid>
 
-                            <views:LauncherPaneView Grid.Row="1" DataContext="{Binding Home}" />
+                            <views:LauncherPaneView x:Name="LauncherView" Grid.Row="1" DataContext="{Binding Home}" />
                         </Grid>
 
                         <ContentControl x:Name="WorkspaceHost" Content="{Binding CurrentWorkspace}"
@@ -153,6 +153,10 @@
                                 </views:RetainedViewTemplate>
                             </ContentControl.DataTemplates>
                         </ContentControl>
+
+                        <Border x:Name="SwitchCover" Background="{StaticResource KcapCanvasBrush}" IsVisible="False">
+                            <views:StillImage x:Name="SwitchCoverStill" />
+                        </Border>
                     </Panel>
                 </Grid>
             </Panel>

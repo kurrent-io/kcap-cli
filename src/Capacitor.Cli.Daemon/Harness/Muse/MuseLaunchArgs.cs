@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Harness.Muse;
@@ -6,7 +7,7 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// decides it here; approval posture rides the wire.</summary>
 internal static class MuseLaunchArgs {
     internal static IReadOnlyList<string> For(DaemonConfig config, RuntimeStartContext ctx, bool reviewer) {
-        var argv = new List<string> { "serve", "--provider", "meta" };
+        var argv = new List<string> { "serve", "--provider", MuseModelCatalog.LaunchProvider };
 
         if (ResolveModel(config, ctx) is { Length: > 0 } model) {
             argv.Add("--model");

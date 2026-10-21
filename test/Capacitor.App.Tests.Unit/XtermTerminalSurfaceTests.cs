@@ -87,7 +87,7 @@ public class XtermTerminalSurfaceTests {
             surface.Feed("c");
 
             await Assert.That(File.ReadAllText(dump)).IsEqualTo("ab⏵c");
-            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ab▶c");
+            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ab►c");
         });
     }
 

@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using Capacitor.App.Platform.Mac;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 
@@ -29,9 +30,9 @@ public class ApplicationReferencesTests {
     }
 
     (string Old, string Target, string Unit, string Link, DaemonStore Store, UserHome Home) Setup() {
-        var old = Tmp.CreateDir("Applications/Kurrent Capacitor.app");
+        var old = Tmp.CreateDir("home/Applications/kcap.app");
         var target = Tmp.CreateDir("Applications/kcap.app");
-        Tmp.CreateFile("Applications/Kurrent Capacitor.app/Contents/MacOS/kcap");
+        Tmp.CreateFile("home/Applications/kcap.app/Contents/MacOS/kcap");
         Tmp.CreateFile("Applications/kcap.app/Contents/MacOS/kcap");
         var unit = Tmp.CreateFile("home/Library/LaunchAgents/io.kurrent.kcap.daemon.work.plist");
         var dict = new XElement("dict", new XElement("key", "Label"), new XElement("string", "io.kurrent.kcap.daemon.work"),
@@ -53,21 +54,22 @@ public class ApplicationReferencesTests {
     }
 
     [Test]
-    public async Task A_dragged_bundle_migrates_real_files_and_references_before_opening_then_removes_the_legacy_copy() {
+    public async Task A_user_Applications_copy_moves_real_files_and_references_before_opening_then_is_removed() {
         if (!OperatingSystem.IsMacOS()) return;
         var paths = Setup();
         static void Bundle(string root, string version) {
             File.WriteAllText(Path.Combine(root, "Contents", "Info.plist"),
-                $"<plist><dict><key>CFBundleIdentifier</key><string>io.kurrent.capacitor</string><key>CFBundleVersion</key><string>{version}</string></dict></plist>");
+                $"<plist><dict><key>CFBundleIdentifier</key><string>io.kurrent.kcap</string><key>CFBundleVersion</key><string>{version}</string></dict></plist>");
             File.WriteAllText(Path.Combine(root, "Contents", "MacOS", "kcap-desktop"), version);
         }
-        Bundle(paths.Old, "1.0.0");
-        Bundle(paths.Target, "1.1.0");
+        Bundle(paths.Old, "1.1.0");
+        Directory.Delete(paths.Target, recursive: true);
         var ctl = new Launchctl();
         var runner = new BundleRunner(ctl);
         var activated = false;
         var mover = new ApplicationsMover(runner, ApplicationsMover.PromoteExclusive, Path.GetDirectoryName(paths.Target)!,
             ApplicationsMover.SwapAtomic,
+            userApplicationsDir: Path.GetDirectoryName(paths.Old),
             migrateReferences: () => new ApplicationReferences(runner, paths.Home, paths.Store, TimeProvider.System,
                 (_, _) => Task.FromResult(true), (_, _) => Task.FromResult(true), "gui/123", [Path.GetDirectoryName(paths.Link)!]),
             activate: (root, _) => {
@@ -76,7 +78,7 @@ public class ApplicationReferencesTests {
                     && new FileInfo(paths.Link).LinkTarget == paths.Target + "/Contents/MacOS/kcap";
                 return Task.FromResult(activated);
             });
-        var outcome = await mover.MoveAsync(paths.Target, CancellationToken.None);
+        var outcome = await mover.MoveAsync(paths.Old, CancellationToken.None);
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(activated).IsTrue();
         await Assert.That(File.ReadAllText(Path.Combine(paths.Target, "Contents", "MacOS", "kcap-desktop"))).IsEqualTo("1.1.0");
