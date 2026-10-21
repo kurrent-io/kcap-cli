@@ -500,15 +500,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         // Never starts empty: a null SupportedVendors means "daemon
         // capability unknown", not "hosts nothing" — Build(null) offers everything until the first
-        // real snapshot narrows it. Merged with the machine-picker's own override (null when
-        // local, the selected remote machine's advertised vendors otherwise — SelectMachineAsync's
-        // rule). ObserveOn BEFORE ToProperty: Snapshots is pushed from the daemon client's own
-        // background thread (MainWindowViewModel's identical comment).
+        // real snapshot narrows it. A remote selection follows its live registry entry, so a
+        // restarted daemon's new set applies; the list captured at selection covers a registry
+        // that no longer resolves it. ObserveOn BEFORE ToProperty: Snapshots is pushed from the
+        // daemon client's own background thread.
         var harnessOptions = daemon.Snapshots
             .Select(s => s.Daemon.SupportedVendors)
             .StartWith((string[]?)null)
-            .CombineLatest(_remoteVendorOverride, _machineSelectionChanges,
-                (localVendors, remoteVendors, sel) => HostedHarnessCatalog.Build(sel.Remote ? remoteVendors : localVendors));
+            .CombineLatest(_remoteVendorOverride, _daemons.StartWith((IReadOnlyList<DaemonInfo>) []), _machineSelectionChanges,
+                (localVendors, remoteVendors, list, sel) => HostedHarnessCatalog.Build(!sel.Remote ? localVendors
+                    : FindMachine(list, sel.Name, _lastViewerId) is { } live ? live.SupportedVendors : remoteVendors));
         var noHarnesses = harnessOptions.Select(options => !options.Any(o => o.Available)).DistinctUntilChanged();
         _harnesses = harnessOptions
             .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -682,7 +683,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
             .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
                 (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null))
-            .CombineLatest(noHarnesses, _machineSelectionChanges,
+            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _machineSelectionChanges,
                 (notice, none, sel) => notice ?? (none ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)

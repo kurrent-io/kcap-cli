@@ -173,6 +173,31 @@ public class HomeViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_selected_remote_follows_its_live_vendor_list() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([Box("u1")]);
+            using var vm = new HomeViewModel(daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(),
+                Known(), TimeProvider.System, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                laneStatus: Observable.Return(new ServerLaneStatus(ServerLaneState.Connected)));
+
+            await vm.SelectMachineAsync("box", isLocal: false);
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+
+            remote.DaemonsSubject.OnNext([Box("u1") with { SupportedVendors = [] }]);
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.NoHarnessesNotice("box"));
+
+            remote.DaemonsSubject.OnNext([Box("u1") with { SupportedVendors = ["codex"] }]);
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_same_named_daemon_owned_by_someone_else_never_supplies_the_catalog() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var daemon = new FakeDaemonClientService();
