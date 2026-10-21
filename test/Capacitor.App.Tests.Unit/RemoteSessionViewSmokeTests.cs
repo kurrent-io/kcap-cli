@@ -204,9 +204,7 @@ public class RemoteSessionViewSmokeTests {
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task A_remote_running_turn_without_turn_details_can_be_interrupted_until_idle_or_disconnected(bool button) {
+    public async Task A_remote_process_without_turn_details_does_not_offer_interrupt_or_claim_to_be_idle() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var host = new Host();
             try {
@@ -215,19 +213,15 @@ public class RemoteSessionViewSmokeTests {
                 var composer = chat.FindControl<TextBox>("ComposerInput")!;
                 var interrupt = chat.FindControl<Button>("InterruptButton")!;
                 await Assert.That(host.Vm.Chat.AgentStatus.IsRunningUnknownTurn).IsTrue();
-                await Assert.That(interrupt.IsEffectivelyVisible).IsTrue();
-                await Assert.That(interrupt.IsEffectivelyEnabled).IsTrue();
+                await Assert.That(interrupt.IsEffectivelyVisible).IsFalse();
+                await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsFalse();
 
                 composer.Focus();
                 host.Window.KeyTextInput("keep this draft");
                 host.Settle();
-                if (button) {
-                    var point = interrupt.TranslatePoint(new Point(interrupt.Bounds.Width / 2, interrupt.Bounds.Height / 2), host.Window)!.Value;
-                    host.Window.MouseDown(point, MouseButton.Left);
-                    host.Window.MouseUp(point, MouseButton.Left);
-                } else host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
-                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 1, "interrupt delivered");
-                await Assert.That(host.Lane.SpecialKeys).IsEquivalentTo(new[] { ("a1", SpecialKeys.Escape) });
+                host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                host.Settle();
+                await Assert.That(host.Lane.SpecialKeys).IsEmpty();
                 await Assert.That(composer.Text).IsEqualTo("keep this draft");
                 await Assert.That(host.Vm.Chat.ComposerText).IsEqualTo("keep this draft");
 
@@ -237,16 +231,16 @@ public class RemoteSessionViewSmokeTests {
                 composer.Focus();
                 host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
                 host.Settle();
-                await Assert.That(host.Lane.SpecialKeys).Count().IsEqualTo(1);
+                await Assert.That(host.Lane.SpecialKeys).IsEmpty();
 
                 host.SetStatus("Running");
-                await Assert.That(interrupt.IsEffectivelyVisible).IsTrue();
-                await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsTrue();
+                await Assert.That(interrupt.IsEffectivelyVisible).IsFalse();
+                await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsFalse();
                 host.Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
                 host.Settle();
                 await Assert.That(host.Vm.Chat.ShowsInterrupt).IsFalse();
                 await Assert.That(await host.Vm.Chat.InterruptCommand.CanExecute.FirstAsync()).IsFalse();
-                await Assert.That(host.Lane.SpecialKeys).Count().IsEqualTo(1);
+                await Assert.That(host.Lane.SpecialKeys).IsEmpty();
                 await Assert.That(host.Vm.Chat.ComposerText).IsEqualTo("keep this draft");
             } finally { await host.Vm.TeardownAsync(); }
             return true;

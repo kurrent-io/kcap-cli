@@ -735,6 +735,7 @@ public class ChatTabViewSmokeTests {
             var host = new Host();
             var path = Tmp.CreateFile("queue.jsonl", [UserLine]);
             var client = await host.AttachAsync(path);
+            host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = true });
             host.Type("queued follow-up");
             host.PressEnter(RawInputModifiers.None);
             host.Settle();
@@ -750,6 +751,7 @@ public class ChatTabViewSmokeTests {
             await Assert.That(banner.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == QueuedChatMessage.AwaitingPickupNote && t.IsVisible)).IsFalse();
             var queued = host.Chat.QueuedMessages.Single();
             var send = banner.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "SendQueuedButton" && b.IsVisible);
+            await Assert.That(send.Content).IsEqualTo("Send again");
             host.Type("queued follow-up");
             Click(host, send);
             await WaitUntilAsync(() => client.SentInput.Count == 3, what: "queued text pasted a second time");

@@ -121,13 +121,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public IAvaloniaReadOnlyList<ChatItemViewModel> Items => _items;
     public IAvaloniaReadOnlyList<QueuedChatMessage> QueuedMessages => _queuedMessages;
     public bool HasQueuedMessages => _queuedMessages.Count > 0;
-    /// Other people's prompts are counted apart, so the strip never reads as the viewer's own.
+    /// Unmatched server entries have no proven client identity.
     public string QueueSummary {
         get {
             var foreign     = _queuedMessages.Count(q => q.IsForeign);
             var unconfirmed = _queuedMessages.Count(q => q.IsUnconfirmed);
             (int Count, string Word)[] segments =
-                [(_queuedMessages.Count - unconfirmed - foreign, "queued"), (unconfirmed, "unconfirmed"), (foreign, "from others")];
+                [(_queuedMessages.Count - unconfirmed - foreign, "queued"), (unconfirmed + foreign, "unconfirmed")];
 
             return string.Join(" · ", segments.Where(s => s.Count > 0)
                 .Select((s, i) => i == 0 ? $"{MessageCount(s.Count)} {s.Word}" : $"{s.Count} {s.Word}"));
@@ -518,7 +518,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool CanSendBeforeSeed => HasSeed || _origin != AgentOrigin.Remote;
 
     void RefreshQueuedSend() {
-        var idle = AgentIsIdle;
+        bool? idle = _status == "Running" && _awaitingInput is null && !SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents)
+            ? null : AgentIsIdle;
         var can = AgentCanTakeQueuedNow;
         foreach (var queued in _queuedMessages) queued.SetPickup(idle, can);
     }
@@ -707,10 +708,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 this.WhenAnyValue(x => x.HasTerminalMenu),
                 this.WhenAnyValue(x => x.AgentStatus),
                 (can, readOnly, menu, status) => can && !readOnly && !menu
-                    && (status.Kind == AgentStatusKind.Working || status.IsRunningUnknownTurn))
+                    && status.Kind == AgentStatusKind.Working)
             .ToProperty(this, x => x.ShowsInterrupt,
                 initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasTerminalMenu
-                    && (AgentStatus.Kind == AgentStatusKind.Working || AgentStatus.IsRunningUnknownTurn))
+                    && AgentStatus.Kind == AgentStatusKind.Working)
             .DisposeWith(_disposables);
 
         // The banner carries the read-only explanation for a flow participant, so the hint
@@ -867,6 +868,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             // with every other such item and could disqualify an own send from its real match.
             if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
             if (Tracked.Any(q => q.DispatchId == item.DispatchId)) continue;
+            if (_superseded.Any(pair => pair.Old.DispatchId == item.DispatchId)) continue;
             var own = Tracked.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
             if (own is not null) own.MarkQueued(item.DispatchId);
             else _queuedMessages.Add(QueuedChatMessage.FromServer(item));
