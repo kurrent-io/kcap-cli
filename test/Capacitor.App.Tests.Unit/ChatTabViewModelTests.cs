@@ -24,6 +24,30 @@ namespace Capacitor.App.Tests.Unit;
 public class ChatTabViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Read_paths_wrap_but_Edit_paths_keep_compact_previews() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = "/repo/" + new string('a', 80) + "/parent/file.cs";
+            await h.PushAsync(Dto(Tmp.CreateFile("read-edit-paths.jsonl", [
+                $$$$"""{"type":"assistant","message":{"content":[{"type":"tool_use","id":"read","name":"Read","input":{"file_path":"{{{{path}}}}"}},{"type":"tool_use","id":"edit","name":"Edit","input":{"file_path":"{{{{path}}}}","old_string":"a","new_string":"b"}}]}}""",
+            ])));
+            var calls = Group(h.Chat, 0).Calls;
+            await Assert.That(calls[0].Category).IsEqualTo(ToolCategory.Read);
+            await Assert.That(calls[0].DetailIsPath).IsTrue();
+            await Assert.That(calls[0].Detail.EndsWith("/parent/file.cs", StringComparison.Ordinal)).IsTrue();
+            await Assert.That(calls[1].Category).IsEqualTo(ToolCategory.Edit);
+            await Assert.That(calls[1].DetailIsPath).IsFalse();
+            var folded = new ToolGroupItem();
+            folded.Add(calls[1]);
+            folded.Add(new ToolCallItem("Read", "other.cs", ToolCategory.Read) { Outcome = ToolOutcome.Done });
+            calls[1].Outcome = ToolOutcome.Done;
+            await Assert.That(folded.SummaryLine.Split(" · ")[1].Length).IsLessThanOrEqualTo(56);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Only_path_formatted_details_get_path_rendering() {
         await RunOnUiAsync(async () => {
             var h = Claude();

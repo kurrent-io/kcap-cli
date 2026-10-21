@@ -201,10 +201,16 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     public string ResultHeading => IsError ? "Error" : "Output";
     public bool CanExpand => HasCommandBody || HasResult || IsError;
 
+    public string BodyToggleName => $"{(IsExpanded ? "Hide" : "Show")} {Name} details";
+
     bool _isExpanded;
     public bool IsExpanded {
         get => _isExpanded;
-        private set => this.RaiseAndSetIfChanged(ref _isExpanded, value);
+        private set {
+            if (_isExpanded == value) return;
+            this.RaiseAndSetIfChanged(ref _isExpanded, value);
+            this.RaisePropertyChanged(nameof(BodyToggleName));
+        }
     }
 
     ReactiveCommand<Unit, Unit>? _toggleBody;

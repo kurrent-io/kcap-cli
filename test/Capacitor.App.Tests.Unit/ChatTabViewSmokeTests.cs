@@ -6,6 +6,7 @@ using System.Reactive.Subjects;
 using System.Text;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
@@ -239,7 +240,11 @@ public class ChatTabViewSmokeTests {
             host.Settle();
             var toggle = host.View.GetVisualDescendants().OfType<Button>()
                 .Single(b => b.Classes.Contains("toolBody") && b.IsEffectivelyVisible);
+            await Assert.That(toggle.Classes).Contains("kcapGhost");
+            var peer = ControlAutomationPeer.CreatePeerForElement(toggle)!;
+            await Assert.That(peer.GetName()).IsEqualTo("Show Bash details");
             Click(host, toggle);
+            await Assert.That(peer.GetName()).IsEqualTo("Hide Bash details");
             host.Settle();
             var result = host.View.GetVisualDescendants().OfType<SelectableTextBlock>()
                 .Single(t => t.Text == call.ResultText);
@@ -251,6 +256,7 @@ public class ChatTabViewSmokeTests {
             await Assert.That(result.Text!.EndsWith("line 200", StringComparison.Ordinal)).IsTrue();
             Click(host, toggle);
             await Assert.That(call.IsExpanded).IsFalse();
+            await Assert.That(peer.GetName()).IsEqualTo("Show Bash details");
             await host.CloseAsync();
         });
     }

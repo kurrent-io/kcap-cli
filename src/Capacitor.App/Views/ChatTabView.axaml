@@ -217,8 +217,8 @@
                                 <ColumnDefinition Width="*" MinWidth="0" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <Button Grid.Column="0" Classes="toolBody" Margin="0,0,4,0"
-                                    AutomationProperties.Name="Toggle tool details"
+                            <Button Grid.Column="0" Classes="kcapGhost toolBody" Margin="0,0,4,0"
+                                    AutomationProperties.Name="{Binding BodyToggleName}"
                                     Command="{Binding ToggleBodyCommand}" IsVisible="{Binding CanExpand}">
                                 <Panel Width="12" Height="12">
                                     <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"
