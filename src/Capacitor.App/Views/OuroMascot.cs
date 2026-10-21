@@ -8,13 +8,13 @@ using Avalonia.Threading;
 
 namespace Capacitor.App.Views;
 
-/// Svg.Skia ignores the asset's CSS keyframes, so each pose is baked into its own image and the
-/// frames are stepped here, only while IsPlaying and on screen.
+/// Svg.Skia renders a static picture, so the class hooks in ouro.svg take each pose's transforms
+/// and the baked frames are stepped here, only while IsPlaying and on screen.
 public sealed class OuroMascot : Image {
     public static readonly StyledProperty<bool> IsPlayingProperty =
         AvaloniaProperty.Register<OuroMascot, bool>(nameof(IsPlaying));
 
-    // Wing angle, hop offset and tail angle of each keyframe in ouro.svg, stepped out and back in 12 frames.
+    // Wing angle, hop offset and tail angle per pose, stepped out and back in 12 frames.
     static readonly (int Wing, int Hop, int Tail)[] Poses =
         [(60, 16, -12), (40, 10, -8), (15, 2, -3), (-10, -6, 3), (-35, -12, 8), (-60, -16, 12)];
     static readonly int[] Sequence = [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0];
@@ -70,8 +70,6 @@ public sealed class OuroMascot : Image {
     static IImage[] Build() {
         using var reader = new StreamReader(AssetLoader.Open(new Uri("avares://kcap-desktop/Assets/ouro.svg")));
         var svg = reader.ReadToEnd();
-        var style = svg.IndexOf("<style>", StringComparison.Ordinal);
-        svg = svg.Remove(style, svg.IndexOf("</style>", StringComparison.Ordinal) + "</style>".Length - style);
         return [.. Poses.Select(p => (IImage)new SvgImage {
             Source = SvgSource.LoadFromStream(new MemoryStream(Encoding.UTF8.GetBytes(svg
                 .Replace("<g class=\"hop\">", $"<g transform=\"translate(0 {p.Hop})\">")

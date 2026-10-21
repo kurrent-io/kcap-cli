@@ -453,7 +453,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     bool _showsLiveNote;
-    /// Starting or working, shown beside the composer with the mascot.
+    /// Starting or working, shown with the mascot under the last message.
     public bool ShowsLiveNote {
         get => _showsLiveNote;
         private set => this.RaiseAndSetIfChanged(ref _showsLiveNote, value);
