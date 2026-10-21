@@ -181,18 +181,16 @@ public class LocalPermissionBridgePolicyTests {
         await Assert.That(h.Server.PolicyEvents().Length).IsEqualTo(0);
     }
 
+    /// A terminal-hosted Codex is governed by its launch's policy exactly as Claude is.
     [Test, NotInParallel(nameof(LocalPermissionBridgePolicyTests))]
-    public async Task A_hosted_codex_request_parks_untouched() {
+    public async Task A_hosted_codex_request_is_answered_by_its_policy() {
         await using var h = new Harness(Governed);
         await h.StartAsync();
 
-        var response = h.PostAsync("git push --force", vendor: "codex");
-        var pending  = await h.WaitPendingAsync();
-        await Assert.That(pending.Vendor).IsEqualTo("codex");
-        h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app");
+        var response = await h.PostAsync("git push --force", vendor: "codex");
 
-        await Assert.That(await Harness.BehaviorOf(await response)).IsEqualTo("allow");
-        await Assert.That(h.Server.PolicyEvents().Length).IsEqualTo(0);
+        await Assert.That(await Harness.BehaviorOf(response)).IsEqualTo("deny");
+        await Assert.That(h.Server.PolicyEvents().Single().Vendor).IsEqualTo("codex");
     }
 }
 

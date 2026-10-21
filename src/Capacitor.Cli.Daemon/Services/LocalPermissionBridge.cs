@@ -8,6 +8,7 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Claude;
+using Capacitor.Cli.Daemon.Harness.Codex;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -666,15 +667,15 @@ internal sealed partial class LocalPermissionBridge(
                     : null;
 
                 // The launched agent's own policy, and the judge for a call no rule decided, answer
-                // before a human is asked. The vendor gate is deliberate: a hosted Codex request parks
-                // unevaluated. Anything the evaluation throws leaves the request on the human lane.
-                if (vendor is "claude" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
+                // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
+                if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
                     ClaudeHostedPolicyResult? policy = null;
                     try {
-                        policy = await ClaudeHostedPolicySeam.EvaluateAsync(
-                            new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
-                                node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node)),
-                            snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
+                        var call = new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
+                            node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node));
+                        policy = vendor == "codex"
+                            ? await CodexPtyPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, JudgeBudget, logger, _refusals, ct)
+                            : await ClaudeHostedPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
                     } catch (Exception ex) {
                         LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
                     }
@@ -866,18 +867,20 @@ internal sealed partial class LocalPermissionBridge(
     static string? ToolUseIdOf(JsonNode node) =>
         node["tool_use_id"] is JsonValue v && v.TryGetValue<string>(out var id) ? id : null;
 
-    /// <summary>Claude receives a human-lane deny as a hook deny, which its transcript does not mark
-    /// as a refusal, so the judge learns of it only from here. Any deny counts: one no human gave
-    /// can only make the judge stricter.</summary>
+    /// <summary>A human-lane deny reaches Claude or Codex as a hook deny, which neither transcript marks as a
+    /// refusal, so the judge learns of it only from here. Any deny counts: one no human gave can only make
+    /// the judge stricter.</summary>
     void RecordRefusal(string vendor, AttributedAgent? attributed, string? sessionId, JsonNode node,
             string? toolName, JsonElement? toolInput, string behavior) {
-        if (vendor is not "claude" || behavior != PermissionSettlements.Deny || sessionId is null
+        if (vendor is not ("claude" or "codex") || behavior != PermissionSettlements.Deny || sessionId is null
          || attributed is not { PolicySnapshot.JudgeEnabled: true } governed)
             return;
 
         try {
-            ClaudeHostedPolicySeam.RecordRefusal(_refusals, new ClaudeHostedPermissionCall(sessionId, governed.AgentId,
-                toolName, toolInput, node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node)));
+            var call = new ClaudeHostedPermissionCall(sessionId, governed.AgentId,
+                toolName, toolInput, node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node));
+            if (vendor == "codex") CodexPtyPolicySeam.RecordRefusal(_refusals, call);
+            else ClaudeHostedPolicySeam.RecordRefusal(_refusals, call);
         } catch (Exception ex) {
             logger.LogDebug(ex, "Recording a hosted refusal for session {SessionId} failed", sessionId);
         }
