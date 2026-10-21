@@ -125,12 +125,13 @@ public sealed class LinuxSingleInstanceLock : SingleInstanceLock {
     // connect into the listen backlog for a stopped holder too, so only the answer proves it runs.
     static int? SilentHolder(string socketPath) {
         using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        // Before connecting: on macOS setsockopt fails with EINVAL once the holder has answered and closed.
+        socket.ReceiveTimeout = (int)AnswerTimeout.TotalMilliseconds;
         try {
             socket.Connect(new UnixDomainSocketEndPoint(socketPath));
         } catch (SocketException) {
             return null;
         }
-        socket.ReceiveTimeout = (int)AnswerTimeout.TotalMilliseconds;
         try {
             if (socket.Receive(new byte[1]) == 1) return null;
         } catch (SocketException) { }
