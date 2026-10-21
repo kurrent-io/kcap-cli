@@ -32,6 +32,11 @@ internal sealed class PermissionRefusalLedger {
         lock (_gate) _lostRequest = true;
     }
 
+    /// <summary>A refusal in the session that could not be described, such as one no agent could be attributed for.</summary>
+    public void MarkIncomplete(string sessionId) {
+        lock (_gate) For(sessionId).Incomplete = true;
+    }
+
     /// <summary>Called once, where the bridge starts the session's runtime itself — never on a resume.</summary>
     public void MarkBridgedSinceStart(string sessionId) {
         lock (_gate) For(sessionId).BridgedSinceStart = true;

@@ -38,7 +38,7 @@ public class LocalPermissionBridgeJudgeTests {
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance,
                 TimeProvider.System, Broker, new PermissionDecisionLog(Tmp.Path, NullLogger.Instance), gateway,
                 new ConfigRoot(Tmp.CreateDir("config").Path)) {
-                AttributeHandler = _ => new AttributedAgent("agent-1", Governed, bridgedSinceStart),
+                AttributeHandler = a => a.AgentId == "agent-1" ? new AttributedAgent("agent-1", Governed, bridgedSinceStart) : null,
                 // Far above production's: a cold first consultation under a loaded suite can outlive
                 // it and park the request on a card nothing settles.
                 JudgeBudget = TimeSpan.FromSeconds(20),
@@ -57,11 +57,11 @@ public class LocalPermissionBridgeJudgeTests {
         string Transcript() => _transcript ??= Tmp.CreateFile("t.jsonl",
             """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"go"}}""" + "\n");
 
-        public Task<HttpResponseMessage> PostAsync(string command, string toolUseId = "toolu_1") =>
+        public Task<HttpResponseMessage> PostAsync(string command, string toolUseId = "toolu_1", string agentId = "agent-1") =>
             Client.PostAsync($"{Bridge.BaseUrl}/claude/permission-request",
                 JsonContent.Create(new {
                     session_id = Session, tool_name = "Bash", tool_input = new { command },
-                    agent_id = "agent-1", cwd = "/wt", tool_use_id = toolUseId, transcript_path = Transcript(),
+                    agent_id = agentId, cwd = "/wt", tool_use_id = toolUseId, transcript_path = Transcript(),
                 }));
 
         public JsonElement JudgeRequestFor(string toolUseId) => JudgeRequests().Single(r =>
@@ -198,5 +198,41 @@ public class LocalPermissionBridgeJudgeTests {
         await call;
 
         await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsFalse();
+    }
+
+    /// A reviewer's requests never reach the judge, so one the bridge rejects costs no governed session its completeness.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task A_reviewer_request_the_bridge_rejects_unread_leaves_refusals_complete() {
+        await using var h = new Harness();
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        var reviewerUrl = h.Bridge.RegisterReviewerToken(["kcap-review"]);
+        var rejected    = await h.Client.PostAsync($"{reviewerUrl}/codex/permission-request", new StringContent("{"));
+        await Assert.That(rejected.IsSuccessStatusCode).IsFalse();
+
+        var call = h.PostAsync("git push", "toolu_1");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+        await call;
+
+        await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsTrue();
+    }
+
+    /// A deny no agent could be attributed for cannot be described, but it still happened in the session.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    public async Task An_unattributed_deny_leaves_the_sessions_refusals_incomplete() {
+        await using var h = new Harness();
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        h.Server.UnattributedAnswer = new PermissionDecision("deny", null, null);
+        var first = await h.PostAsync("git push", "toolu_1", agentId: "agent-unknown");
+        await Assert.That(await Harness.BehaviorOf(first)).IsEqualTo("deny");
+
+        var retry = h.PostAsync("git push", "toolu_2");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+        await retry;
+
+        await Assert.That(h.JudgeRequestFor("toolu_2").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsFalse();
     }
 }

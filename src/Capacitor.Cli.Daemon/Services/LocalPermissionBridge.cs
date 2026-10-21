@@ -417,7 +417,8 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     async Task HandleAsync(HttpListenerContext context, CancellationToken ct) {
-        // The hook denies any permission request the bridge does not answer, unseen by the ledger.
+        // The hook denies any permission request the bridge does not answer, unseen by the ledger. A reviewer's
+        // requests never reach the judge, so only the shared token's count.
         var permissionRequest = false;
 
         try {
@@ -568,7 +569,7 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
-            permissionRequest = true;
+            permissionRequest = isShared;
 
             // Not bound to ct: a handler admitted before shutdown must still reach its own claim
             // below, so this reads under its own bounded RequestReadTimeout instead. Capped at
@@ -753,7 +754,7 @@ internal sealed partial class LocalPermissionBridge(
 
         // Which session was refused is unknown here, so every session loses its complete mark.
         void RejectPermissionRequest(int status) {
-            _refusals.MarkAllIncomplete();
+            if (permissionRequest) _refusals.MarkAllIncomplete();
             context.Response.StatusCode = status;
             context.Response.Close();
         }
@@ -880,8 +881,15 @@ internal sealed partial class LocalPermissionBridge(
     /// the judge stricter.</summary>
     void RecordRefusal(string vendor, AttributedAgent? attributed, string? sessionId, JsonNode node,
             string? toolName, JsonElement? toolInput, string behavior) {
-        if (vendor is not ("claude" or "codex") || behavior != PermissionSettlements.Deny || sessionId is null
-         || attributed is not { PolicySnapshot.JudgeEnabled: true } governed)
+        if (vendor is not ("claude" or "codex") || behavior != PermissionSettlements.Deny || sessionId is null)
+            return;
+
+        if (attributed is null) {
+            _refusals.MarkIncomplete(sessionId);
+            return;
+        }
+
+        if (attributed is not { PolicySnapshot.JudgeEnabled: true } governed)
             return;
 
         try {

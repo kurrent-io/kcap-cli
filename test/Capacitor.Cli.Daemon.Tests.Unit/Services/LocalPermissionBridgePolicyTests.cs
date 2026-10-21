@@ -227,4 +227,11 @@ sealed class PolicyServerConnection() : ServerConnection(
 
     public override Task<RespondOutcome> RespondToPermissionAsync(string sessionId, string serverRequestId, PermissionDecision decision) =>
         Task.FromResult(new RespondOutcome(RespondOutcomeKind.Applied, null));
+
+    /// The answer to a request no agent was attributed for; unset, it stays open like any other.
+    public PermissionDecision? UnattributedAnswer { get; set; }
+
+    public override Task<PermissionDecision> RequestPermissionAsync(
+            string sessionId, string? toolName, JsonElement? toolInput, JsonElement? suggestions, CancellationToken ct = default) =>
+        UnattributedAnswer is { } answer ? Task.FromResult(answer) : base.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
 }
