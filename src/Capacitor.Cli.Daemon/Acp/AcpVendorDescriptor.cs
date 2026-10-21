@@ -549,8 +549,7 @@ internal static class AcpVendorDescriptors {
     /// verified at effect level.
     ///
     /// <para>An interactive launch is given kcap's own servers there. Grok runs a <c>session/new</c>
-    /// server in place of the same-named one it imports from the user's Cursor config
-    /// (<c>docs/probes/2026-10-21-grok-mcp-precedence/</c>), so a registration left on a removed binary
+    /// server in place of the same-named one it imports from the user's Cursor config, so a registration left on a removed binary
     /// cannot take a kcap tool away from a hosted session. They need no session variable: Grok sets
     /// <c>GROK_SESSION_ID</c> on every server it starts.</para>
     ///
