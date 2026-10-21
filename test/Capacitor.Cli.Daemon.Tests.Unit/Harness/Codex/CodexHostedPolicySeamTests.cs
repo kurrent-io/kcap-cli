@@ -129,6 +129,18 @@ public class CodexHostedPolicySeamTests : IDisposable {
         await Assert.That(turns.Select(t => t!["id"]!.GetValue<string>())).IsEquivalentTo(new[] { AcpItemTurnId.For("m1").ToString() });
     }
 
+    /// The server counts every hosted user message as human, so one opening with a marker is declared too.
+    [Test]
+    public async Task A_hosted_prompt_opening_with_a_marker_is_declared() {
+        Judge("allow");
+        var seam = Seam(new FakeProbe("m1"));
+        seam.Turns.Observe(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "# AGENTS.md instructions need fixing", ItemId: "m1"));
+
+        await seam.EvaluateAsync(CommandApproval, Command("npm view left-pad version"), CancellationToken.None);
+
+        await Assert.That(JsonNode.Parse(_server.LogEntries.Single().RequestMessage.Body!)!["turns"]!["user_messages"]!.AsArray().Count).IsEqualTo(1);
+    }
+
     /// With no stored turn the consultation is windowless rather than declaring one the server cannot find.
     [Test]
     public async Task No_stored_turn_declares_no_turn_set() {
