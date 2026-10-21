@@ -20,19 +20,30 @@ internal static class GrokQuestions {
         var questions = new List<AcpVendorQuestion>();
 
         foreach (var q in list.EnumerateArray()) {
-            if (q.Str("question") is not { Length: > 0 } text) return null;
-
-            var options = q.Arr("options") is { } offered
-                ? offered.EnumerateArray()
-                    .Where(o => o.Str("label") is { Length: > 0 })
-                    .Select(o => new AcpVendorQuestionOption(o.Str("label")!, o.Str("description")))
-                    .ToArray()
-                : [];
+            if (q.ValueKind != JsonValueKind.Object || q.Str("question") is not { Length: > 0 } text) return null;
+            if (OptionsOf(q) is not { } options) return null;
 
             questions.Add(new AcpVendorQuestion(text, options, q.Bool("multiSelect") == true));
         }
 
         return new AcpVendorQuestionRequest(sessionId, questions);
+    }
+
+    /// <summary>A question's choices, none when it offers none; null when they cannot all be read, since
+    /// asking it as a typed question would hide the choices Grok meant to offer.</summary>
+    static AcpVendorQuestionOption[]? OptionsOf(JsonElement question) {
+        if (!question.TryGetProperty("options", out var offered) || offered.ValueKind == JsonValueKind.Null) return [];
+        if (offered.ValueKind != JsonValueKind.Array) return null;
+
+        var options = new List<AcpVendorQuestionOption>();
+
+        foreach (var o in offered.EnumerateArray()) {
+            if (o.ValueKind != JsonValueKind.Object || o.Str("label") is not { Length: > 0 } label) return null;
+
+            options.Add(new AcpVendorQuestionOption(label, o.Str("description")));
+        }
+
+        return [.. options];
     }
 
     // Written token by token: JsonNode values lower to generic calls that NativeAOT cannot compile.

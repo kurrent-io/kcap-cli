@@ -173,6 +173,35 @@ public class GrokQuestionsTests {
         await Assert.That(asked).IsEmpty();
     }
 
+    /// <summary>Choices that cannot be read are never turned into a typed question the user answers blind.</summary>
+    [Test]
+    [Arguments("""{}""")]
+    [Arguments("""[{"description":"Warm"}]""")]
+    [Arguments("""[{"label":""}]""")]
+    [Arguments("""[{"label":5}]""")]
+    [Arguments("""[{"label":"Red"},"Blue"]""")]
+    public async Task A_malformed_option_list_is_declined_without_asking(string options) {
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
+
+        var result = await bridge.HandleAsync(Ask($$"""[{"question":"Which colour?","options":{{options}}}]"""), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+    }
+
+    /// <summary>The card shows only the start of a long label, so two labels could look alike while
+    /// answering differently.</summary>
+    [Test]
+    public async Task A_label_longer_than_a_card_shows_is_declined_without_asking() {
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
+        var label = new string('l', 257);
+
+        var result = await bridge.HandleAsync(Ask($$"""[{"question":"Which?","options":[{"label":"{{label}}"}]}]"""), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+    }
+
     /// <summary>A question that fits alone can outgrow a card once its "(i of n)" prefix is added.</summary>
     [Test]
     public async Task A_question_whose_numbered_prompt_is_too_large_is_declined_without_asking() {

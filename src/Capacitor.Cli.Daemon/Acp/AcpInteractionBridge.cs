@@ -250,8 +250,12 @@ internal sealed partial class AcpInteractionBridge(
     static bool FitsAQuestionCard(AcpVendorQuestion question, string prompt) =>
         prompt.Length <= MaxElicitationMessageCodeUnits
      && question.Options.Count <= ElicitationSchemaClassifier.MaxOptions
-     && question.Options.All(o => o.Label.Length <= ElicitationSchemaClassifier.MaxOptionCodeUnits
+     && question.Options.All(o => o.Label.Length <= MaxQuestionLabelCodeUnits
                                && (o.Description?.Length ?? 0) <= ElicitationSchemaClassifier.MaxOptionCodeUnits);
+
+    /// <summary>The server cuts a card option's label to this, and a vendor question's label is its
+    /// answer, so a longer one could look like another while answering differently.</summary>
+    const int MaxQuestionLabelCodeUnits = 256;
 
     /// <summary>The labels a decision picked from the offered options, or the answer typed instead of
     /// picking one; null when it declined or names an option that was not offered.</summary>
