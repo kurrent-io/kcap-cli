@@ -35,7 +35,7 @@ public partial class RemoteSessionView : UserControl {
         _tabFocus = model is null ? null : model
             .WhenAnyValue(vm => vm.ActiveTab, vm => vm.ShowsPanes)
             .Subscribe(pair => Dispatcher.UIThread.Post(() => {
-                if (!ReferenceEquals(model, DataContext) || !pair.Property2) return;
+                if (!ReferenceEquals(model, DataContext) || !(pair.Property2 || model is { ShowsTerminalPane: true })) return;
                 if (pair.Property1 == RemoteTab.Artefacts && ArtefactsPane.Content is null && model is not null)
                     ArtefactsPane.Content = new ArtefactsView { DataContext = model.Artefacts };
                 if (pair.Property1 == RemoteTab.PullRequest && PullRequestPane.Content is null && model?.PullRequests is { } pullRequests)

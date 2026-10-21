@@ -89,10 +89,18 @@
             <ItemsControl.Template>
                 <ControlTemplate>
                     <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" BringIntoViewOnFocusChange="False">
-                        <!-- ItemsPanel does not reach the presenter on its own: without this
-                             template binding it falls back to its own default StackPanel and
-                             every row is realized. -->
-                        <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" Margin="22,18,22,8" />
+                        <views:ChatTailPanel x:DataType="vm:ChatTabViewModel">
+                            <!-- ItemsPanel does not reach the presenter on its own: without this
+                                 template binding it falls back to its own default StackPanel and
+                                 every row is realized. -->
+                            <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" Margin="22,18,22,0" />
+                            <!-- Inside the scroll, so it sits under the last message and follows the tail. -->
+                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="14,0,22,8" IsVisible="{Binding ShowsLiveNote}">
+                                <views:OuroMascot Width="32" Height="32" Margin="0,-5" IsPlaying="{Binding ShowsLiveNote}" />
+                                <TextBlock Text="{Binding ActivityNote}" VerticalAlignment="Center"
+                                           Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5" />
+                            </StackPanel>
+                        </views:ChatTailPanel>
                     </ScrollViewer>
                 </ControlTemplate>
             </ItemsControl.Template>
@@ -125,7 +133,8 @@
                 <DataTemplate x:DataType="vm:AssistantThinkingItem">
                     <StackPanel MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Spacing="4">
                         <Button Classes="toolSummary thinkingSummary" HorizontalAlignment="Left"
-                                Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
+                                Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
+                                AutomationProperties.Name="{Binding HeaderLabel}">
                             <views:ChatKindHeader Label="{Binding HeaderLabel}"
                                                   IconKind="{x:Static views:ToolCategoryIcons.ThinkingIcon}">
                                 <views:ChatKindHeader.Status>
@@ -233,7 +242,8 @@
                                             Tag="{Binding Card.Url}" Click="OnCopyLinkClick"
                                             IsVisible="{Binding Card.Url, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                     <Button x:Name="ToolCardOpen" Classes="kcapGhost kcapQuiet" Margin="0,0,-8,0"
-                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}">
+                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}"
+                                            AutomationProperties.Name="Open">
                                         <StackPanel Orientation="Horizontal" Spacing="5">
                                             <TextBlock Text="Open" VerticalAlignment="Center" />
                                             <views:AppIcon Kind="ArrowUpRight" Size="12" Classes="toolCardOpenArrow" />
@@ -257,7 +267,8 @@
                                 <views:ChatKindHeader IsVisible="{Binding ShowsKindChip}"
                                                       Label="{Binding KindChip}" IconKind="{Binding HeaderIconKind}" />
                                 <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}"
-                                        Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
+                                        Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
+                                        AutomationProperties.Name="{Binding SummaryLine}">
                                     <views:ChatKindHeader Label="{Binding SummaryLine}" IconKind="{Binding HeaderIconKind}">
                                         <views:ChatKindHeader.Status>
                                             <Panel Width="12" Height="12" VerticalAlignment="Center">

@@ -33,6 +33,7 @@ public sealed class WorkContextLinkViewModel {
     /// Server kind/provider/value when projected from a work-item link; empty for legacy PR cards.
     public string  Identity { get; }
     public bool    CanOpen  { get; }
+    public string  AccessibleName => Title.Length == 0 ? Key : $"{Key}: {Title}";
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     public WorkContextLinkViewModel(string eyebrow, string key, string title, string? url, IUrlOpener opener, string identity = "") {
@@ -50,7 +51,6 @@ public sealed class WorkContextLinkViewModel {
 /// <see cref="AvatarUrl"/>, so a missing or failed picture shows the letter.
 public sealed class WorkContextPersonViewModel {
     public string  Name             { get; }
-    public string  NameDisplay      { get; }
     public string  Initial          { get; }
     public string? AvatarUrl        { get; }
     public string  LastActivityText { get; }
@@ -58,7 +58,6 @@ public sealed class WorkContextPersonViewModel {
 
     public WorkContextPersonViewModel(string name, string? avatarUrl, DateTimeOffset? lastActivityAt, DateTimeOffset now, string userId = "") {
         Name             = name;
-        NameDisplay      = WorkContextViewModel.MiddleTruncate(name, 10, 8);
         Initial          = InitialOf(name);
         AvatarUrl        = avatarUrl;
         LastActivityText = lastActivityAt is { } at ? RelativeTime.Format(at, now) : "";

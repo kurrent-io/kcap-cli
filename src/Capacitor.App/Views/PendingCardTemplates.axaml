@@ -144,7 +144,8 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:QuestionStepViewModel">
                             <Button Classes="step" Classes.current="{Binding IsCurrent}" Classes.answered="{Binding IsAnswered}"
-                                    Command="{Binding GoCommand}" Margin="0,0,6,4">
+                                    Command="{Binding GoCommand}" Margin="0,0,6,4"
+                                    AutomationProperties.Name="{Binding Title}">
                                 <StackPanel Orientation="Horizontal" Spacing="5">
                                     <views:AppIcon Kind="Check" Size="12" Foreground="{StaticResource KcapSuccessBrush}"
                                                    IsVisible="{Binding IsAnswered}" VerticalAlignment="Center" />
@@ -170,7 +171,8 @@
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate x:DataType="vm:QuestionOptionViewModel">
-                                            <Button Classes="option" Classes.selected="{Binding IsSelected}" Command="{Binding PickCommand}">
+                                            <Button Classes="option" Classes.selected="{Binding IsSelected}" Command="{Binding PickCommand}"
+                                                    AutomationProperties.Name="{Binding Label}">
                                                 <DockPanel>
                                                     <Panel DockPanel.Dock="Left" VerticalAlignment="Top">
                                                         <Border Classes="indicator" CornerRadius="8" IsVisible="{Binding !IsMulti}" />
@@ -214,7 +216,7 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate x:DataType="vm:QuestionGroupViewModel">
-                                <Button Classes="reviewRow" Command="{Binding EditCommand}">
+                                <Button Classes="reviewRow" Command="{Binding EditCommand}" AutomationProperties.Name="{Binding Text}">
                                     <StackPanel Spacing="3">
                                         <TextBlock Text="{Binding Text}" FontSize="12.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
                                         <TextBlock Text="{Binding AnswerSummary}" FontSize="14" FontWeight="Medium" TextWrapping="Wrap"

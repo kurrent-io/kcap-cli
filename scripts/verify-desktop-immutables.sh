@@ -18,8 +18,8 @@ fetch="${3:?usage: verify-desktop-immutables.sh <local-dir> <version> <fetch-scr
 channel="${4:-osx-arm64}"
 
 names=(
-  "KurrentCapacitor-$version-$channel-full.nupkg"
-  "KurrentCapacitor-$version-$channel-delta.nupkg"
+  "kcap-$version-$channel-full.nupkg"
+  "kcap-$version-$channel-delta.nupkg"
   "kcap-$version-$channel.dmg"
   "kcap-$version-$channel-Setup.exe"
   "kcap-$version-$channel.AppImage"

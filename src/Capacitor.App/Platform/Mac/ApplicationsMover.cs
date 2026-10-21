@@ -15,50 +15,42 @@ public sealed partial class ApplicationsMover(
         Func<string, CancellationToken, Task<bool>>? quitRunning = null,
         Func<IApplicationReferences>? migrateReferences = null,
         Func<string, CancellationToken, Task<bool>>? activate = null, string? userApplicationsDir = null) {
-    static readonly string[] BundleNames = ["kcap.app", "Kurrent Capacitor.app"];
+    const string BundleName = "kcap.app";
     static readonly TimeSpan CopyTimeout = TimeSpan.FromMinutes(2);
 
     public static IReadOnlyList<string> ApplicationDirectories(string bundleRoot, string userApplicationsDir,
             string systemApplicationsDir = "/Applications") {
         var source = Path.GetFullPath(bundleRoot.TrimEnd('/'));
-        bool Existing(string directory) => BundleNames
-            .Select(name => Path.Combine(directory, name)).Any(path => ReadVersion(path) is not null);
+        bool Existing(string directory) => ReadVersion(Path.Combine(directory, BundleName)) is not null;
         var directories = new[] { systemApplicationsDir, userApplicationsDir };
         var existing = directories.Where(Existing).ToArray();
         bool Conflicts(string directory) {
-            var target = Path.Combine(directory, "kcap.app");
+            var target = Path.Combine(directory, BundleName);
             return Path.GetFullPath(target) != source && Exists(target) && ReadVersion(target) is null;
         }
         if (Conflicts(systemApplicationsDir) || existing.Any(Conflicts))
             return directories;
         var home = Path.GetDirectoryName(source);
-        if (Path.GetFileName(source) == "kcap.app" && home is not null
-                && existing.Contains(home) && ReadVersion(source) is not null
-                && ReadVersion(Path.Combine(home, "Kurrent Capacitor.app")) is null)
+        if (Path.GetFileName(source) == BundleName && home is not null
+                && existing.Contains(home) && ReadVersion(source) is not null)
             return [home];
         if (existing.Length > 0) return existing;
         return [Path.GetDirectoryName(source) == userApplicationsDir ? userApplicationsDir : systemApplicationsDir];
     }
 
     public ApplicationsInstallPlan Inspect(string bundleRoot) {
-        var target = Path.Combine(applicationsDir, "kcap.app");
-        var legacy = Path.Combine(applicationsDir, "Kurrent Capacitor.app");
+        var target = Path.Combine(applicationsDir, BundleName);
         var source = ReadVersion(bundleRoot);
         if (source is null)
             return new(ApplicationsInstallAction.Blocked, target, Error: "This copy of kcap is incomplete or cannot be verified. Download it again.");
         if (Exists(target) && ReadVersion(target) is null)
             return new(ApplicationsInstallAction.Blocked, target, source, Error: $"{target} already exists, but is not a verified kcap bundle. Choose another Applications folder or move it aside in Finder.");
-        var existing = ReadVersion(legacy) is not null ? legacy : ReadVersion(target) is not null ? target : null;
-        var installed = existing is null ? null : ReadVersion(existing);
-        var payload = installed is not null && !PrereleaseSemver.IsNewer(source, installed) ? existing! : bundleRoot;
+        var installed = ReadVersion(target);
+        var existing = installed is null ? null : target;
+        var payload = installed is not null && !PrereleaseSemver.IsNewer(source, installed) ? target : bundleRoot;
         var payloadVersion = ReadVersion(payload)!;
-        // A dragged copy can be newer than both the disk image and the legacy install.
-        if (ReadVersion(target) is { } canonical && PrereleaseSemver.IsNewer(canonical, payloadVersion)) {
-            payload = target;
-            payloadVersion = canonical;
-        }
-        var action = existing is null ? ApplicationsInstallAction.Install
-            : existing != target || PrereleaseSemver.IsNewer(source, installed!)
+        var action = installed is null ? ApplicationsInstallAction.Install
+            : PrereleaseSemver.IsNewer(source, installed)
                 ? ApplicationsInstallAction.Update : ApplicationsInstallAction.OpenInstalled;
         return new(action, target, payloadVersion, installed, ExistingPath: existing, PayloadPath: payload);
     }
@@ -141,8 +133,7 @@ public sealed partial class ApplicationsMover(
     static string? ReadVersion(string root) {
         try {
             if (!Directory.Exists(root) || new DirectoryInfo(root).LinkTarget is not null ||
-                (!File.Exists(Path.Combine(root, "Contents", "MacOS", "kcap-desktop")) &&
-                 !File.Exists(Path.Combine(root, "Contents", "MacOS", "Kurrent Capacitor")))) return null;
+                !File.Exists(Path.Combine(root, "Contents", "MacOS", "kcap-desktop"))) return null;
             using var reader = XmlReader.Create(Path.Combine(root, "Contents", "Info.plist"),
                 new XmlReaderSettings { DtdProcessing = DtdProcessing.Ignore, XmlResolver = null });
             var entries = XDocument.Load(reader).Root?.Element("dict")?.Elements().ToArray();
@@ -153,7 +144,7 @@ public sealed partial class ApplicationsMover(
                         return entries[i + 1].Value;
                 return null;
             }
-            return Value("CFBundleIdentifier") == "io.kurrent.capacitor"
+            return Value("CFBundleIdentifier") == "io.kurrent.kcap"
                 ? Value("CFBundleVersion") ?? Value("CFBundleShortVersionString") : null;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException) {
             return null;

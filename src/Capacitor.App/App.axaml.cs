@@ -458,8 +458,7 @@ public partial class App : Application {
     }
 
     internal static bool ShouldPromptToInstall(InstallLocationKind kind, string root, ApplicationsInstallPlan plan) =>
-        !InstallLocation.Passes(kind) || plan.Migrates || Path.GetFullPath(root) != Path.GetFullPath(plan.Target)
-        || Path.GetFileName(root.TrimEnd('/')) == "Kurrent Capacitor.app";
+        !InstallLocation.Passes(kind) || Path.GetFullPath(root) != Path.GetFullPath(plan.Target);
 
     Task<bool> QuitInstalledAppAsync(string root, CancellationToken ct) =>
         InstalledAppProcesses.QuitAsync(root, _time, ct);

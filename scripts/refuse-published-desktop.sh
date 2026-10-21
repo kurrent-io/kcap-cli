@@ -4,7 +4,7 @@
 set -uo pipefail
 usage="usage: refuse-published-desktop.sh <channel> <version>"
 channel="${1:?$usage}"; version="${2:?$usage}"
-key="desktop/$channel/KurrentCapacitor-$version-$channel-full.nupkg"
+key="desktop/$channel/kcap-$version-$channel-full.nupkg"
 
 err="$(aws s3api head-object --endpoint-url "${R2_ENDPOINT:?}" --bucket "${R2_BUCKET:?}" --key "$key" 2>&1 >/dev/null)"
 rc=$?

@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Capacitor.App.ViewModels;
 
 namespace Capacitor.App.Views;
 
@@ -27,6 +28,15 @@ public sealed class ChatVirtualizingPanel : VirtualizingPanel {
     int _last = -1;
 
     internal bool MeasuredAtEstimatedEnd { get; private set; }
+
+    internal double? LastUserTurnTop {
+        get {
+            if (_starts.Length != Items.Count + 1) return null;
+            for (var i = Items.Count - 1; i >= 0; i--)
+                if (Items[i] is UserTurnItem or ShellCommandItem { HasCommand: true }) return _starts[i];
+            return null;
+        }
+    }
 
     public ChatVirtualizingPanel() => EffectiveViewportChanged += OnViewportChanged;
 

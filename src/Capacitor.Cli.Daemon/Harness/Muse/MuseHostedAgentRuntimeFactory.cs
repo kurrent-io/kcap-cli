@@ -123,12 +123,13 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     public UnattendedSupport DescribeUnattendedSupport() =>
         ReviewerRefusal() is { } reason ? new(false, reason) : new(true, null);
 
-    /// <summary>Muse's own catalog lists one bundled model; the dropdown comes from the server's catalog.</summary>
+    /// <summary>The models Meta currently serves, from the catalog Muse caches on each run. The server's
+    /// own feed keeps retired ids, which Muse rejects on every turn, so a present cache replaces it.</summary>
     public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
+        Task.FromResult(MuseModelCatalog.Read(_paths.ModelCatalogDir));
 
     public IReadOnlyList<string> CatalogFingerprintPaths =>
-        [_paths.SettingsJson, Path.Combine(_paths.ConfigRoot, "auth.json")];
+        [_paths.SettingsJson, Path.Combine(_paths.ConfigRoot, "auth.json"), .. MuseModelCatalog.Files(_paths.ModelCatalogDir)];
 
     internal static ReviewerVersionStore VersionStoreFor(DaemonConfig config) =>
         new(config.Store.StateDirectory(config.Name), DaemonRunner.MuseVendor);

@@ -111,21 +111,18 @@ Updates arrive through the app: it checks a few times a day, downloads in the ba
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
 
-**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. Existing installations stay in their Applications folder and migrate from `Kurrent Capacitor.app` to `kcap.app`. The migration updates owned terminal links and background-service paths, then refreshes previously installed agent integrations with the bundled CLI to repair MCP commands, git hooks, and the Claude marketplace path. A failed integration refresh is reported and retried on the next launch. It preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. An installer that finds valid installations in both Applications folders, or another app occupying the destination, asks for a destination first. Opening an installed `kcap.app` keeps that copy when its own folder needs no migration, even if a legacy copy remains in the other folder. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed migration restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
+**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. The installation stays in its Applications folder. Moving the app to the other Applications folder updates owned terminal links and background-service paths, then refreshes previously installed agent integrations with the bundled CLI to repair MCP commands, git hooks, and the Claude marketplace path. A failed integration refresh is reported and retried on the next launch. An update preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. An installer that finds valid installations in both Applications folders, or another app occupying the destination, asks for a destination first. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed update restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
 
 ### Desktop app on Windows
 
-Download `kcap-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\KurrentCapacitor` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal. Signing in installs the daemon as a background service (a per-user Scheduled Task that starts at sign-in) and starts it, as on macOS.
+Download `kcap-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\kcap` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal. Signing in installs the daemon as a background service (a per-user Scheduled Task that starts at sign-in) and starts it, as on macOS.
 
 Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
 
 ### Rebrand compatibility
 
 kcap keeps existing configuration filenames, data directories, worktree locations,
-and branch prefixes. Internal app and package IDs also stay unchanged, including
-`io.kurrent.capacitor` and `KurrentCapacitor`. These conventions apply to new
-installations too; no data-directory migration or manual reinstall is required
-for the rebrand.
+and branch prefixes; no data-directory migration is required for the rebrand.
 
 The connection skill is now `connect-kcap` (`kcap-connect-kcap` in the shared
 agent skill tree), and the Muse recording skill is `kcap-recording`. Refreshing

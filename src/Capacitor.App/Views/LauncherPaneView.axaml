@@ -85,11 +85,11 @@
                                 <Button x:Name="AgentChip" Classes="kcapChip" Click="OnAgentChipClick"
                                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                                         Foreground="{StaticResource KcapTextBrush}" CornerRadius="999" Padding="11,5"
-                                        ToolTip.Tip="Harness and model">
+                                        ToolTip.Tip="Harness and model" AutomationProperties.Name="{Binding #AgentChipLabel.Text}">
                                     <StackPanel Orientation="Horizontal" Spacing="7">
                                         <ContentControl VerticalAlignment="Center"
                                                         Content="{Binding SelectedVendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=13}" />
-                                        <TextBlock VerticalAlignment="Center">
+                                        <TextBlock x:Name="AgentChipLabel" VerticalAlignment="Center">
                                             <TextBlock.Text>
                                                 <MultiBinding Converter="{x:Static views:AgentChipTextConverter.Instance}">
                                                     <Binding Path="Harnesses" />

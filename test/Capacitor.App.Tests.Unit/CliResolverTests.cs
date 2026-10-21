@@ -79,7 +79,7 @@ public class CliResolverTests {
 
     [Test]
     public async Task ResolvePath_finds_the_windows_sibling_by_its_exe_name() {
-        const string dir = @"C:\Users\me\AppData\Local\KurrentCapacitor\current";
+        const string dir = @"C:\Users\me\AppData\Local\kcap\current";
         var sibling = Path.Combine(dir, "kcap.exe");
 
         var path = CliResolver.ResolvePath(_ => null, p => p == sibling, dir, "kcap.exe");

@@ -71,18 +71,17 @@ public class ApplicationIntegrationRefreshTests {
     }
 
     [Test]
-    public async Task Migration_handoff_repairs_an_owned_Codex_MCP_entry_after_removing_the_legacy_bundle() {
+    public async Task Migration_handoff_repairs_an_owned_Codex_MCP_entry_after_removing_the_user_Applications_copy() {
         var apps = Tmp.CreateDir("Applications");
-        var old = Path.Combine(apps, "Kurrent Capacitor.app");
-        var download = Tmp.CreateDir("Downloads/kcap.app");
+        var userApps = Tmp.CreateDir("home/Applications");
+        var old = Path.Combine(userApps, "kcap.app");
         static void Bundle(string root, string version) {
             Directory.CreateDirectory(Path.Combine(root, "Contents/MacOS"));
             File.WriteAllText(Path.Combine(root, "Contents/MacOS/kcap-desktop"), "app");
             File.WriteAllText(Path.Combine(root, "Contents/Info.plist"),
-                $"<plist><dict><key>CFBundleIdentifier</key><string>io.kurrent.capacitor</string><key>CFBundleVersion</key><string>{version}</string></dict></plist>");
+                $"<plist><dict><key>CFBundleIdentifier</key><string>io.kurrent.kcap</string><key>CFBundleVersion</key><string>{version}</string></dict></plist>");
         }
-        Bundle(old, "1.0.0");
-        Bundle(download, "1.1.0");
+        Bundle(old, "1.1.0");
         var codex = Tmp.GetResolvedPath("home", ".codex", "config.toml");
         CodexConfigToml.RegisterKcapMcpServers(codex, () => Path.Combine(old, "Contents/MacOS/kcap"));
         var runner = new Runner((file, args) => {
@@ -96,15 +95,15 @@ public class ApplicationIntegrationRefreshTests {
         });
         var refresh = new ApplicationIntegrationRefresh(new ConfigRoot(Tmp.CreateDir("config")), runner);
         var mover = new ApplicationsMover(runner, (from, to) => { Directory.Move(from, to); return true; }, apps,
-            activate: (target, _) => { refresh.Schedule(target); return Task.FromResult(true); });
-        var outcome = await mover.MoveAsync(download, CancellationToken.None);
+            activate: (target, _) => { refresh.Schedule(target); return Task.FromResult(true); }, userApplicationsDir: userApps);
+        var outcome = await mover.MoveAsync(old, CancellationToken.None);
         await Assert.That(outcome.Moved).IsTrue();
         await Assert.That(Directory.Exists(old)).IsFalse();
         await refresh.RunPendingAsync(outcome.InstalledPath, CancellationToken.None);
         var commands = CodexConfigToml.ReadMcpServerCommands(codex);
         await Assert.That(commands.Count).IsGreaterThan(0);
         await Assert.That(commands.All(command => command.Command == Path.Combine(apps, "kcap.app", "Contents", "MacOS", "kcap"))).IsTrue();
-        await Assert.That(File.ReadAllText(codex)).DoesNotContain("Kurrent Capacitor.app");
+        await Assert.That(File.ReadAllText(codex)).DoesNotContain(userApps);
         await Assert.That(File.Exists(Tmp.PathTo("home/.codex/hooks.json"))).IsFalse();
     }
 }
