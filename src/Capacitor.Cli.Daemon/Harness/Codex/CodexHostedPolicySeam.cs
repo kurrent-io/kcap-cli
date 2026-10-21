@@ -93,9 +93,10 @@ internal sealed class CodexHostedPolicySeam(
     CanonicalAction? Action(string method, JsonElement request) {
         var cwd = request.Str("cwd") ?? workingDirectory;
         switch (ItemType(method)) {
-            // Only a plain command: a stdin or managed-network approval asks for more than its command text says.
+            // Only a plain local command: a stdin or managed-network approval, or one bound for another execution
+            // environment, asks for more than its command text says.
             case "commandExecution" when request.Str("kind") is null or "command" && !HasValue(request, "networkApprovalContext")
-                                      && request.Str("command") is { Length: > 0 } command: {
+                                      && !HasValue(request, "environmentId") && request.Str("command") is { Length: > 0 } command: {
                 using var input = JsonDocument.Parse(new JsonObject { ["command"] = command }.ToJsonString());
                 return CodexHookActions.Normalize("Bash", input.RootElement.Clone(), cwd);
             }
