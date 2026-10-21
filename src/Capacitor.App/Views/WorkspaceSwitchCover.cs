@@ -17,11 +17,11 @@ public sealed class WorkspaceSwitchCover {
 
     readonly Control _pane;
     readonly Control _cover;
-    readonly Image _still;
+    readonly CoverBitmap _still;
     readonly SerialDisposable _hold = new();
     int _generation;
 
-    public WorkspaceSwitchCover(Control pane, Control cover, Image still) {
+    public WorkspaceSwitchCover(Control pane, Control cover, CoverBitmap still) {
         _pane = pane;
         _cover = cover;
         _still = still;
