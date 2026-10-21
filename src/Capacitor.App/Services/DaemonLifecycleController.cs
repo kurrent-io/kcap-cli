@@ -835,8 +835,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         await ReportStartMutationAsync(verb, ct).ConfigureAwait(false);
     }
 
-    /// The app attaches by daemon name, so the daemon behind it can be serving another server or profile,
-    /// typically one installed under a profile since switched away from. The expected identity is the
+    /// The app attaches by daemon name, so the daemon behind it can be serving another server or profile
+    /// than the app expects. The expected identity is the
     /// graph's own resolution, never a re-read of the active profile, so an external selection change
     /// cannot move the daemon out from under the app.
     /// <param name="reoffer">An offer superseded by a reconnect: the same mismatch is offered again, not reported again.</param>
