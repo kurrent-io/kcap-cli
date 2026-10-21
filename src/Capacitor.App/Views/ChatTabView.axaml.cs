@@ -54,7 +54,7 @@ public partial class ChatTabView : UserControl {
         // than the press, by which time a flag armed on the press alone has been released.
         ChatItems.AddHandler(PointerPressedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerMovedEvent, OnSelectionDrag, RoutingStrategies.Bubble, handledEventsToo: true);
-        ChatItems.AddHandler(PointerMovedEvent, OnSelectionMove, RoutingStrategies.Tunnel, handledEventsToo: true);
+        ChatItems.AddHandler(PointerMovedEvent, OnSelectionMove, RoutingStrategies.Bubble, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerReleasedEvent, OnSelectionDragEnded, RoutingStrategies.Tunnel, handledEventsToo: true);
         ChatItems.AddHandler(PointerWheelChangedEvent, OnReaderGesture, RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -132,6 +132,7 @@ public partial class ChatTabView : UserControl {
             CancelSmoothScroll();
             return;
         }
+        if (e.RoutedEvent == PointerWheelChangedEvent || e.RoutedEvent == ScrollGestureEvent) DropToggleAnchor();
         if (e.RoutedEvent == PointerWheelChangedEvent || e.RoutedEvent == ScrollGestureEvent || e is KeyEventArgs) _thumbFraction = null;
         if (e.RoutedEvent == ScrollGestureEvent || e.RoutedEvent == PointerPressedEvent || e is KeyEventArgs) CancelSmoothScroll();
         // A press, or Enter or Space, inside a pending card is answering it — an option, Next, a step
@@ -142,7 +143,10 @@ public partial class ChatTabView : UserControl {
         if (e.RoutedEvent == PointerPressedEvent) CaptureToggleAnchor(e.Source);
         if (_readerGesture) return;
         _readerGesture = true;
-        Dispatcher.UIThread.Post(() => _readerGesture = false, DispatcherPriority.Background);
+        Dispatcher.UIThread.Post(() => {
+            _readerGesture = false;
+            RefreshSelectionFollowTail();
+        }, DispatcherPriority.Background);
     }
 
     void OnChatWheelChanged(object? sender, PointerWheelEventArgs e) {
@@ -460,11 +464,22 @@ public partial class ChatTabView : UserControl {
 
     void OnSelectionMove(object? sender, PointerEventArgs e) {
         if (!e.GetCurrentPoint(ChatItems).Properties.IsLeftButtonPressed || !OriginatesFromMarkdown(e)) return;
-        _followTail = false;
+        RefreshSelectionFollowTail();
+    }
+
+    void RefreshSelectionFollowTail() {
+        if (SelectionHeld()) {
+            _followTail = false;
+            return;
+        }
+        if (_scroll is null || _anchorItem is not null || _thumbFraction is not null
+            || IsSmoothScrolling || ListTextBoxOwnsFocus()) return;
+        if (_scroll.Offset.Y + _scroll.Viewport.Height >= _scroll.Extent.Height - BottomTolerance)
+            _followTail = true;
     }
 
     bool SelectionHeld() =>
-        ChatItems.GetVisualDescendants().OfType<MarkdownView>().Any(static view => view.HasSelection);
+        ChatItems.GetVisualDescendants().OfType<MarkdownView>().Any(static view => view.IsEffectivelyVisible && view.HasSelection);
 
     static bool OriginatesFromMarkdown(RoutedEventArgs e) =>
         e.Source is Visual visual && visual.GetSelfAndVisualAncestors().OfType<MarkdownView>().Any();

@@ -477,6 +477,93 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Follow_tail_resumes_after_a_selection_is_cleared_or_hidden(bool collapse, bool appendWhileSelected) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("selection.jsonl", Enumerable.Repeat(UserLine, 20).Append(ThinkingLine).ToArray());
+                await host.LoadAsync(path);
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>()
+                    .Single(v => v.Classes.Contains("thinking"));
+                PresentAndLocate(host, markdown);
+                var block = markdown.GetVisualDescendants().OfType<TextBlock>()
+                    .First(t => MarkdownViewHarness.Reads(t) == "weighing it");
+                Point At(int index) {
+                    var glyph = block.TextLayout.HitTestTextPosition(index);
+                    return block.TranslatePoint(new Point(glyph.X + 1, glyph.Height / 2), host.Window)!.Value;
+                }
+                var start = At(0);
+                var end = At(6);
+                host.Window.MouseMove(start);
+                host.Window.MouseDown(start, MouseButton.Left);
+                host.Window.MouseMove(start + new Vector(0.1, 0), RawInputModifiers.LeftMouseButton);
+                await Assert.That(markdown.HasSelection).IsFalse();
+                await Assert.That(host.View.CanPreserveReadingPosition).IsFalse();
+                host.Window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+                host.Window.MouseUp(end, MouseButton.Left);
+                host.Settle();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                await Assert.That(host.View.CanPreserveReadingPosition).IsTrue();
+                await Assert.That(host.AtBottom()).IsTrue();
+
+                if (appendWhileSelected) {
+                    var offset = host.Scroll.Offset.Y;
+                    await host.AppendAndTickAsync(path, 2);
+                    host.Settle();
+                    await Assert.That(host.Scroll.Offset.Y).IsEqualTo(offset);
+                    await Assert.That(host.AtBottom()).IsFalse();
+                    await Assert.That(markdown.HasSelection).IsTrue();
+                }
+                if (collapse) {
+                    var summary = host.View.GetVisualDescendants().OfType<Button>()
+                        .Single(b => b.Classes.Contains("thinkingSummary"));
+                    Click(host, summary);
+                    await Assert.That(markdown.HasSelection).IsTrue();
+                    await Assert.That(markdown.IsEffectivelyVisible).IsFalse();
+                    Action<TimeSpan>? pendingFrame = null;
+                    host.View.RequestSmoothFrame = (_, frame) => pendingFrame = frame;
+                    var timestamp = TimeSpan.FromSeconds(1);
+                    void Wheel(double delta) {
+                        host.Window.MouseWheel(PresentAndLocate(host, host.View.FindControl<ItemsControl>("ChatItems")!), new Vector(0, delta));
+                        host.Settle();
+                        for (var i = 0; i < 100 && pendingFrame is { } frame; i++) {
+                            pendingFrame = null;
+                            timestamp += TimeSpan.FromMilliseconds(16);
+                            frame(timestamp);
+                            host.Settle();
+                        }
+                    }
+                    Wheel(100_000);
+                    await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
+                    Wheel(-100_000);
+                    await Assert.That(host.AtBottom()).IsTrue();
+                    await Assert.That(host.View.CanPreserveReadingPosition).IsFalse();
+                } else {
+                    PresentAndLocate(host, markdown);
+                    var clear = At(9);
+                    host.Window.MouseMove(clear);
+                    host.Window.MouseDown(clear, MouseButton.Left);
+                    host.Window.MouseUp(clear, MouseButton.Left);
+                    host.Settle();
+                    await Assert.That(markdown.HasSelection).IsFalse();
+                    await Assert.That(host.View.CanPreserveReadingPosition).IsEqualTo(appendWhileSelected);
+                    if (appendWhileSelected) {
+                        host.Scroll.ScrollToEnd();
+                        host.Settle();
+                    }
+                }
+                await host.AppendAndTickAsync(path, 10);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     /// The window reuses one view for every session it opens: a reader who scrolled up in one
     /// session must not open the next one scrolled up and off the tail.
     [Test]
