@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Assertions.Enums;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -125,18 +126,26 @@ public class CodexHostedPolicySeamTests : IDisposable {
             .IsEqualTo(CodexHostedVerdict.Decline);
     }
 
+    /// Turns are declared by item id, only as far back from the newest as the server has stored them: an older prompt
+    /// must never stand in for the newest one the approval belongs to.
     [Test]
-    public async Task Only_stored_turns_are_declared_by_their_item_ids() {
+    [Arguments("m1,m2", "m1,m2")]
+    [Arguments("m2", "m2")]
+    [Arguments("m1", "")]
+    [Arguments("", "")]
+    public async Task The_stored_turns_back_from_the_newest_are_declared(string stored, string declared) {
         Judge("allow");
-        var seam = Seam(new FakeProbe("m1"));
+        var seam = Seam(new FakeProbe(stored.Split(',', StringSplitOptions.RemoveEmptyEntries)));
         seam.Turns.Observe(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "fix the build", ItemId: "m1", TurnId: "turn-1"));
         seam.Turns.Observe(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "now ship it", ItemId: "m2", TurnId: "turn-2"));
 
         await Assert.That(await seam.EvaluateAsync(CommandApproval, Command("npm view left-pad version"), CancellationToken.None))
             .IsEqualTo(CodexHostedVerdict.Accept);
 
-        var turns = JsonNode.Parse(_server.LogEntries.Single().RequestMessage.Body!)!["turns"]!["user_messages"]!.AsArray();
-        await Assert.That(turns.Select(t => t!["id"]!.GetValue<string>())).IsEquivalentTo(new[] { AcpItemTurnId.For("m1").ToString() });
+        var turns    = JsonNode.Parse(_server.LogEntries.Single().RequestMessage.Body!)!["turns"];
+        var expected = declared.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(id => AcpItemTurnId.For(id).ToString()).ToArray();
+        if (expected.Length == 0) await Assert.That(turns).IsNull();
+        else await Assert.That(turns!["user_messages"]!.AsArray().Select(t => t!["id"]!.GetValue<string>())).IsEquivalentTo(expected, CollectionOrdering.Matching);
     }
 
     /// The server counts every hosted user message as human, so one opening with a marker is declared too.
@@ -149,19 +158,6 @@ public class CodexHostedPolicySeamTests : IDisposable {
         await seam.EvaluateAsync(CommandApproval, Command("npm view left-pad version"), CancellationToken.None);
 
         await Assert.That(JsonNode.Parse(_server.LogEntries.Single().RequestMessage.Body!)!["turns"]!["user_messages"]!.AsArray().Count).IsEqualTo(1);
-    }
-
-    /// With no stored turn the consultation is windowless rather than declaring one the server cannot find.
-    [Test]
-    public async Task No_stored_turn_declares_no_turn_set() {
-        Judge("ask");
-        var seam = Seam(new FakeProbe());
-        seam.Turns.Observe(new AcpEventEnvelope(Kind: AcpEventKind.UserMessage, Text: "fix the build", ItemId: "m1", TurnId: "turn-1"));
-
-        await Assert.That(await seam.EvaluateAsync(CommandApproval, Command("npm view left-pad version"), CancellationToken.None))
-            .IsEqualTo(CodexHostedVerdict.Forward);
-
-        await Assert.That(JsonNode.Parse(_server.LogEntries.Single().RequestMessage.Body!)!["turns"]).IsNull();
     }
 
     [Test]

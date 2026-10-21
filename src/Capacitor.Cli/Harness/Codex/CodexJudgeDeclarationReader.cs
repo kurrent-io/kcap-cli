@@ -9,10 +9,11 @@ namespace Capacitor.Cli.Harness.Codex;
 internal sealed record CodexDeclaration(PolicyJudgeTurnSetV1? Turns, string? WindowlessReason);
 
 /// <summary>
-/// Declares a watched Codex session's newest human turns as the server stored them. Only lines the root
-/// watcher has had acknowledged are declared, since the server holds at least those and its mark can be no
-/// further; each is identified by the hash of the line as the watcher sent it, after redaction. A line the
-/// redactor could not finish was never stored as itself, so the set goes windowless rather than name it.
+/// Declares a watched Codex session's newest human turns as the server stored them, each identified by the hash
+/// of the line as the watcher sent it, after redaction. The newest human line must be acknowledged first: the server
+/// cannot see one it has not stored, so declaring only older turns would let a stale prompt stand in for the one the
+/// call belongs to. A line the redactor could not finish was never stored as itself, so the set goes windowless
+/// rather than name it.
 /// </summary>
 internal static class CodexJudgeDeclarationReader {
     public const int MaxTurns = 16;
@@ -41,11 +42,11 @@ internal static class CodexJudgeDeclarationReader {
             await Task.Delay(Poll, time, ct).ConfigureAwait(false);
         }
 
-        var covered = scan.Recent.Where(line => line.Number <= acked).ToList();
-        if (covered.Count == 0) return new(null, "no_turns");
+        if (scan.Recent.Count == 0) return new(null, "no_turns");
+        if (scan.NewestHuman > acked) return new(null, "newest_turn_unacknowledged");
 
-        var declared = new List<PolicyJudgeDeclaredTurnV1>(covered.Count);
-        foreach (var line in covered) {
+        var declared = new List<PolicyJudgeDeclaredTurnV1>(scan.Recent.Count);
+        foreach (var line in scan.Recent) {
             var sent = SecretRedactor.RedactLineWithOutcome(line.Raw);
             if (sent.Loss is not null) return new(null, "redaction_incomplete");
             declared.Add(new(TranscriptIds.CodexRecord(sent.Line).ToString(), line.TurnId));
@@ -54,7 +55,7 @@ internal static class CodexJudgeDeclarationReader {
         return new(new PolicyJudgeTurnSetV1([.. declared], null), null);
     }
 
-    /// <summary>The newest human lines, oldest first; those past the count are left out once it is known.</summary>
+    /// <summary>The newest human lines, oldest first.</summary>
     sealed record ScanResult(IReadOnlyList<HumanLine> Recent, int NewestHuman, string? Reason);
 
     static ScanResult Scan(string path) {

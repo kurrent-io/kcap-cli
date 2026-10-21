@@ -124,14 +124,15 @@ internal sealed class CodexHostedPolicySeam(
         }
     }
 
-    /// <summary>Only turns the server has stored are declared: one it has not would fail the evidence read.
-    /// With none left the consultation is windowless.</summary>
+    /// <summary>Only the stored turns back from the newest are declared: one the server has not stored would fail the
+    /// evidence read, and skipping it would let an older prompt stand in for the one the approval belongs to. With the
+    /// newest unstored the consultation is windowless.</summary>
     async Task<PolicyJudgeTurnSetV1?> DeclaredTurnsAsync(CancellationToken ct) {
         var recent = Turns.Recent();
         if (recent.Count == 0 || probe() is not { } persistence) return null;
 
         var stored = await persistence.AwaitPersistedAsync([.. recent.Select(t => t.ItemId)], PersistWait, ct).ConfigureAwait(false);
-        var declared = recent.Where(t => stored.ContainsKey(t.ItemId))
+        var declared = recent.Reverse().TakeWhile(t => stored.ContainsKey(t.ItemId)).Reverse()
             .Select(t => new PolicyJudgeDeclaredTurnV1(AcpItemTurnId.For(t.ItemId).ToString(), t.TurnId))
             .ToArray();
 

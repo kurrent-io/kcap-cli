@@ -44,16 +44,17 @@ public class CodexJudgeDeclarationReaderTests {
         await Assert.That(declared.Turns.UserMessages.Select(m => m.PromptId)).IsEquivalentTo(new string?[] { "t1", "t2" });
     }
 
-    /// The server can hold no further than the watcher's count, so a newer line it has not acknowledged is left out.
+    /// The server cannot see a line it has not stored, so declaring only the older turns would let a stale prompt
+    /// stand in for the newest one.
     [Test]
-    public async Task A_human_line_past_the_count_is_left_out_once_the_wait_is_spent() {
-        var first = User("fix the build", "t1", "user.text");
-        var path  = Rollout(first, User("now ship it", "t2", "user.text"));
+    public async Task An_unacknowledged_newest_human_line_makes_the_set_windowless_once_the_wait_is_spent() {
+        var path = Rollout(User("fix the build", "t1", "user.text"), User("now ship it", "t2", "user.text"));
         Cursor.Write(Sid, 1);
 
         var declared = await Read(path);
 
-        await Assert.That(declared.Turns!.UserMessages.Single().Id).IsEqualTo(TranscriptIds.CodexRecord(first).ToString());
+        await Assert.That(declared.Turns).IsNull();
+        await Assert.That(declared.WindowlessReason).IsEqualTo("newest_turn_unacknowledged");
     }
 
     [Test]
