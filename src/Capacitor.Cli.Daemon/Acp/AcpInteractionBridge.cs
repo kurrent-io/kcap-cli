@@ -42,9 +42,9 @@ internal sealed partial class AcpInteractionBridge(
         Action<string>?                                                               unexpectedUnattendedInteraction = null,
         IReadOnlySet<string>?                                                         admittedToolIds = null,
         // Launch-time permission preset for the INTERACTIVE path only (non-null only when
-        // unattendedPolicy is Disabled): the bridge auto-approves a permission request whose ACP tool
-        // kind the preset covers, with a single unambiguous allow_once — everything else keeps
-        // prompting. Null for a review-flow launch and every launch without a preset.
+        // unattendedPolicy is Disabled): the bridge auto-approves a permission request the preset
+        // covers, with a single unambiguous allow_once — everything else keeps prompting. Null for a
+        // review-flow launch and every launch without a preset.
         AcpLaunchPermissionPreset?                                                    preset = null,
         // Fire-and-forget audit sink invoked once per preset auto-approval (through a non-throwing
         // boundary). Null in tests / when no server connection is wired.
@@ -259,6 +259,8 @@ internal sealed partial class AcpInteractionBridge(
                 evaluation   = PolicyEngine.Evaluate(snapshot, policyAction, EvaluationMode.Full);
             } catch (Exception ex) {
                 LogPolicyEvaluationFailed(ex, agentId);
+                // A policy that could not be read might have denied this call, so no preset may approve it.
+                policyForcedAsk = true;
             }
 
             if (policyAction is { } act && evaluation is { } eval) {
@@ -292,22 +294,32 @@ internal sealed partial class AcpInteractionBridge(
                         break;
                 }
             }
+
+            // A call of a governed kind that lacks the field its rules read normalizes to Other, where
+            // those rules cannot see it; it may be one they deny, so no preset approves it.
+            if (policyAction is { Kind: ActionKind.Other }
+             && TryGetToolKind(parsed.ToolCall) is AcpToolKind.Execute or AcpToolKind.Fetch or AcpToolKind.Read
+                    or AcpToolKind.Search or AcpToolKind.Edit or AcpToolKind.Move or AcpToolKind.Delete)
+                policyForcedAsk = true;
         }
 
         // Launch-time permission preset (INTERACTIVE path only). Sits strictly between "frame
         // understood" and "forward to human": it can only ever replace a prompt with an allow — never
-        // a cancel, never a standing grant. Auto-approve iff the request's ACP tool kind is one the
-        // preset covers AND there is a single unambiguous allow_once option. Every other case — a
-        // kind the preset does not cover, a kind-less frame, zero/multiple allow_once, or a sole
-        // allow_always — falls through to the interactive forward below.
+        // a cancel, never a standing grant. Auto-approve iff the preset covers the request AND there
+        // is a single unambiguous allow_once. A vendor's allow_always is never taken, not even a
+        // session-scoped one: once granted the vendor stops asking, so later calls would bypass both
+        // the launch's policy and this audit.
         if (unattendedPolicy == AcpUnattendedInteractionPolicy.Disabled
          && !policyForcedAsk
          && preset is not null
-         && TryGetToolKind(parsed.ToolCall) is { } toolKind
-         && preset.AutoApprovedKinds.Contains(toolKind)) {
+         && preset.Covers(TryGetToolKind(parsed.ToolCall))) {
             var autoChoice = TrySelectSingleAllowOnce(options);
 
             if (autoChoice is not null) {
+                // The server drops an audit whose kind is outside the ACP vocabulary, and `auto`
+                // approves frames with an unrecognised kind or none at all.
+                var toolKind = AcpToolKind.Normalize(TryGetToolKind(parsed.ToolCall)) ?? AcpToolKind.Other;
+
                 LogPresetAutoApproved(agentId, toolKind, preset.Token, TryGetToolTitle(parsed.ToolCall) ?? "(untitled)");
                 TryNotifyAutoApproval(new AcpAutoApprovalNotice(
                     AgentId:      agentId,
@@ -319,8 +331,6 @@ internal sealed partial class AcpInteractionBridge(
 
                 return SelectedResult(autoChoice);
             }
-            // No unambiguous allow_once — fall through to the interactive forward (prompt), never
-            // cancel, never a standing grant.
         }
 
         var interactionRequest = new AcpInteractionRequest(

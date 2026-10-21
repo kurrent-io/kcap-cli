@@ -57,6 +57,18 @@ public class ServerConnectionAdvertisementTests {
     }
 
     [Test]
+    public async Task DaemonConnect_advertises_the_permission_presets_the_bridge_enforces() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            conn.BuildDaemonConnect("mac", [], [], null), CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(json).Contains("\"acp_presets\":[\"explore\",\"edit\",\"auto\"]");
+    }
+
+    [Test]
     public async Task DaemonConnect_serializes_its_capability_flags_with_snake_case_names() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
         await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
