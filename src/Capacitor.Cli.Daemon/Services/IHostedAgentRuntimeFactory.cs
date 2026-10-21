@@ -209,12 +209,9 @@ internal sealed record RuntimeStartContext(
         // and reap it. Empty when a test/legacy caller omits them — the markers are simply not written.
         string             DaemonId    = "",
         string             DaemonEpoch = "",
-        // Optional MCP-server list for session/new — null/empty for every launch today
-        // (no caller populates this yet; interactive launches must keep it empty). The reviewer
-        // path is the first planned consumer. Distinct from McpAllowlist above, which is a PTY-only
-        // materialization concern (an allowlist of names the launcher writes into a temp
-        // mcp-config file) — this is the literal ACP session/new payload for descriptors that
-        // support it.
+        // Extra servers for an interactive ACP launch's session/new, sent after kcap's own set where the
+        // descriptor injects one. Ignored by a review flow, whose list the factory builds, and by a
+        // descriptor without SupportsMcpServers.
         IReadOnlyList<AcpMcpServerSpec>? McpServers = null,
         // True only when a borrowed request has been materialized into a fully independent,
         // daemon-owned repository snapshot. Factories use this to revalidate exact artifacts.

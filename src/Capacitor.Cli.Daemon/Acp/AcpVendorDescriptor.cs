@@ -135,6 +135,11 @@ internal sealed record AcpVendorDescriptor {
     public AcpUnattendedInteractionPolicy UnattendedInteractionPolicy { get; }
     public IAcpModelSelector           ModelSelector          { get; }
     public bool                        SupportsMcpServers     { get; }
+
+    /// <summary>Whether an interactive launch is handed kcap's own MCP servers in <c>session/new</c>.
+    /// Declared only for a vendor measured to run such a server in place of a same-named one from its own
+    /// config: one that ran both would spawn every kcap server twice.</summary>
+    public bool                        InjectsKcapMcpServers  { get; }
     public AcpReviewFlowMcpTransport   ReviewFlowMcpTransport { get; }
     public bool                        SupportsBorrowedReviewFlow { get; }
     public AcpBorrowedReviewContainment BorrowedReviewContainment { get; }
@@ -203,7 +208,8 @@ internal sealed record AcpVendorDescriptor {
                                         TurnUsageReader = null,
             Func<Core.Acp.AcpNotification, AcpSubagentSignal?>?
                                         SubagentReader = null,
-            AcpQuestionProtocol?        QuestionProtocol = null
+            AcpQuestionProtocol?        QuestionProtocol = null,
+            bool                        InjectsKcapMcpServers = false
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -256,6 +262,7 @@ internal sealed record AcpVendorDescriptor {
         this.UnattendedInteractionPolicy = UnattendedInteractionPolicy;
         this.ModelSelector       = ModelSelector;
         this.SupportsMcpServers  = SupportsMcpServers;
+        this.InjectsKcapMcpServers = InjectsKcapMcpServers;
         this.SupportsBorrowedReviewFlow = SupportsBorrowedReviewFlow;
         this.BorrowedReviewContainment = BorrowedReviewContainment;
         this.SupportsReconnectResume = SupportsReconnectResume;
@@ -280,6 +287,11 @@ internal sealed record AcpVendorDescriptor {
             throw new ArgumentException(
                 $"{nameof(AcpReviewFlowMcpTransport.SessionNew)} requires {nameof(SupportsMcpServers)} (vendor: {Vendor}).",
                 nameof(ReviewFlowMcpTransport));
+
+        if (InjectsKcapMcpServers && !SupportsMcpServers)
+            throw new ArgumentException(
+                $"{nameof(InjectsKcapMcpServers)} requires {nameof(SupportsMcpServers)} (vendor: {Vendor}).",
+                nameof(InjectsKcapMcpServers));
     }
 }
 
@@ -536,6 +548,12 @@ internal static class AcpVendorDescriptors {
     /// MCP servers go through <c>session/new</c> and its model through <c>configOptions</c>, both
     /// verified at effect level.
     ///
+    /// <para>An interactive launch is given kcap's own servers there. Grok runs a <c>session/new</c>
+    /// server in place of the same-named one it imports from the user's Cursor config
+    /// (<c>docs/probes/2026-10-21-grok-mcp-precedence/</c>), so a registration left on a removed binary
+    /// cannot take a kcap tool away from a hosted session. They need no session variable: Grok sets
+    /// <c>GROK_SESSION_ID</c> on every server it starts.</para>
+    ///
     /// <para><c>yoloMode: false</c> is not optional: Grok applies the user's own
     /// <c>permission_mode = "always-approve"</c> to an ACP session unless <c>session/new</c> overrides
     /// it, and then never sends <c>session/request_permission</c>, so neither the permission broker nor
@@ -565,7 +583,8 @@ internal static class AcpVendorDescriptors {
         SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
         TurnUsageReader:     GrokTurnUsage.Read,
         SubagentReader:      GrokSubagentSignals.Read,
-        QuestionProtocol:    GrokQuestions.Protocol
+        QuestionProtocol:    GrokQuestions.Protocol,
+        InjectsKcapMcpServers: true
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).
