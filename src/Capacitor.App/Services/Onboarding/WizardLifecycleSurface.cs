@@ -19,7 +19,8 @@ public sealed class WizardLifecycleSurface : ReactiveObject, ILifecycleSurface {
         _inner = new LifecycleSurface(
             message => post(() => StatusText = message),
             message => post(() => AttentionText = message),
-            showPrompt);
+            showPrompt,
+            message => post(() => { if (ReferenceEquals(AttentionText, message)) AttentionText = null; }));
 
     public string? StatusText {
         get => _statusText;

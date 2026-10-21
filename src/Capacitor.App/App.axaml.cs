@@ -526,8 +526,10 @@ public partial class App : Application {
         // The controller's attach subscription must be live BEFORE service.Start() begins pumping,
         // or the startup phase could miss the first terminal outcome it hinges on.
         var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe, lifecycleCli) = BuildLifecycleController(
-            service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext, lifecycleAttention.OnNext,
-            message => { if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null); },
+            service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext,
+            // One lock for setting and withdrawing, so a withdrawal never erases a message set beside it.
+            message => { lock (lifecycleAttention) lifecycleAttention.OnNext(message); },
+            message => { lock (lifecycleAttention) if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null); },
             lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
         lifecycle.Start();
         _lifecycle = lifecycle;

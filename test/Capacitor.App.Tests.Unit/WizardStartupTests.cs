@@ -379,6 +379,22 @@ public class WizardStartupTests {
 
     // ── the consumer runs unchanged over the wizard's own surface ─────────────
 
+    /// A withdrawn line clears only while it is still the one shown; a newer line stays.
+    [Test]
+    public async Task The_wizard_surface_withdraws_only_the_line_it_still_shows() {
+        var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
+        const string report = "Daemon daemon-a is running for another server.";
+
+        surface.Attention(report);
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsNull();
+
+        surface.Attention(report);
+        surface.Attention("newer");
+        surface.Withdraw(report);
+        await Assert.That(surface.AttentionText).IsEqualTo("newer");
+    }
+
     [Test]
     public async Task The_outcome_consumer_presents_through_the_wizard_surface() {
         var surface = new WizardLifecycleSurface((_, _) => Task.FromResult(false), action => action());
