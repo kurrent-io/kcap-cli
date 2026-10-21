@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
@@ -22,6 +23,7 @@ public partial class ChatTabView : UserControl {
     ScrollViewer? _scroll;
     TextPresenter? _composerPresenter;
     AttachmentDropPaste? _attachments;
+    IDisposable? _sent;
     bool _followTail = true;
     /// Armed by a gesture inside the list and released once the dispatcher queue drains past
     /// layout, so it covers exactly the scroll changes that gesture produced — an expansion click
@@ -105,6 +107,18 @@ public partial class ChatTabView : UserControl {
         _dragView = null;
         _followTail = true;
         base.OnDataContextChanged(e);
+        _sent?.Dispose();
+        _sent = DataContext is ChatTabViewModel vm ? vm.SendCommand.Merge(vm.SendQueuedCommand).Subscribe(_ => FollowSentTurn()) : null;
+    }
+
+    /// A send brings its turn to the top even when the reader had scrolled back.
+    void FollowSentTurn() {
+        CancelSmoothScroll();
+        DropToggleAnchor();
+        _thumbFraction = null;
+        _followTail = true;
+        EnsureChatScroll();
+        _scroll?.ScrollToEnd();
     }
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {

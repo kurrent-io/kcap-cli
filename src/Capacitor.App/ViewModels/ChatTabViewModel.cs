@@ -536,10 +536,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         StatusText = AgentStatus.Label;
     }
 
-    static string WorkingNote(TimeSpan elapsed) {
-        var seconds = Math.Max(0, (long)elapsed.TotalSeconds);
-        return $"Working for {seconds / 60}m {seconds % 60}s";
-    }
+    static string WorkingNote(TimeSpan elapsed) => $"Working for {RunRow.Duration(elapsed)}";
 
     bool _isReadOnlyParticipant;
     /// True for a flow participant (any kind other than "agent"): the view swaps the composer

@@ -89,10 +89,18 @@
             <ItemsControl.Template>
                 <ControlTemplate>
                     <ScrollViewer x:Name="ChatScroll" VerticalScrollBarVisibility="Auto" BringIntoViewOnFocusChange="False">
-                        <!-- ItemsPanel does not reach the presenter on its own: without this
-                             template binding it falls back to its own default StackPanel and
-                             every row is realized. -->
-                        <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" Margin="22,18,22,8" />
+                        <views:ChatTailPanel x:DataType="vm:ChatTabViewModel">
+                            <!-- ItemsPanel does not reach the presenter on its own: without this
+                                 template binding it falls back to its own default StackPanel and
+                                 every row is realized. -->
+                            <ItemsPresenter Name="PART_ItemsPresenter" ItemsPanel="{TemplateBinding ItemsPanel}" Margin="22,18,22,0" />
+                            <!-- Inside the scroll, so it sits under the last message and follows the tail. -->
+                            <StackPanel Orientation="Horizontal" Spacing="6" Margin="14,0,22,8" IsVisible="{Binding ShowsLiveNote}">
+                                <views:OuroMascot Width="32" Height="32" Margin="0,-5" IsPlaying="{Binding ShowsLiveNote}" />
+                                <TextBlock Text="{Binding ActivityNote}" VerticalAlignment="Center"
+                                           Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5" />
+                            </StackPanel>
+                        </views:ChatTailPanel>
                     </ScrollViewer>
                 </ControlTemplate>
             </ItemsControl.Template>
@@ -370,12 +378,6 @@
                            Text="{Binding ActivityNote}" ToolTip.Tip="{Binding ActivityNote}"
                            Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
                            TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
-                <StackPanel x:Name="ChatLiveNote" Grid.Row="2" Orientation="Horizontal" Spacing="6" Margin="8,0,14,8"
-                            IsVisible="{Binding ShowsLiveNote}">
-                    <views:OuroMascot Width="32" Height="32" Margin="0,-5" IsPlaying="{Binding ShowsLiveNote}" />
-                    <TextBlock Text="{Binding ActivityNote}" VerticalAlignment="Center"
-                               Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5" />
-                </StackPanel>
 
                 <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
