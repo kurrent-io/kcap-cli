@@ -170,7 +170,8 @@
     </UserControl.Styles>
     <UserControl.Resources>
         <DataTemplate x:Key="LinkCard" x:DataType="vm:WorkContextLinkViewModel">
-            <Button Command="{Binding OpenCommand}" Classes="toggle" ToolTip.Tip="{Binding Url}">
+            <Button Command="{Binding OpenCommand}" Classes="toggle" ToolTip.Tip="{Binding Url}"
+                    AutomationProperties.Name="{Binding AccessibleName}">
                 <Border Classes="card" Padding="13,11">
                     <StackPanel Spacing="6">
                         <TextBlock Text="{Binding Eyebrow}" Classes="cardEyebrow" />
@@ -360,7 +361,8 @@
                             </StackPanel>
 
                             <StackPanel IsVisible="{Binding HasParts}">
-                                <Button x:Name="PartsToggle" Command="{Binding TogglePartsCommand}" Classes="sectionHeader expandable">
+                                <Button x:Name="PartsToggle" Command="{Binding TogglePartsCommand}" Classes="sectionHeader expandable"
+                                        AutomationProperties.Name="Parts">
                                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                                         <TextBlock Text="PARTS" Classes="eyebrow" />
                                         <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -425,7 +427,8 @@
 
                 <!-- Who's on it: folded to one initial per person, the header opens the names. -->
                 <StackPanel x:Name="WhoSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
-                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader expandable">
+                    <Button x:Name="WhoToggle" Command="{Binding TogglePeopleCommand}" Classes="sectionHeader expandable"
+                            AutomationProperties.Name="Who's on it">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="WHO'S ON IT" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -474,9 +477,9 @@
                                                     </Panel>
                                                 </Border>
                                                 <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
-                                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}">
+                                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name, StringFormat='Copy {0}'}">
                                                     <StackPanel>
-                                                        <TextBlock Text="{Binding NameDisplay}" FontSize="13" FontWeight="SemiBold"
+                                                        <TextBlock x:Name="ContributorNameText" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                                         <TextBlock Text="{Binding LastActivityText}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0"
                                                                    IsVisible="{Binding LastActivityText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
@@ -496,9 +499,10 @@
                                     </Panel>
                                 </Border>
                                 <Button x:Name="RequesterName" Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
-                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}" IsVisible="{Binding PeopleExpanded}">
+                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}" IsVisible="{Binding PeopleExpanded}"
+                                        AutomationProperties.Name="{Binding Requester, StringFormat='Copy {0}'}">
                                     <StackPanel>
-                                        <TextBlock Text="{Binding RequesterDisplay}" FontSize="13" FontWeight="SemiBold"
+                                        <TextBlock Text="{Binding Requester}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
                                         <TextBlock Text="{Binding RequesterRole}" FontSize="12" Foreground="{StaticResource KcapFaintBrush}" Margin="0,1,0,0" />
                                     </StackPanel>
@@ -512,7 +516,7 @@
                      server has no reader, or the empty note once both reads have settled. -->
                 <StackPanel x:Name="PullRequestSection" Margin="0,18,0,0" IsVisible="{Binding ShowsPullRequestSection}">
                     <StackPanel IsVisible="{Binding ShowsPullRequestCard}">
-                        <Button x:Name="PullRequestHeader" Classes="sectionHeader">
+                        <Button x:Name="PullRequestHeader" Classes="sectionHeader" AutomationProperties.Name="Pull requests">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                                 <TextBlock Text="{Binding PullRequests.SectionEyebrow}" Classes="eyebrow" />
                                 <TextBlock x:Name="PullRequestNumberMeta" Grid.Column="1"
@@ -547,7 +551,7 @@
                     <Button x:Name="IssueHeader" Classes="sectionHeader"
                             Classes.expandable="{Binding IssuesOverflows}"
                             Command="{Binding ToggleIssuesCommand}"
-                            ToolTip.Tip="{Binding SeparateIssue.Url}">
+                            ToolTip.Tip="{Binding SeparateIssue.Url}" AutomationProperties.Name="Issues">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="{Binding IssueSectionEyebrow}" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -566,6 +570,7 @@
                                     Command="{Binding SeparateIssue.OpenCommand}"
                                     IsVisible="{Binding !HasMultipleIssues}"
                                     ToolTip.Tip="{Binding SeparateIssue.Url}"
+                                    AutomationProperties.Name="{Binding SeparateIssue.AccessibleName}"
                                     HorizontalAlignment="Stretch">
                                 <TextBlock x:Name="IssueTitle" Text="{Binding SeparateIssue.Title}" FontSize="13" LineHeight="16" FontWeight="SemiBold"
                                            TextWrapping="Wrap" Foreground="{StaticResource KcapTextBrush}"
@@ -581,7 +586,7 @@
                                     <DataTemplate x:DataType="vm:WorkContextLinkViewModel">
                                         <Button Classes="copyValue"
                                                 Command="{Binding OpenCommand}"
-                                                ToolTip.Tip="{Binding Url}"
+                                                ToolTip.Tip="{Binding Url}" AutomationProperties.Name="{Binding AccessibleName}"
                                                 HorizontalAlignment="Stretch">
                                             <StackPanel Spacing="4">
                                                 <TextBlock Text="{Binding Key}" Classes="prMuted" FontSize="12" />
@@ -602,7 +607,7 @@
                     <TextBlock Text="Loading plan…" FontSize="13" Foreground="{StaticResource KcapMutedBrush}"
                                Margin="0,4,0,0" IsVisible="{Binding Plan.IsLoading}" />
                     <Button x:Name="PlanToggle" Command="{Binding Plan.ToggleCommand}" Classes="sectionHeader expandable"
-                            IsVisible="{Binding Plan.HasPlan}">
+                            IsVisible="{Binding Plan.HasPlan}" AutomationProperties.Name="Plan">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="PLAN" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -683,7 +688,8 @@
 
                 <!-- Agents and commands: read from the transcript, so it renders in every pane phase. -->
                 <StackPanel x:Name="SubagentsSection" IsVisible="{Binding HasRuns}" Margin="0,18,0,0">
-                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleRunsCommand}" Classes="sectionHeader expandable">
+                    <Button x:Name="SubagentsToggle" Command="{Binding ToggleRunsCommand}" Classes="sectionHeader expandable"
+                            AutomationProperties.Name="Agents and commands">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="AGENTS &amp; COMMANDS" Classes="eyebrow" />
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
@@ -741,13 +747,19 @@
 
                 <!-- Session facts. -->
                 <StackPanel x:Name="SessionSection" Margin="0,18,0,0" IsVisible="{Binding HasAgent}">
-                    <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable">
+                    <Button x:Name="SessionToggle" Command="{Binding ToggleSessionCommand}" Classes="sectionHeader expandable"
+                            AutomationProperties.Name="{Binding SessionToggleText, StringFormat='Session details, {0}'}">
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
                             <TextBlock Text="SESSION" Classes="eyebrow" />
-                            <Panel Grid.Column="1" Width="12" Height="12" VerticalAlignment="Center">
-                                <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding SessionExpanded}" />
-                                <views:AppIcon Kind="ChevronRight" Size="12" Classes="chevron" IsVisible="{Binding !SessionExpanded}" />
-                            </Panel>
+                            <!-- The base facts always show, so this toggle reads as more/less detail, not open/shut. -->
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                <TextBlock x:Name="SessionToggleText" Classes="sectionMeta"
+                                           Text="{Binding SessionToggleText}" />
+                                <Panel Width="12" Height="12">
+                                    <views:AppIcon Kind="ChevronUp" Size="12" Classes="chevron" IsVisible="{Binding SessionExpanded}" />
+                                    <views:AppIcon Kind="ChevronDown" Size="12" Classes="chevron" IsVisible="{Binding !SessionExpanded}" />
+                                </Panel>
+                            </StackPanel>
                         </Grid>
                     </Button>
                     <Border Classes="sectionBody">
