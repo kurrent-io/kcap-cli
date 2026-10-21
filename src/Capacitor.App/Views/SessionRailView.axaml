@@ -86,6 +86,12 @@
         <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailDaemonRow > StackPanel">
             <Setter Property="Margin" Value="0,0,5,4" />
         </Style>
+        <Style Selector="Button#RailHelpButton">
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Button#RailHelpButton.withDaemon">
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+        </Style>
         <!-- Status, machine, and age share an 11px line; the logo and glyph sit in that line. -->
         <Style Selector="Border.railChip">
             <Setter Property="VerticalAlignment" Value="Center" />
@@ -161,6 +167,10 @@
                                        IsVisible="{Binding ReloadFailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                         </StackPanel>
                     </Border>
+                    <!-- The chip docks beside the status column. Until a daemon name or version
+                         exists the second row is absent, and the chip shares the status line. -->
+                    <Grid ColumnDefinitions="*,Auto" ClipToBounds="True">
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
                     <StackPanel x:Name="RailConnectionStatus" Orientation="Horizontal" Spacing="7">
                         <!-- Extra info (lighter) then the fragment's name (kcapTipCaption). A
                              diagnostic takes the extra slot; without one the caption stands
@@ -276,15 +286,46 @@
                             </Button>
                         </WrapPanel>
                     </Panel>
-                    <!-- ClipToBounds plus WrapPanel: a horizontal StackPanel sizes children
-                         unbounded, so a long daemon line paints into the help chip. -->
-                    <DockPanel ClipToBounds="True">
-                        <Button x:Name="RailHelpButton" DockPanel.Dock="Right" Classes="kcapChip"
-                                Width="22" Height="22" Padding="0" CornerRadius="6" Margin="10,0,0,0"
-                                ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support"
-                                VerticalAlignment="Bottom">
-                            <views:AppIcon Kind="CircleQuestionMark" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
-                            <Button.Flyout>
+                    <!-- Bottom, not Center: the fragments and the button share the row's
+                         bottom edge, so the text line and the button agree on one line. One
+                         font size across the row, so the baselines coincide outright.
+                         The dot and the count are one wrap child, so a break takes the
+                         separator with the count. The version has none. -->
+                    <WrapPanel x:Name="RailDaemonRow" VerticalAlignment="Bottom"
+                               IsVisible="{Binding ShowsDaemonLine}">
+                        <TextBlock x:Name="RailDaemonNameText" Text="{Binding DaemonName}" Classes="footerMeta"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{x:Static vm:MainWindowViewModel.DaemonNameTip}"
+                                   IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Bottom"
+                                    IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <TextBlock Classes="footerDot" />
+                            <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
+                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}" />
+                        </StackPanel>
+                        <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" Classes="footerMeta"
+                                   Classes.restartPending="{Binding RestartPending}"
+                                   IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                            <ToolTip.Tip>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
+                                               IsVisible="{Binding RestartPending}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
+                                               Classes="kcapTipCaption"
+                                               IsVisible="{Binding RestartPending}" />
+                                    <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
+                                               IsVisible="{Binding !RestartPending}" />
+                                </StackPanel>
+                            </ToolTip.Tip>
+                        </TextBlock>
+                    </WrapPanel>
+                    </StackPanel>
+                    <Button x:Name="RailHelpButton" Grid.Column="1" Classes="kcapChip"
+                            Classes.withDaemon="{Binding ShowsDaemonLine}"
+                            Width="22" Height="22" Padding="0" CornerRadius="6" Margin="10,0,0,0"
+                            ToolTip.Tip="Help and support" AutomationProperties.Name="Help and support">
+                        <views:AppIcon Kind="CircleQuestionMark" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
+                        <Button.Flyout>
                                 <!-- Same kcapPanel + ghost rows as the launcher pickers; MenuFlyout
                                      keeps Fluent MenuItem chrome (grey hover bar on this surface). -->
                                 <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
@@ -337,39 +378,7 @@
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
-                        <!-- Bottom, not Center: the fragments and the button share the row's
-                             bottom edge, so the text line and the button agree on one line. One
-                             font size across the row, so the baselines coincide outright.
-                             The dot and the count are one wrap child, so a break takes the
-                             separator with the count. The version has none. -->
-                        <WrapPanel x:Name="RailDaemonRow" VerticalAlignment="Bottom">
-                            <TextBlock x:Name="RailDaemonNameText" Text="{Binding DaemonName}" Classes="footerMeta"
-                                       TextTrimming="CharacterEllipsis"
-                                       ToolTip.Tip="{x:Static vm:MainWindowViewModel.DaemonNameTip}"
-                                       IsVisible="{Binding DaemonName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Bottom"
-                                        IsVisible="{Binding AgentCountText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                <TextBlock Classes="footerDot" />
-                                <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
-                                           ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}" />
-                            </StackPanel>
-                            <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" Classes="footerMeta"
-                                       Classes.restartPending="{Binding RestartPending}"
-                                       IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                                <ToolTip.Tip>
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Text="{Binding RestartPendingText}" TextWrapping="Wrap"
-                                                   IsVisible="{Binding RestartPending}" />
-                                        <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
-                                                   Classes="kcapTipCaption"
-                                                   IsVisible="{Binding RestartPending}" />
-                                        <TextBlock Text="{x:Static vm:MainWindowViewModel.VersionIdentityTip}"
-                                                   IsVisible="{Binding !RestartPending}" />
-                                    </StackPanel>
-                                </ToolTip.Tip>
-                            </TextBlock>
-                        </WrapPanel>
-                    </DockPanel>
+                    </Grid>
                 </StackPanel>
             </Border>
 

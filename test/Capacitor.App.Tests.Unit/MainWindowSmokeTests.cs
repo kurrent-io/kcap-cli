@@ -1715,6 +1715,39 @@ public class MainWindowSmokeTests {
             new[] { MainWindowViewModel.AgentCountTip }, CollectionOrdering.Matching);
     }
 
+    /// No daemon identity yet: the help chip shares the status line. A second row with nothing
+    /// in it would leave the chip sitting under "Unreachable".
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Rail_help_shares_the_status_line_when_the_daemon_line_is_absent() {
+        var (sharesLine, rowHidden) = await AvaloniaSession.DispatchAsync(() => {
+            var service = new FakeDaemonClientService();
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                tenantName: "kurrent");
+            var window = new MainWindow { DataContext = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var status = rail.FindControl<StackPanel>("RailConnectionStatus")!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var daemon = rail.FindControl<Panel>("RailDaemonRow")!;
+            var statusMid = status.TranslatePoint(new Point(0, status.Bounds.Height / 2), rail)!.Value.Y;
+            var helpMid = help.TranslatePoint(new Point(0, help.Bounds.Height / 2), rail)!.Value.Y;
+            var shares = Math.Abs(statusMid - helpMid) <= help.Bounds.Height / 2;
+            var hidden = !daemon.IsVisible;
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return (shares, hidden);
+        });
+
+        await Assert.That(rowHidden).IsTrue();
+        await Assert.That(sharesLine).IsTrue();
+    }
+
     /// Name, then the agent count, then the version. The dot shares the count's parent, so a
     /// wrap cannot leave it on the line above. Both leave when the attach drops; the snapshot
     /// stays, so the name and version remain with nothing between them.
