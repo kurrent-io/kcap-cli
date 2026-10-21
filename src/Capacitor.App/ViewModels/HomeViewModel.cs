@@ -74,7 +74,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. The app is starting its service; press Start daemon to try again now.";
+        "The app is trying to start the daemon. Select Start daemon to try again now.";
     internal const string DaemonIncompatibleNotice =
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
@@ -82,7 +82,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A daemon attached by name that serves another server: signing in again cannot move it.
     internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
         var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
-        return $"This machine's daemon is running for {daemonLabel}, not {appLabel}, so it cannot run agents here.";
+        return $"This machine's daemon is connected to {daemonLabel}. It cannot run agents on {appLabel}.";
     }
 
     /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
@@ -90,7 +90,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         string.IsNullOrEmpty(daemonServer) || string.IsNullOrEmpty(appServer) || ServerIdentity.SameServer(daemonServer, appServer)
             ? null : daemonServer;
 
-    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
+    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out. Sign in to its profile to reconnect.";
 
     /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
     /// hub is down; never on the wire.

@@ -203,10 +203,10 @@ public class LauncherPaneViewSmokeTests {
     }
 
     /// The progress track and the action cluster stay out of the layout until they have something
-    /// to show. An action follows the message; it does not leave a blank run after the words.
+    /// to show. Actions sit below the message with a clear gap, even in a wide card.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Connection_banner_follows_its_message_and_drops_idle_chrome() {
+    public async Task Connection_banner_stacks_primary_actions_and_drops_idle_chrome() {
         var (idle, busy) = await AvaloniaSession.DispatchAsync(() => {
             var (vm, service, _, tmp) = Build();
             using var _tmp = tmp;
@@ -231,15 +231,15 @@ public class LauncherPaneViewSmokeTests {
 
             static double Top(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.Y;
             static double Left(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.X;
-            static double Right(Control c, Visual rel) => Left(c, rel) + c.Bounds.Width;
             static double Bottom(Control c, Visual rel) => Top(c, rel) + c.Bounds.Height;
 
-            var gap = Left(button, banner) - Right(text, banner);
+            var gap = Top(button, banner) - Bottom(text, banner);
             var idleShot = (
                 BarVisible: bar.IsVisible,
                 TextTop: Top(text, banner),
-                SharesRow: Top(button, banner) < Bottom(text, banner) && Bottom(button, banner) > Top(text, banner),
-                Follows: gap is >= 6 and <= 16);
+                AlignedLeft: Math.Abs(Left(button, banner) - Left(text, banner)) < 1,
+                Primary: button.Classes.Contains("kcapPrimary"),
+                Gap: gap);
 
             start.OnNext(false);
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connecting"));
@@ -250,8 +250,8 @@ public class LauncherPaneViewSmokeTests {
             var busyShot = (
                 BarVisible: bar.IsVisible,
                 ActionsVisible: actions.IsEffectivelyVisible,
-                BarAbove: Bottom(bar, banner) <= Top(text, banner) + 1,
-                TextHugs: text.Bounds.Width < banner.Bounds.Width - 80);
+                BarBelow: Top(bar, banner) >= Bottom(text, banner),
+                Compact: banner.Bounds.Height <= text.Bounds.Height + bar.Bounds.Height + 34);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -260,20 +260,22 @@ public class LauncherPaneViewSmokeTests {
         });
 
         await Assert.That(idle.BarVisible).IsFalse();
-        await Assert.That(idle.TextTop).IsLessThan(16);
-        await Assert.That(idle.SharesRow).IsTrue();
-        await Assert.That(idle.Follows).IsTrue();
+        await Assert.That(idle.TextTop).IsLessThan(22);
+        await Assert.That(idle.AlignedLeft).IsTrue();
+        await Assert.That(idle.Primary).IsTrue();
+        await Assert.That(idle.Gap).IsGreaterThanOrEqualTo(13);
+        await Assert.That(idle.Gap).IsLessThanOrEqualTo(15);
         await Assert.That(busy.BarVisible).IsTrue();
         await Assert.That(busy.ActionsVisible).IsFalse();
-        await Assert.That(busy.BarAbove).IsTrue();
-        await Assert.That(busy.TextHugs).IsTrue();
+        await Assert.That(busy.BarBelow).IsTrue();
+        await Assert.That(busy.Compact).IsTrue();
     }
 
-    /// A card narrower than the message plus the action wraps the action under the message.
+    /// A narrow card gives the copy the full width and puts the action below, aligned left.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Connection_banner_keeps_its_action_inside_a_narrow_card() {
-        var (inside, wrapped) = await AvaloniaSession.DispatchAsync(() => {
+        var (inside, below, alignedLeft, iconAligned, wrapped) = await AvaloniaSession.DispatchAsync(() => {
             var (vm, service, _, tmp) = Build();
             using var _tmp = tmp;
             vm.AttachDaemonRecovery(
@@ -291,9 +293,18 @@ public class LauncherPaneViewSmokeTests {
             var text = Find<TextBlock>(window, "BannerMessageText")!;
             var button = Find<Button>(window, "StartDaemonButton")!;
             var right = button.TranslatePoint(new Point(button.Bounds.Width, 0), banner)!.Value.X;
+            var textTop = text.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
             var buttonTop = button.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
-            var textBottom = text.TranslatePoint(new Point(0, text.Bounds.Height), banner)!.Value.Y;
-            var shot = (Inside: right <= banner.Bounds.Width + 1, Wrapped: buttonTop >= textBottom - 1);
+            var icon = text.FindAncestorOfType<Grid>()!.Children.OfType<AppIcon>().Single();
+            var iconTop = icon.TranslatePoint(new Point(0, 0), banner)!.Value.Y;
+            var textLeft = text.TranslatePoint(new Point(0, 0), banner)!.Value.X;
+            var buttonLeft = button.TranslatePoint(new Point(0, 0), banner)!.Value.X;
+            var shot = (
+                Inside: right <= banner.Bounds.Width + 1,
+                Below: buttonTop >= textTop + text.Bounds.Height + 7,
+                AlignedLeft: Math.Abs(buttonLeft - textLeft) < 1,
+                IconAligned: Math.Abs(iconTop + icon.Bounds.Height / 2 - (textTop + 9)) < 1,
+                Wrapped: text.Bounds.Height > 18);
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -302,6 +313,9 @@ public class LauncherPaneViewSmokeTests {
         });
 
         await Assert.That(inside).IsTrue();
+        await Assert.That(below).IsTrue();
+        await Assert.That(alignedLeft).IsTrue();
+        await Assert.That(iconAligned).IsTrue();
         await Assert.That(wrapped).IsTrue();
     }
 
