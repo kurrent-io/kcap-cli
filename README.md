@@ -2760,7 +2760,12 @@ kcap feedback --feedback                               # send feedback; prompts 
 > Releases and checks its sha256 against the manifest, installing nothing on a
 > mismatch. Each release gets its own `versions/<version>` directory and the
 > `current` link is switched to it, so running processes keep the files they
-> started from; then the new binary runs `kcap refresh`. A daemon service
+> started from; then the new binary runs `kcap refresh`. The version it replaced
+> stays; every other version is deleted unless something still runs from it.
+> macOS cannot tell, so there it is deleted anyway, and a process already running
+> from it keeps working. A daemon started from a script install restarts on the new version once it is idle,
+> Windows included, provided it was started on a release that watches for updates
+> there; restart an older Windows daemon once with `kcap daemon restart`. A daemon service
 > installed from a script install is moved onto the `current` path, so it
 > follows updates. Switching from npm, a daemon service installed under npm keeps
 > running the npm binary: run `kcap daemon service install` again once the
