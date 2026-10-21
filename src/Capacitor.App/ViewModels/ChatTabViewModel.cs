@@ -1233,23 +1233,50 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
             if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0 && read.Runs.Count == 0
                 && baselineVersion == Volatile.Read(ref _baselineVersion) && inputGeneration == Volatile.Read(ref _inputGeneration)) return;
-            await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read));
+            await Dispatcher.UIThread.InvokeAsync(() => ApplyAsync(lease.Generation, read));
         } catch (Exception ex) {
             LogOnce($"read: {ex.Message}");
         } finally {
             Volatile.Write(ref _readInFlight, 0);
-            if (_lease is { Feed: RemoteTranscriptFeed remote } current
-                && (Volatile.Read(ref current.Pending) != 0 || remote.HasPendingChanges)) SignalFeedRead(current);
+            if (_lease is { } current && (Volatile.Read(ref current.Pending) != 0
+                || current.Feed is RemoteTranscriptFeed { HasPendingChanges: true }))
+                SignalFeedRead(current);
         }
     }
 
-    void Apply(int generation, FeedRead read) {
+    async Task ApplyAsync(int generation, FeedRead read) {
+        if (!Prepare(generation, read)) return;
+        if (read.Lines.Count == 0) {
+            Finish(read, cursor: null);
+            return;
+        }
+        // Building every row shares the UI thread with the switch cover's timer, so a long
+        // transcript holds the launcher on screen until the replay returns.
+        var cursor = LineCursor.Copy(this);
+        if (CanProjectAway()) {
+            var history = new HashSet<(long Offset, string Text)>(_literalInputHistory);
+            cursor = await Task.Run(() => ProjectLines(read, cursor, matchSends: false, history));
+        } else
+            cursor = ProjectLines(read, cursor, matchSends: true, _literalInputHistory);
         if (generation != Volatile.Read(ref _generation)) return;
+        Finish(read, cursor);
+    }
+
+    // A queued send is matched as the lines are replayed. An open group or shell is already on
+    // screen, and a pending call is the same row a later result settles. Those stay on the UI
+    // thread: settling raises the group's bound lists.
+    bool CanProjectAway() =>
+        _openGroup is null && _openShell is null && _superseded.Count == 0
+        && _pendingTools.Count == 0
+        && !Tracked.Any(static q => !q.IsForeign && !q.Acknowledged);
+
+    bool Prepare(int generation, FeedRead read) {
+        if (generation != Volatile.Read(ref _generation)) return false;
 
         switch (read.Status) {
             case FeedStatus.Missing:
                 Phase = ChatTabPhase.Missing;
-                return;
+                return false;
             case FeedStatus.Failed:
                 var reason = read.Failure ?? "read failed";
                 LogOnce(reason);
@@ -1262,7 +1289,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     this.RaisePropertyChanged(nameof(PhaseNote));
                     RefreshActivityNote();
                 }
-                return;
+                return false;
             case FeedStatus.Reset:
                 HasSeed = true;
                 // Skip everything the new source replays: it may be history, not receipts. The feed
@@ -1287,7 +1314,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _failureNote = null;
             RefreshActivityNote();
         }
-        Phase = ChatTabPhase.Reading;
         // A send made before the transcript existed has no safe baseline. Its first successful
         // read establishes one; that initial history cannot acknowledge the send.
         var rebased = false;
@@ -1296,75 +1322,69 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             rebased = true;
         }
         if (rebased) RefreshQueue();
-        if (read.Lines.Count == 0) {
-            ApplyFeedRuns(read);
-            if (read.Status == FeedStatus.Reset) {
-                SyncPendingCardItems();
-                RefreshActivityNote();
-            }
-            return;
-        }
+        return true;
+    }
 
-        _planActivity?.Apply(read.Lines.Select(line => line.Projection));
-        var fresh = new List<ChatItemViewModel>();
-        var restored = new List<ChatProjectionResult>(read.Lines.Count);
+    LineCursor ProjectLines(FeedRead read, LineCursor cursor, bool matchSends, HashSet<(long Offset, string Text)> history) {
         foreach (var (line, offset) in read.Lines) {
             var projected = line.RestoreSubmittedInputs(text => {
+                if (!matchSends) return false;
                 if (!Tracked.Any(q => !q.IsForeign && !q.Acknowledged && q.Matches(text, _inputGeneration, offset))
                     && !_superseded.Any(pair => !pair.Old.Acknowledged && pair.Old.Matches(text, _inputGeneration, offset))) return false;
                 _literalInputHistory.Add((offset, text));
                 return true;
-            }, text => _literalInputHistory.Contains((offset, text)));
-            restored.Add(projected);
-            foreach (var text in projected.SubmittedInputs) {
-                _history.Observe(AttachmentTrailer.Strip(text));
-                if (TakeSupersededEcho(text, offset)) continue;
-                var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
-                if (acknowledged is null) continue;
-                Acknowledge(acknowledged);
+            }, text => history.Contains((offset, text)));
+            cursor.Restored.Add(projected);
+            if (matchSends) {
+                foreach (var text in projected.SubmittedInputs) {
+                    if (TakeSupersededEcho(text, offset)) continue;
+                    var acknowledged = Tracked.FirstOrDefault(q => !q.Acknowledged && q.Matches(text, _inputGeneration, offset));
+                    if (acknowledged is null) continue;
+                    Acknowledge(acknowledged);
+                }
             }
             foreach (var e in projected.Envelopes) {
                 switch (e.Kind) {
                     case AcpEventKind.UserMessage when e.ToolKind == ChatDisplayKind.Shell:
-                        _openGroup = null;
-                        _openShell = new ShellCommandItem(e.Text ?? "");
-                        fresh.Add(_openShell);
+                        cursor.OpenGroup = null;
+                        cursor.OpenShell = new ShellCommandItem(e.Text ?? "");
+                        cursor.Fresh.Add(cursor.OpenShell);
                         break;
                     case AcpEventKind.UserMessage:
-                        _openGroup = null;
-                        _openShell = null;
-                        fresh.Add(new UserTurnItem(e.Text ?? ""));
+                        cursor.OpenGroup = null;
+                        cursor.OpenShell = null;
+                        cursor.Fresh.Add(new UserTurnItem(e.Text ?? ""));
                         break;
                     case AcpEventKind.AssistantText:
-                        _openGroup = null;
-                        _openShell = null;
-                        fresh.Add(new AssistantTextItem(e.Text ?? ""));
+                        cursor.OpenGroup = null;
+                        cursor.OpenShell = null;
+                        cursor.Fresh.Add(new AssistantTextItem(e.Text ?? ""));
                         break;
                     case AcpEventKind.AssistantThinking when !string.IsNullOrWhiteSpace(e.Text):
-                        _openGroup = null;
-                        _openShell = null;
-                        fresh.Add(new AssistantThinkingItem(e.Text));
+                        cursor.OpenGroup = null;
+                        cursor.OpenShell = null;
+                        cursor.Fresh.Add(new AssistantThinkingItem(e.Text));
                         break;
-                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && _openShell is { HasOutput: false } shell:
-                        _openGroup = null;
+                    case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell && cursor.OpenShell is { HasOutput: false } shell:
+                        cursor.OpenGroup = null;
                         shell.Output = e.Text ?? "";
                         break;
                     case AcpEventKind.SystemNote when e.ToolKind == ChatDisplayKind.Shell:
-                        _openGroup = null;
-                        _openShell = null;
-                        fresh.Add(new ShellCommandItem("") { Output = e.Text ?? "" });
+                        cursor.OpenGroup = null;
+                        cursor.OpenShell = null;
+                        cursor.Fresh.Add(new ShellCommandItem("") { Output = e.Text ?? "" });
                         break;
                     case AcpEventKind.SystemNote:
-                        _openGroup = null;
-                        _openShell = null;
-                        fresh.Add(new SystemNoteItem(e.Text ?? "", e.ToolKind switch {
+                        cursor.OpenGroup = null;
+                        cursor.OpenShell = null;
+                        cursor.Fresh.Add(new SystemNoteItem(e.Text ?? "", e.ToolKind switch {
                             ChatDisplayKind.AgentReport  => SystemNoteItem.AgentReportLabel,
                             ChatDisplayKind.AgentMessage => SystemNoteItem.AgentMessageLabel,
                             _                            => SystemNoteItem.NoteLabel,
                         }));
                         break;
                     case AcpEventKind.ToolCall: {
-                        _openShell = null;
+                        cursor.OpenShell = null;
                         var name = e.ToolName ?? "tool";
                         var entry = KcapToolCatalogue.Match(name);
                         var isToolSearch = entry is null && KcapToolCatalogue.IsToolSearch(name);
@@ -1378,21 +1398,21 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                         var chip = foreignLabel is not null ? KcapToolCatalogue.ForeignServer(name) : null;
                         var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson, chip);
                         if (e.ToolCallId is { } id) {
-                            _pendingTools[id] = item;
-                            if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
+                            cursor.Pending[id] = item;
+                            if (name == ClaudeElicitation.ToolName) NoteQuestionCall(cursor, id, e.ToolInputJson);
                         }
-                        if (_openGroup is null) {
-                            _openGroup = new ToolGroupItem();
-                            fresh.Add(_openGroup);
+                        if (cursor.OpenGroup is null) {
+                            cursor.OpenGroup = new ToolGroupItem();
+                            cursor.Fresh.Add(cursor.OpenGroup);
                         }
-                        _openGroup.Add(item);
+                        cursor.OpenGroup.Add(item);
                         break;
                     }
                     case AcpEventKind.ToolResult:
                         if (e.ToolCallId is not { } resultId) break;
-                        _settledTools.Add(resultId);
-                        NoteQuestionResult(resultId, e.TimestampIso);
-                        if (_pendingTools.Remove(resultId, out var call)) {
+                        cursor.Settled.Add(resultId);
+                        NoteQuestionResult(cursor, resultId, e.TimestampIso);
+                        if (cursor.Pending.Remove(resultId, out var call)) {
                             if (!e.ToolIsError && call.CardKind != ToolCardKind.None
                                 && ToolCards.Build(call.CardKind, call.InputJson, e.ToolResult) is { } card)
                                 call.SetCard(card, CardOpener(card));
@@ -1402,9 +1422,35 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 }
             }
         }
-        _runs.ApplyAll(restored);
-        if (fresh.Count > 0) _items.AddRange(fresh);
+        return cursor;
+    }
+
+    void Finish(FeedRead read, LineCursor? cursor) {
+        if (cursor is not null) {
+            _openGroup = cursor.OpenGroup;
+            _openShell = cursor.OpenShell;
+            _pendingTools.Clear();
+            foreach (var (id, call) in cursor.Pending) _pendingTools.Add(id, call);
+            _settledTools.Clear();
+            _settledTools.UnionWith(cursor.Settled);
+            _questionAsks.Clear();
+            _questionAsks.AddRange(cursor.Questions);
+            _planActivity?.Apply(read.Lines.Select(line => line.Projection));
+            _runs.ApplyAll(cursor.Restored);
+            foreach (var projected in cursor.Restored)
+                foreach (var text in projected.SubmittedInputs)
+                    _history.Observe(AttachmentTrailer.Strip(text));
+            if (cursor.Fresh.Count > 0) _items.AddRange(cursor.Fresh);
+        }
+        Phase = ChatTabPhase.Reading;
         ApplyFeedRuns(read);
+        if (cursor is null) {
+            if (read.Status == FeedStatus.Reset) {
+                SyncPendingCardItems();
+                RefreshActivityNote();
+            }
+            return;
+        }
         RefreshQueue();
         Reconcile();
         SyncPendingCardItems();
@@ -1521,18 +1567,44 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         return latest is { SettledAt: { } settled } && request.RequestedAt <= settled;
     }
 
-    void NoteQuestionCall(string callId, string? inputJson) {
-        if (_questionAsks.Exists(a => a.CallId == callId)) return;
+    void NoteQuestionCall(LineCursor cursor, string callId, string? inputJson) {
+        if (cursor.Questions.Exists(a => a.CallId == callId)) return;
         if (PendingPermissionRequest.QuestionTexts(inputJson) is not { } texts) return;
         var ask = new AskedQuestion(callId, texts);
-        if (_settledTools.Contains(callId)) ask.SettledAt = _time.GetUtcNow();
-        _questionAsks.Add(ask);
+        if (cursor.Settled.Contains(callId)) ask.SettledAt = _time.GetUtcNow();
+        cursor.Questions.Add(ask);
     }
 
-    void NoteQuestionResult(string callId, string? timestampIso) {
-        var ask = _questionAsks.LastOrDefault(a => a.CallId == callId);
+    void NoteQuestionResult(LineCursor cursor, string callId, string? timestampIso) {
+        var ask = cursor.Questions.LastOrDefault(a => a.CallId == callId);
         if (ask is null || ask.SettledAt is not null) return;
         ask.SettledAt = Timestamp(timestampIso) ?? _time.GetUtcNow();
+    }
+
+    sealed class LineCursor {
+        public List<ChatItemViewModel> Fresh { get; } = [];
+        public List<ChatProjectionResult> Restored { get; } = [];
+        public ToolGroupItem? OpenGroup;
+        public ShellCommandItem? OpenShell;
+        public Dictionary<string, ToolCallItem> Pending { get; }
+        public HashSet<string> Settled { get; }
+        public List<AskedQuestion> Questions { get; }
+
+        LineCursor(ToolGroupItem? openGroup, ShellCommandItem? openShell,
+            Dictionary<string, ToolCallItem> pending, HashSet<string> settled, List<AskedQuestion> questions) {
+            OpenGroup = openGroup;
+            OpenShell = openShell;
+            Pending = pending;
+            Settled = settled;
+            Questions = questions;
+        }
+
+        public static LineCursor Copy(ChatTabViewModel tab) => new(
+            tab._openGroup,
+            tab._openShell,
+            new Dictionary<string, ToolCallItem>(tab._pendingTools, StringComparer.Ordinal),
+            new HashSet<string>(tab._settledTools, StringComparer.Ordinal),
+            new List<AskedQuestion>(tab._questionAsks));
     }
 
     static DateTimeOffset? Timestamp(string? iso) =>
