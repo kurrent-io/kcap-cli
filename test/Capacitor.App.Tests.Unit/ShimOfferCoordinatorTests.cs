@@ -317,8 +317,9 @@ public class ShimOfferCoordinatorTests {
 
     // ---- accept / decline outcomes ----
 
+    // The status lane is the launcher's warning banner, which a connected daemon never clears.
     [Test]
-    public async Task Accept_then_Installed_surfaces_a_success_status() {
+    public async Task Accept_then_Installed_posts_no_status_line() {
         using var h = new Harness(immediatePhaseClosed: true);
         var probeCalls = 0;
         h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(++probeCalls == 1 ? false : true);
@@ -326,8 +327,8 @@ public class ShimOfferCoordinatorTests {
         h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
-        await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the installed status line");
-        await Assert.That(h.Surface.StatusMessages[0]).Contains("PATH");
+        await WaitUntilAsync(() => h.OfferableValues.Count >= 3, what: "the installed outcome");
+        await Assert.That(h.Surface.StatusMessages).IsEmpty();
         await Assert.That(h.Store.State.ShimDenied).IsFalse();
     }
 
@@ -342,7 +343,7 @@ public class ShimOfferCoordinatorTests {
         h.Runner.Enqueue(new ProcessResult(0, "", "", false));
         h.Coordinator.Start();
 
-        await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the installed status line");
+        await WaitUntilAsync(() => h.OfferableValues.Count >= 3, what: "the installed outcome");
         await Assert.That(h.OfferableValues.Last()).IsFalse();
     }
 

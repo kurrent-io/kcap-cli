@@ -10,6 +10,7 @@ public sealed class PathFixViewModel : ReactiveObject {
     readonly string?           _target;
     readonly Func<bool>        _onLocalPath;
 
+    Task<bool>? _running;
     bool    _offerClaimed;
     bool    _fixed;
     string? _message;
@@ -38,8 +39,12 @@ public sealed class PathFixViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
-    /// Installs the terminal command and reports whether the login shell can now run it.
-    public async Task<bool> InstallAsync(CancellationToken ct = default) {
+    /// Installs the terminal command and reports whether the login shell can now run it. A call
+    /// while one is running joins it, so the admin prompt never shows twice.
+    public Task<bool> InstallAsync(CancellationToken ct = default) =>
+        _running is { IsCompleted: false } running ? running : _running = RunInstallAsync(ct);
+
+    async Task<bool> RunInstallAsync(CancellationToken ct) {
         if (Fixed) return true;
         if (_target is null) {
             Message = "This machine could not find its own kcap, so nothing changed.";

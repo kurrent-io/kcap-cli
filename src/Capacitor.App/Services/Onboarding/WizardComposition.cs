@@ -233,9 +233,12 @@ internal static class WizardComposition {
         signIn.WhenAnyValue(x => x.Satisfied)
             .Where(satisfied => satisfied)
             .Subscribe(signedIn => _ = daemon.EnsureAsync(options.ShutdownToken));
-        // Only the settled outcome counts: a progress line is not an installed server.
+        // Only the settled outcome counts: a progress line is not an installed server. The terminal
+        // command is part of a local install, harnesses or not; the harness step joins this run.
         void OnInstallSettled(LocalInstallOutcome outcome) {
-            if (outcome is LocalInstallOutcome.Installed) _ = daemon.EnsureAsync(options.ShutdownToken);
+            if (outcome is not LocalInstallOutcome.Installed) return;
+            _ = daemon.EnsureAsync(options.ShutdownToken);
+            _ = pathFix?.InstallAsync(options.ShutdownToken);
         }
         install.Settled += OnInstallSettled;
         if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);

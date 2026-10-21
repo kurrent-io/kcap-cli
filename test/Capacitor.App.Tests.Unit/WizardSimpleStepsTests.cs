@@ -99,6 +99,38 @@ public class WizardSimpleStepsTests {
         public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(result);
     }
 
+    sealed class GatedInstaller : ICliPathInstaller {
+        public readonly TaskCompletionSource<ShimResult> Result = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Calls;
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) {
+            Calls++;
+            return Result.Task;
+        }
+    }
+
+    /// The local install starts the link in the background; the harness step's Next joins it
+    /// rather than raising a second admin prompt.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_second_install_while_one_runs_joins_it() {
+        var (calls, first, second) = await AvaloniaSession.DispatchAsync(async () => {
+            var installer = new GatedInstaller();
+            var vm = new PathFixViewModel(installer, new FakeAppStateStore(), "/x");
+
+            var background = vm.InstallAsync();
+            var next       = vm.InstallAsync();
+            installer.Result.SetResult(new ShimResult(ShimOutcome.Installed, null, null));
+
+            return (installer.Calls, await background, await next);
+        });
+
+        await Assert.That(calls).IsEqualTo(1);
+        await Assert.That(first).IsTrue();
+        await Assert.That(second).IsTrue();
+    }
+
     static readonly ShimResult[] UnfinishedShims = [
         new(ShimOutcome.InstalledButNotOnPath, null, null),
         new(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null),
