@@ -171,4 +171,32 @@ public class LocalPermissionBridgeJudgeTests {
 
         await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsFalse();
     }
+
+    /// The hook denies a permission request the bridge rejects unread, so the ledger can no longer
+    /// claim it saw every refusal. The card-deny test above is the control: the same session is complete.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeJudgeTests))]
+    [Arguments("oversized")]
+    [Arguments("malformed")]
+    [Arguments("null")]
+    [Arguments("no_session")]
+    public async Task A_permission_request_the_bridge_rejects_unread_leaves_refusals_incomplete(string body) {
+        await using var h = new Harness();
+        h.Answer("uncertain");
+        await h.StartAsync();
+
+        var raw = body switch {
+            "oversized"  => new string('x', LocalPermissionBridge.MaxPermissionRequestBodyBytes + 1),
+            "malformed"  => "{",
+            "null"       => "null",
+            _            => """{"tool_name":"Bash","tool_input":{"command":"git push"}}""",
+        };
+        var rejected = await h.Client.PostAsync($"{h.Bridge.BaseUrl}/claude/permission-request", new StringContent(raw));
+        await Assert.That(rejected.IsSuccessStatusCode).IsFalse();
+
+        var call = h.PostAsync("git push", "toolu_1");
+        h.Broker.TrySettle((await h.WaitPendingAsync()).RequestId, new PermissionDecision("allow", null, null), "allow", "app");
+        await call;
+
+        await Assert.That(h.JudgeRequestFor("toolu_1").GetProperty("refusals").GetProperty("complete").GetBoolean()).IsFalse();
+    }
 }

@@ -417,6 +417,9 @@ internal sealed partial class LocalPermissionBridge(
     }
 
     async Task HandleAsync(HttpListenerContext context, CancellationToken ct) {
+        // The hook denies any permission request the bridge does not answer, unseen by the ledger.
+        var permissionRequest = false;
+
         try {
             // This capability is deliberately routed before the permission-request parser. It has
             // one exact method/path, accepts no query or caller-selected path, and exists only on a
@@ -475,8 +478,7 @@ internal sealed partial class LocalPermissionBridge(
 
                         var submitBody = await ReadCappedBodyAsync(context.Request.InputStream, MaxSubmitBodyBytes, ct);
                         if (submitBody is null) {
-                            _refusals.MarkAllIncomplete();
-                context.Response.StatusCode = 413;
+                            context.Response.StatusCode = 413;
                             context.Response.Close();
 
                             return;
@@ -566,6 +568,8 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
+            permissionRequest = true;
+
             // Not bound to ct: a handler admitted before shutdown must still reach its own claim
             // below, so this reads under its own bounded RequestReadTimeout instead. Capped at
             // MaxPermissionRequestBodyBytes so an unbounded read from the local hook can't exhaust
@@ -574,8 +578,7 @@ internal sealed partial class LocalPermissionBridge(
             var       body    = await ReadCappedBodyAsync(context.Request.InputStream, MaxPermissionRequestBodyBytes, readCts.Token);
 
             if (body is null) {
-                context.Response.StatusCode = 413;
-                context.Response.Close();
+                RejectPermissionRequest(413);
 
                 return;
             }
@@ -588,15 +591,13 @@ internal sealed partial class LocalPermissionBridge(
                 // Malformed JSON from the local hook caller — that's a 400 (caller error),
                 // not a 500 (daemon failure). Without this branch the outer Exception catch
                 // would mislabel client-side parse errors as server faults.
-                context.Response.StatusCode = 400;
-                context.Response.Close();
+                RejectPermissionRequest(400);
 
                 return;
             }
 
             if (node is null) {
-                context.Response.StatusCode = 400;
-                context.Response.Close();
+                RejectPermissionRequest(400);
 
                 return;
             }
@@ -607,8 +608,7 @@ internal sealed partial class LocalPermissionBridge(
             var sessionId = node["session_id"]?.GetValue<string>()?.Replace("-", "");
 
             if (string.IsNullOrWhiteSpace(sessionId)) {
-                context.Response.StatusCode = 400;
-                context.Response.Close();
+                RejectPermissionRequest(400);
 
                 return;
             }
@@ -628,8 +628,7 @@ internal sealed partial class LocalPermissionBridge(
 
                 // Unattended participant: a well-formed tool name is required to classify.
                 if (string.IsNullOrWhiteSpace(toolName)) {
-                    context.Response.StatusCode = 400;
-                    context.Response.Close();
+                    RejectPermissionRequest(400);
 
                     return;
                 }
@@ -742,8 +741,7 @@ internal sealed partial class LocalPermissionBridge(
             await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
         } catch (Exception ex) {
             LogBridgeHandlerError(logger, ex);
-            // The hook denies what the bridge could not answer, and the session may not be known here.
-            _refusals.MarkAllIncomplete();
+            if (permissionRequest) _refusals.MarkAllIncomplete();
 
             try {
                 context.Response.StatusCode = 500;
@@ -751,6 +749,13 @@ internal sealed partial class LocalPermissionBridge(
             } catch {
                 /* response already closed */
             }
+        }
+
+        // Which session was refused is unknown here, so every session loses its complete mark.
+        void RejectPermissionRequest(int status) {
+            _refusals.MarkAllIncomplete();
+            context.Response.StatusCode = status;
+            context.Response.Close();
         }
     }
 
