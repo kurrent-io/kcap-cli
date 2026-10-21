@@ -1,6 +1,9 @@
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Svg.Skia;
+using Svg;
+using Svg.Model;
+using SvgImage = Avalonia.Svg.Skia.SvgImage;
 
 namespace Capacitor.App.Services;
 
@@ -40,7 +43,10 @@ internal sealed class ToolPreviewImages : IDisposable {
                 using var buffer = ReadBounded(stream);
                 if (buffer is null || buffer.Length == 0) return null;
                 object? source = path.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)
-                    ? SvgSource.LoadFromStream(buffer, null)
+                    ? SvgSource.LoadFromStream(buffer, new SvgParameters(null, null, LoadOptions: new SvgDocumentLoadOptions {
+                        ProcessingMode = SvgProcessingMode.SecureStatic,
+                        ExternalResources = SvgExternalResourcePolicy.SameDocumentAndDataOnly,
+                    }))
                     : Bitmap.DecodeToWidth(buffer, 960);
                 if (source is null) return null;
                 if (Cache.Count >= MaxEntries) {
