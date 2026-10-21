@@ -2702,7 +2702,7 @@ sealed class SetupCommand(
                 new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress, deferral.Token);
 
             // The app's wizard links to the dashboard before it reports anything itself.
-            await PingCliSetupAsync(committed.ServerUrl, profile: "", AuthProvider.None);
+            await PingCliSetupAsync(committed.ServerUrl, profile: "", AuthProvider.None, deferral.Token);
 
             return 0;
         } catch (Exception ex) {
@@ -2922,11 +2922,9 @@ sealed class SetupCommand(
         return Directory.Exists(repoPlugin) ? repoPlugin : null;
     }
 
-    // Best-effort signal that this user finished setup; every failure is swallowed, because the
-    // dashboard's install nudge is not part of what `kcap setup` promises. The lane cannot refresh
-    // (a refresh honours no CancellationToken), and the 5s WhenAny bounds the wall clock whatever
-    // HttpClient does internally. KCAP_DEBUG prints the outcome on stderr.
-    async Task PingCliSetupAsync(string serverUrl, string profile, string provider) {
+    // Best-effort: a failure must not fail setup. The lane cannot refresh, because a refresh honours
+    // no CancellationToken, and the 5s WhenAny bounds the wait whatever HttpClient does internally.
+    async Task PingCliSetupAsync(string serverUrl, string profile, string provider, CancellationToken ct = default) {
         var  debug = Environment.GetEnvironmentVariable("KCAP_DEBUG") is { Length: > 0 };
         void Debug(string message) {
             if (debug) Console.Error.WriteLine($"[kcap] cli-setup ping: {message}");
@@ -2936,9 +2934,10 @@ sealed class SetupCommand(
             HttpClient client;
 
             // A no-auth server records the report against its local user. Any token in the profile
-            // belongs to whatever server it pointed at before, so it is never sent there.
+            // belongs to whatever server it pointed at before, so it is never sent there. A loopback
+            // server takes the proxy-free lane: an ambient proxy cannot reach this machine's server.
             if (provider == AuthProvider.None) {
-                client = http.Anonymous();
+                client = Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri) && uri.IsLoopback ? http.Loopback() : http.Anonymous();
             } else {
                 var tokens = await store.LoadAsync(profile);
                 if (tokens is null || tokens.IsExpiredAt(time.GetUtcNow())) {
@@ -2966,8 +2965,8 @@ sealed class SetupCommand(
                 System.Text.Encoding.UTF8,
                 "application/json");
 
-            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload);
-            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time));
+            var pingTask = client.PostAsync(CliSetupReport.Url(serverUrl), payload, ct);
+            var winner   = await Task.WhenAny(pingTask, Task.Delay(TimeSpan.FromSeconds(5), time, ct));
 
             if (winner == pingTask) {
                 // Observe the result so any exception is consumed by the outer

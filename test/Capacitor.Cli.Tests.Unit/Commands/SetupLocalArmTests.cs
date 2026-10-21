@@ -170,14 +170,15 @@ internal sealed class SetupLocalArmTests : IDisposable {
     public async Task Committed_install_reports_cli_setup_without_a_bearer(bool wholeRun) {
         string? authorization = null;
         Server.Override = path => path == "/api/users/me/cli-setup" ? new(System.Net.HttpStatusCode.NoContent) : null;
-        Server.OnRequestMessage = request => authorization ??= request.Headers.Authorization?.ToString() ?? "";
+        Server.OnCliSetupReport = request => authorization ??= request.Headers.Authorization?.ToString() ?? "";
 
         string[] args = wholeRun
             ? ["setup", "--local", "--json", "--no-prompt", "--single-user", "--yes", "--skip-import", .. SetupCommandTests.SkipAllAgentInstallFlags]
             : ["setup", "--local", "--json", "--single-user", "--yes"];
 
-        var (_, _, _, stderr) = await Run(args);
+        var (exit, _, _, stderr) = await Run(args);
 
+        await Assert.That(exit).IsEqualTo(wholeRun ? SetupExit.Done : 0).Because(stderr);
         await Assert.That(_log).Contains("POST /api/users/me/cli-setup").Because(stderr);
         await Assert.That(authorization).IsEqualTo("");
     }
