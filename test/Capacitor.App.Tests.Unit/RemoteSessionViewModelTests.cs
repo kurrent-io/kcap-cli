@@ -399,6 +399,26 @@ public class RemoteSessionViewModelTests {
             h.Directory.Rows.Remove("remote:a2");
 
             await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.AccessNote).IsEqualTo("The agent ended before its session started");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A row that loses its session id, as a daemon re-registering does for a moment, keeps the
+    /// session's rows in the chat, so the chat is not shown under the note as if before a session.
+    [Test]
+    public async Task A_row_that_loses_its_session_id_hides_the_chat_it_had() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row(vendor: "claude");
+            var vm = h.Build(row);
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = null });
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.NoSession, what: "no session");
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
             await vm.TeardownAsync();
         });
     }

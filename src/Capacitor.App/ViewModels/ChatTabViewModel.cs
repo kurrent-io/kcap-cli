@@ -226,9 +226,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
     }
 
-    /// A working agent's chat is never empty for long, so an empty one is still waiting, read or not.
+    /// A working agent's chat is never empty for long, so an empty one is still waiting, read or not,
+    /// until the session ends.
     public string PhaseNote => _items.Count > 0 ? "" : Phase switch {
-        ChatTabPhase.Waiting or ChatTabPhase.Reading => "Waiting for chat…",
+        ChatTabPhase.Waiting                => "Waiting for chat…",
+        ChatTabPhase.Reading when !_ended   => "Waiting for chat…",
         ChatTabPhase.Missing     => _missingNote ?? "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
         ChatTabPhase.Failed      => FailureNote(_failureNote),
@@ -913,7 +915,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         _interruption = info.Interruption;
         if (_ended != info.Ended) {
             _ended = info.Ended;
-            this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+            RaisePhaseNote();
         }
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)

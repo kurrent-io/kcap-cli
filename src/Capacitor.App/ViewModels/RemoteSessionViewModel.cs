@@ -43,6 +43,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly BehaviorSubject<SessionAccessState> _accessStates = new(SessionAccessState.Unavailable);
     bool _workAccessDenied;
     string? _leasedSession;
+    /// The chat keeps a session's rows when the row loses its session id, so only an agent that never
+    /// had one shows its chat before a session.
+    bool _hadSession;
     AgentRow _row;
 
     public string AgentId { get; }
@@ -138,6 +141,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             if (_sessionEnded == value) return;
             this.RaiseAndSetIfChanged(ref _sessionEnded, value);
+            this.RaisePropertyChanged(nameof(AccessNote));
             _sessionEndedChanges.OnNext(value);
         }
     }
@@ -188,7 +192,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Access is RemoteSessionAccess.Ready or RemoteSessionAccess.Offline && !OriginChangedToLocal;
 
     public bool ShowsChatPane =>
-        (ShowsPanes || Access == RemoteSessionAccess.NoSession && !OriginChangedToLocal) && IsChatActive && Subagent is null;
+        (ShowsPanes || Access == RemoteSessionAccess.NoSession && !_hadSession && !OriginChangedToLocal) && IsChatActive && Subagent is null;
     public bool ShowsSubagentPane => ShowsPanes && IsChatActive && Subagent is not null;
 
     SubagentPaneViewModel? _subagent;
@@ -230,7 +234,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
-        RemoteSessionAccess.NoSession => "Waiting for the session to start",
+        RemoteSessionAccess.NoSession => SessionEnded ? "The agent ended before its session started" : "Waiting for the session to start",
         _ => "",
     };
 
@@ -393,6 +397,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         _seenLive = true;
 
         var sessionId = row.SessionId;
+        _hadSession |= sessionId is not null;
         if (sessionId != _leasedSession) {
             Release();
             if (sessionId is null) Access = RemoteSessionAccess.NoSession;
