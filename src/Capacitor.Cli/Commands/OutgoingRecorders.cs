@@ -40,7 +40,10 @@ sealed class OutgoingRecorders(
             var services = ServiceManagerFactory.ForCurrentOs(config, home, time);
 
             foreach (var id in services.ListInstalled()) {
+                var ended = await ServiceRemoval.EndAgentsAsync(store, id, time);
+
                 if (services.Uninstall(id, out var error)) {
+                    if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time);
                     await Console.Out.WriteLineAsync($"  • Removed daemon service '{id}' ({services.Describe()})");
                 } else {
                     await Console.Error.WriteLineAsync($"  • Could not remove daemon service '{id}': {error}");

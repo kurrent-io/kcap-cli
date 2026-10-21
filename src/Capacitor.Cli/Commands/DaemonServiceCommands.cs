@@ -521,7 +521,7 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        var ended = await EndAgentsBeforeRemovalAsync(id);
+        var ended = await ServiceRemoval.EndAgentsAsync(store, id, time);
 
         if (!manager.Uninstall(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not uninstall service '{id}': {error}");
@@ -532,18 +532,6 @@ sealed class DaemonServiceCommands(
 
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
-    }
-
-    /// <summary>Asks a running daemon whose unit is being removed for good to end its agents and exit: the
-    /// bootout alone reaches it as SIGTERM, which keeps them for a successor that never starts. One that
-    /// does not answer is left to the bootout. False when the daemon was running and did not exit: its
-    /// ledger still names agents a later start would resume.</summary>
-    async Task<bool> EndAgentsBeforeRemovalAsync(string serviceId) {
-        if (DaemonPidProbe.ValidatedPid(store, serviceId) is null) return true;
-
-        return await DaemonShutdownClient.StopAndWaitAsync(
-                store, serviceId, new ShutdownRequestDto("end", "final"), DaemonCommands.StopExitWait, time, CancellationToken.None)
-            || DaemonPidProbe.ValidatedPid(store, serviceId) is null;
     }
 
     /// <summary>
@@ -571,7 +559,7 @@ sealed class DaemonServiceCommands(
                     // An install holding the lock may have repointed the unit at another copy of kcap.
                     continue;
                 } else {
-                    var ended = await EndAgentsBeforeRemovalAsync(unit);
+                    var ended = await ServiceRemoval.EndAgentsAsync(store, unit, time);
 
                     if (!manager.Uninstall(unit, out var error)) {
                         await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
