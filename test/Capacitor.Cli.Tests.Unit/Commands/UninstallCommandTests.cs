@@ -12,6 +12,7 @@ using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
+using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.LocalEdition;
 using Capacitor.Cli.Tests.Unit.LocalEdition.Fakes;
 using TUnit.Core.Enums;
@@ -653,7 +654,71 @@ public class UninstallCommandTests {
         return account;
     }
 
-    UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null) {
+    [Test]
+    [NotInParallel]
+    public async Task Uninstall_removes_its_own_link() {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var (links, link, binary) = LinkFixture(fixture);
+        using var output          = ConsoleOutput.StartCapture();
+
+        var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(new FileInfo(link).LinkTarget).IsNull();
+        await Assert.That(File.Exists(binary)).IsTrue();
+        await Assert.That(output.GetCapturedOutput()).Contains($"Remove the kcap command link at {link}");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Keep_path_links_leaves_it() {
+        await using var fixture = await Fixture.CreateAsync();
+
+        var (links, link, _) = LinkFixture(fixture);
+
+        var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config", "--keep-path-links"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(new FileInfo(link).LinkTarget).IsNotNull();
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task A_link_it_cannot_remove_fails_the_uninstall_with_a_sudo_hint() {
+        if (OperatingSystem.IsWindows()) return;
+
+        await using var fixture = await Fixture.CreateAsync();
+
+        var (links, link, _) = LinkFixture(fixture);
+        var folder           = Path.GetDirectoryName(link)!;
+        File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        try {
+            using var errors = ConsoleOutput.StartErrorCapture();
+
+            var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+            await Assert.That(exit).IsEqualTo(1);
+            await Assert.That(errors.GetCapturedError()).Contains($"sudo rm '{link}'");
+        } finally {
+            File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    static (KcapLinkRemover Links, string Link, string Binary) LinkFixture(Fixture f) {
+        f.Temp.CreateFile("kcap-bin", "x");
+        f.Temp.CreateDir("link-bin");
+
+        var binary = f.Temp.PathTo("kcap-bin");
+        var folder = f.Temp.PathTo("link-bin");
+        var link   = Path.Combine(folder, "kcap");
+        File.CreateSymbolicLink(link, binary);
+
+        return (new KcapLinkRemover([folder], binary), link, binary);
+    }
+
+    UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null) {
         var userHome = home ?? f.UserHome;
         var profiles = Resolutions.None(f.Root);
         var daemons  = store ?? Daemons.Store;
@@ -664,7 +729,8 @@ public class UninstallCommandTests {
             daemons, f.Root, userHome, harness, TestBinaries.None, new AgentsPaths(userHome),
             new WorkingDirectory(workdir ?? AppContext.BaseDirectory),
             recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System),
-            stacks ?? new EmptyStackFactory(userHome, f.Root));
+            stacks ?? new EmptyStackFactory(userHome, f.Root),
+            links ?? new KcapLinkRemover([], ""));
     }
 
     sealed class EmptyStackFactory(UserHome home, ConfigRoot config) : ILocalStackFactory {

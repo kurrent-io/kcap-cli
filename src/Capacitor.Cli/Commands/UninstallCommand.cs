@@ -36,13 +36,15 @@ namespace Capacitor.Cli.Commands;
 /// </summary>
 sealed class UninstallCommand(
         DaemonStore store, ConfigRoot config, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries,
-        AgentsPaths agents, WorkingDirectory workdir, IOutgoingRecorders recorders, ILocalStackFactory stacks) {
+        AgentsPaths agents, WorkingDirectory workdir, IOutgoingRecorders recorders, ILocalStackFactory stacks,
+        KcapLinkRemover links) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
         var includeProject = args.Contains("--project");
         var force          = args.Contains("--force");
         var purgeLocal     = args.Contains("--purge-local");
+        var keepPathLinks  = args.Contains("--keep-path-links");
 
         string? projectRoot = null;
 
@@ -134,6 +136,11 @@ sealed class UninstallCommand(
         await Console.Out.WriteLineAsync($"  • Remove the kcap plugin from {harnesses.Of<AntigravityHarness>().Paths.PluginDir}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MuseHarness>().Paths.SettingsJson}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {agents.UserSkillsDir}");
+
+        var pathLinks = !keepPathLinks && !OperatingSystem.IsWindows() ? links.Find() : [];
+
+        foreach (var link in pathLinks)
+            await Console.Out.WriteLineAsync($"  • Remove the kcap command link at {link}");
 
         if (projectRoot is not null) {
             await Console.Out.WriteLineAsync(
@@ -241,6 +248,14 @@ sealed class UninstallCommand(
         // Same for legacy ~/.codex/skills/.
         if (!SweepCapacitorPrefixedDirs(agents.UserSkillsDir))            hadFailures = true;
         if (!SweepCapacitorPrefixedDirs(harnesses.Of<CodexHarness>().Paths.SkillsDir)) hadFailures = true;
+
+        if (pathLinks.Count > 0) {
+            foreach (var failure in links.Remove()) {
+                await Console.Error.WriteLineAsync($"Could not remove {failure.Path}: {failure.Reason}");
+                await Console.Error.WriteLineAsync($"Remove it yourself: sudo rm {ShellQuote(failure.Path)}");
+                hadFailures = true;
+            }
+        }
 
         if (projectRoot is not null) {
             var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");
@@ -359,6 +374,8 @@ sealed class UninstallCommand(
 
         return true;
     }
+
+    static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
     static bool PathsEqual(string a, string b) =>
         string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
