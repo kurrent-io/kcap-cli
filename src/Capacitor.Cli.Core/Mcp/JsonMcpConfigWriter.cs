@@ -33,10 +33,9 @@ public static class JsonMcpConfigWriter {
                 if (block[s.Name] is JsonNode existing) {
                     var owned     = marker.Owns(configPath, s.Name, existing);
                     var identical = JsonNode.DeepEquals(existing, rendered);
-                    // An unowned entry is adopted only when it is something this writer could have
-                    // written: the marker can be lost, predate the entry, or hold a fingerprint that a
-                    // re-pointed command no longer matches, and the harness then keeps spawning a
-                    // binary that is gone. Anything else under kcap's name is the user's.
+                    // An entry the marker does not vouch for is adopted only when it is a kcap registration
+                    // at another kcap command, or the harness would go on spawning a binary that is gone.
+                    // Anything else under kcap's name is the user's.
                     if (!owned && !identical && !IsKcapRegistration(existing, rendered, s, shape)) continue;
 
                     written.Add(new(s.Name, rendered));
@@ -105,10 +104,12 @@ public static class JsonMcpConfigWriter {
 
     /// <summary>Whether <paramref name="existing"/> differs from <paramref name="rendered"/> only by a kcap
     /// command and by the args: the server's own, stamped or not. Every other key must be one this shape
-    /// writes, with the value it writes, so a disabled server, an added env or a pinned cwd stays.</summary>
+    /// writes, with the value it writes, so a disabled server, an added env or a pinned cwd stays. An
+    /// entry without the <c>trust</c> kcap writes is one the user made ask again.</summary>
     static bool IsKcapRegistration(JsonNode existing, JsonObject rendered, KcapMcpServer s, McpConfigShape shape) {
         if (existing is not JsonObject entry || entry["command"] is null) return false;
         if (!shape.CommandAsArgvArray && entry["args"] is null) return false;
+        if (rendered.ContainsKey("trust") && !entry.ContainsKey("trust")) return false;
 
         foreach (var (key, value) in entry) {
             if (!rendered.ContainsKey(key)) return false;

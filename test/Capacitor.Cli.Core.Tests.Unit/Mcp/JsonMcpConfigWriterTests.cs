@@ -328,10 +328,8 @@ public class JsonMcpConfigWriterTests {
     static string CommandOf(string path, string name) =>
         (string)((JsonObject)((JsonObject)JsonNode.Parse(File.ReadAllText(path))!["mcpServers"]!)[name]!)["command"]!;
 
-    /// <summary>An entry kcap's marker does not vouch for — written before ownership was recorded, or
-    /// edited since — is still rewritten when it is exactly a kcap registration at another command: the
-    /// harness otherwise keeps spawning a binary that is gone. Afterwards kcap owns it, so uninstall
-    /// removes it.</summary>
+    /// <summary>An entry the marker does not vouch for is rewritten when it is exactly a kcap registration
+    /// at another kcap command, and kcap then owns it, so uninstall removes it.</summary>
     [Test]
     [Arguments("""{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}""", "kcap-workitems")]
     [Arguments("""{"command":"kcap","args":["mcp","review"]}""", "kcap-review")]
@@ -352,8 +350,7 @@ public class JsonMcpConfigWriterTests {
         await Assert.That(marker.Owned(path)).Contains(name);
     }
 
-    /// <summary>The fingerprint kcap recorded no longer matches because something else re-pointed the
-    /// command, so ownership alone would leave the entry stale forever.</summary>
+    /// <summary>A recorded entry whose command no longer matches its fingerprint is rewritten too.</summary>
     [Test]
     public async Task Register_rewrites_a_recorded_entry_whose_command_was_repointed_elsewhere() {
         using var tmp = new TempDir();
@@ -361,11 +358,26 @@ public class JsonMcpConfigWriterTests {
         var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
         var one    = KcapMcpServers.All.Where(s => s.Name == "kcap-workitems").ToArray();
         JsonMcpConfigWriter.Register(path, one, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/dev/build/kcap");
-        File.WriteAllText(path, """{"mcpServers":{"kcap-workitems":{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}}}""");
+        tmp.CreateFile("mcp.json", """{"mcpServers":{"kcap-workitems":{"command":"/opt/homebrew/bin/kcap","args":["mcp","workitems"]}}}""");
 
         JsonMcpConfigWriter.Register(path, one, McpConfigShape.Standard, null, marker, resolveBinaryPath: () => "/new/kcap");
 
         await Assert.That(CommandOf(path, "kcap-workitems")).IsEqualTo("/new/kcap");
+    }
+
+    /// <summary>A Gemini entry whose <c>trust</c> was removed asks before each tool call again; kcap must
+    /// not put the bypass back.</summary>
+    [Test]
+    public async Task Register_leaves_a_gemini_entry_whose_trust_was_removed() {
+        using var tmp = new TempDir();
+        var path   = tmp.CreateFile("settings.json", """{"mcpServers":{"kcap-review":{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"]}}}""");
+        var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Gemini, null, marker, resolveBinaryPath: () => "/new/kcap");
+
+        var entry = (JsonObject)((JsonObject)JsonNode.Parse(File.ReadAllText(path))!["mcpServers"]!)["kcap-review"]!;
+        await Assert.That(entry.ContainsKey("trust")).IsFalse();
+        await Assert.That((string)entry["command"]!).IsEqualTo("/opt/homebrew/bin/kcap");
     }
 
     /// <summary>Anything beyond the command and args differing from what kcap writes is the user's
