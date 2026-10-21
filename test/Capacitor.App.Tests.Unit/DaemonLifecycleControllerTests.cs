@@ -1697,7 +1697,8 @@ public class DaemonLifecycleControllerTests {
     }
 
     /// The command offered by hand names the daemon by its service id and the profile as the named shell
-    /// reads it, and asks for the verified replace only where the platform supports it.
+    /// reads it, and asks for the verified replace only where the platform supports it. An app under a server
+    /// override has no profile, so the daemon must be given one that resolves the override's server.
     [Test]
     [Arguments("daemon-a", "default", false, true,
         "`kcap daemon service install --replace --verify --name daemon-a --profile default` in a shell ")]
@@ -1707,7 +1708,9 @@ public class DaemonLifecycleControllerTests {
         "`kcap daemon service install --replace --verify --name 'my laptop' --profile 'it''s mine'` in PowerShell ")]
     [Arguments("laptop", "it\u2019s", true, false,
         "`kcap daemon service uninstall --name laptop`, then `kcap daemon service install --name laptop --profile 'it\u2019\u2019s'` in PowerShell ")]
-    public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string profile, bool windows, bool verified, string expected) =>
+    [Arguments("laptop", null, false, true,
+        "--profile <profile>`, with <profile> replaced by a profile for the server this app uses, in a shell ")]
+    public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string? profile, bool windows, bool verified, string expected) =>
         await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).Contains(expected);
 
     /// A configured name the socket reduces to the daemon's own is the same daemon, and two servers on one host

@@ -55,7 +55,7 @@ internal static class AttachedIdentity {
         var commands  = verifiedReplace
             ? $"`kcap daemon service install --replace --verify {target}`"
             : $"`kcap daemon service uninstall --name {serviceId}`, then `kcap daemon service install {target}`";
-        var placeholder = profile is null ? ", with <profile> replaced by the profile this app should use," : "";
+        var placeholder = profile is null ? ", with <profile> replaced by a profile for the server this app uses," : "";
         return $"To fix it, run {commands}{placeholder} in {(windows ? "PowerShell" : "a shell")} where KCAP_URL is unset, then restart the app.";
     }
 
