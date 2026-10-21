@@ -98,6 +98,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
 
+    /// The daemon detects harnesses once at startup, so installing one takes a daemon restart.
+    internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
+        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent, then restart the daemon."
+        : $"No coding agents were found on {remoteMachine}. Install one there, then restart its daemon.";
+
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
     const string IncompatibleReason = "daemon_incompatible";
@@ -499,11 +504,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // local, the selected remote machine's advertised vendors otherwise — SelectMachineAsync's
         // rule). ObserveOn BEFORE ToProperty: Snapshots is pushed from the daemon client's own
         // background thread (MainWindowViewModel's identical comment).
-        _harnesses = daemon.Snapshots
+        var harnessOptions = daemon.Snapshots
             .Select(s => s.Daemon.SupportedVendors)
             .StartWith((string[]?)null)
             .CombineLatest(_remoteVendorOverride, _machineSelectionChanges,
-                (localVendors, remoteVendors, sel) => HostedHarnessCatalog.Build(sel.Remote ? remoteVendors : localVendors))
+                (localVendors, remoteVendors, sel) => HostedHarnessCatalog.Build(sel.Remote ? remoteVendors : localVendors));
+        var noHarnesses = harnessOptions.Select(options => !options.Any(o => o.Available)).DistinctUntilChanged();
+        _harnesses = harnessOptions
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.Harnesses, HostedHarnessCatalog.Build(null))
             .DisposeWith(_disposables);
@@ -634,7 +641,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .CombineLatest(
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
-                (ready, attachable, uploading) => ready && attachable && !uploading);
+                noHarnesses,
+                (ready, attachable, uploading, none) => ready && attachable && !uploading && !none);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -673,7 +681,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
             .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
-                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null))
+            .CombineLatest(noHarnesses, _machineSelectionChanges,
+                (notice, none, sel) => notice ?? (none ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
