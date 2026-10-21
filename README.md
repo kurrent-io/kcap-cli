@@ -2653,9 +2653,12 @@ To remove kcap from this machine, run:
 ```bash
 kcap uninstall                  # interactive, user-scope removal
 kcap uninstall --yes            # non-interactive
+kcap uninstall --yes --purge-local  # non-interactive, deleting a local server's sessions
 kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
+
+When a local server is installed (`kcap setup --local`), `uninstall` removes it first, as `kcap local uninstall --purge` does: its service, binaries, data and logs go, with every session it recorded. The prompt names the server and the deletion; `--yes` alone is not consent to it, so a non-interactive run refuses unless you pass `--purge-local` (or `--keep-config`, which removes the server but keeps its data). If the local server cannot be removed, or its registry cannot be read, `~/.config/kcap/` is kept and the uninstall reported incomplete, so a re-run can finish.
 
 `uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), removes the `kcap` git hook from `~/.gitconfig`, and deletes `~/.config/kcap/`. Every registered vendor account (see `kcap accounts`) is unwired too, and the account registry (`~/.config/kcap/accounts/`) and the daemon state directory (`~/.config/kcap/daemons/`, which `KCAP_CONFIG_DIR` never moves; kept whole while a daemon or daemon command still holds one of its locks, and left alone when `KCAP_DAEMONS_DIR` moved it or it is a link) are deleted last, only when no step failed — neither `--keep-config` nor `--project` spares them. A registry kcap could not read or lock is kept and the uninstall reported incomplete, since it is the only record of which accounts still record; check them with `kcap accounts`, then re-run `kcap uninstall`.
 

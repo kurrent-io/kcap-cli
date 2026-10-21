@@ -674,6 +674,132 @@ public class UninstallCommandTests {
         public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");
     }
 
+    sealed class StackFactory(Func<LocalStack> create) : ILocalStackFactory {
+        public LocalStack Create() => create();
+
+        public LocalBundleStager Stager() => throw new InvalidOperationException("The command reached the bundles.");
+    }
+
+    const string LocalUrl = "http://localhost:9473";
+
+    sealed record LocalServer(LocalRoot Root, FakeLocalServerService Service, List<string> Log, ILocalStackFactory Stacks, FakeOutgoingRecorders Recorders) {
+        public string Dir(string name) => Path.Combine(Root.Directory, name);
+
+        public LocalServerUnit Unit => LocalServerUnit.ForInstallation(Root, 9473);
+    }
+
+    static LocalServer InstallLocalServer(Fixture f) {
+        var log     = new List<string>();
+        var root    = LocalRoot.Resolve(null, f.UserHome);
+        var service = new FakeLocalServerService(log, f.UserHome);
+
+        root.EnsureCreated();
+        LocalStateFiles.PublishRegistry(root, InstallRegistry.Empty.WithActive(new("0123456789abcdef0123456789abcdef", 9473, LocalUrl, "1.2.3")));
+        service.Install(LocalServerUnit.ForInstallation(root, 9473));
+        Directory.CreateDirectory(Path.Combine(root.Directory, "data"));
+
+        var watchers = f.Temp.PathTo("watchers");
+        var stacks   = new StackFactory(() => new(root, f.UserHome, service, new HttpClient(), TimeProvider.System, new FakeOutgoingRecorders(log, watchers), f.Root));
+
+        return new(root, service, log, stacks, new FakeOutgoingRecorders(log, watchers));
+    }
+
+    async Task<(int Exit, string Out, string Err)> UninstallWithLocalAsync(Fixture f, LocalServer local, params string[] args) {
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await NewCommand(f, recorders: local.Recorders, stacks: local.Stacks).HandleAsync(["uninstall", .. args]);
+
+        return (exit, capture.GetCapturedOutput(), capture.GetCapturedError());
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Yes_alone_refuses_when_a_local_server_is_installed() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(errors).Contains("--purge-local");
+        await Assert.That(local.Service.IsInstalled(local.Unit)).IsTrue();
+        await Assert.That(local.Log).DoesNotContain("recorders:stop");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Purge_local_purges_before_the_config_directory_goes() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+
+        var (exit, output, _) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(output).Contains("Purged the local server");
+        await Assert.That(local.Service.IsInstalled(local.Unit)).IsFalse();
+        // Ahead of every other step, the uninstall's own daemon stop included.
+        await Assert.That(local.Log.IndexOf("uninstall")).IsLessThan(local.Log.LastIndexOf("recorders:stop"));
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsFalse();
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Keep_config_keeps_the_local_data() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+
+        var (exit, _, _) = await UninstallWithLocalAsync(fixture, local, "--yes", "--keep-config");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(local.Log).Contains("uninstall");
+        await Assert.That(local.Service.IsInstalled(local.Unit)).IsFalse();
+        await Assert.That(Directory.Exists(local.Dir("data"))).IsTrue();
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Interactive_prompt_names_the_deletion() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+        var stdin = Console.In;
+
+        (int Exit, string Out, string Err) result;
+        Console.SetIn(new StringReader("y\n"));
+        try {
+            result = await UninstallWithLocalAsync(fixture, local);
+        } finally {
+            Console.SetIn(stdin);
+        }
+
+        await Assert.That(result.Exit).IsEqualTo(0);
+        await Assert.That(result.Out).Contains(LocalUrl);
+        await Assert.That(result.Out).Contains("every session it recorded");
+        await Assert.That(result.Out).Contains("Purged the local server");
+        await Assert.That(Directory.Exists(local.Dir("data"))).IsFalse();
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Unreadable_local_registry_keeps_the_config_directory() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+        await File.WriteAllTextAsync(local.Root.RegistryPath, "{ not json");
+
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(errors).Contains(local.Root.RegistryPath);
+        await Assert.That(local.Log).DoesNotContain("uninstall");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
+    [Test, NotInParallel]
+    public async Task No_local_server_needs_no_purge_flag() {
+        await using var fixture = await Fixture.CreateAsync();
+
+        using var capture = ConsoleOutput.StartFullCapture();
+        var exit = await NewCommand(fixture, recorders: new FakeOutgoingRecorders([])).HandleAsync(["uninstall", "--yes"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsFalse();
+    }
+
     [Test, NotInParallel]
     public async Task Busy_daemon_refuses_and_changes_nothing() {
         await using var fixture = await Fixture.CreateAsync();
