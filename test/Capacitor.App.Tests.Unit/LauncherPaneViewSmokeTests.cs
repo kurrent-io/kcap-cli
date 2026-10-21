@@ -271,6 +271,50 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(busy.Compact).IsTrue();
     }
 
+    [Test]
+    [Arguments("launchctl bootstrap failed (exit code 5).")]
+    [Arguments("launchctl bootstrap failed (exit code 5).\nInput/output error")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connection_banner_keeps_system_details_below_its_copy(string error) {
+        var (headline, detailText, belowCopy, aboveActions, cleared) = await AvaloniaSession.DispatchAsync(() => {
+            var (vm, service, _, tmp) = Build();
+            using var _tmp = tmp;
+            using var message = new BehaviorSubject<string?>(error);
+            vm.AttachDaemonRecovery(
+                ReactiveCommand.Create(() => { }), ReactiveCommand.Create(() => { }),
+                Observable.Return(true), Observable.Return(false), message);
+            service.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, "daemon_unreachable", null));
+            var window = new Window { Content = new LauncherPaneView { DataContext = vm }, Width = 480, Height = 400 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+
+            var copy = Find<TextBlock>(window, "BannerMessageText")!;
+            var detail = Find<SelectableTextBlock>(window, "BannerDetailText");
+            var button = Find<Button>(window, "StartDaemonButton")!;
+            static double Top(Control c, Visual rel) => c.TranslatePoint(new Point(0, 0), rel)!.Value.Y;
+            var headline = copy.Text;
+            var detailText = detail?.Text;
+            var below = detail is not null && Top(detail, window) >= Top(copy, window) + copy.Bounds.Height + 5;
+            var above = detail is not null && Top(button, window) >= Top(detail, window) + detail.Bounds.Height + 13;
+
+            message.OnNext(null);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var cleared = detail is not null && !detail.IsVisible
+                && Math.Abs(Top(button, window) - Top(copy, window) - copy.Bounds.Height - 14) < 1;
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            vm.Dispose();
+            return (headline, detailText, below, above, cleared);
+        });
+        await Assert.That(headline).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        await Assert.That(detailText).IsEqualTo(error);
+        await Assert.That(belowCopy).IsTrue();
+        await Assert.That(aboveActions).IsTrue();
+        await Assert.That(cleared).IsTrue();
+    }
+
     /// A narrow card gives the copy the full width and puts the action below, aligned left.
     [Test]
     [NotInParallel("AvaloniaSession")]

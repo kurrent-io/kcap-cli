@@ -256,6 +256,10 @@
                     <TextBlock x:Name="BannerMessageText" Text="{Binding BannerMessage}"
                                Foreground="{StaticResource KcapTextBrush}" FontSize="13" LineHeight="18"
                                TextWrapping="Wrap" VerticalAlignment="Center" />
+                    <SelectableTextBlock x:Name="BannerDetailText" Text="{Binding BannerDetail}"
+                                         Foreground="{StaticResource KcapMutedBrush}" FontSize="12.5" LineHeight="18"
+                                         TextWrapping="Wrap"
+                                         IsVisible="{Binding BannerDetail, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <ProgressBar x:Name="BannerBusyBar" Height="2" MinHeight="2" IsIndeterminate="True"
                                  IsVisible="{Binding BannerBusy}"
                                  Foreground="{StaticResource KcapMutedBrush}" />
@@ -284,7 +288,7 @@
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button x:Name="UsageNoticeTurnOffButton" Classes="kcapChip" Content="Turn off"
                             Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}" />
-                    <Button x:Name="UsageNoticeOkButton" Classes="kcapPrimary" Content="OK"
+                    <Button x:Name="UsageNoticeOkButton" Classes="kcapPrimary" Content="Dismiss"
                             Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}" />
                 </StackPanel>
             </StackPanel>
