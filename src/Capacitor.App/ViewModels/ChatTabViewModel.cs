@@ -994,7 +994,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _queuedMessages.Remove(gone);
         foreach (var own in _queuedMessages.Where(q => !q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)))
             own.MarkUnlisted();
-        _discardedDispatches.RemoveWhere(id => !listed.Contains(id));
         RefreshQueue();
     }
 
