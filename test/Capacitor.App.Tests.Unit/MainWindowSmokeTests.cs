@@ -1431,7 +1431,7 @@ public class MainWindowSmokeTests {
 
             var help = window.FindDescendantOfType<SessionRailView>()!.FindControl<Button>("RailHelpButton")!;
             await Assert.That(help.IsEnabled).IsTrue();
-            await Assert.That(DockPanel.GetDock(help)).IsEqualTo(Dock.Right);
+            await Assert.That(Grid.GetColumn(help)).IsEqualTo(1);
             await Assert.That(ToolTip.GetTip(help)).IsEqualTo("Help and support");
             await Assert.That(AutomationProperties.GetName(help)).IsEqualTo("Help and support");
 

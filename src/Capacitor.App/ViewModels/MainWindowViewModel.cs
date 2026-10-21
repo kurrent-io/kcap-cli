@@ -80,8 +80,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "";
 
-    // False until a snapshot names the daemon. The help chip then shares the status line;
-    // a second row with nothing in it would leave the chip sitting under that line.
+    // False until a snapshot has a daemon name or a displayable version. The help chip
+    // then shares the status line; a second row with nothing in it would leave the chip
+    // sitting under that line.
     ObservableAsPropertyHelper<bool>? _showsDaemonLine;
     public bool ShowsDaemonLine => _showsDaemonLine?.Value ?? false;
 

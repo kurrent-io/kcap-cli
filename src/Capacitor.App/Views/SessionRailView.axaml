@@ -86,8 +86,10 @@
         <Style Selector="WrapPanel#RailDaemonRow > TextBlock, WrapPanel#RailDaemonRow > StackPanel">
             <Setter Property="Margin" Value="0,0,5,4" />
         </Style>
+        <!-- Top keeps the chip on the status line when the local-stack row wraps and the
+             daemon row is still absent. withDaemon overrides this once that row exists. -->
         <Style Selector="Button#RailHelpButton">
-            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Top" />
         </Style>
         <Style Selector="Button#RailHelpButton.withDaemon">
             <Setter Property="VerticalAlignment" Value="Bottom" />
