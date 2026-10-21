@@ -100,7 +100,8 @@ public static class TranscriptChat {
     public static IReadOnlyList<RunSignal> SubagentStart(string agentId, string? agentType, DateTimeOffset at, IChatDisplayRules? rules) {
         if (rules?.StartsSubagentRows == true) return [new RunSignal.Identified(null, agentId)];
 
-        var key = $"agent:{agentId}";
+        // Keyed by the start too: an id can start a second run, and the record's own time keeps a replay one row.
+        var key = $"agent:{agentId}:{at.UtcTicks}";
         return [new RunSignal.Started(key, agentType is { Length: > 0 } type ? type : "agent", "", at), new RunSignal.Identified(key, agentId)];
     }
 }

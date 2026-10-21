@@ -248,7 +248,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         presence.Select(p => p.Dto).Subscribe(dto => {
             _latestDto = dto;
             // Only Claude Code files a subagent's transcript beside its parent's, so only its rows open here.
-            if (dto is not null) runs.OpensSubagents = dto.Vendor == "claude";
+            if (dto is not null) runs.OpensSubagents = FilesSubagentsBesideItself(dto);
         }).DisposeWith(_disposables);
 
         // Replays through presence, which the cards pipeline relies on: its filter admits nothing
@@ -402,7 +402,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     /// A subagent's transcript sits beside its parent's on this machine, written as it runs.
     void OpenSubagent(RunRow row) {
         // Only Claude Code files a subagent's transcript beside its parent's.
-        if (row.AgentId is not { } subagentId || _latestDto is not { TranscriptPath: { } parentPath, Vendor: "claude" } dto
+        if (row.AgentId is not { } subagentId || _latestDto is not { TranscriptPath: { } parentPath } dto || !FilesSubagentsBesideItself(dto)
             || TranscriptChat.ForSubagent(dto.Vendor) is not { } projection) return;
         var path   = ClaudeSubagentFiles.TranscriptPath(parentPath, subagentId);
         var logged = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
@@ -413,6 +413,10 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             _opener, _time, _permissions, CloseSubagent));
         ActiveTab = WorkspaceTab.Chat;
     }
+
+    /// Claude Code's own transcript, not a journal the daemon writes for it.
+    static bool FilesSubagentsBesideItself(AgentStatusDto dto) =>
+        dto is { Vendor: "claude" } && dto.TranscriptFormat != TranscriptFormats.Envelopes;
 
     void CloseSubagent() => ReplaceSubagent(null);
 

@@ -216,6 +216,21 @@ public class SessionRunsTests {
         await Assert.That(s.RunningCount).IsEqualTo(0);
     }
 
+    /// An id starting a second run after its first ended gets a row of its own, which its completion ends.
+    [Test]
+    public async Task A_second_start_for_the_same_agent_is_its_own_row() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0, rules: null)]));
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddMinutes(1))));
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0.AddMinutes(5), rules: null)]));
+
+        await Assert.That(s.Rows.Count).IsEqualTo(2);
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddMinutes(6))));
+        await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
     /// A lane that cannot read a subagent's transcript must not offer a row that opens nothing.
     [Test]
     public async Task A_row_offers_to_open_only_where_the_lane_can_open_it() {
