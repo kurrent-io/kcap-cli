@@ -4,6 +4,7 @@ using System.Text;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Remote.Models;
+using Microsoft.Extensions.Time.Testing;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.WorkspaceFixtures;
 
@@ -21,6 +22,7 @@ public class RemoteTerminalViewModelTests {
         public readonly BehaviorSubject<bool> Ended = new(false);
         public readonly BehaviorSubject<bool> Visible;
         public readonly List<FakeTerminalSurface> Surfaces = [];
+        public readonly FakeTimeProvider Time = new();
         public readonly RemoteTerminalViewModel Vm;
 
         /// <param name="subscribe">The server's answers, in place before the pane's first showing asks.</param>
@@ -28,7 +30,7 @@ public class RemoteTerminalViewModelTests {
             if (subscribe is not null) Lane.TerminalSubscribeHandler = subscribe;
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             Visible = new BehaviorSubject<bool>(visible);
-            Vm = new RemoteTerminalViewModel("a1", Lane, Access, Ended, Visible, () => { var s = new FakeTerminalSurface(); Surfaces.Add(s); return s; });
+            Vm = new RemoteTerminalViewModel("a1", Lane, Access, Ended, Visible, Time, () => { var s = new FakeTerminalSurface(); Surfaces.Add(s); return s; });
         }
 
         public void Drop() => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
@@ -329,9 +331,10 @@ public class RemoteTerminalViewModelTests {
     }
 
     /// The subscription is the agent's, not the session's, so a terminal already live when session
-    /// access is established — the session starting while it is watched — carries on as it is.
+    /// access is established — the session starting while it is watched — carries on as it is. A
+    /// later establishment can come with a replacement terminal, so that one asks again.
     [Test]
-    public async Task A_live_terminal_carries_on_when_access_is_established() {
+    public async Task A_live_terminal_carries_on_when_the_session_starts_and_asks_again_after() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             h.Access.OnNext(SessionAccessState.Unavailable);
@@ -345,6 +348,52 @@ public class RemoteTerminalViewModelTests {
             await Assert.That(h.Vm.Surface).IsSameReferenceAs(surface);
             await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(1);
             await Assert.That(h.Lane.TerminalUnsubscribes).IsEmpty();
+
+            h.Access.OnNext(SessionAccessState.Establishing);
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 2, what: "the second subscribe");
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live again");
+            await Assert.That(h.Vm.Surface).IsNotSameReferenceAs(surface);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// An ask in flight when access is established may have been answered before it: the
+    /// establishment asks again rather than leaving that answer to stand.
+    [Test]
+    public async Task Access_established_while_an_ask_is_in_flight_asks_again() {
+        await RunOnUiAsync(async () => {
+            var first = new TaskCompletionSource<HubCallOutcome>();
+            var calls = 0;
+            var h = new Harness(subscribe: _ => calls++ == 0 ? first.Task : Task.FromResult(HubCallOutcome.Ok));
+            await WaitUntilAsync(() => h.Lane.TerminalSubscribes.Count == 1, what: "the first subscribe");
+
+            h.Access.OnNext(SessionAccessState.Established);
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+            first.SetResult(HubCallOutcome.Failed("retry"));
+            await Task.Delay(50);
+            await Assert.That(h.Vm.Phase).IsEqualTo(RemoteTerminalPhase.Live);
+            await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(2);
+            await h.Vm.TeardownAsync();
+        });
+    }
+
+    /// Before a session no access verdict arrives to ask again, so a failed ask backs off and retries.
+    [Test]
+    public async Task A_failed_ask_retries_after_a_back_off() {
+        await RunOnUiAsync(async () => {
+            var fail = true;
+            var h = new Harness(subscribe: _ => Task.FromResult(fail ? HubCallOutcome.Failed("retry") : HubCallOutcome.Ok));
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Offline, what: "offline");
+
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            await Task.Delay(50);
+            await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(1);
+
+            fail = false;
+            h.Time.Advance(TimeSpan.FromSeconds(1));
+            await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+            await Assert.That(h.Lane.TerminalSubscribes.Count).IsEqualTo(2);
             await h.Vm.TeardownAsync();
         });
     }

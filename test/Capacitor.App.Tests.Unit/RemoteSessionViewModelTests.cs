@@ -428,6 +428,22 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// An agent that ends before its session starts has no terminal left to open.
+    [Test]
+    public async Task An_agent_that_ends_before_its_session_offers_no_terminal() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(sessionId: null, vendor: "claude"));
+            await Assert.That(vm.ShowsTerminalButton).IsTrue();
+
+            h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: null, status: "Completed", vendor: "claude"));
+            await WaitUntilAsync(() => vm.SessionEnded, what: "ended");
+            await Assert.That(vm.ShowsTerminalButton).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("Waiting for the session to start");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// Whether the viewer may see the terminal is the server's answer, so a refusal shows in the
     /// pane rather than being guessed in advance.
     [Test]

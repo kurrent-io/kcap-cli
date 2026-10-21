@@ -17,17 +17,19 @@ public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended, Ref
 /// agent's PTY for everyone. Each subscribe lands on a fresh surface, so a replay never stacks on
 /// scrollback. It asks the server on the pane's first showing, so a workspace kept on its Chat tab
 /// costs the server no replay or stream, and asks again only when the answer could have changed:
-/// the lane reconnects, session access is established or denied, or an ended session returns.
-/// Whether the viewer may see the terminal is the server's answer, never the app's guess, so it
-/// holds before any session as much as during one; a live terminal carries on when the session
-/// starts. A refusal reads as Refused; a server too old to answer leaves an empty pane that
-/// only looks like "no output yet".
+/// the lane reconnects, session access is established or denied, an ended session returns, or a
+/// failed ask's back-off runs out. Whether the viewer may see the terminal is the server's answer,
+/// never the app's guess, so it holds before any session as much as during one; a terminal live
+/// before the session carries on when it starts. A refusal reads as Refused; a server too old to
+/// answer leaves an empty pane that only looks like "no output yet".
 public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
     const int MaxCols = 500, MaxRows = 200;
+    static readonly TimeSpan[] Retry = [TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
 
     readonly string _agentId;
     readonly IServerLane _lane;
+    readonly TimeProvider _time;
     readonly Func<ITerminalSurface> _surfaceFactory;
     readonly CompositeDisposable _disposables = new();
     readonly CancellationTokenSource _lifetime = new();
@@ -54,6 +56,11 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// told otherwise, so a reported one must always be given back and an unreported one never.
     bool _reported;
     (int Cols, int Rows)? _sourceSize;
+    SessionAccessState? _access;
+    /// Admitted before session access was established: the session starting is no reason to ask again.
+    bool _carriesOn;
+    ITimer? _retry;
+    int _failures;
 
     ITerminalSurface? _surface;
     public ITerminalSurface? Surface { get => _surface; private set => this.RaiseAndSetIfChanged(ref _surface, value); }
@@ -86,9 +93,10 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
 
     public RemoteTerminalViewModel(
             string agentId, IServerLane lane, IObservable<SessionAccessState> access, IObservable<bool> sessionEnded,
-            IObservable<bool> visible, Func<ITerminalSurface> surfaceFactory) {
+            IObservable<bool> visible, TimeProvider time, Func<ITerminalSurface> surfaceFactory) {
         _agentId = agentId;
         _lane = lane;
+        _time = time;
         _surfaceFactory = surfaceFactory;
         _token = _lifetime.Token;
         SendKeyCommand = ReactiveCommand.CreateFromTask<string>(
@@ -117,13 +125,18 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             _ended = false;
             Ask();
         }).DisposeWith(_disposables);
-        // A live terminal carries on when access is established: the subscription is the agent's,
-        // not the session's, and the server keeps re-checking it. It ends a revoked viewer's stream
-        // without a word, so a denial is the cue to ask again — but only for a terminal it could end.
+        // The server ends a revoked viewer's stream without a word, so a denial asks again, but only
+        // for a terminal it could end. Any establishment asks again too — a new session can come with
+        // a replacement terminal — except the session starting under a terminal already live.
         access.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(state => {
-            var held = Phase is RemoteTerminalPhase.Live or RemoteTerminalPhase.Connecting;
-            if (state == SessionAccessState.Denied ? held : state == SessionAccessState.Established && !held)
-                Ask();
+            _access = state;
+            if (state == SessionAccessState.Denied) {
+                if (Phase is RemoteTerminalPhase.Live or RemoteTerminalPhase.Connecting) Ask();
+                return;
+            }
+            if (state != SessionAccessState.Established) return;
+            if (Phase == RemoteTerminalPhase.Live && _carriesOn) { _carriesOn = false; return; }
+            Ask();
         }).DisposeWith(_disposables);
         // The server forgets a connection's subscriptions when it drops.
         lane.Status.Select(s => s.State == ServerLaneState.Connected).DistinctUntilChanged().Skip(1)
@@ -145,6 +158,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     }
 
     void Ask() {
+        StopRetry();
         if (!_everShown || _ended) return;
         if (_subscribed || _strayMembership) Detach(RemoteTerminalPhase.Connecting);
         Attach();
@@ -199,13 +213,30 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
                     _strayMembership = false;
                     _ = ReleaseAsync();
                 }
+                // Before a session nothing else would ask again, and a lane that is down asks on reconnect.
+                if (outcome.Result == HubCallResult.Failed) ScheduleRetry(generation);
+                else if (outcome.Result == HubCallResult.Denied) _failures = 0;
                 return;
             }
+            _failures = 0;
+            _carriesOn = _access != SessionAccessState.Established;
             _strayMembership = false;
             _subscribed = true;
             Phase = RemoteTerminalPhase.Live;
             ReportViewport(surface.CurrentSize);
         });
+    }
+
+    void ScheduleRetry(int generation) {
+        var delay = Retry[Math.Min(_failures++, Retry.Length - 1)];
+        _retry = _time.CreateTimer(_ => Dispatcher.UIThread.Post(() => {
+            if (generation == _generation && Phase == RemoteTerminalPhase.Offline) Ask();
+        }), null, delay, Timeout.InfiniteTimeSpan);
+    }
+
+    void StopRetry() {
+        _retry?.Dispose();
+        _retry = null;
     }
 
     /// The one place a viewport is reported: a pane off screen still carries its unmeasured
@@ -225,6 +256,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     }
 
     void Detach(RemoteTerminalPhase phase) {
+        StopRetry();
         _generation++;
         _receiving = false;
         Phase = phase;
@@ -259,6 +291,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     }
 
     public async Task TeardownAsync() {
+        StopRetry();
         _generation++;
         _receiving = false;
         _disposables.Dispose();
