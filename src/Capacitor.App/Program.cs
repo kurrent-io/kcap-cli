@@ -14,6 +14,9 @@ internal static class Program
     /// This process's platform, chosen once before the UI starts.
     public static DesktopHost Host { get; private set; } = DesktopHost.Unstarted();
 
+    /// Read before the app is constructed, which is where its first config-root write would happen.
+    internal static UninstallMode? Uninstall { get; private set; }
+
     [STAThread]
     public static void Main(string[] args) {
         // Velopack's install/update hooks exit from inside Run(); anything before it would re-run
@@ -28,6 +31,7 @@ internal static class Program
                 if (OperatingSystem.IsWindows()) WindowsUninstallCleanup.Run(AppContext.BaseDirectory);
             });
         velopack.Run();
+        Uninstall = UninstallMode.Parse(args);
 
         var crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
         AppDomain.CurrentDomain.UnhandledException += (_, e) => {

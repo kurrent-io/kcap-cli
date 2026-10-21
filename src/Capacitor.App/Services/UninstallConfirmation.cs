@@ -42,7 +42,7 @@ public static class UninstallConfirmation {
 
         var prompt = new LifecyclePrompt(
             LifecyclePrompt.KindUninstall, null, null, false, string.Join("\n\n", lines), warning);
-        IReadOnlyList<string> args = facts.LocalServerUrl is null ? ["--uninstall"] : ["--uninstall", "--purge-local"];
+        IReadOnlyList<string> args = facts.LocalServerUrl is null ? [UninstallMode.Arg] : [UninstallMode.Arg, UninstallMode.PurgeLocalArg];
         return new UninstallRequest(prompt, args);
     }
 }

@@ -90,8 +90,13 @@ public partial class App : Application {
 
     readonly UiScaleSetting _uiScale;
 
+    // Set only in a copy started to uninstall; nothing of the normal app is built in it.
+    readonly UninstallMode? _uninstallMode = Program.Uninstall;
+    UninstallRunViewModel? _uninstallRun;
+
     public App() {
-        _telemetry   = CliTelemetry.Start(TelemetryStartup.ForDesktopApp(serverUrl: null, _endpoints.SignupUrl), _config, _time);
+        // A live facade creates the device id and the spool under the config root being removed.
+        _telemetry   = CliTelemetry.Start(DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl), _config, _time);
         _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
@@ -99,6 +104,9 @@ public partial class App : Application {
 #pragma warning restore RS0030
         _uiScale = UiScaleSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
+
+    internal static TelemetryStartup DesktopTelemetry(UninstallMode? uninstall, string signupUrl) =>
+        TelemetryStartup.ForDesktopApp(serverUrl: null, signupUrl) with { Suppressed = uninstall is not null };
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
     /// resolved server, and the app starts before a profile has named one. Process-lifetime for the
@@ -280,10 +288,14 @@ public partial class App : Application {
                 if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
                 startup.Activate();
             });
-            // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
-            _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
-            _menuBar.Install();
-            _ = StartAsync(desktop);
+            if (_uninstallMode is { } uninstall) {
+                RunUninstallMode(desktop, uninstall);
+            } else {
+                // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
+                _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
+                _menuBar.Install();
+                _ = StartAsync(desktop);
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -400,6 +412,37 @@ public partial class App : Application {
             _localInstall = null;
             _wizardWindow = null;
         }
+    }
+
+    // The installed bundle's CLI and removal only: no lane, daemon client, lifecycle controller,
+    // updater, wizard or tray, so nothing restarts or recreates what is being removed.
+    void RunUninstallMode(IClassicDesktopStyleApplicationLifetime desktop, UninstallMode uninstall) {
+        var runner = new ProcessRunner(_time);
+        var probe  = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
+        var cli    = NewWizardCli(_config, _serverEnv, _localRoot, runner, ResolvePinnedCli().Path, probe);
+        // Shutdown closes the window, whose Closed handler quits again.
+        var quitting = false;
+        void Quit(int exitCode) {
+            if (quitting) return;
+            quitting = true;
+            desktop.Shutdown(exitCode);
+        }
+        var run = OperatingSystem.IsMacOS()
+            ? uninstall.BuildRun(Environment.ProcessPath, root => new MacAppRemoval(runner, _userHome, root), cli, () => Quit(0))
+            : null;
+        if (run is null) {
+            Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app.");
+            // Posted: the lifetime's main loop has not started yet.
+            Dispatcher.UIThread.Post(() => Quit(1));
+            return;
+        }
+
+        _uninstallRun = run;
+        var window = new UninstallWindow { DataContext = run, WindowStartupLocation = WindowStartupLocation.CenterScreen };
+        window.Closed += (_, _) => Quit(0);
+        desktop.MainWindow = window;
+        window.Show();
+        _ = run.RunAsync();
     }
 
     // macOS only: elsewhere there is no bundle. Returns true when a window was shown and startup
@@ -2079,6 +2122,11 @@ public partial class App : Application {
     // Once that completes, TryShutdown() re-raises this same event; the SECOND pass is let
     // through. This never blocks the UI thread on the async disposal.
     void OnShutdownRequested(object? sender, ShutdownRequestedEventArgs e) {
+        // Nothing to tear down in this mode; a quit mid-run would leave kcap half removed.
+        if (_uninstallRun is { } uninstall) {
+            e.Cancel = uninstall.State == UninstallRunState.Running;
+            return;
+        }
         // Navigation's twin of BeginShutdownPass rule 1, and for the same reason: applied on EVERY
         // pass, before the confirmed-pass early return, so a window the coordinator builds BETWEEN
         // the passes can neither open a workspace nor keep one attached.
