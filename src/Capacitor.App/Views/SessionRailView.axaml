@@ -132,7 +132,7 @@
                 <Button x:Name="RailNewSessionButton" Classes="kcapChip" HorizontalAlignment="Stretch" Margin="10,0,10,10"
                         Command="{Binding CloseWorkspaceCommand}"
                         Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
-                        BorderThickness="1" CornerRadius="7" Padding="11,7">
+                        BorderThickness="1" CornerRadius="7" Padding="11,7" AutomationProperties.Name="New session">
                     <DockPanel>
                         <TextBlock x:Name="RailNewSessionShortcut" DockPanel.Dock="Right" Text="{x:Static views:ShortcutLabels.NewSession}" FontSize="11"
                                    Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
@@ -305,7 +305,7 @@
                             <TextBlock x:Name="RailAgentCountText" Text="{Binding AgentCountText}" Classes="footerMeta"
                                        ToolTip.Tip="{x:Static vm:MainWindowViewModel.AgentCountTip}" />
                         </StackPanel>
-                        <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay}" Classes="footerMeta"
+                        <TextBlock x:Name="RailVersionText" Text="{Binding VersionDisplay, StringFormat='kcap {0}'}" Classes="footerMeta"
                                    Classes.restartPending="{Binding RestartPending}"
                                    IsVisible="{Binding VersionDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                             <ToolTip.Tip>

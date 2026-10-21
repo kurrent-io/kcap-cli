@@ -156,14 +156,7 @@ public sealed partial class WorkContextViewModel {
     };
 
     string _requester = "You";
-    public string Requester {
-        get => _requester;
-        private set {
-            this.RaiseAndSetIfChanged(ref _requester, value);
-            this.RaisePropertyChanged(nameof(RequesterDisplay));
-        }
-    }
-    public string RequesterDisplay => MiddleTruncate(Requester, 10, 8);
+    public string Requester { get => _requester; private set => this.RaiseAndSetIfChanged(ref _requester, value); }
     string _requesterRole = "";
     public string RequesterRole { get => _requesterRole; private set => this.RaiseAndSetIfChanged(ref _requesterRole, value); }
     string _requesterInitial = "Y";
@@ -184,7 +177,14 @@ public sealed partial class WorkContextViewModel {
         }
     }
     bool _sessionExpanded;
-    public bool SessionExpanded { get => _sessionExpanded; private set => this.RaiseAndSetIfChanged(ref _sessionExpanded, value); }
+    public bool SessionExpanded {
+        get => _sessionExpanded;
+        private set {
+            this.RaiseAndSetIfChanged(ref _sessionExpanded, value);
+            this.RaisePropertyChanged(nameof(SessionToggleText));
+        }
+    }
+    public string SessionToggleText => SessionExpanded ? "Less" : "More";
     bool _runsExpanded;
     public bool RunsExpanded { get => _runsExpanded; private set => this.RaiseAndSetIfChanged(ref _runsExpanded, value); }
 

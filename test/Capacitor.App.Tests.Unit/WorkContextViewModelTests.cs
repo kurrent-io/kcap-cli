@@ -218,6 +218,7 @@ public class WorkContextViewModelTests {
             await h.PushAsync(Dto());
             await h.TickAsync();
             await Assert.That(h.Vm.PhaseNote).IsEqualTo(WorkContextViewModel.NoWorkItemNote);
+            await Assert.That(h.Vm.PhaseNote).DoesNotContain("declare");
             await h.Vm.TeardownAsync();
         });
     }
@@ -1545,12 +1546,14 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.PartsExpanded).IsTrue();
             await Assert.That(h.Vm.PeopleExpanded).IsFalse();
             await Assert.That(h.Vm.SessionExpanded).IsFalse();
+            await Assert.That(h.Vm.SessionToggleText).IsEqualTo("More");
 
             await h.Vm.TogglePartsCommand.Execute();
             await h.Vm.ToggleSessionCommand.Execute();
 
             await Assert.That(h.Vm.PartsExpanded).IsFalse();
             await Assert.That(h.Vm.SessionExpanded).IsTrue();
+            await Assert.That(h.Vm.SessionToggleText).IsEqualTo("Less");
             await h.Vm.TeardownAsync();
         });
     }
@@ -1686,8 +1689,6 @@ public class WorkContextViewModelTests {
         await Assert.That(WorkContextViewModel.MiddleTruncate("short")).IsEqualTo("short");
         await Assert.That(WorkContextViewModel.MiddleTruncate("c03b8e371db44dd697732a1cf1fc3532"))
             .IsEqualTo("c03b8e37…f1fc3532");
-        await Assert.That(new WorkContextPersonViewModel("nortonandreev-very-long-github-handle", null, null, DateTimeOffset.UnixEpoch)
-            .NameDisplay).IsEqualTo("nortonandr…b-handle");
     }
 
     /// One person folds and opens like a crowd does, and the header counts sessions either way.

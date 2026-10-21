@@ -1,3 +1,4 @@
+using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Documents;
 using Avalonia.Controls.Primitives;
@@ -33,6 +34,9 @@ sealed class DetailsBlockRenderer(DetailsState state, Action<int, bool> toggle) 
         row.Children.Add(label);
 
         var header = new ToggleButton { Content = row, IsChecked = expanded, Tag = obj.Ordinal };
+        // An image-only summary has no text, and an unnamed toggle reads as just "toggle button".
+        var name = label.Inlines?.Text;
+        AutomationProperties.SetName(header, string.IsNullOrWhiteSpace(name) ? "Details" : name);
         header.Classes.Add("markdown-details-summary");
         header.Click += (_, _) => toggle(obj.Ordinal, header.IsChecked == true);
 

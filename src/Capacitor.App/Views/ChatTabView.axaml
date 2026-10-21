@@ -133,7 +133,8 @@
                 <DataTemplate x:DataType="vm:AssistantThinkingItem">
                     <StackPanel MaxWidth="660" HorizontalAlignment="Left" Margin="0,8,0,12" Spacing="4">
                         <Button Classes="toolSummary thinkingSummary" HorizontalAlignment="Left"
-                                Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
+                                Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
+                                AutomationProperties.Name="{Binding HeaderLabel}">
                             <views:ChatKindHeader Label="{Binding HeaderLabel}"
                                                   IconKind="{x:Static views:ToolCategoryIcons.ThinkingIcon}">
                                 <views:ChatKindHeader.Status>
@@ -241,7 +242,8 @@
                                             Tag="{Binding Card.Url}" Click="OnCopyLinkClick"
                                             IsVisible="{Binding Card.Url, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                                     <Button x:Name="ToolCardOpen" Classes="kcapGhost kcapQuiet" Margin="0,0,-8,0"
-                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}">
+                                            Command="{Binding OpenCardCommand}" IsVisible="{Binding CanOpenCard}"
+                                            AutomationProperties.Name="Open">
                                         <StackPanel Orientation="Horizontal" Spacing="5">
                                             <TextBlock Text="Open" VerticalAlignment="Center" />
                                             <views:AppIcon Kind="ArrowUpRight" Size="12" Classes="toolCardOpenArrow" />
@@ -265,7 +267,8 @@
                                 <views:ChatKindHeader IsVisible="{Binding ShowsKindChip}"
                                                       Label="{Binding KindChip}" IconKind="{Binding HeaderIconKind}" />
                                 <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}"
-                                        Command="{Binding ToggleCommand}" Click="OnToolSummaryClick">
+                                        Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
+                                        AutomationProperties.Name="{Binding SummaryLine}">
                                     <views:ChatKindHeader Label="{Binding SummaryLine}" IconKind="{Binding HeaderIconKind}">
                                         <views:ChatKindHeader.Status>
                                             <Panel Width="12" Height="12" VerticalAlignment="Center">

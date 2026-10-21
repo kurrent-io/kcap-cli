@@ -214,7 +214,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
 
-    public string AppVersionLabel { get; } = $"kcap {AppVersion.Display}";
+    public string AppVersionLabel { get; } = $"Desktop app {AppVersion.Display}";
 
     /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
     /// flyout opens the app's own.

@@ -293,6 +293,7 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(IsAnnounced(avatar)).IsFalse();
+            await Assert.That(Peer(host.Find<Button>("RequesterName")).GetName()).IsEqualTo($"Copy {host.Vm.Requester}");
         });
     }
 
@@ -350,6 +351,28 @@ public class WorkContextViewSmokeTests {
             var corners = chips.Select(c => c.TranslatePoint(new Point(c.Bounds.Width, 0), pane)!.Value).ToArray();
             await Assert.That(corners.Max(p => p.X)).IsLessThanOrEqualTo(pane.Bounds.Width);
             await Assert.That(corners.Select(p => p.Y).Distinct().Count()).IsGreaterThan(1);
+        });
+    }
+
+    /// Pins that a name is trimmed by the width it has, not by a character count: a long address
+    /// in a pane with room for it shows whole.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_contributor_name_shows_whole_when_the_pane_has_room() {
+        await RunOnUiAsync(async () => {
+            const string email = "someone.with.a.long.name@example.io";
+            await using var host = new Host();
+            host.Window.Width = 900;
+            var read = KeyOnlyRead();
+            await host.ShowAsync(read with { Item = read.Item! with {
+                Contributors = [new WorkItemContributorDto { UserId = "u1", DisplayName = email }] } });
+            await host.Vm.TogglePeopleCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            host.Window.UpdateLayout();
+
+            var name = host.Find<TextBlock>("ContributorNameText");
+            await Assert.That(name.Text).IsEqualTo(email);
+            await Assert.That(name.TextLayout.TextLines.Any(l => l.HasCollapsed)).IsFalse();
         });
     }
 
