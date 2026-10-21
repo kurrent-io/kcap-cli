@@ -11,9 +11,9 @@ public static class TerminalScrollKey {
         return true;
     }
 
-    public static bool TryDecode(string key, out byte[] bytes) {
+    public static bool TryDecode(string? key, out byte[] bytes) {
         bytes = [];
-        if (!key.StartsWith(Prefix, StringComparison.Ordinal) || key.Length > Prefix.Length + 32) return false;
+        if (key is null || !key.StartsWith(Prefix, StringComparison.Ordinal) || key.Length > Prefix.Length + 32) return false;
         Span<byte> buffer = stackalloc byte[MaxBytes];
         if (!Convert.TryFromBase64String(key[Prefix.Length..], buffer, out var count) || !IsWheel(buffer[..count])) return false;
         bytes = buffer[..count].ToArray();
@@ -21,7 +21,7 @@ public static class TerminalScrollKey {
     }
 
     static bool IsWheel(ReadOnlySpan<byte> bytes) {
-        if (bytes is [0x1b, (byte)'[', (byte)'M', 96 or 97, >= 33, >= 33 and <= 232]) return true;
+        if (bytes is [0x1b, (byte)'[', (byte)'M', 96 or 97, >= 33, >= 33]) return true;
         if (bytes.Length is < 10 or > MaxBytes || !bytes.StartsWith("\x1b[<"u8) || bytes[^1] != 'M') return false;
         if (bytes[3] != '6' || bytes[4] is not ((byte)'4' or (byte)'5') || bytes[5] != ';') return false;
         var coords = bytes[6..^1];

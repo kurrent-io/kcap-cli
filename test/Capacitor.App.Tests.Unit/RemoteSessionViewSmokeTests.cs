@@ -108,16 +108,18 @@ public class RemoteSessionViewSmokeTests {
                 host.Window.MouseWheel(point, new Vector(0, 0.1));
                 host.Settle();
                 await Assert.That(viewport.Offset.Y).IsLessThan(beforeWheel);
+                var afterSmallWheel = viewport.Offset.Y;
                 host.Window.MouseWheel(point, new Vector(0, 100));
                 host.Settle();
-                host.Window.MouseWheel(point, new Vector(0, 100));
-                host.Settle();
+                await Assert.That(afterSmallWheel - viewport.Offset.Y).IsLessThanOrEqualTo(9 * terminal.CellHeight);
+                for (var i = 0; i < 40; i++) { host.Window.MouseWheel(point, new Vector(0, 100)); host.Settle(); }
                 await Assert.That(viewport.Offset.Y).IsEqualTo(0);
                 await Assert.That(model.ScrollOffset).IsLessThan(model.MaxScrollback);
+                var beforeLargeWheel = model.ScrollOffset;
                 host.Window.MouseWheel(point, new Vector(0, -100));
                 host.Settle();
-                host.Window.MouseWheel(point, new Vector(0, -100));
-                host.Settle();
+                await Assert.That(model.ScrollOffset - beforeLargeWheel).IsLessThanOrEqualTo(9);
+                for (var i = 0; i < 40; i++) { host.Window.MouseWheel(point, new Vector(0, -100)); host.Settle(); }
                 await Assert.That(model.ScrollOffset).IsEqualTo(model.MaxScrollback);
                 await Assert.That(viewport.Offset.Y).IsGreaterThan(0);
 
@@ -175,8 +177,12 @@ public class RemoteSessionViewSmokeTests {
                 var point = terminal.TranslatePoint(new Point(30, 30), host.Window)!.Value;
                 for (var i = 0; i < 10; i++) host.Window.MouseWheel(point, new Vector(0, 0.1));
                 await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 1, "one accumulated wheel step");
-                host.Window.MouseWheel(point, new Vector(0, 6));
-                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 7, "six proportional steps, without page acceleration");
+                host.Window.MouseWheel(point, new Vector(0, 100.25));
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 7, "a large event is capped at six reports");
+                host.Window.MouseWheel(point, new Vector(0, 0.75));
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 8, "fractional remainder survives the cap");
+                await Assert.That(viewport.HorizontalScrollBarVisibility).IsEqualTo(ScrollBarVisibility.Hidden);
+                await Assert.That(viewport.VerticalScrollBarVisibility).IsEqualTo(ScrollBarVisibility.Hidden);
                 foreach (var (_, key) in host.Lane.SpecialKeys) {
                     await Assert.That(TerminalScrollKey.TryDecode(key, out var report)).IsTrue();
                     await Assert.That(report.AsSpan().StartsWith("\x1b[<64;"u8)).IsTrue();
@@ -192,7 +198,7 @@ public class RemoteSessionViewSmokeTests {
                 var before = terminal.Model.ScrollOffset;
                 host.Window.MouseWheel(point, new Vector(0, -0.5));
                 host.Window.MouseWheel(point, new Vector(0, -0.5));
-                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 8, "one downward step after resize");
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 9, "one downward step after resize");
                 await Assert.That(TerminalScrollKey.TryDecode(host.Lane.SpecialKeys[^1].Key, out var down)).IsTrue();
                 await Assert.That(down.AsSpan().StartsWith("\x1b[<65;"u8)).IsTrue();
                 await Assert.That(terminal.Model.ScrollOffset).IsEqualTo(before);

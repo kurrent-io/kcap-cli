@@ -21,17 +21,13 @@ public sealed class RemoteTerminalControl : TerminalControl {
     Size _viewport;
     public double CellHeight => _cell.Height;
 
-    double _wheelRemainder;
+    WheelStepAccumulator _wheel;
     readonly ScrollBar? _historyScrollBar;
     Action? _modelRefresh;
 
     public void SendWheel(double delta, Point position) {
         if (Model is not { } model || _cell.Width <= 0 || _cell.Height <= 0 || delta == 0) return;
-        if (Math.Sign(delta) != Math.Sign(_wheelRemainder)) _wheelRemainder = 0;
-        _wheelRemainder += delta;
-        var steps = (int)Math.CopySign(Math.Floor(Math.Abs(_wheelRemainder) + 1e-9), _wheelRemainder);
-        _wheelRemainder -= steps;
-        if (Math.Abs(_wheelRemainder) < 1e-9) _wheelRemainder = 0;
+        var steps = _wheel.Take(delta, 6);
         var col = Math.Clamp((int)(position.X / _cell.Width), 0, model.Terminal.Cols - 1);
         var row = Math.Clamp((int)(position.Y / _cell.Height), 0, model.Terminal.Rows - 1);
         var up = steps > 0;
@@ -47,7 +43,9 @@ public sealed class RemoteTerminalControl : TerminalControl {
     public RemoteTerminalControl() {
         ClipToBounds = true;
         UseLayoutRounding = false;
-        _historyScrollBar = Children.OfType<ScrollBar>().Single();
+        var bar = Children.OfType<ScrollBar>().FirstOrDefault();
+        if (ColumnDefinitions.Count == 2 && RowDefinitions.Count == 0 && bar is not null && GetColumn(bar) == 1)
+            _historyScrollBar = bar;
         UpdateSourceLayout();
         UpdateHistoryScrollBar();
     }
@@ -59,7 +57,7 @@ public sealed class RemoteTerminalControl : TerminalControl {
             oldModel.UpdateUI = _modelRefresh;
         base.OnPropertyChanged(change);
         if (change.Property == ModelProperty) {
-            _wheelRemainder = 0;
+            _wheel = default;
             _modelRefresh = Model?.UpdateUI;
             if (Model is { } model) model.UpdateUI = RefreshRemoteModel;
             UpdateHistoryScrollBar();
@@ -71,11 +69,12 @@ public sealed class RemoteTerminalControl : TerminalControl {
 
     void RefreshRemoteModel() {
         _modelRefresh?.Invoke();
+        if (!(Model?.IsMouseModeActive ?? false)) _wheel = default;
         UpdateHistoryScrollBar();
     }
 
     void UpdateHistoryScrollBar() {
-        if (_historyScrollBar is null) return;
+        if (_historyScrollBar is null || ColumnDefinitions.Count != 2) return;
         var sourceOwnsHistory = Model?.IsMouseModeActive ?? false;
         var hidden = sourceOwnsHistory || (Model?.Terminal.IsAlternateBufferActive ?? false);
         _historyScrollBar.Visibility = hidden ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Auto;
@@ -84,6 +83,7 @@ public sealed class RemoteTerminalControl : TerminalControl {
     }
 
     void UpdateSourceLayout() {
+        if (_historyScrollBar is null || ColumnDefinitions.Count != 2 || RowDefinitions.Count > 1) return;
         var typeface = new Typeface(FontFamily);
         if (!FontManager.Current.TryGetGlyphTypeface(typeface, out var glyphs)) {
             typeface = new Typeface(Avalonia.Media.FontFamily.Default);
@@ -107,7 +107,8 @@ public sealed class RemoteTerminalControl : TerminalControl {
     public void ReportViewport() {
         var size = _viewport;
         if (_cell.Width <= 0 || _cell.Height <= 0 || size.Width <= 0 || size.Height <= 0) return;
-        var scrollbar = ColumnDefinitions[1].ActualWidth;
+        var scrollbar = _historyScrollBar is not null && ColumnDefinitions.Count >= 2
+            ? ColumnDefinitions[1].ActualWidth : 0;
         ViewportChanged?.Invoke(Math.Max(1, (int)((size.Width - scrollbar) / _cell.Width)),
             Math.Max(1, (int)(size.Height / _cell.Height)));
     }

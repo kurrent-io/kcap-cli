@@ -10,6 +10,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 public class PtyHostedAgentRuntimeTests {
     // Records every write so we can assert the split-write ordering.
     sealed class RecordingPty : IPtyProcess {
+        public Queue<byte[]> Output { get; } = new();
         public List<string> StringWrites { get; } = [];
         public List<byte[]>  ByteWrites   { get; } = [];
         public (ushort Cols, ushort Rows)? LastResize { get; private set; }
@@ -24,7 +25,7 @@ public class PtyHostedAgentRuntimeTests {
 
 #pragma warning disable CS1998
         public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
-            yield break;
+            while (Output.TryDequeue(out var bytes)) yield return bytes;
         }
 #pragma warning restore CS1998
 
@@ -87,6 +88,33 @@ public class PtyHostedAgentRuntimeTests {
         await runtime.SendSpecialKeyAsync("definitely-not-a-key");
 
         await Assert.That(pty.ByteWrites.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(9)]
+    [Arguments(1000)]
+    [Arguments(1002)]
+    [Arguments(1003)]
+    public async Task Wheel_reports_are_dropped_after_the_source_disables_mouse_tracking(int mode) {
+        var pty = new RecordingPty();
+        await using var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System);
+        var report = "\x1b[<64;10;5M"u8.ToArray();
+        Capacitor.Remote.Models.TerminalScrollKey.TryCreate(report, out var key);
+        await runtime.SendSpecialKeyAsync(key);
+        await Assert.That(pty.ByteWrites).IsEmpty();
+
+        pty.Output.Enqueue(System.Text.Encoding.UTF8.GetBytes($"\x1b[?{mode}"));
+        pty.Output.Enqueue("h"u8.ToArray());
+        await foreach (var _ in runtime.ReadOutputAsync()) { }
+        await runtime.SendSpecialKeyAsync(key);
+        await Assert.That(pty.ByteWrites.Single()).IsEquivalentTo(report);
+
+        pty.Output.Enqueue(System.Text.Encoding.UTF8.GetBytes($"\x1b[?{mode}l"));
+        await foreach (var _ in runtime.ReadOutputAsync()) { }
+        await runtime.SendSpecialKeyAsync(key);
+        await runtime.SendSpecialKeyAsync("Enter");
+        await Assert.That(pty.ByteWrites.Count).IsEqualTo(2);
+        await Assert.That(pty.ByteWrites[^1]).IsEquivalentTo(new byte[] { 0x0d });
     }
 
     [Test]

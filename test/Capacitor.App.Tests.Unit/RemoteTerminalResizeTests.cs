@@ -12,6 +12,10 @@ public class RemoteTerminalResizeTests {
     [NotInParallel("AvaloniaSession")]
     public async Task The_scrollbar_tracks_history_ownership_and_detaches_from_a_replaced_model() {
         await RunOnUiAsync(async () => {
+            var upstream = new SvcSystems.UI.Terminal.TerminalControl();
+            await Assert.That(upstream.ColumnDefinitions.Count).IsEqualTo(2);
+            await Assert.That(upstream.RowDefinitions.Count).IsEqualTo(0);
+            await Assert.That(Grid.GetColumn(upstream.Children.OfType<ScrollBar>().Single())).IsEqualTo(1);
             var surface = new XtermTerminalSurface(80, 24);
             var control = new RemoteTerminalControl { Model = surface.Model };
             var bar = control.Children.OfType<ScrollBar>().Single();

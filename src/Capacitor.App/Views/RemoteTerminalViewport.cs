@@ -9,11 +9,11 @@ public sealed class RemoteTerminalViewport : ScrollViewer {
     protected override Type StyleKeyOverride => typeof(ScrollViewer);
 
     bool _followTail = true;
-    double _wheelRemainder;
+    WheelStepAccumulator _wheel;
 
     public RemoteTerminalViewport() {
-        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto;
-        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto;
+        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Hidden;
+        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Hidden;
         AddHandler(PointerWheelChangedEvent, OnTerminalWheel, RoutingStrategies.Tunnel);
         AddHandler(KeyDownEvent, (_, e) => {
             var remoteKey = e.Key is Key.Up or Key.Down or Key.Enter or Key.Tab or Key.Escape
@@ -40,27 +40,25 @@ public sealed class RemoteTerminalViewport : ScrollViewer {
 
     void OnTerminalWheel(object? sender, PointerWheelEventArgs e) {
         if (Content is not RemoteTerminalControl terminal || terminal.Model is not { } model) return;
+        if (!double.IsFinite(e.Delta.Y) || !double.IsFinite(e.Delta.X)) { e.Handled = true; return; }
         // Mouse-tracking apps own scrolling in either buffer. Their intermediate redraws are not history.
         if (model.IsMouseModeActive) {
+            _wheel = default;
             terminal.SendWheel(e.Delta.Y, e.GetPosition(terminal));
             e.Handled = true;
             return;
         }
         var end = Math.Max(0, Extent.Height - Viewport.Height);
-        var rows = -e.Delta.Y * 3;
+        var rows = Math.Clamp(-e.Delta.Y * 3, -9, 9);
         if ((rows < 0 && Offset.Y > 0) || (rows > 0 && model.ScrollOffset == model.MaxScrollback)) {
             Offset = new Vector(Offset.X, Math.Clamp(Offset.Y + rows * terminal.CellHeight, 0, end));
-            _wheelRemainder = 0;
+            _wheel = default;
         } else {
-            if (Math.Sign(rows) != Math.Sign(_wheelRemainder)) _wheelRemainder = 0;
-            _wheelRemainder += rows;
-            var lines = (int)Math.CopySign(Math.Floor(Math.Abs(_wheelRemainder) + 1e-9), _wheelRemainder);
-            _wheelRemainder -= lines;
-            if (Math.Abs(_wheelRemainder) < 1e-9) _wheelRemainder = 0;
+            var lines = _wheel.Take(-e.Delta.Y * 3, 9);
             if (lines != 0) model.ScrollLines(lines);
         }
         if (e.Delta.X != 0)
-            Offset = new Vector(Math.Clamp(Offset.X - e.Delta.X * terminal.CellHeight * 3,
+            Offset = new Vector(Math.Clamp(Offset.X - Math.Clamp(e.Delta.X * 3, -9, 9) * terminal.CellHeight,
                 0, Math.Max(0, Extent.Width - Viewport.Width)), Offset.Y);
         e.Handled = true;
     }

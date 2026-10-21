@@ -4,7 +4,7 @@ namespace Capacitor.Cli.Daemon.Services;
 
 /// Encodes named keys and bounded wheel reports for the PTY; unknown inputs produce no bytes.
 public static class SpecialKeyMap {
-    public static byte[] ToBytes(string key) {
+    public static byte[] ToBytes(string? key) {
         if (TerminalScrollKey.TryDecode(key, out var scroll)) return scroll;
         return key switch {
             "Escape"    => [0x1b],

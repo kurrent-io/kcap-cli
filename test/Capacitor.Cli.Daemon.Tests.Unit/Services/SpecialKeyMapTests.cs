@@ -47,8 +47,10 @@ public sealed class SpecialKeyMapTests {
     }
 
     [Test]
-    public async Task Unknown_key_returns_empty_array() {
-        var bytes = SpecialKeyMap.ToBytes("BogusKey");
+    [Arguments(null)]
+    [Arguments("BogusKey")]
+    public async Task Unknown_key_returns_empty_array(string? key) {
+        var bytes = SpecialKeyMap.ToBytes(key);
         await Assert.That(bytes.Length).IsEqualTo(0);
     }
     [Test]
