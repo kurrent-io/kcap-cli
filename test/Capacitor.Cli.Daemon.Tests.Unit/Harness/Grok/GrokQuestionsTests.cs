@@ -9,8 +9,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Grok;
 
 /// <summary>
 /// A hosted Grok's <c>_x.ai/ask_user_question</c> reaches the dashboard as one question card per
-/// question, and the answers go back in the reply shape Grok 1.0.62 accepts
-/// (<c>docs/probes/2026-10-21-grok-ask-user-question/</c>).
+/// question, and the answers go back in the reply shape Grok accepts.
 /// </summary>
 public class GrokQuestionsTests {
     const string SessionId = "01a15c7b-3f8d-7012-ab33-842ccc5a834d";
