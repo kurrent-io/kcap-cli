@@ -683,11 +683,10 @@ public class UninstallCommandTests {
         await Assert.That(new FileInfo(link).LinkTarget).IsNotNull();
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     [NotInParallel]
+    [UnsupportedOSPlatform("windows")]
     public async Task A_link_it_cannot_remove_fails_the_uninstall_with_a_sudo_hint() {
-        if (OperatingSystem.IsWindows()) return;
-
         await using var fixture = await Fixture.CreateAsync();
 
         var (links, link, _) = LinkFixture(fixture);
@@ -852,6 +851,36 @@ public class UninstallCommandTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains(local.Root.RegistryPath);
         await Assert.That(local.Log).DoesNotContain("uninstall");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task A_local_removal_that_fails_exits_1_and_keeps_the_config_directory() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+        local.Service.StopFailure      = new LocalLifecycleException("launchctl bootout failed");
+        local.Service.UninstallFailure = new LocalLifecycleException("launchctl bootout failed");
+
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(errors).Contains("launchctl bootout failed");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Yes_alone_refuses_when_a_local_change_was_interrupted() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+        LocalStateFiles.WriteJournal(local.Root, new("setup", "pending", ServerStart.Deny, null, DateTimeOffset.UtcNow, new Dictionary<string, string>()));
+
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(errors).Contains("interrupted");
+        await Assert.That(errors).Contains("--purge-local");
+        await Assert.That(local.Service.IsInstalled(local.Unit)).IsTrue();
+        await Assert.That(local.Log).DoesNotContain("recorders:stop");
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 

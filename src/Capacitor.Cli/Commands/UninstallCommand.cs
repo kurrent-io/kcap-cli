@@ -119,7 +119,8 @@ sealed class UninstallCommand(
                     : $"  • Delete the local server at {url} and every session it recorded");
                 break;
             case LocalStackState.Interrupted(var operation, _):
-                await Console.Out.WriteLineAsync(keepConfig
+                // An interrupted purge is always finished, whatever --keep-config says.
+                await Console.Out.WriteLineAsync(keepConfig && operation != LocalPurgeJournal.Operation
                     ? $"  • Finish an interrupted {operation} of the local server in {local!.Root.Directory}, then remove it, keeping its data"
                     : $"  • Finish an interrupted {operation} of the local server in {local!.Root.Directory}, then delete it and every session it recorded");
                 break;
