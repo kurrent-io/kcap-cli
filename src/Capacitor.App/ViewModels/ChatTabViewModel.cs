@@ -1225,7 +1225,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             var read = lease.Feed is RemoteTranscriptFeed
                 ? lease.Feed.ReadAppended()
                 : await Task.Run(lease.Feed.ReadAppended).ConfigureAwait(false);
-            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0
+            if (canSkipEmpty && read.Status == FeedStatus.Ok && read.Lines.Count == 0 && read.Runs.Count == 0
                 && baselineVersion == Volatile.Read(ref _baselineVersion) && inputGeneration == Volatile.Read(ref _inputGeneration)) return;
             await Dispatcher.UIThread.InvokeAsync(() => Apply(lease.Generation, read));
         } catch (Exception ex) {
@@ -1291,6 +1291,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         }
         if (rebased) RefreshQueue();
         if (read.Lines.Count == 0) {
+            ApplyFeedRuns(read);
             if (read.Status == FeedStatus.Reset) {
                 SyncPendingCardItems();
                 RefreshActivityNote();
@@ -1394,10 +1395,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             }
         }
         if (fresh.Count > 0) _items.AddRange(fresh);
+        ApplyFeedRuns(read);
         RefreshQueue();
         Reconcile();
         SyncPendingCardItems();
         RefreshActivityNote();
+    }
+
+    void ApplyFeedRuns(FeedRead read) {
+        if (read.Runs.Count > 0) _runs.Apply(new ChatProjectionResult([], [], read.Runs));
     }
 
     /// The one group carrying the pack/suppress flags. Only the trailing group ever carries them,

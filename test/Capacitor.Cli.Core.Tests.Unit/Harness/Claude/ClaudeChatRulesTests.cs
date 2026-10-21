@@ -357,9 +357,30 @@ public class ClaudeChatRulesTests {
         await Assert.That(detached.CallId).IsEqualTo("toolu_A");
         await Assert.That(detached.AgentId).IsEqualTo("a9f262478e032f427");
 
-        await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs).IsEmpty();
         await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"async_launched"}}""").Runs).IsEmpty();
         await Assert.That(R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]}}""").Runs).IsEmpty();
+    }
+
+    /// A subagent's own transcript is all sidechain records: hidden in the parent's chat, shown in its own,
+    /// along with the runs it starts.
+    [Test]
+    public async Task Sidechain_records_show_only_in_a_subagents_own_view() {
+        const string line = """{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"Found it"}]}}""";
+        var nested = ShellCall.Replace("\"type\":\"assistant\",", "\"type\":\"assistant\",\"isSidechain\":true,");
+        var own = TranscriptChat.ForSubagent("claude")!;
+
+        await Assert.That(R(line).Envelopes).IsEmpty();
+        await Assert.That(own.ProjectWithInputs(line, 1, Received, own.CreateContext("a1", "s1")).Envelopes.Single().Text).IsEqualTo("Found it");
+        await Assert.That(own.ProjectWithInputs(nested, 2, Received, own.CreateContext("a1", "s1")).Runs.Single()).IsTypeOf<RunSignal.Started>();
+    }
+
+    /// A foreground subagent's result names the agent that ran, which is how its row learns the id its
+    /// transcript is filed under.
+    [Test]
+    public async Task A_completed_foreground_result_identifies_its_agent() {
+        var identified = (RunSignal.Identified)R("""{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"a9f262478e032f427"}}""").Runs.Single();
+        await Assert.That(identified.CallId).IsEqualTo("toolu_A");
+        await Assert.That(identified.AgentId).IsEqualTo("a9f262478e032f427");
     }
 
     /// Runs twice: identified by origin_kind as the local leaf writes it, and by text alone as the

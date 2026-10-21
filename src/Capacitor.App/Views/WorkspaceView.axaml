@@ -155,6 +155,14 @@
                  DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsChat}" />
+            <!-- Built only while a subagent is open, so the closed pane adds no second chat to the tree. -->
+            <ContentControl x:Name="SubagentHost" Content="{Binding Subagent}" IsVisible="{Binding ShowsSubagent}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:SubagentPaneViewModel">
+                        <views:SubagentPaneView IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsSubagent}" />
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
             <ContentControl x:Name="ArtefactsHost" IsVisible="{Binding IsArtefactsActive}" />
 

@@ -140,6 +140,13 @@
             <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="13" />
         </Style>
+        <Style Selector="Button.toggle:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="Button.toggle.openable">
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
         <Style Selector="Button.toggle:pointerover Border.card">
             <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
         </Style>
@@ -235,23 +242,35 @@
             </Grid>
         </DataTemplate>
         <DataTemplate x:Key="RunItem" x:DataType="vm:RunRow">
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
-                    <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
-                </Panel>
-                <StackPanel Grid.Column="1" Spacing="2">
-                    <Grid ColumnDefinitions="Auto,*">
-                        <views:AppIcon x:Name="ShellGlyph" Kind="Terminal" Size="12" Margin="0,0,5,0"
-                                       Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
-                        <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
-                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" />
-                    </Grid>
-                    <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
-                               TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}"
-                               IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
-                </StackPanel>
-            </Grid>
+            <!-- Only a subagent whose id is known opens. Any other row is disabled, so it is neither a tab stop nor
+                 announced as actionable, but it reads the same. -->
+            <Button x:Name="RunRowButton" Classes="toggle" Classes.openable="{Binding CanOpen}" IsEnabled="{Binding CanOpen}"
+                    Command="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).OpenRunCommand}"
+                    CommandParameter="{Binding}">
+                <AutomationProperties.Name>
+                    <MultiBinding StringFormat="{}{0}, {1}">
+                        <Binding Path="Name" />
+                        <Binding Path="StateWord" />
+                    </MultiBinding>
+                </AutomationProperties.Name>
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
+                    <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
+                        <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
+                    </Panel>
+                    <StackPanel Grid.Column="1" Spacing="2">
+                        <Grid ColumnDefinitions="Auto,*">
+                            <views:AppIcon x:Name="ShellGlyph" Kind="Terminal" Size="12" Margin="0,0,5,0"
+                                           Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding IsShell}" />
+                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" LineHeight="16" FontWeight="SemiBold" Foreground="{StaticResource KcapTextBrush}"
+                                       TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Name}" ToolTip.ShowOnDisabled="True" />
+                        </Grid>
+                        <TextBlock Text="{Binding Description}" FontSize="12" LineHeight="16" Foreground="{StaticResource KcapMutedBrush}"
+                                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Description}" ToolTip.ShowOnDisabled="True"
+                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                        <TextBlock Text="{Binding StateText}" Classes="subagentState" Classes.failed="{Binding IsFailed}" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Grid>
+            </Button>
         </DataTemplate>
     </UserControl.Resources>
 
