@@ -701,6 +701,30 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A withdrawal falls back to the newest standing line: an identity report outranks a lane line posted before it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_withdrawal_after_an_identity_report_restores_the_report() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var service = new FakeDaemonClientService();
+            var lifecycleStatus = new Subject<string?>();
+            var lifecycleAttention = new Subject<string?>();
+            var identity = new Subject<string?>();
+            var vm = new MainWindowViewModel(
+                service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                lifecycleStatus: lifecycleStatus, lifecycleAttention: lifecycleAttention, identityReport: identity);
+            using var activation = vm.Activator.Activate();
+            const string report = "Daemon daemon-a is running for another server.";
+
+            lifecycleStatus.OnNext("Installing the command-line tool failed.");
+            identity.OnNext(report);
+            lifecycleAttention.OnNext("The daemon didn't come up cleanly.");
+            lifecycleAttention.OnNext(null);
+
+            await Assert.That(vm.StartMessage).IsEqualTo(report);
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Lifecycle_attention_also_lands_on_the_start_message_lane() {

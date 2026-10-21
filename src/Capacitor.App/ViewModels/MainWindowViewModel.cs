@@ -567,13 +567,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             // A connect clears the progress lines back to the standing identity report, whichever of the two the
             // main thread happens to see first.
             string? identity = null;
-            // Each lifecycle lane's line until it is withdrawn or a connect clears the banner.
+            // Each lifecycle lane's line until it is withdrawn, or a connect or identity report replaces it.
             var laneLines = new string?[2];
             identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(report => {
                     var shown = identity;
                     identity = report;
-                    if (report is not null) StartMessage = report;
+                    if (report is not null) {
+                        laneLines.AsSpan().Clear();
+                        StartMessage = report;
+                    }
                     else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
                 })
                 .DisposeWith(disposables);
