@@ -27,7 +27,7 @@ internal static class CodexJudgeDeclarationReader {
 
     public static async Task<CodexDeclaration> ReadAsync(
             string transcriptPath, string sessionId, WatchAckCursor cursor, TimeProvider time, TimeSpan reReadBudget, CancellationToken ct) {
-        // One scan per consultation: only the count moves while it waits.
+        // Only the count is polled while it waits; the rollout is scanned before the wait and once after it.
         var scan = Scan(transcriptPath);
         if (scan.Reason is { } reason) return new(null, reason);
 
@@ -40,6 +40,12 @@ internal static class CodexJudgeDeclarationReader {
             // The newest human line is not yet acknowledged: the watcher is about to send it.
             if (scan.NewestHuman <= acked || time.GetUtcNow() >= deadline) break;
             await Task.Delay(Poll, time, ct).ConfigureAwait(false);
+        }
+
+        // A human line appended during the wait may be one the server does not hold yet.
+        if (scan.NewestHuman <= acked) {
+            scan = Scan(transcriptPath);
+            if (scan.Reason is { } again) return new(null, again);
         }
 
         if (scan.Recent.Count == 0) return new(null, "no_turns");

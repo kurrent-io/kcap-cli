@@ -57,6 +57,20 @@ public class CodexJudgeDeclarationReaderTests {
         await Assert.That(declared.WindowlessReason).IsEqualTo("newest_turn_unacknowledged");
     }
 
+    /// A human line written while the reader waits counts too: the count covering the line the wait began on is not enough.
+    [Test]
+    public async Task A_human_line_appended_during_the_wait_makes_the_set_windowless_until_acknowledged() {
+        var path = Rollout(User("fix the build", "t1", "user.text"), User("now ship it", "t2", "user.text"));
+        Cursor.Write(Sid, 1);
+
+        var reading = Read(path, TimeSpan.FromSeconds(5));
+        await Task.Delay(250);
+        await File.AppendAllTextAsync(path, User("actually, stop", "t3", "user.text") + "\n");
+        Cursor.Write(Sid, 2);
+
+        await Assert.That((await reading).WindowlessReason).IsEqualTo("newest_turn_unacknowledged");
+    }
+
     [Test]
     public async Task Waits_for_the_count_to_cover_the_newest_human_line() {
         var path = Rollout(User("fix the build", "t1", "user.text"), User("now ship it", "t2", "user.text"));
