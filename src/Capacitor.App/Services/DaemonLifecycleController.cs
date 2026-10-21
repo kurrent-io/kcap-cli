@@ -868,15 +868,20 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
                 return;
             }
             if (busy) {
-                lock (_lock) _mismatchWaitsForIdle = true;
-                // An idle snapshot landing while this read the profile found the flag unset; look again now.
-                if (!_latestBusy) _ = CheckAttachedIdentityAsync();
                 var agents = daemon.ActiveAgents switch {
                     0 => "the agent it is starting is running and has finished",
                     1 => "its running agent finishes",
                     var n => $"its {n} running agents finish"
                 };
                 if (announce) Report($"{mismatch} The app offers to replace it once {agents}.");
+                // After the report, so an idle outcome is the one left standing. An idle snapshot that landed before
+                // the flag was set found nothing to wake, so this looks again; one landing after it does the looking.
+                bool idleNow;
+                lock (_lock) {
+                    _mismatchWaitsForIdle = true;
+                    idleNow = !_latestBusy;
+                }
+                if (idleNow) _ = CheckAttachedIdentityAsync();
                 return;
             }
 
