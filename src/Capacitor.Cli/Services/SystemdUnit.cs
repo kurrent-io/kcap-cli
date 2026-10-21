@@ -67,7 +67,7 @@ static class SystemdUnit {
         return enabledExit == 0 ? ServiceState.Installed : ServiceState.NotInstalled;
     }
 
-    // The UnitFileState values for which `systemctl is-enabled` exits 0, so both probes agree on Installed.
+    // The UnitFileState values for which `systemctl is-enabled` exits 0.
     static readonly string[] EnabledFileStates = ["enabled", "enabled-runtime", "static", "alias", "indirect", "generated", "transient"];
 
     /// <summary>
@@ -78,6 +78,9 @@ static class SystemdUnit {
     /// <para>Only <c>inactive</c> and <c>failed</c> prove the daemon is gone. Any other state — <c>activating</c>
     /// during the restart delay, <c>deactivating</c> while a stop is still killing it — is Unknown and
     /// Running with no pid, so nothing treats a daemon that may be alive as stopped.</para>
+    ///
+    /// <para>A unit file on disk that systemd knows is Installed even when disabled: <c>ensure</c> and the
+    /// desktop app start a present unit, and a verified start must not then read it as missing.</para>
     /// </summary>
     public static ServiceQuery QueryFromShow(int exitCode, string output, bool unitPresent, string? binaryPath) {
         if (exitCode != 0) return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.NotInstalled, binaryPath, null);
@@ -91,10 +94,11 @@ static class SystemdUnit {
         if (activeState is not ("active" or "reloading" or "inactive" or "failed"))
             return new ServiceQuery(LabelProbe.Unknown, unitPresent, ServiceState.Running, binaryPath, null);
 
-        var active  = activeState is "active" or "reloading";
-        var enabled = EnabledFileStates.Contains(props.GetValueOrDefault("UnitFileState"));
-        var state   = active ? ServiceState.Running : enabled ? ServiceState.Installed : ServiceState.NotInstalled;
-        var pid     = active && int.TryParse(props.GetValueOrDefault("MainPID"), out var p) && p > 0 ? p : (int?)null;
+        var fileState = props.GetValueOrDefault("UnitFileState");
+        var known     = EnabledFileStates.Contains(fileState) || (unitPresent && fileState is { Length: > 0 } and not "not-found");
+        var active    = activeState is "active" or "reloading";
+        var state     = active ? ServiceState.Running : known ? ServiceState.Installed : ServiceState.NotInstalled;
+        var pid       = active && int.TryParse(props.GetValueOrDefault("MainPID"), out var p) && p > 0 ? p : (int?)null;
 
         return new ServiceQuery(state == ServiceState.NotInstalled ? LabelProbe.Absent : LabelProbe.Loaded, unitPresent, state, binaryPath, pid);
     }

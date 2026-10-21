@@ -136,4 +136,24 @@ public class SystemdUnitTests {
         await Assert.That(q.Probe).IsEqualTo(LabelProbe.Loaded);
         await Assert.That(q.State).IsEqualTo(ServiceState.Installed);
     }
+
+    /// <summary>A unit someone ran `systemctl --user disable` on is still ours to start, not missing.</summary>
+    [Test]
+    public async Task QueryFromShow_disabled_unit_on_disk_is_installed() {
+        var q = SystemdUnit.QueryFromShow(0, "ActiveState=inactive\nUnitFileState=disabled\nMainPID=0\n", unitPresent: true, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Loaded);
+        await Assert.That(q.State).IsEqualTo(ServiceState.Installed);
+    }
+
+    /// <summary>Without our unit file, a disabled unit systemd finds elsewhere is not this install's.</summary>
+    [Test]
+    [Arguments("disabled", false)]
+    [Arguments("not-found", true)]
+    public async Task QueryFromShow_unit_systemd_does_not_tie_to_our_file_is_absent(string fileState, bool unitPresent) {
+        var q = SystemdUnit.QueryFromShow(0, $"ActiveState=inactive\nUnitFileState={fileState}\nMainPID=0\n", unitPresent, null);
+
+        await Assert.That(q.Probe).IsEqualTo(LabelProbe.Absent);
+        await Assert.That(q.State).IsEqualTo(ServiceState.NotInstalled);
+    }
 }
