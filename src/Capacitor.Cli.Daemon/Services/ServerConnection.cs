@@ -731,6 +731,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             HighestResolutionGeneration: GetHighestResolutionGeneration?.Invoke(),
             UnattendedVendorCapabilities: _config.UnattendedVendorCapabilities,
             AcpPresetVendors: _config.AcpPresetVendors,
+            AcpPresets: Acp.AcpPermissionPresets.Advertised,
             PermissionModeVendors: _config.PermissionModeVendors,
             PrReviewVendors: _config.PrReviewVendors,
             // Read off the handler, never asserted: an unwired connection would otherwise invite

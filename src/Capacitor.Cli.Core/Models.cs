@@ -1694,12 +1694,10 @@ public readonly record struct LaunchAgentCommand(
         // NEVER used for consent matching, which stays on RequesterUserId. Appended last, same
         // wire-compat rule as the fields above — old daemons ignore it, old servers never set it.
         string?           RequesterDisplay = null,
-        // Caller-selected ACP permission preset ("explore"/"edit") for an interactive ACP-hosted
-        // launch. The AcpInteractionBridge auto-approves permission requests whose ACP tool kind the
-        // preset covers; everything else keeps prompting. Null for every non-preset launch; the
-        // orchestrator's pre-flight AcpPermissionPresetPolicy fails closed on a preset supplied for a
-        // review-flow / borrowed / non-ACP-routed launch. Appended last so the SignalR positional
-        // binding stays wire-compatible — old daemons ignore it, old servers never set it.
+        // Caller-selected ACP permission preset for an interactive ACP-hosted launch; the
+        // AcpInteractionBridge auto-approves the permission requests it covers. Null for every
+        // non-preset launch; the orchestrator's pre-flight AcpPermissionPresetPolicy fails closed on a
+        // preset supplied for a review-flow / borrowed / non-ACP-routed launch.
         string?           AcpPermissionPreset = null,
         // §2.7 B4: the hosted Codex thread to RESUME (via thread/resume, no second SessionStarted) instead
         // of starting fresh — set by the server only for a parked-reviewer relaunch, else null. Appended
@@ -2238,7 +2236,10 @@ public readonly record struct DaemonConnect(
         // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
         // cannot see a branch that exists only here.
         bool                                        SupportsBranchBaseRef = false,
-        ResumingAgentClaim[]?                       ResumingAgents = null
+        ResumingAgentClaim[]?                       ResumingAgents = null,
+        // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
+        // Null from a daemon predating the field, which the server reads as explore and edit only.
+        string[]?                                   AcpPresets = null
     );
 
 public sealed record UnattendedVendorCapability(
