@@ -109,6 +109,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     bool _feedReleased;
     /// The session the listed foreign rows belong to.
     string? _queueKey;
+    readonly HashSet<Guid> _discardedDispatches = [];
+    bool _discardBusy;
     string? _root;
 
     volatile FeedLease? _lease;
@@ -320,6 +322,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
 
     public ReactiveCommand<Unit, Unit> SendCommand { get; }
     public ReactiveCommand<QueuedChatMessage, Unit> SendQueuedCommand { get; }
+    public ReactiveCommand<QueuedChatMessage, Unit> DiscardQueuedCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
     public ReactiveCommand<string, Unit> RunCodeCommand { get; }
@@ -521,7 +524,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         bool? idle = _status == "Running" && _awaitingInput is null && !SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents)
             ? null : AgentIsIdle;
         var can = AgentCanTakeQueuedNow;
-        foreach (var queued in _queuedMessages) queued.SetPickup(idle, can);
+        foreach (var queued in _queuedMessages) queued.SetPickup(idle, can, !_discardBusy && !IsReadOnlyParticipant && _input.CanDiscardQueued);
     }
 
     void RefreshAgentStatus() {
@@ -760,6 +763,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // may still accept text, but that text would land in the menu.
         Observable.Merge(
                 _input.WhenAnyValue(i => i.CanAcceptText).Select(_ => Unit.Default),
+                _input.WhenAnyValue(i => i.CanDiscardQueued).Select(_ => Unit.Default),
                 this.WhenAnyValue(x => x.HasTerminalMenu).Select(_ => Unit.Default))
             .Subscribe(_ => RefreshQueuedSend())
             .DisposeWith(_disposables);
@@ -829,6 +833,26 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         });
         _disposables.Add(SendQueuedCommand);
 
+        DiscardQueuedCommand = ReactiveCommand.CreateFromTask<QueuedChatMessage>(async message => {
+            if (!message.CanDiscard || _discardBusy || message.DispatchId is not { } id || !_queuedMessages.Contains(message)) return;
+            var queueKey = _queueKey;
+            _discardBusy = true;
+            RefreshQueuedSend();
+            try {
+                var discarded = await _input.DiscardQueuedAsync(id, _lifetimeToken);
+                if (_lifetimeToken.IsCancellationRequested || _queueKey != queueKey) return;
+                if (!discarded) { Notice("Could not discard this attempt. Try again."); return; }
+                _discardedDispatches.Add(id);
+                _queuedMessages.Remove(message);
+                _unechoed.Remove(message);
+                RefreshQueue();
+            } finally {
+                _discardBusy = false;
+                if (!_lifetimeToken.IsCancellationRequested) RefreshQueuedSend();
+            }
+        });
+        _disposables.Add(DiscardQueuedCommand);
+
         InterruptCommand = ReactiveCommand.CreateFromTask(
             () => _input.InterruptAsync(_lifetimeToken), this.WhenAnyValue(x => x.ShowsInterrupt));
         _disposables.Add(InterruptCommand);
@@ -867,6 +891,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             // An item with no id is unkeyed, not identified as nobody's: keying it would collide
             // with every other such item and could disqualify an own send from its real match.
             if (item.DispatchId == Guid.Empty || !listed.Add(item.DispatchId)) continue;
+            if (_discardedDispatches.Contains(item.DispatchId)) continue;
             if (Tracked.Any(q => q.DispatchId == item.DispatchId)) continue;
             if (_superseded.Any(pair => pair.Old.DispatchId == item.DispatchId)) continue;
             var own = Tracked.FirstOrDefault(q => q.DispatchId is null && !q.Acknowledged && q.MatchesText(item.Text));
@@ -877,6 +902,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _queuedMessages.Remove(gone);
         foreach (var own in _queuedMessages.Where(q => !q.IsForeign && q.DispatchId is { } id && !listed.Contains(id)))
             own.MarkUnlisted();
+        _discardedDispatches.RemoveWhere(id => !listed.Contains(id));
         RefreshQueue();
     }
 
@@ -904,6 +930,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // where no snapshot can ever arrive to retire it — leaves nothing to keep it honest.
         if (info.FeedKey != _queueKey) {
             _queueKey = info.FeedKey;
+            _discardedDispatches.Clear();
             foreach (var foreign in _queuedMessages.Where(q => q.IsForeign).ToList()) _queuedMessages.Remove(foreign);
         }
         var switched = _openFeed is { } open && info.FeedKey is { } key && key != _feedKey;

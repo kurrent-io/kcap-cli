@@ -27,6 +27,26 @@ namespace Capacitor.App.Tests.Unit;
 /// scheduler marshals that onto the UI thread before it reaches a binding.
 [NotInParallel(nameof(AvaloniaSession))]
 public class RemoteSessionViewSmokeTests {
+    [Test]
+    public async Task An_unresolved_server_attempt_can_be_discarded_without_sending_a_prompt() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var host = new Host();
+            try {
+                await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+                var id = Guid.NewGuid();
+                host.Lane.PendingInputSubject.OnNext(new("s1", [new QueuedInputItem { DispatchId = id, Text = "old attempt" }]));
+                host.Settle();
+                var discard = host.View.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "DiscardQueuedButton" && b.IsVisible);
+                var point = discard.TranslatePoint(new Point(discard.Bounds.Width / 2, discard.Bounds.Height / 2), host.Window)!.Value;
+                host.Window.MouseDown(point, MouseButton.Left);
+                host.Window.MouseUp(point, MouseButton.Left);
+                await host.SettleUntilAsync(() => host.Vm.Chat.QueuedMessages.Count == 0, "discarded");
+                await Assert.That(host.Lane.UserInputs).IsEmpty();
+            } finally { await host.Vm.TeardownAsync(); }
+            return true;
+        });
+    }
+
     sealed class Host : IDisposable {
         readonly SessionAccessService _access;
         readonly FakeAgentDirectory _directory = new();

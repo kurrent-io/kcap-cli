@@ -47,6 +47,14 @@ internal sealed class ServerChatInput : ChatInput {
         : SendAvailability.Connecting;
 
     public override bool CanAcceptText => Availability == SendAvailability.Ready;
+    public override bool CanDiscardQueued => !_disposed && _laneState == ServerLaneState.Connected && _access == SessionAccessState.Established;
+
+    public override async Task<bool> DiscardQueuedAsync(Guid dispatchId, CancellationToken ct) {
+        if (!CanDiscardQueued || ct.IsCancellationRequested) return false;
+        try {
+            return (await _lane.DiscardQueuedInputAsync(_agentId, dispatchId, ct)).Result == HubCallResult.Ok;
+        } catch (Exception) { return false; }
+    }
 
     /// Escape is a PTY keystroke; a frame-driven harness has nothing it would reach.
     public override bool CanInterrupt => _hasTerminal && CanAcceptText;
@@ -117,6 +125,7 @@ internal sealed class ServerChatInput : ChatInput {
         this.RaisePropertyChanged(nameof(Availability));
         this.RaisePropertyChanged(nameof(CanAcceptText));
         this.RaisePropertyChanged(nameof(CanInterrupt));
+        this.RaisePropertyChanged(nameof(CanDiscardQueued));
         this.RaisePropertyChanged(nameof(Hint));
     }
 

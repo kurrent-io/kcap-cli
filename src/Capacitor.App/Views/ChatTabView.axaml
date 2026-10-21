@@ -359,15 +359,23 @@
                                                            ToolTip.Tip="The server recorded this send but has no matching delivery receipt. This does not mean the agent is still waiting to run it."
                                                            FontSize="11" Foreground="{StaticResource KcapFaintBrush}" />
                                             </StackPanel>
-                                            <Button x:Name="SendQueuedButton" Grid.Column="1" Classes="kcapPrimary" Content="Send again"
-                                                    ToolTip.Tip="Send this message again. The original message may still arrive."
-                                                    Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
-                                                    CommandParameter="{Binding}"
-                                                    IsVisible="{Binding CanSendNow}"
-                                                    Height="24" Padding="12,0" Margin="12,0,0,0"
-                                                    VerticalAlignment="Center" VerticalContentAlignment="Center"
-                                                    FontSize="13" FontWeight="SemiBold" CornerRadius="7"
-                                                    AutomationProperties.Name="Send queued message again" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                <Button x:Name="DiscardQueuedButton" Content="Discard"
+                                                        Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).DiscardQueuedCommand}"
+                                                        CommandParameter="{Binding}" IsVisible="{Binding CanDiscard}"
+                                                        ToolTip.Tip="Remove this attempt from the server's pending list. This does not cancel delivery; the message may still reach the agent."
+                                                        Height="24" Padding="10,0" Margin="12,0,0,0" FontSize="13"
+                                                        AutomationProperties.Name="Discard unresolved message" />
+                                                <Button x:Name="SendQueuedButton" Classes="kcapPrimary" Content="Send again"
+                                                        ToolTip.Tip="Send this message again. The original message may still arrive."
+                                                        Command="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).SendQueuedCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        IsVisible="{Binding CanSendNow}"
+                                                        Height="24" Padding="12,0" Margin="12,0,0,0"
+                                                        VerticalAlignment="Center" VerticalContentAlignment="Center"
+                                                        FontSize="13" FontWeight="SemiBold" CornerRadius="7"
+                                                        AutomationProperties.Name="Send queued message again" />
+                                            </StackPanel>
                                         </Grid>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>

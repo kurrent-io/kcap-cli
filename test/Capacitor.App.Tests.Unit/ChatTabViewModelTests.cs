@@ -3375,6 +3375,49 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Discard_removes_only_the_confirmed_attempt_and_preserves_failed_discards_and_the_draft() {
+        await RunOnUiAsync(async () => {
+            var lane = new FakeServerLane();
+            lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+            var access = new BehaviorSubject<SessionAccessState>(SessionAccessState.Established);
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
+            var input = new ServerChatInput("a1", lane, access, session, hasTerminal: true);
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
+                new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+            var first = Item("same text", Guid.NewGuid());
+            var second = Item("same text", Guid.NewGuid());
+            queue.OnNext([first, second]);
+            chat.ComposerText = "keep my draft";
+            var row = chat.QueuedMessages[0];
+            await Assert.That(row.CanDiscard).IsTrue();
+            var response = new TaskCompletionSource<HubCallOutcome>();
+            lane.DiscardHandler = id => {
+                if (id != first.DispatchId) throw new InvalidOperationException("wrong dispatch");
+                return response.Task;
+            };
+            var discard = chat.DiscardQueuedCommand.Execute(row).ToTask();
+            await WaitUntilAsync(() => !row.CanDiscard, what: "discard in flight");
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
+            response.SetResult(HubCallOutcome.Ok);
+            await discard;
+            await Assert.That(chat.QueuedMessages.Single().DispatchId).IsEqualTo(second.DispatchId);
+            queue.OnNext([first, second]);
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(1);
+
+            lane.DiscardHandler = _ => Task.FromResult(HubCallOutcome.Failed("old server"));
+            await chat.DiscardQueuedCommand.Execute(chat.QueuedMessages.Single());
+            await Assert.That(chat.QueuedMessages.Single().DispatchId).IsEqualTo(second.DispatchId);
+            await Assert.That(chat.ComposerText).IsEqualTo("keep my draft");
+            await Assert.That(lane.UserInputs).IsEmpty();
+            await chat.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task An_idle_server_listed_send_can_be_retried_without_reappearing_as_another_clients_message() {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
