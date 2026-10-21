@@ -404,6 +404,21 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// An agent already finished when it is opened had a session, so nothing says it is waiting for
+    /// one, or for chat.
+    [Test]
+    public async Task A_finished_agent_with_a_session_neither_waits_nor_claims_it_never_started() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.Row(status: "Completed", vendor: "claude"));
+            await Assert.That(vm.SessionEnded).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            await Assert.That(vm.AccessNote).IsEqualTo("");
+            await WaitUntilAsync(() => vm.Chat.PhaseNote == "", what: "the ended chat's note cleared");
+            await vm.TeardownAsync();
+        });
+    }
+
     /// A row that loses its session id, as a daemon re-registering does for a moment, keeps the
     /// session's rows in the chat, so the chat is not shown under the note as if before a session.
     [Test]

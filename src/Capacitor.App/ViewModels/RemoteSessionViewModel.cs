@@ -234,7 +234,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
-        RemoteSessionAccess.NoSession => SessionEnded ? "The agent ended before its session started" : "Waiting for the session to start",
+        RemoteSessionAccess.NoSession => !SessionEnded ? "Waiting for the session to start"
+            : _hadSession ? ""
+            : "The agent ended before its session started",
         _ => "",
     };
 
@@ -379,7 +381,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     void Apply(AgentRow row) {
         _row = row;
         PublishWorkPresence();
-        if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
+        var sessionId = row.SessionId;
+        _hadSession |= sessionId is not null;
+        if (_sessionIds.Value != sessionId) _sessionIds.OnNext(sessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
         if (SessionStatusDots.IsTerminal(row.Status)) {
@@ -396,8 +400,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         OriginChangedToLocal = false;
         _seenLive = true;
 
-        var sessionId = row.SessionId;
-        _hadSession |= sessionId is not null;
         if (sessionId != _leasedSession) {
             Release();
             if (sessionId is null) Access = RemoteSessionAccess.NoSession;
