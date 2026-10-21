@@ -294,6 +294,13 @@ internal sealed partial class AcpInteractionBridge(
                         break;
                 }
             }
+
+            // A call of a governed kind that lacks the field its rules read normalizes to Other, where
+            // those rules cannot see it; it may be one they deny, so no preset approves it.
+            if (policyAction is { Kind: ActionKind.Other }
+             && TryGetToolKind(parsed.ToolCall) is AcpToolKind.Execute or AcpToolKind.Fetch or AcpToolKind.Read
+                    or AcpToolKind.Search or AcpToolKind.Edit or AcpToolKind.Move or AcpToolKind.Delete)
+                policyForcedAsk = true;
         }
 
         // Launch-time permission preset (INTERACTIVE path only). Sits strictly between "frame

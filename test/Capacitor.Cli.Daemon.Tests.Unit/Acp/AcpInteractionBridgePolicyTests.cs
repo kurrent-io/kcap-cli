@@ -120,6 +120,32 @@ public class AcpInteractionBridgePolicyTests {
         await Assert.That(h.Notices).IsEmpty();
     }
 
+    /// <summary>A call claiming a kind the policy governs, but missing the field its rules read, could be one
+    /// a rule denies, so no preset approves it.</summary>
+    [Test]
+    [Arguments(AcpPermissionPresets.Auto, """{"toolCallId":"call-1","title":"Run","kind":"execute","rawInput":{}}""")]
+    [Arguments(AcpPermissionPresets.Auto, """{"toolCallId":"call-1","title":"Fetch","kind":"fetch"}""")]
+    [Arguments(AcpPermissionPresets.Edit, """{"toolCallId":"call-1","title":"Touch","kind":"edit","locations":[{"path":""}]}""")]
+    public async Task A_call_the_policy_cannot_read_goes_to_a_human(string preset, string toolCall) {
+        var h = Build(Governed, preset);
+
+        await h.HandleAsync(Frame(toolCall, Standard));
+
+        await Assert.That(h.Forwarded).IsTrue();
+        await Assert.That(h.Notices).IsEmpty();
+    }
+
+    /// <summary>A call outside every governed kind is one the policy reads as it is, so Auto still approves it.</summary>
+    [Test]
+    public async Task Auto_approves_a_call_of_a_kind_the_policy_does_not_govern() {
+        var h = Build(Governed, AcpPermissionPresets.Auto);
+
+        var outcome = await h.HandleAsync(Frame("""{"toolCallId":"call-1","title":"mcp: search","kind":"other"}""", Standard));
+
+        await Assert.That(Harness.OptionId(outcome)).IsEqualTo("allow-once");
+        await Assert.That(h.Notices).HasSingleItem();
+    }
+
     [Test]
     public async Task Deny_answers_with_the_agents_own_reject_option() {
         var h = Build(Governed);
