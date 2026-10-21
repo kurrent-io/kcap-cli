@@ -125,6 +125,8 @@ public class CodexHostedPolicySeamTests : IDisposable {
     [Arguments("pathless", "Forward")]
     [Arguments("empty_destination", "Forward")]
     [Arguments("empty_snapshot", "Forward")]
+    [Arguments("non_array", "Forward")]
+    [Arguments("bad_destination", "Forward")]
     public async Task Every_path_a_file_change_touches_is_checked(string shape, string verdict) {
         // The judge allows anything it sees and the earlier snapshot is denied, so only an unknown item forwards.
         Judge("allow");
@@ -134,9 +136,12 @@ public class CodexHostedPolicySeamTests : IDisposable {
             "rename"            => new JsonArray(other, new JsonObject { ["path"] = "/wt/src/key.txt", ["kind"] = Move("/wt/config/secrets/key.txt") }),
             "pathless"          => new JsonArray(other, new JsonObject { ["kind"] = new JsonObject { ["type"] = "add" } }),
             "empty_destination" => new JsonArray(other, new JsonObject { ["path"] = "/wt/src/key.txt", ["kind"] = Move("") }),
+            "bad_destination"   => new JsonArray(other, new JsonObject {
+                                       ["path"] = "/wt/src/key.txt", ["kind"] = new JsonObject { ["type"] = "update", ["move_path"] = 5 } }),
+            "non_array"         => (JsonNode)new JsonObject(),
             _                   => new JsonArray(),
         };
-        if (shape == "empty_snapshot")
+        if (shape is "empty_snapshot" or "non_array")
             seam.Paths.Observe("patch-3", Element(new JsonArray(new JsonObject { ["path"] = "/wt/config/secrets/key.txt", ["kind"] = "add" })));
         seam.Paths.Observe("patch-3", Element(snapshot));
 
