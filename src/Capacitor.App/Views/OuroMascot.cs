@@ -14,7 +14,6 @@ public sealed class OuroMascot : Image {
     public static readonly StyledProperty<bool> IsPlayingProperty =
         AvaloniaProperty.Register<OuroMascot, bool>(nameof(IsPlaying));
 
-    // Wing angle, hop offset and tail angle per pose, stepped out and back in 12 frames.
     static readonly (int Wing, int Hop, int Tail)[] Poses =
         [(60, 16, -12), (40, 10, -8), (15, 2, -3), (-10, -6, 3), (-35, -12, 8), (-60, -16, 12)];
     static readonly int[] Sequence = [0, 1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0];
