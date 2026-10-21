@@ -142,7 +142,7 @@ public partial class App : Application {
     // _shutdown stops.
     ShimOfferCoordinator? _shimOffer;
     // The wizard's PATH link, which can outlive the wizard; the shim offer waits on it.
-    Task _wizardPathLink = Task.CompletedTask;
+    Task<string?> _wizardPathLink = Task.FromResult<string?>(null);
     // No disposal needed — its Status subscription dies with _service's own subject disposal below.
     ConsentFlipCoordinator? _consentFlip;
     // Inert outside a packed bundle (CreateUpdater degrades a construction failure the same way);
@@ -1159,7 +1159,7 @@ public partial class App : Application {
             WizardAttentionCopyFor);
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
-        if (graph.PathFix is { } pathFix) _wizardPathLink = pathFix.Running;
+        if (graph.PathFix is { } pathFix) _wizardPathLink = pathFix.UnfinishedAsync();
         var quiesced = await HandoffAfterWizardAsync(
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 

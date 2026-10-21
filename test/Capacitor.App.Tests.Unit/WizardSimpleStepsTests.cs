@@ -228,6 +228,28 @@ public class WizardSimpleStepsTests {
         await Assert.That(updates).IsEqualTo(0);
     }
 
+    /// The handoff carries a failure the user may not have seen, but not their own cancel.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unfinished_link_hands_off_its_reason_but_not_a_cancel() {
+        var (failed, cancelled, none) = await AvaloniaSession.DispatchAsync(async () => {
+            var failing = new PathFixViewModel(
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, "Permission denied.", null)), new FakeAppStateStore(), "/x");
+            var cancelling = new PathFixViewModel(
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Cancelled, null, null)), new FakeAppStateStore(), "/x");
+            var idle = new PathFixViewModel(
+                new ScriptedInstaller(new ShimResult(ShimOutcome.Failed, null, null)), new FakeAppStateStore(), "/x");
+            await failing.LinkAsync(CancellationToken.None);
+            await cancelling.LinkAsync(CancellationToken.None);
+
+            return (await failing.UnfinishedAsync(), await cancelling.UnfinishedAsync(), await idle.UnfinishedAsync());
+        });
+
+        await Assert.That(failed).Contains("Permission denied.");
+        await Assert.That(cancelled).IsNull();
+        await Assert.That(none).IsNull();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Never_installing_never_claims() {

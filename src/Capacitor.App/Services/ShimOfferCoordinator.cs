@@ -24,7 +24,7 @@ public sealed class ShimOfferCoordinator {
     readonly CancellationToken _lifetime;
     // True only for a gate-Incomplete startup — Offerable/manual install still work, only the once-ever auto-offer DIALOG is skipped.
     readonly bool _autoOfferSuppressed;
-    readonly Task _pendingLink;
+    readonly Task<string?> _pendingLink;
     // The warning this coordinator last posted, taken back once an install succeeds.
     string? _warning;
 
@@ -38,7 +38,7 @@ public sealed class ShimOfferCoordinator {
     public ShimOfferCoordinator(
             Task phaseClosed, ILoginShellProbe probe, ICliPathInstaller? installer, IAppStateStore store,
             ILifecycleSurface surface, string? target, CancellationToken lifetime, bool autoOfferSuppressed = false,
-            Task? pendingLink = null) {
+            Task<string?>? pendingLink = null) {
         _phaseClosed          = phaseClosed;
         _probe                = probe;
         _installer            = installer;
@@ -47,7 +47,7 @@ public sealed class ShimOfferCoordinator {
         _target               = installer is null ? null : target;
         _lifetime             = lifetime;
         _autoOfferSuppressed  = autoOfferSuppressed;
-        _pendingLink          = pendingLink ?? Task.CompletedTask;
+        _pendingLink          = pendingLink ?? Task.FromResult<string?>(null);
     }
 
     /// True while the tray's "Install command-line tool…" item should show: applicable (an
@@ -67,8 +67,10 @@ public sealed class ShimOfferCoordinator {
     async Task RunAsync() {
         try {
             await _phaseClosed.ConfigureAwait(false);
-            // A probe before the setup wizard's link settles would offer what is about to exist.
-            await AwaitPendingLinkAsync().ConfigureAwait(false);
+            // A probe before the setup wizard's link settles would offer what is about to exist. Its
+            // failure is said here: setup may never have shown it, and the preflight below can
+            // return without a dialog.
+            if (await AwaitPendingLinkAsync().ConfigureAwait(false) is { } unfinished) await Status(unfinished).ConfigureAwait(false);
             if (_target is null) return; // nothing to link — offer and menu item both stay off
 
             var onPath = await _probe.KcapOnPathAsync(_lifetime).ConfigureAwait(false);
@@ -141,7 +143,7 @@ public sealed class ShimOfferCoordinator {
         return Task.CompletedTask;
     }
 
-    Task AwaitPendingLinkAsync() => _pendingLink.WaitAsync(_lifetime);
+    Task<string?> AwaitPendingLinkAsync() => _pendingLink.WaitAsync(_lifetime);
 
     async Task ClaimDeniedThenStatus(string message) {
         await ClaimDeniedAsync().ConfigureAwait(false);

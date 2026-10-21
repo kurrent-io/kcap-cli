@@ -12,6 +12,7 @@ public sealed class PathFixViewModel : ReactiveObject {
 
     Task<bool>? _running;
     bool    _offerClaimed;
+    bool    _cancelled;
     bool    _fixed;
     string? _message;
 
@@ -39,8 +40,13 @@ public sealed class PathFixViewModel : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _message, value);
     }
 
-    /// The link in flight, or a completed task; the app's startup offer waits on it before probing.
-    public Task Running => _running ?? Task.CompletedTask;
+    /// Settles with why the last link did not finish, or null when it did, none ran, or the user
+    /// cancelled it. The app's startup offer waits on it, since setup may never have shown it.
+    public async Task<string?> UnfinishedAsync() {
+        if (_running is null) return null;
+        await _running.ConfigureAwait(true);
+        return Fixed || _cancelled ? null : Message;
+    }
 
     /// Installs the terminal command and reports whether the login shell can now run it. A call
     /// while one is running joins it, so the admin prompt never shows twice.
@@ -80,6 +86,7 @@ public sealed class PathFixViewModel : ReactiveObject {
     }
 
     void Apply(ShimResult result) {
+        _cancelled = result.Outcome == ShimOutcome.Cancelled;
         switch (result.Outcome) {
             case ShimOutcome.Installed:
                 Fixed   = true;

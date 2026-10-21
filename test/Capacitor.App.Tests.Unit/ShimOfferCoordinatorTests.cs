@@ -71,7 +71,7 @@ public class ShimOfferCoordinatorTests {
 
         public Harness(
                 bool immediatePhaseClosed = false, bool noTarget = false, bool noInstaller = false,
-                bool autoOfferSuppressed = false, Task? pendingLink = null) {
+                bool autoOfferSuppressed = false, Task<string?>? pendingLink = null) {
             Target      = noTarget ? null : Path.Combine(TempDir, "target-cli");
             Destination = Path.Combine(TempDir, "kcap");
             Installer   = new PathShimInstaller(Runner, Probe, Destination);
@@ -108,7 +108,7 @@ public class ShimOfferCoordinatorTests {
     /// what is about to exist.
     [Test]
     public async Task Offer_waits_for_the_wizard_link_before_probing() {
-        var link = new TaskCompletionSource();
+        var link = new TaskCompletionSource<string?>();
         using var h = new Harness(immediatePhaseClosed: true, pendingLink: link.Task);
         var probed = false;
         h.Probe.KcapOnPathBehavior = _ => { probed = true; return Task.FromResult<bool?>(true); };
@@ -117,8 +117,25 @@ public class ShimOfferCoordinatorTests {
         await Task.Delay(50);
         await Assert.That(probed).IsFalse();
 
-        link.SetResult();
+        link.SetResult(null);
         await WaitUntilAsync(() => probed, what: "the probe to run once the link settles");
+        await Assert.That(h.Surface.StatusMessages).IsEmpty();
+    }
+
+    /// A link the setup wizard left unfinished can meet a preflight that returns without a dialog
+    /// (Conflict here, AlreadyInstalled likewise); its reason must still reach the user.
+    [Test]
+    public async Task An_unfinished_wizard_link_says_why_even_when_no_offer_follows() {
+        const string why = "Could not finish installing the terminal command.";
+        using var h = new Harness(immediatePhaseClosed: true, pendingLink: Task.FromResult<string?>(why));
+        h.Probe.KcapOnPathBehavior = _ => Task.FromResult<bool?>(false);
+        File.WriteAllText(h.Destination, "someone else's kcap");
+        h.Coordinator.Start();
+
+        await WaitUntilAsync(() => h.OfferableValues.Contains(true), what: "the probe to find kcap missing");
+        await Task.Delay(50); // give a wrongly-firing dialog every chance to appear
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Surface.StatusMessages).IsEquivalentTo([why]);
     }
 
     [Test]
