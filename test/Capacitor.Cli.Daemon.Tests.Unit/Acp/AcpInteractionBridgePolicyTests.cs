@@ -97,7 +97,6 @@ public class AcpInteractionBridgePolicyTests {
         return harness;
     }
 
-    /// <summary>Rules that cannot be read; reading any of them throws.</summary>
     sealed class UnreadableRules : IReadOnlyList<PolicyRule> {
         public PolicyRule this[int index] => throw new InvalidOperationException("unreadable policy");
         public int Count => throw new InvalidOperationException("unreadable policy");
