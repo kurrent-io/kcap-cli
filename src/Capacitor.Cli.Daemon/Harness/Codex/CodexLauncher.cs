@@ -220,10 +220,7 @@ internal sealed partial class CodexLauncher(
 
         args.Add("--no-alt-screen");
 
-        if (ctx.PromptFile is { } promptFile) {
-            args.Add("--");
-            args.Add(PromptFile.Pointer(promptFile));
-        } else if (!string.IsNullOrEmpty(ctx.Prompt)) {
+        if (!string.IsNullOrEmpty(ctx.Prompt)) {
             args.Add("--");
             args.Add(ctx.Prompt);
         }

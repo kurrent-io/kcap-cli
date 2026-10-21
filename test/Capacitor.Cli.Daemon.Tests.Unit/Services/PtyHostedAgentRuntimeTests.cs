@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -159,6 +161,111 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.StringWrites.Count).IsEqualTo(2);   // paste + exactly one CR
         await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~hello\x1b[201~");
         await Assert.That(pty.StringWrites[1]).IsEqualTo("\r");
+    }
+
+    static Task PumpAsync(PtyHostedAgentRuntime runtime) =>
+        Task.Run(async () => { await foreach (var _ in runtime.ReadOutputAsync()) { } });
+
+    /// <summary>Advances the fake clock in slices, yielding between them so timer continuations
+    /// run, until <paramref name="done"/> or the span is used up.</summary>
+    static async Task StepAsync(FakeTimeProvider time, TimeSpan span, Func<bool> done) {
+        var step = TimeSpan.FromMilliseconds(250);
+
+        for (var advanced = TimeSpan.Zero; advanced <= span + span / 2 && !done(); advanced += step) {
+            time.Advance(step);
+            await Task.Delay(10);
+        }
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (!done() && DateTime.UtcNow < deadline) await Task.Delay(10);
+    }
+
+    /// <summary>The launch prompt owns the input lane from the start, so a message the user sends
+    /// while the TUI is still starting lands after it, never before.</summary>
+    [Test]
+    public async Task Launch_prompt_lands_before_a_follow_up_sent_during_startup() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        var followUp = runtime.SendUserInputAsync("and test it");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+
+        await followUp.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(string.Join("|", pty.Writes))
+            .IsEqualTo("\x1b[200~build it\x1b[201~|\r|\x1b[200~and test it\x1b[201~|\r");
+        pty.Exit();
+    }
+
+    /// <summary>Output that keeps coming, such as a startup spinner, postpones the paste until it stops.</summary>
+    [Test]
+    public async Task Launch_prompt_waits_until_startup_output_stops() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        _ = PumpAsync(runtime);
+        pty.Emit("spinner");
+        await Task.Delay(100);
+
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        await Task.Delay(50);
+        pty.Emit("spinner");
+        await Task.Delay(100);
+        time.Advance(TimeSpan.FromMilliseconds(300));
+        await Task.Delay(100);
+
+        await Assert.That(pty.Writes).IsEmpty();
+
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptQuietWindow, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>A TUI that never settles still gets its prompt once the startup wait expires.</summary>
+    [Test]
+    public async Task Launch_prompt_is_pasted_when_the_startup_wait_expires_without_output() {
+        var time    = new FakeTimeProvider();
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, time, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait, () => pty.Writes.Count >= 1);
+
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        pty.Exit();
+    }
+
+    /// <summary>An agent that is already gone gets nothing pasted, and the lane is released for
+    /// whoever asks next.</summary>
+    [Test]
+    public async Task Launch_prompt_is_dropped_when_the_agent_exited_before_startup_settled() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+        pty.Exit();
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(pty.Writes).IsEmpty();
+        await runtime.SendUserInputAsync("later").WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>Disposal during the startup wait abandons the prompt without faulting the delivery.</summary>
+    [Test]
+    public async Task Launch_prompt_delivery_ends_quietly_when_the_runtime_is_disposed_during_startup() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.DisposeAsync();
+
+        await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(pty.Writes).IsEmpty();
     }
 
     /// <summary>The graceful stop reaches its "/exit" write while a delivery is parked mid-write —

@@ -87,7 +87,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     [Test]
     public async Task Interactive_launch_hands_the_permission_mode_to_the_launcher() {
         var launcher = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var ctx   = BuildInteractiveContext("claude") with { PermissionMode = "acceptEdits" };
         var start = await factory.StartAsync(ctx, CancellationToken.None);
@@ -104,7 +104,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var start = await factory.StartAsync(BuildClaudeLaunchContext("auto"), CancellationToken.None);
 
@@ -124,7 +124,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var start = await factory.StartAsync(
             BuildClaudeLaunchContext(null) with { IsReviewFlow = true, FlowRole = "reviewer" }, CancellationToken.None);
@@ -143,7 +143,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
 
@@ -162,7 +162,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
         var pty      = new SpyPtyProcessFactory();
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var start = await factory.StartAsync(
             BuildClaudeLaunchContext(null) with { IsPrivate = true, DaemonBridgeUrl = "http://127.0.0.1:9" }, CancellationToken.None);
@@ -185,44 +185,46 @@ public class PtyHostedAgentRuntimeFactoryTests {
         await Assert.That(PtyEnvScrub.HostedAgentVars).Contains("KCAP_FLOW_ROLE");
     }
 
-    static readonly string LongPrompt = new('d', PromptFile.ArgumentBudget + 1);
+    static readonly string LongPrompt = new('d', CommandLinePrompt.ArgumentBudget + 1);
 
-    (PtyHostedAgentRuntimeFactory Factory, SpyPtyProcessFactory Pty, GatedPty Process, string PromptRoot) NewPromptFactory() {
+    (PtyHostedAgentRuntimeFactory Factory, SpyPtyProcessFactory Pty, RecordingScriptedPtyProcess Process) NewPasteFactory() {
         var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
         var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
-        var process  = new GatedPty();
+        var process  = new RecordingScriptedPtyProcess();
         var pty      = new SpyPtyProcessFactory(process);
-        var root     = Tmp.PathTo("prompts");
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance,
-            TimeProvider.System, root);
-        return (factory, pty, process, root);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
+        return (factory, pty, process);
+    }
+
+    static bool PastesALaunchPrompt(HostedRuntimeStart start) => ((PtyHostedAgentRuntime) start.Runtime).LaunchPromptDelivery is not null;
+
+    /// <summary>Drains the runtime's output the way the orchestrator's read loop does.</summary>
+    static Task PumpAsync(IHostedAgentRuntime runtime) =>
+        Task.Run(async () => { await foreach (var _ in runtime.ReadOutputAsync()) { } });
+
+    static async Task WaitForWritesAsync(RecordingScriptedPtyProcess process, int count) {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (process.Writes.Count < count && DateTime.UtcNow < deadline) await Task.Delay(25);
     }
 
     /// <summary>Any local user can read a command line, and <c>pkill -f</c> matches it, so the prompt
-    /// never appears there, even when it is short. The file lives until the runtime is disposed: an
-    /// agent slow to start reads it long after spawn.</summary>
+    /// never appears there, even when it is short. It reaches the agent as its first message instead,
+    /// pasted once the TUI's startup output has settled.</summary>
     [Test]
-    public async Task A_prompt_is_read_from_an_owner_only_file_that_is_removed_with_the_runtime() {
-        var (factory, pty, process, root) = NewPromptFactory();
-        var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
+    public async Task A_prompt_is_kept_off_the_command_line_and_pasted_once_startup_output_settles() {
+        var (factory, pty, process) = NewPasteFactory();
+        var start = await factory.StartAsync(
+            BuildClaudeLaunchContext(null) with { Prompt = "build it\nthen test it" }, CancellationToken.None);
 
         try {
-            var file = Path.Combine(root, AgentFileNames.For("agent-mode-1"), "prompt.md");
-            await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
-            await Assert.That(pty.LastArgs.Any(a => a.Contains("build it", StringComparison.Ordinal))).IsFalse();
-            await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo("build it");
+            await Assert.That(pty.LastArgs!.Any(a => a.Contains("build it", StringComparison.Ordinal))).IsFalse();
 
-            if (!OperatingSystem.IsWindows()) {
-                await Assert.That(File.GetUnixFileMode(file)).IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite);
-                await Assert.That(File.GetUnixFileMode(Path.GetDirectoryName(file)!))
-                    .IsEqualTo(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            }
+            _ = PumpAsync(start.Runtime);
+            process.Emit("welcome banner");
+            await WaitForWritesAsync(process, 2);
 
-            process.Exit();
-            await Assert.That(File.Exists(file)).IsTrue();
-
-            await start.Runtime.DisposeAsync();
-            await Assert.That(Directory.Exists(Path.GetDirectoryName(file))).IsFalse();
+            await Assert.That(process.Writes[0]).IsEqualTo("\x1b[200~build it\nthen test it\x1b[201~");
+            await Assert.That(process.Writes[1]).IsEqualTo("\r");
         } finally {
             process.Exit();
             await start.Runtime.DisposeAsync();
@@ -231,49 +233,49 @@ public class PtyHostedAgentRuntimeFactoryTests {
 
     [Test]
     public async Task A_slash_command_stays_on_the_command_line() {
-        var (factory, pty, process, root) = NewPromptFactory();
+        var (factory, pty, process) = NewPasteFactory();
         var start = await factory.StartAsync(BuildClaudeLaunchContext(null) with { Prompt = "/review 42" }, CancellationToken.None);
 
         try {
             await Assert.That(pty.LastArgs![^1]).IsEqualTo("/review 42");
-            await Assert.That(Directory.Exists(root)).IsFalse();
+            await Assert.That(PastesALaunchPrompt(start)).IsFalse();
         } finally {
             process.Exit();
             await start.Runtime.DisposeAsync();
         }
     }
 
+    /// <summary>A leading absolute path is not a slash command, so it is pasted like any prose.</summary>
     [Test]
-    public async Task A_prompt_that_starts_with_an_absolute_path_is_read_from_a_file() {
-        var (factory, pty, process, root) = NewPromptFactory();
+    public async Task A_prompt_that_starts_with_an_absolute_path_is_pasted() {
+        var (factory, pty, process) = NewPasteFactory();
         var start = await factory.StartAsync(
             BuildClaudeLaunchContext(null) with { Prompt = "/Users/me/notes.md has the plan" }, CancellationToken.None);
 
         try {
-            var file = Path.Combine(root, AgentFileNames.For("agent-mode-1"), "prompt.md");
-            await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
+            await Assert.That(pty.LastArgs!.Any(a => a.Contains("notes.md", StringComparison.Ordinal))).IsFalse();
+            await Assert.That(PastesALaunchPrompt(start)).IsTrue();
         } finally {
             process.Exit();
             await start.Runtime.DisposeAsync();
         }
     }
 
-    /// <summary>An overlong command line fails a Windows spawn outright, so there even a slash command is
-    /// better read from a file; elsewhere it fits and keeps working as a command.</summary>
+    /// <summary>An overlong command line fails a Windows spawn outright, so there even a slash command
+    /// is pasted; elsewhere it fits and keeps working as a command.</summary>
     [Test]
-    public async Task An_overlong_slash_command_moves_to_a_file_only_on_Windows() {
-        var (factory, pty, process, root) = NewPromptFactory();
+    public async Task An_overlong_slash_command_is_pasted_only_on_Windows() {
+        var (factory, pty, process) = NewPasteFactory();
         var prompt = "/" + LongPrompt;
         var start  = await factory.StartAsync(BuildClaudeLaunchContext(null) with { Prompt = prompt }, CancellationToken.None);
 
         try {
             if (OperatingSystem.IsWindows()) {
-                var file = Path.Combine(root, AgentFileNames.For("agent-mode-1"), "prompt.md");
-                await Assert.That(pty.LastArgs![^1]).IsEqualTo(PromptFile.Pointer(file));
-                await Assert.That(await File.ReadAllTextAsync(file)).IsEqualTo(prompt);
+                await Assert.That(pty.LastArgs!.Contains(prompt)).IsFalse();
+                await Assert.That(PastesALaunchPrompt(start)).IsTrue();
             } else {
                 await Assert.That(pty.LastArgs![^1]).IsEqualTo(prompt);
-                await Assert.That(Directory.Exists(root)).IsFalse();
+                await Assert.That(PastesALaunchPrompt(start)).IsFalse();
             }
         } finally {
             process.Exit();
@@ -282,53 +284,25 @@ public class PtyHostedAgentRuntimeFactoryTests {
     }
 
     [Test]
-    public async Task A_launch_that_does_not_put_the_prompt_on_the_command_line_writes_no_file() {
+    public async Task A_launch_that_does_not_put_the_prompt_on_the_command_line_pastes_nothing() {
         var launcher = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");
-        var root     = Tmp.PathTo("prompts");
-        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance,
-            TimeProvider.System, root);
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new NullPtyProcessFactory(), NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var start = await factory.StartAsync(BuildInteractiveContext("claude") with { Prompt = "build it" }, CancellationToken.None);
 
         try {
-            await Assert.That(Directory.Exists(root)).IsFalse();
+            await Assert.That(PastesALaunchPrompt(start)).IsFalse();
         } finally {
             await start.Runtime.DisposeAsync();
         }
     }
 
-    /// <summary>A PTY that runs until <see cref="Exit"/>, so a test can look at what exists while the
-    /// agent is alive.</summary>
-    sealed class GatedPty : IPtyProcess {
-        readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public void Exit() => _exited.TrySetResult();
-
-        public int  Pid       => 0;
-        public bool HasExited => _exited.Task.IsCompleted;
-        public int? ExitCode  => HasExited ? 0 : null;
-
-        public ValueTask DisposeAsync() { Exit(); return default; }
-        public Task WaitForExitAsync(TimeSpan? timeout = null) => _exited.Task;
-        public Task TerminateAsync(TimeSpan?   timeout = null) { Exit(); return Task.CompletedTask; }
-
-        public async IAsyncEnumerable<byte[]> ReadOutputAsync(
-                [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default) {
-            await _exited.Task.WaitAsync(ct).ConfigureAwait(false);
-            yield break;
-        }
-
-        public Task WriteAsync(string input) => Task.CompletedTask;
-        public Task WriteAsync(byte[] data) => Task.CompletedTask;
-        public void Resize(ushort     cols, ushort rows) { }
-        public void SendInterrupt() { }
-    }
 
     [Test]
     public async Task Review_launch_builds_the_MCP_command_from_CapacitorPath_not_the_agent_CliPath() {
         var launcher   = new RecordingLauncher("claude", cliPath: "/opt/vendor/claude");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var ctx = BuildReviewContext("claude", capacitorPath: "/opt/kcap/kcap");
 
@@ -360,7 +334,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Review_launch_for_codex_builds_MCP_command_from_CapacitorPath_not_the_agent_CliPath() {
         var launcher   = new RecordingLauncher("codex", cliPath: "/opt/vendor/codex");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var ctx = BuildReviewContext("codex", capacitorPath: "/opt/kcap/kcap");
 
@@ -388,7 +362,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Codex_launch_threads_the_posture_into_the_launcher_context() {
         var launcher   = new RecordingLauncher("codex", cliPath: "/opt/vendor/codex");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var ctx = BuildInteractiveContext("codex") with { CodexPosture = new("danger-full-access", "untrusted") };
 
@@ -408,7 +382,7 @@ public class PtyHostedAgentRuntimeFactoryTests {
     public async Task Codex_launch_without_a_posture_threads_null_into_the_launcher_context() {
         var launcher   = new RecordingLauncher("codex", cliPath: "/opt/vendor/codex");
         var ptyFactory = new NullPtyProcessFactory();
-        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, Tmp.PathTo("prompts"));
+        var factory    = new PtyHostedAgentRuntimeFactory(launcher, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System);
 
         var start = await factory.StartAsync(BuildInteractiveContext("codex"), CancellationToken.None);
 
