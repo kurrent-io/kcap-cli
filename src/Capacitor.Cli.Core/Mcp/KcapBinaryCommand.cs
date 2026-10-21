@@ -52,4 +52,17 @@ public static class KcapBinaryCommand {
         var sibling = Path.Combine(dir, OperatingSystem.IsWindows() ? "kcap.exe" : "kcap");
         return File.Exists(sibling) ? ScriptInstallLayout.Stabilize(sibling) : null;
     }
+
+    /// <summary>Whether a registered command runs kcap: the bare literal, or an absolute path (either
+    /// OS's flavour) whose file is named <c>kcap</c>.</summary>
+    public static bool IsKcap(string command) {
+        if (command == KcapMcpServers.Command) return true;
+
+        var windowsRooted = command.Length >= 3 && char.IsAsciiLetter(command[0]) && command[1] == ':' && command[2] is '\\' or '/';
+        if (!command.StartsWith('/') && !command.StartsWith('\\') && !windowsRooted) return false;
+
+        var name = command[(command.LastIndexOfAny(['/', '\\']) + 1)..];
+
+        return name.Equals("kcap", StringComparison.OrdinalIgnoreCase) || name.Equals("kcap.exe", StringComparison.OrdinalIgnoreCase);
+    }
 }
