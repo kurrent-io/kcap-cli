@@ -36,6 +36,26 @@ public class SubagentPaneViewModelTests {
         await pane.TeardownAsync();
     });
 
+    /// A running subagent reads as working to the chat, so its own foreground runs stay in the transcript
+    /// rather than in the banner for work that outlives a turn.
+    [Test]
+    public async Task A_running_subagent_reads_as_working_and_an_ended_one_does_not() => await RunOnUiAsync(async () => {
+        var time = new FakeTimeProvider();
+        var runs = new SessionRuns(time);
+        runs.Apply(Signals(new RunSignal.Started("c1", "Explore", "Map", time.GetUtcNow())));
+        var pane = new SubagentPaneViewModel(
+            runs, runs.Rows.Single(), "Parent", AgentOrigin.Local, "a1", "claude", "key", _ => new ChatPromptFeed(),
+            new RecordingOpener(), time, new FakePermissionService(), () => { });
+
+        await Assert.That(pane.Chat.ActivityNote).StartsWith("Working for");
+
+        runs.Apply(Signals(new RunSignal.Finished("c1", null, RunOutcome.Done, time.GetUtcNow())));
+
+        await Assert.That(pane.IsRunning).IsFalse();
+        await Assert.That(pane.Chat.ActivityNote).IsEqualTo("");
+        await pane.TeardownAsync();
+    });
+
     /// The chat reads the agent the pane opened on, so a row that comes to name another agent closes it.
     [Test]
     public async Task A_row_renamed_to_another_agent_closes_the_pane() => await RunOnUiAsync(async () => {

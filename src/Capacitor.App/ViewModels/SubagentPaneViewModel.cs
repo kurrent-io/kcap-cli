@@ -34,7 +34,7 @@ public sealed class SubagentPaneViewModel : ReactiveObject {
         _runs.Rows.CollectionChanged += OnRowsChanged;
         var session = _running.DistinctUntilChanged()
             .Select(running => new ChatSessionInfo(
-                running ? "running" : "ended", running ? "Running" : "Finished", vendor, null, null, null, !running, Notice, feedKey));
+                running ? "Running" : "Exited", running ? "Running" : "Finished", vendor, null, null, running ? false : null, !running, Notice, feedKey));
         // Its own key keeps the parent's pending cards, which are keyed by the parent, out of this pane.
         Chat = new ChatTabViewModel(
             $"{parentAgentId}/{row.AgentId}", origin, session, Observable.Return<string[]?>(null), new ReadOnlyChatInput(),

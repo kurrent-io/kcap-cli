@@ -388,10 +388,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         // Only Claude Code files a subagent's transcript beside its parent's.
         if (row.AgentId is not { } subagentId || _latestDto is not { TranscriptPath: { } parentPath, Vendor: "claude" } dto
             || TranscriptChat.ForSubagent(dto.Vendor) is not { } projection) return;
-        var path = ClaudeSubagentFiles.TranscriptPath(parentPath, subagentId);
+        var path   = ClaudeSubagentFiles.TranscriptPath(parentPath, subagentId);
+        var logged = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         ReplaceSubagent(new SubagentPaneViewModel(
             _runs, row, Title, AgentOrigin.Local, AgentId, dto.Vendor, path,
-            key => new LocalTranscriptFeed(key, projection, subagentId, _time, _ => { }),
+            key => new LocalTranscriptFeed(key, projection, subagentId, _time,
+                reason => { if (logged.TryAdd(reason, 0)) Console.Error.WriteLine($"kcap: subagent transcript: {reason}"); }),
             _opener, _time, _permissions, CloseSubagent));
         ActiveTab = WorkspaceTab.Chat;
     }
