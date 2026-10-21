@@ -103,13 +103,12 @@ public static class JsonMcpConfigWriter {
     }
 
     /// <summary>Whether <paramref name="existing"/> differs from <paramref name="rendered"/> only by a kcap
-    /// command and by the args: the server's own, stamped or not. Every other key must be one this shape
-    /// writes, with the value it writes, so a disabled server, an added env or a pinned cwd stays. An
-    /// entry without the <c>trust</c> kcap writes is one the user made ask again.</summary>
+    /// command and by the args: the server's own, stamped or not. The keys must be exactly those this
+    /// shape writes, every other one with the value it writes, so a disabled server, an added env or a
+    /// pinned cwd stays, and so does a removed <c>trust</c> or <c>cwd</c>.</summary>
     static bool IsKcapRegistration(JsonNode existing, JsonObject rendered, KcapMcpServer s, McpConfigShape shape) {
-        if (existing is not JsonObject entry || entry["command"] is null) return false;
-        if (!shape.CommandAsArgvArray && entry["args"] is null) return false;
-        if (rendered.ContainsKey("trust") && !entry.ContainsKey("trust")) return false;
+        if (existing is not JsonObject entry) return false;
+        if (rendered.Any(field => !entry.ContainsKey(field.Key))) return false;
 
         foreach (var (key, value) in entry) {
             if (!rendered.ContainsKey(key)) return false;

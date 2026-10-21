@@ -365,19 +365,26 @@ public class JsonMcpConfigWriterTests {
         await Assert.That(CommandOf(path, "kcap-workitems")).IsEqualTo("/new/kcap");
     }
 
-    /// <summary>A Gemini entry whose <c>trust</c> was removed asks before each tool call again; kcap must
-    /// not put the bypass back.</summary>
+    /// <summary>A field kcap writes that the user removed is their choice: a Gemini entry without
+    /// <c>trust</c> asks before each tool call, one without <c>cwd</c> runs where the harness starts it.</summary>
     [Test]
-    public async Task Register_leaves_a_gemini_entry_whose_trust_was_removed() {
+    [Arguments("gemini", "kcap-review", """{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"]}""")]
+    [Arguments("standard", "kcap-sessions", """{"command":"/opt/homebrew/bin/kcap","args":["mcp","sessions"]}""")]
+    [Arguments("opencode", "kcap-review", """{"type":"local","command":["/opt/homebrew/bin/kcap","mcp","review"]}""")]
+    public async Task Register_leaves_an_entry_missing_a_field_kcap_writes(string shape, string name, string entry) {
         using var tmp = new TempDir();
-        var path   = tmp.CreateFile("settings.json", """{"mcpServers":{"kcap-review":{"command":"/opt/homebrew/bin/kcap","args":["mcp","review"]}}}""");
+        var block  = shape == "opencode" ? "mcp" : "mcpServers";
+        var path   = tmp.CreateFile("settings.json", "{\"" + block + "\":{\"" + name + "\":" + entry + "}}");
         var marker = new McpMarker("test", Home, _ => tmp.PathTo("marker.json"));
+        var configShape = shape switch {
+            "gemini"   => McpConfigShape.Gemini,
+            "opencode" => McpConfigShape.OpenCode,
+            _          => McpConfigShape.Standard,
+        };
 
-        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, McpConfigShape.Gemini, null, marker, resolveBinaryPath: () => "/new/kcap");
+        JsonMcpConfigWriter.Register(path, KcapMcpServers.All, configShape, "/w/repo", marker, resolveBinaryPath: () => "/new/kcap");
 
-        var entry = (JsonObject)((JsonObject)JsonNode.Parse(File.ReadAllText(path))!["mcpServers"]!)["kcap-review"]!;
-        await Assert.That(entry.ContainsKey("trust")).IsFalse();
-        await Assert.That((string)entry["command"]!).IsEqualTo("/opt/homebrew/bin/kcap");
+        await Assert.That(JsonNode.DeepEquals(((JsonObject)Read(path)[block]!)[name], JsonNode.Parse(entry))).IsTrue();
     }
 
     /// <summary>Anything beyond the command and args differing from what kcap writes is the user's
