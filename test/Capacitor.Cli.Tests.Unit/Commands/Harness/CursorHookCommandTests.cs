@@ -536,12 +536,9 @@ public class CursorHookCommandTests {
         // nothing to emit.
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
 
-        // The abandoned reader's ReadToEndAsync only ever completes by observing its
-        // CancellationToken fire. Give it a generous window relative to the 30ms budget —
-        // this asserts the cancellation was actually delivered promptly by HandleCore's
-        // explicit Cancel(), not "eventually, whenever the internal timer happens to tick".
-        var won = await Task.WhenAny(reader.Cancelled.Task, Task.Delay(TimeSpan.FromSeconds(2)));
-        await Assert.That(won).IsEqualTo(reader.Cancelled.Task);
+        // Read synchronously at return: the reader's own continuation runs on the pool, which a
+        // loaded runner can starve for seconds after the cancel has already happened.
+        await Assert.That(reader.Token.IsCancellationRequested).IsTrue();
     }
 
     [Test, NotInParallel]
@@ -1061,14 +1058,14 @@ public class CursorHookCommandTests {
     // throwing. Proves HandleCore's deadline branch deterministically cancels the abandoned
     // inner rather than merely disposing its CTS.
     sealed class CancelObservingReader : TextReader {
-        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CancellationToken Token { get; private set; }
 
         public override async Task<string> ReadToEndAsync(CancellationToken cancellationToken) {
+            Token = cancellationToken;
             var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await using (cancellationToken.Register(() => tcs.TrySetResult())) {
                 await tcs.Task;
             }
-            Cancelled.TrySetResult();
             throw new OperationCanceledException(cancellationToken);
         }
     }
