@@ -654,7 +654,8 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
         : ctx.IsBorrowedSnapshot          ? AcpUnattendedInteractionPolicy.Fail
         : descriptor.UnattendedInteractionPolicy;
 
-    /// <summary>A private agent is given no kcap server: each would tie its session to the server.</summary>
+    /// <summary>A private agent is handed no kcap server, as a --private local launch is not; the servers Grok
+    /// loads from the user's own config, kcap's among them, are the user's choice and still start.</summary>
     static IReadOnlyList<AcpMcpServerSpec> InteractiveMcpServers(AcpVendorDescriptor descriptor, RuntimeStartContext ctx) =>
         descriptor.InjectsKcapMcpServers && !ctx.IsPrivate
             ? [.. AcpInteractiveKcapMcp.Build(ctx, descriptor.Vendor), .. ctx.McpServers ?? []]
