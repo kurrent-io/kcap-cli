@@ -76,6 +76,9 @@ internal sealed partial class AcpInteractionBridge(
 
     readonly PermissionRefusalLedger _refusals = new();
 
+    /// <summary>The runtime opened this session with <c>session/new</c>, so every refusal in it passes through here.</summary>
+    internal void MarkBridgedSinceStart(string sessionId) => _refusals.MarkBridgedSinceStart(sessionId);
+
     /// <summary>
     /// A permission frame this bridge cannot even parse. Always answers <c>cancelled</c>; under
     /// <see cref="AcpUnattendedInteractionPolicy.AllowlistedAutoApprove"/> it ALSO reaps, because a
@@ -528,8 +531,8 @@ internal sealed partial class AcpInteractionBridge(
         var matched = decision.SelectedOptionId is { } sid && options.Any(o => o.OptionId == sid);
 
         if (policySnapshot is { JudgeEnabled: true } && IsHumanRefusal(decision, options))
-            _refusals.Record(parsed.SessionId, TryGetToolCallId(parsed.ToolCall),
-                TryGetToolKind(parsed.ToolCall) ?? TryGetToolTitle(parsed.ToolCall), policyAction);
+            _refusals.Record(parsed.SessionId, TryGetToolCallId(parsed.ToolCall), approvalId: null,
+                TryGetToolKind(parsed.ToolCall) ?? TryGetToolTitle(parsed.ToolCall), policyAction, promptId: null);
         LogPermissionDecisionReceived(agentId, decision.Outcome, decision.SelectedOptionId ?? "(none)", matched);
         LogInteractionResolved(agentId, "permission", OutcomeLabel(mapped));
 

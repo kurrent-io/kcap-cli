@@ -952,6 +952,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     throw new InvalidOperationException("ACP session/new response did not contain a sessionId.");
 
                 _sessionId = sessionId;
+                _interactionBridge?.MarkBridgedSinceStart(sessionId);
 
                 LogSessionStarted(_agentId, sessionId);
                 AcpMetrics.SessionsStarted.Add(1);

@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -36,7 +37,8 @@ public class CodexAppServerHostedAgentRuntimeTests {
     static (CodexAppServerHostedAgentRuntime Runtime, List<string?> Seeds, Func<int, FakeCodexAppServer> Fake)
             Build(Func<int, FakeCodexAppServer> fakeFor, CodexAppServerLaunch launch,
                   bool emitEnvelopes = false, bool deferFirstTurn = false,
-                  Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null) {
+                  Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null,
+                  CodexHostedPolicySeam? policy = null) {
         var seeds  = new List<string?>();
         var fakes  = new List<FakeCodexAppServer>();
         var index  = 0;
@@ -54,7 +56,7 @@ public class CodexAppServerHostedAgentRuntimeTests {
             emitEnvelopeTranscript: emitEnvelopes, deferFirstTurn: deferFirstTurn,
             agentId: requestInteraction is null ? null : "agent-1",
             requestInteraction: requestInteraction,
-            approvalTimeout: TimeSpan.FromSeconds(5), timeProvider: TimeProvider.System);
+            approvalTimeout: TimeSpan.FromSeconds(5), timeProvider: TimeProvider.System, policy: policy);
         return (runtime, seeds, i => fakes[i]);
     }
 
@@ -259,6 +261,23 @@ public class CodexAppServerHostedAgentRuntimeTests {
         await Assert.That(fake.ReceivedMethods).DoesNotContain("thread/resume");
         await Assert.That(fake.LastResumeThreadId).IsNull();
 
+        await runtime.DisposeAsync();
+    }
+
+    /// A thread this runtime started has every refusal in it pass through here; a resumed one may not, so its
+    /// judge can never allow.
+    [Test]
+    [Arguments(null, "thread-abc", true)]
+    [Arguments("thread-parked-1", "thread-parked-1", false)]
+    public async Task Only_a_started_thread_is_bridged_since_start(string? resumeSessionId, string threadId, bool complete) {
+        var refusals = new PermissionRefusalLedger();
+        var snapshot = new PolicySnapshot("snap-1", [], false, []);
+        var policy   = new CodexHostedPolicySeam(snapshot, null, _ => { }, refusals, () => null, "agent-1", TimeProvider.System, NullLogger.Instance);
+        var (runtime, _, _) = Build(_ => new FakeCodexAppServer(), Launch(resumeSessionId: resumeSessionId), policy: policy);
+
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+
+        await Assert.That(refusals.Declare(threadId).Complete).IsEqualTo(complete);
         await runtime.DisposeAsync();
     }
 
