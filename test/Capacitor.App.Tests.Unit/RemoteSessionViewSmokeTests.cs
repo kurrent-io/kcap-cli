@@ -38,7 +38,7 @@ public class RemoteSessionViewSmokeTests {
         public readonly RemoteSessionView View;
         public readonly Window Window;
 
-        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1", IWindowImpl? windowImpl = null) {
+        public Host(IPlanArtifactSource? planArtifacts = null, string sessionId = "s1", IWindowImpl? windowImpl = null, bool realTerminal = false) {
             _access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
             var row = AgentRow.FromRemote(new AgentInstanceDto {
@@ -48,7 +48,7 @@ public class RemoteSessionViewSmokeTests {
             _directory.Rows.AddOrUpdate(row);
             Vm = new RemoteSessionViewModel(row, _directory, _access, Permissions, NewActions(), Lane,
                 (_, _) => Task.FromResult(new SessionDetailFetch(Detail())), new RecordingOpener(), Time, new FakeWorkContextSource(),
-                () => new FakeTerminalSurface(), planArtifacts);
+                () => realTerminal ? new XtermTerminalSurface(130, 54) : new FakeTerminalSurface(), planArtifacts);
             View = new RemoteSessionView { DataContext = Vm };
             Window = windowImpl is null ? new Window() : new Window(windowImpl);
             Window.Content = View;
@@ -81,6 +81,128 @@ public class RemoteSessionViewSmokeTests {
             Permissions.Dispose();
             _directory.Dispose();
         }
+    }
+
+    [Test]
+    public async Task A_remote_terminal_scrolls_locally_and_sends_keyboard_and_button_arrows() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var host = new Host(realTerminal: true);
+            try {
+                await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+                await host.Vm.ShowTerminalCommand.Execute();
+                await host.SettleUntilAsync(() => host.Vm.Terminal!.Phase == RemoteTerminalPhase.Live, "live terminal");
+                host.Lane.TerminalDimensionsSubject.OnNext(new TerminalSize("a1", 130, 54));
+                var feed = string.Concat(Enumerable.Range(0, 120).Select(i => $"line {i}\r\n"))
+                    + "prompt\x1b[?1h";
+                host.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(feed))));
+                host.Window.Height = 450;
+                host.Settle();
+
+                var terminal = host.View.FindControl<RemoteTerminalControl>("TerminalHost")!;
+                var viewport = host.View.FindControl<RemoteTerminalViewport>("TerminalViewport")!;
+                var model = terminal.Model!;
+                await Assert.That(viewport.Extent.Height).IsGreaterThan(viewport.Viewport.Height);
+                await Assert.That(viewport.Offset.Y).IsGreaterThan(0);
+                var point = viewport.TranslatePoint(new Point(30, 30), host.Window)!.Value;
+                var beforeWheel = viewport.Offset.Y;
+                host.Window.MouseWheel(point, new Vector(0, 0.1));
+                host.Settle();
+                await Assert.That(viewport.Offset.Y).IsLessThan(beforeWheel);
+                host.Window.MouseWheel(point, new Vector(0, 100));
+                host.Settle();
+                host.Window.MouseWheel(point, new Vector(0, 100));
+                host.Settle();
+                await Assert.That(viewport.Offset.Y).IsEqualTo(0);
+                await Assert.That(model.ScrollOffset).IsLessThan(model.MaxScrollback);
+                host.Window.MouseWheel(point, new Vector(0, -100));
+                host.Settle();
+                host.Window.MouseWheel(point, new Vector(0, -100));
+                host.Settle();
+                await Assert.That(model.ScrollOffset).IsEqualTo(model.MaxScrollback);
+                await Assert.That(viewport.Offset.Y).IsGreaterThan(0);
+
+                host.Window.MouseWheel(point, new Vector(0, 100));
+                host.Settle();
+                terminal.Focus();
+                host.Window.KeyPress(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
+                host.Window.KeyRelease(Key.Up, RawInputModifiers.None, PhysicalKey.ArrowUp, null);
+                host.Window.KeyPress(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+                host.Window.KeyRelease(Key.Down, RawInputModifiers.None, PhysicalKey.ArrowDown, null);
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 2, "keyboard arrows");
+                await Assert.That(viewport.Offset.Y).IsGreaterThan(0);
+                foreach (var label in new[] { "↑", "↓" }) {
+                    host.Window.MouseWheel(point, new Vector(0, 100));
+                    host.Settle();
+                    var button = host.View.GetVisualDescendants().OfType<Button>().Single(b => Equals(b.Content, label));
+                    var center = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), host.Window)!.Value;
+                    host.Window.MouseDown(center, MouseButton.Left);
+                    host.Window.MouseUp(center, MouseButton.Left);
+                    host.Settle();
+                }
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 4, "button arrows");
+                await Assert.That(terminal.IsKeyboardFocusWithin).IsTrue();
+                await Assert.That(viewport.Offset.Y).IsGreaterThan(0);
+                await Assert.That(host.Lane.SpecialKeys).IsEquivalentTo(new[] {
+                    ("a1", SpecialKeys.ArrowUp), ("a1", SpecialKeys.ArrowDown),
+                    ("a1", SpecialKeys.ArrowUp), ("a1", SpecialKeys.ArrowDown),
+                });
+                await Assert.That((model.Terminal.Cols, model.Terminal.Rows)).IsEqualTo((130, 54));
+            } finally {
+                await host.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_mouse_tracking_app_receives_proportional_wheel_input_in_either_buffer(bool alternate) {
+        await AvaloniaSession.DispatchAsync(async () => {
+            using var host = new Host(realTerminal: true);
+            try {
+                await host.SettleUntilAsync(() => host.Vm.Access == RemoteSessionAccess.Ready, "ready");
+                await host.Vm.ShowTerminalCommand.Execute();
+                await host.SettleUntilAsync(() => host.Vm.Terminal!.Phase == RemoteTerminalPhase.Live, "live terminal");
+                host.Lane.TerminalDimensionsSubject.OnNext(new TerminalSize("a1", 103, 38));
+                var feed = string.Concat(Enumerable.Range(0, 90).Select(i => $"redraw {i}\r\n"));
+                feed += (alternate ? "\x1b[?1049h" : "") + "\x1b[?1000h\x1b[?1006hfull-screen conversation";
+                var bytes = System.Text.Encoding.UTF8.GetBytes(feed);
+                host.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1", Convert.ToBase64String(bytes)));
+                host.Settle();
+                var viewport = host.View.FindControl<RemoteTerminalViewport>("TerminalViewport")!;
+                var terminal = host.View.FindControl<RemoteTerminalControl>("TerminalHost")!;
+                var scrollback = terminal.Model!.ScrollOffset;
+                var point = terminal.TranslatePoint(new Point(30, 30), host.Window)!.Value;
+                for (var i = 0; i < 10; i++) host.Window.MouseWheel(point, new Vector(0, 0.1));
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 1, "one accumulated wheel step");
+                host.Window.MouseWheel(point, new Vector(0, 6));
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 7, "six proportional steps, without page acceleration");
+                foreach (var (_, key) in host.Lane.SpecialKeys) {
+                    await Assert.That(TerminalScrollKey.TryDecode(key, out var report)).IsTrue();
+                    await Assert.That(report.AsSpan().StartsWith("\x1b[<64;"u8)).IsTrue();
+                }
+                await Assert.That(terminal.Model.ScrollOffset).IsEqualTo(scrollback);
+                host.Window.Height = 450;
+                host.Lane.TerminalDimensionsSubject.OnNext(new TerminalSize("a1", 100, 30));
+                host.Settle();
+                host.Lane.TerminalOutputSubject.OnNext(new TerminalOutputFrame("a1",
+                    Convert.ToBase64String("\x1b[2J\x1b[Hredrawn history\x1b[30;1Hdraft"u8.ToArray())));
+                host.Settle();
+                point = terminal.TranslatePoint(new Point(30, 30), host.Window)!.Value;
+                var before = terminal.Model.ScrollOffset;
+                host.Window.MouseWheel(point, new Vector(0, -0.5));
+                host.Window.MouseWheel(point, new Vector(0, -0.5));
+                await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 8, "one downward step after resize");
+                await Assert.That(TerminalScrollKey.TryDecode(host.Lane.SpecialKeys[^1].Key, out var down)).IsTrue();
+                await Assert.That(down.AsSpan().StartsWith("\x1b[<65;"u8)).IsTrue();
+                await Assert.That(terminal.Model.ScrollOffset).IsEqualTo(before);
+                var buffer = terminal.Model.Terminal.Buffer;
+                await Assert.That(buffer.GetLine(buffer.BaseY)!.TranslateToString(true)).IsEqualTo("redrawn history");
+                await Assert.That(buffer.GetLine(buffer.BaseY + 29)!.TranslateToString(true)).IsEqualTo("draft");
+            } finally {
+                await host.Vm.TeardownAsync();
+            }
+        });
     }
 
     // Forward to the real headless platform so these assertions exercise hit testing and routed
