@@ -303,6 +303,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     readonly Func<bool, JsonObject>? _sessionNewMeta;
     readonly Func<AcpNotification, IReadOnlyList<AcpEventEnvelope>>? _turnUsageReader;
     readonly Func<AcpNotification, AcpSubagentSignal?>? _subagentReader;
+    readonly AcpQuestionProtocol? _questionProtocol;
 
     // A subagent's ACP sessionId → the agent id its events carry. Entries stay after it finishes, so a
     // straggling update is still not mistaken for the hosted agent's own.
@@ -529,6 +530,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
         _sessionNewMeta = sessionNewMeta;
         _turnUsageReader = turnUsageReader;
         _subagentReader  = subagentReader;
+        _questionProtocol = questionProtocol;
         _journal = journal;
         _admittedToolIds = admittedToolIds;
         _policySnapshot  = policySnapshot;
@@ -2991,6 +2993,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                     "ACP: elicitation declined by the reconnect router (uninstalled incarnation or non-running phase) for agent {AgentId}.",
                     _agentId);
                 return AcpInteractionBridge.ElicitationCancelResult();
+            case var method when _questionProtocol is { } protocol && method == protocol.Method:
+                _logger.LogDebug(
+                    "ACP: {Method} declined by the reconnect router (uninstalled incarnation or non-running phase) for agent {AgentId}.",
+                    method, _agentId);
+                return protocol.Reply(null);
             default:
                 return null; // unclaimed methods keep the connection's -32601 default-decline posture
         }

@@ -1,5 +1,5 @@
+using System.Buffers;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Capacitor.Cli.Daemon.Acp;
 
 namespace Capacitor.Cli.Daemon.Harness.Grok;
@@ -35,23 +35,35 @@ internal static class GrokQuestions {
         return new AcpVendorQuestionRequest(sessionId, questions);
     }
 
+    // Written token by token: JsonNode values lower to generic calls that NativeAOT cannot compile.
     static JsonElement Reply(IReadOnlyList<AcpVendorQuestionAnswer>? answered) {
-        var reply = new JsonObject();
+        var buffer = new ArrayBufferWriter<byte>();
 
-        if (answered is null) {
-            reply["outcome"] = "cancelled";
-        } else {
-            var answers = new JsonObject();
+        using (var json = new Utf8JsonWriter(buffer)) {
+            json.WriteStartObject();
+            json.WriteString("outcome", answered is null ? "cancelled" : "accepted");
 
-            foreach (var a in answered)
-                answers[a.Question.Text] = a.Question.MultiSelect
-                    ? new JsonArray([.. a.Answers.Select(l => (JsonNode?)JsonValue.Create(l))])
-                    : JsonValue.Create(a.Answers[0]);
+            if (answered is not null) {
+                json.WriteStartObject("answers");
 
-            reply["outcome"] = "accepted";
-            reply["answers"] = answers;
+                foreach (var a in answered) {
+                    if (a.Question.MultiSelect) {
+                        json.WriteStartArray(a.Question.Text);
+                        foreach (var label in a.Answers) json.WriteStringValue(label);
+                        json.WriteEndArray();
+                    } else {
+                        json.WriteString(a.Question.Text, a.Answers[0]);
+                    }
+                }
+
+                json.WriteEndObject();
+            }
+
+            json.WriteEndObject();
         }
 
-        return JsonDocument.Parse(reply.ToJsonString()).RootElement.Clone();
+        using var doc = JsonDocument.Parse(buffer.WrittenMemory);
+
+        return doc.RootElement.Clone();
     }
 }

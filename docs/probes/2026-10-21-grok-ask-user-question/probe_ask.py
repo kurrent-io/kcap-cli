@@ -24,9 +24,9 @@ def other(o):
         print("REQ", json.dumps(o)[:3000])
     if m == "_x.ai/ask_user_question" and "id" in o and answered["n"] == 0:
         answered["n"] += 1
-        # Echo the shape back: try answering with the first option's label.
+        # Answer the first question request with the reply given on the command line, else decline it.
         print("ANSWERING")
-        write({"jsonrpc": "2.0", "id": o["id"], "result": json.loads(sys.argv[2]) if len(sys.argv) > 2 else {"outcome": {"outcome": "cancelled"}}})
+        write({"jsonrpc": "2.0", "id": o["id"], "result": json.loads(sys.argv[2]) if len(sys.argv) > 2 else {"outcome": "cancelled"}})
     elif m == "session/request_permission" and "id" in o:
         write({"jsonrpc": "2.0", "id": o["id"], "result": {"outcome": {"outcome": "selected", "optionId": o["params"]["options"][0]["optionId"]}}})
     elif m == "session/update":

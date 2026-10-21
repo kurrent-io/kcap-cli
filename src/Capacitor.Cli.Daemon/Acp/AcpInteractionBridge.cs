@@ -156,6 +156,9 @@ internal sealed partial class AcpInteractionBridge(
                 return ElicitationCancelResult();
             }
 
+            if (questionProtocol is { } declined && request.Method == declined.Method)
+                return declined.Reply(null);
+
             return request.Method == "session/request_permission" ? CancelledResult() : null;
         }
 
@@ -180,10 +183,21 @@ internal sealed partial class AcpInteractionBridge(
         if (request.Params is not { } p || protocol.Read(p) is not { Questions.Count: > 0 } asked)
             return protocol.Reply(null);
 
-        var answered = new List<AcpVendorQuestionAnswer>(asked.Questions.Count);
+        // The vendor keys each answer by its question's text, so a repeated question is asked once.
+        var questions = asked.Questions.DistinctBy(q => q.Text, StringComparer.Ordinal).ToList();
 
-        for (var i = 0; i < asked.Questions.Count; i++) {
-            var question = asked.Questions[i];
+        if (questions.FirstOrDefault(q => !FitsAQuestionCard(q)) is { } oversized) {
+            logger.LogWarning(
+                "ACP: {Method} for agent {AgentId} asked a question too large for a question card ({Options} options); declining",
+                request.Method, agentId, oversized.Options.Count);
+
+            return protocol.Reply(null);
+        }
+
+        var answered = new List<AcpVendorQuestionAnswer>(questions.Count);
+
+        for (var i = 0; i < questions.Count; i++) {
+            var question = questions[i];
             var options  = question.Options
                 .Select((o, n) => new AcpInteractionOption(n.ToString(System.Globalization.CultureInfo.InvariantCulture), o.Label, o.Description))
                 .ToArray();
@@ -196,7 +210,7 @@ internal sealed partial class AcpInteractionBridge(
                 ToolName: null,
                 ToolInput: null,
                 ToolCallId: null,
-                Prompt: asked.Questions.Count > 1 ? $"({i + 1} of {asked.Questions.Count}) {question.Text}" : question.Text,
+                Prompt: questions.Count > 1 ? $"({i + 1} of {questions.Count}) {question.Text}" : question.Text,
                 Options: options,
                 IsMultiSelect: multi,
                 MinSelections: multi ? 1 : null,
@@ -228,19 +242,24 @@ internal sealed partial class AcpInteractionBridge(
         return protocol.Reply(answered);
     }
 
-    /// <summary>The labels a decision picked from the offered options, or the typed answer when none were
-    /// offered; null when it declined or names an option that was not offered.</summary>
+    /// <summary>The same bounds an elicitation's question card is held to, which the server enforces.</summary>
+    static bool FitsAQuestionCard(AcpVendorQuestion question) =>
+        question.Text.Length <= MaxElicitationMessageCodeUnits
+     && question.Options.Count <= ElicitationSchemaClassifier.MaxOptions
+     && question.Options.All(o => o.Label.Length <= ElicitationSchemaClassifier.MaxOptionCodeUnits
+                               && (o.Description?.Length ?? 0) <= ElicitationSchemaClassifier.MaxOptionCodeUnits);
+
+    /// <summary>The labels a decision picked from the offered options, or the answer typed instead of
+    /// picking one; null when it declined or names an option that was not offered.</summary>
     static string[]? ChosenAnswers(AcpInteractionDecision decision, AcpInteractionOption[] options, bool multi) {
         if (!AffirmativeOutcomes.Contains(decision.Outcome)) return null;
-
-        if (options.Length == 0)
-            return string.IsNullOrWhiteSpace(decision.FreeText) ? null : [decision.FreeText];
 
         var ids = multi
             ? decision.SelectedOptionIds ?? (decision.SelectedOptionId is { } scalar ? [scalar] : null)
             : decision.SelectedOptionId is { } one ? [one] : null;
 
-        if (ids is not { Length: > 0 }) return null;
+        if (options.Length == 0 || ids is not { Length: > 0 })
+            return string.IsNullOrWhiteSpace(decision.FreeText) ? null : [decision.FreeText];
 
         var labels = new List<string>(ids.Length);
 

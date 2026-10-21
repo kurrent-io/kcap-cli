@@ -23,12 +23,15 @@ public class GrokQuestionsTests {
 
     static (AcpInteractionBridge Bridge, List<AcpInteractionRequest> Asked) Bridge(
             Func<AcpInteractionRequest, AcpInteractionDecision> answer,
-            AcpUnattendedInteractionPolicy policy = AcpUnattendedInteractionPolicy.Disabled) {
+            AcpUnattendedInteractionPolicy policy = AcpUnattendedInteractionPolicy.Disabled,
+            Action<string>? reaped = null) {
         var asked = new List<AcpInteractionRequest>();
         var bridge = new AcpInteractionBridge(
             requestInteraction: (req, _) => { asked.Add(req); return Task.FromResult(answer(req)); },
             agentId: "agent-1", logger: NullLogger.Instance, time: TimeProvider.System,
             unattendedPolicy: policy,
+            unexpectedUnattendedInteraction: reaped,
+            admittedToolIds: new HashSet<string>(),
             questionProtocol: GrokQuestions.Protocol);
 
         return (bridge, asked);
@@ -115,6 +118,56 @@ public class GrokQuestionsTests {
         var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"), AcpUnattendedInteractionPolicy.AutoApprove);
 
         var result = await bridge.HandleAsync(Ask(Colour), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+    }
+
+    /// <summary>A Grok reviewer asking a question is reaped, as for any frame it may not raise, and Grok
+    /// is still answered in its own shape.</summary>
+    [Test]
+    public async Task A_grok_reviewer_question_is_reaped_and_declined() {
+        var reasons = new List<string>();
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"),
+            AcpUnattendedInteractionPolicy.AllowlistedAutoApprove, reasons.Add);
+
+        var result = await bridge.HandleAsync(Ask(Colour), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+        await Assert.That(reasons).IsEquivalentTo(["unattended_interaction_forbidden:_x.ai/ask_user_question"]);
+    }
+
+    /// <summary>A question card with options also takes a typed answer; Grok accepts any text.</summary>
+    [Test]
+    public async Task An_answer_typed_instead_of_picking_an_option_goes_back_to_grok() {
+        var (bridge, _) = Bridge(_ => new AcpInteractionDecision("answered", null, null, null, "Teal", null));
+
+        var result = await bridge.HandleAsync(Ask(Colour), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"accepted","answers":{"Which colour?":"Teal"}}""");
+    }
+
+    /// <summary>Grok keys each answer by the question's text, so the same question twice is asked once.</summary>
+    [Test]
+    public async Task A_repeated_question_is_asked_once() {
+        var (bridge, asked) = Bridge(req => Picked(req.Options![0].OptionId));
+
+        var result = await bridge.HandleAsync(Ask("""
+            [{"question":"Which colour?","options":[{"label":"Red"}]},{"question":"Which colour?","options":[{"label":"Red"}]}]
+            """), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"accepted","answers":{"Which colour?":"Red"}}""");
+        await Assert.That(asked.Select(a => a.Prompt ?? "")).IsEquivalentTo(["Which colour?"]);
+    }
+
+    /// <summary>A question beyond what a question card can show is declined before anything is asked.</summary>
+    [Test]
+    public async Task A_question_too_large_for_a_card_is_declined_without_asking() {
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
+        var options = string.Join(",", Enumerable.Range(0, 33).Select(n => $$"""{"label":"option {{n}}"}"""));
+
+        var result = await bridge.HandleAsync(Ask($$"""[{"question":"Which?","options":[{{options}}]}]"""), CancellationToken.None);
 
         await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
         await Assert.That(asked).IsEmpty();
