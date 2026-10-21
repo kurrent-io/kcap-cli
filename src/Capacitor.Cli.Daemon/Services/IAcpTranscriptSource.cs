@@ -48,4 +48,8 @@ internal interface IAcpTranscriptSource {
     /// <summary>Lets a reopened session's turns through, in the order they were queued, once the server has
     /// accepted an event of it.</summary>
     void ReleaseFirstTurn() { }
+
+    /// <summary>The server has bound this session, or never will (a silent agent, a failed bind). The server
+    /// refuses an interaction for a session it has not bound, so one asked before this reaches nobody.</summary>
+    void ServerBindSettled() { }
 }

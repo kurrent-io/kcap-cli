@@ -52,6 +52,9 @@ public class AgentOrchestratorAcpForwardingTests {
         await Assert.That(bindIndex).IsGreaterThan(registerIndex);
         await Assert.That(firstEventsIndex).IsGreaterThan(bindIndex);
 
+        // A runtime holds its interactions until the bind settles; the server refuses them before it.
+        await WaitHarness.PollUntilAsync(() => cursorFactory.LastRuntime!.ServerBindSettledCalls == 1);
+
         // RegisterAcpBinding was called: a reconnect re-bind (task 3's ReBindAcpSessionsAsync)
         // must re-invoke AcpSessionStarted for this agent — UnregisterAcpBinding is NOT
         // observable directly (non-virtual), so this is the indirect proof task 3's own tests

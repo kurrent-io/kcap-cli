@@ -162,6 +162,14 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// <summary>Null for every launch but an unattended Pi review — see <see cref="PiReviewerGuards"/>.</summary>
     readonly PiReviewerGuards? _guards;
 
+    /// <summary>Asks a viewer a Pi dialog. Null cancels every dialog at once, so Pi falls back to its
+    /// own default rather than blocking on stdin.</summary>
+    readonly Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? _requestInteraction;
+
+    /// <summary>Completed by <see cref="ServerBindSettled"/>. A launch prompt's dialog can arrive before
+    /// it, and must wait rather than be refused.</summary>
+    readonly TaskCompletionSource _bindSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     readonly ReapVerdictGate _gate;
 
     /// <summary>Null unless <see cref="_guards"/> is set — the review-flow-only deadline on a round.</summary>
@@ -213,7 +221,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             TimeSpan?     stopGrace     = null,
             Action?       onDisposed    = null,
             TranscriptJournal? journal  = null,
-            PiReviewerGuards? reviewerGuards = null) {
+            PiReviewerGuards? reviewerGuards = null,
+            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null) {
         _process        = process;
         _logger         = logger;
         _agentId        = agentId;
@@ -225,6 +234,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         _onDisposed     = onDisposed;
         _journal        = journal;
         _guards         = reviewerGuards;
+        _requestInteraction = requestInteraction;
         _ownerToken     = _ownerCts.Token;
 
         // DropOldest with SingleWriter=false: the pump is the only writer that matters for
@@ -262,6 +272,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     public string? ResolvedModel => _resolvedModel;
 
     public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
+
+    public void ServerBindSettled() => _bindSettled.TrySetResult();
 
     /// <summary>Rule (a). A factory MUST await this after constructing the runtime and BEFORE
     /// returning control to the orchestrator. Faults — never hangs — on every path that cannot
@@ -387,8 +399,9 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
                 SetBusy(false);
                 return;
 
-            case "extension_ui_request" when _guards is not null && IsBlockingDialog(frame):
-                StartReap("pi_reviewer_unexpected_dialog");
+            case "extension_ui_request" when PiDialogBridge.IsDialog(frame.Root.Str("method")):
+                if (_guards is not null) StartReap("pi_reviewer_unexpected_dialog");
+                else _ = AnswerDialogAsync(frame);
                 return;
         }
 
@@ -415,10 +428,45 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
         foreach (var env in envelopes) EmitAgentEnvelope(env);
     }
 
-    /// <summary>The dialog kinds Pi blocks on until a host answers. This runtime never answers, so for an
-    /// unattended reviewer each one is a hang.</summary>
-    static bool IsBlockingDialog(PiRpcFrame frame) =>
-        frame.Root.Str("method") is "select" or "confirm" or "input" or "editor";
+    /// <summary>Runs off the pump, which must keep reading while a viewer decides. Every path writes a
+    /// response — Pi blocks the turn on stdin until one arrives — except teardown, where nobody is left
+    /// to read it. Pi's own <c>timeout</c> bounds the question here too, so a card does not outlive the
+    /// dialog Pi already dismissed.</summary>
+    async Task AnswerDialogAsync(PiRpcFrame frame) {
+        if (frame.Id is not { Length: > 0 } requestId) return;
+
+        var response = PiRpc.ExtensionUiCancelled(requestId);
+
+        if (_requestInteraction is not null) {
+            using var timeoutCts = frame.Root.Num("timeout") is > 0 and var timeout
+                ? new CancellationTokenSource(TimeSpan.FromMilliseconds(Math.Min(timeout, int.MaxValue)), _time)
+                : new CancellationTokenSource();
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ownerToken, timeoutCts.Token);
+
+            try {
+                await _bindSettled.Task.WaitAsync(cts.Token).ConfigureAwait(false);
+
+                if (PiDialogBridge.ToInteraction(_agentId, AcpSessionId, frame.Root) is { } interaction) {
+                    var decision = await _requestInteraction(interaction, cts.Token).ConfigureAwait(false);
+                    response = PiDialogBridge.ToResponse(requestId, decision, frame.Root);
+                }
+            } catch (OperationCanceledException) when (cts.IsCancellationRequested) {
+                if (_ownerToken.IsCancellationRequested) return;
+            } catch (Exception ex) {
+                _logger.LogWarning(ex, "Pi: dialog {RequestId} could not be asked; cancelling it (agentId={AgentId}).", requestId, _agentId);
+            }
+        } else {
+            _logger.LogInformation("Pi: cancelling dialog {RequestId}: nobody can be asked (agentId={AgentId}).", requestId, _agentId);
+        }
+
+        try {
+            await _process.WriteLineAsync(response, _ownerToken).ConfigureAwait(false);
+        } catch (Exception ex) when (ex is not OperationCanceledException || !_ownerToken.IsCancellationRequested) {
+            _logger.LogWarning(ex, "Pi: the answer to dialog {RequestId} could not be written (agentId={AgentId}).", requestId, _agentId);
+        } catch (OperationCanceledException) {
+            // Teardown — the child is going away with its dialog.
+        }
+    }
 
     /// <summary>Rule (c): true when this frame is Pi echoing back a prompt we sent, in which case
     /// the whole frame is dropped (we already emitted the <c>user_message</c> at send time). Only
@@ -733,9 +781,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// <see cref="EnterTerminal"/>'s <c>SetBusy(false)</c>) — a waiter parked on a settle that can
     /// never arrive is a hang, not a stop.
     ///
-    /// <para>A caller that may need to stop waiting on a wedged turn (e.g. a child blocked on an
-    /// <c>extension_ui_request</c> that never settles — see <see cref="PiRpc"/>'s
-    /// <c>TranslateExtensionUiRequest</c>) MUST pass a cancellable token: with
+    /// <para>A caller that may need to stop waiting on a wedged turn (e.g. one held open by a dialog
+    /// nobody answers) MUST pass a cancellable token: with
     /// <see cref="CancellationToken.None"/> the waiter only completes on the next
     /// <c>agent_settled</c> or on <see cref="EnterTerminal"/>.</para></summary>
     public Task WaitForTurnIdleAsync(CancellationToken ct) {

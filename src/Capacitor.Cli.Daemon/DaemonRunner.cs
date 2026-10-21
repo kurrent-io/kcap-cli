@@ -575,7 +575,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<TimeProvider>(),
-                paths: harnesses.Of<Core.Harness.Pi.PiHarness>().Paths
+                paths: harnesses.Of<Core.Harness.Pi.PiHarness>().Paths,
+                requestInteraction: sp.GetRequiredService<ServerConnection>().RequestAcpInteractionAsync
             )
         );
 
