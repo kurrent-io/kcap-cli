@@ -54,6 +54,7 @@ public class AgentOrchestratorAcpForwardingTests {
 
         // A runtime holds its interactions until the bind settles; the server refuses them before it.
         await WaitHarness.PollUntilAsync(() => cursorFactory.LastRuntime!.ServerBindSettledCalls == 1);
+        await Assert.That(cursorFactory.LastRuntime!.ServerBound).IsTrue();
 
         // RegisterAcpBinding was called: a reconnect re-bind (task 3's ReBindAcpSessionsAsync)
         // must re-invoke AcpSessionStarted for this agent — UnregisterAcpBinding is NOT

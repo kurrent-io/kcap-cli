@@ -3080,7 +3080,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // A refused agent keeps running with nothing sent, so a held first turn goes out without the claim.
             if (agent.RegistrationRefused && start.Runtime.RequiresSourceClaimBeforeFirstTurn) _ = BeginRefusedFirstTurnAsync(agent, start.Runtime);
 
-            if (agent.IsServerSilent) start.Transcript?.ServerBindSettled();
+            if (agent.IsServerSilent) start.Transcript?.ServerBindSettled(bound: false);
 
             if (!agent.IsServerSilent && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
@@ -5203,7 +5203,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         } catch (Exception ex) {
             if (reopened) agent.TryRefuseReopenedTranscript();
             LogAcpBindFailed(ex, agent.Id);
-            transcript.ServerBindSettled();
+            transcript.ServerBindSettled(bound: false);
         }
     }
 
@@ -5273,7 +5273,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
         agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
 
-        transcript.ServerBindSettled();
+        transcript.ServerBindSettled(bound: true);
     }
 
     /// <summary>The held first turn of an agent the server refused: no claim can be made for it, and holding the

@@ -526,7 +526,7 @@ public class PiRpcHostedAgentRuntimeTests {
         var (rt, proc) = NewRuntime(requestInteraction: (request, _) => { asked.TrySetResult(request); return answer.Task; });
         await using var _ = rt;
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
-        rt.ServerBindSettled();
+        rt.ServerBindSettled(bound: true);
 
         proc.Push("""{"type":"extension_ui_request","id":"ui-7","method":"input","title":"Your name"}""");
         var request = await asked.Task.WaitAsync(HangGuard);
@@ -559,9 +559,27 @@ public class PiRpcHostedAgentRuntimeTests {
 
         await Assert.That(asked.Task.IsCompleted).IsFalse();
 
-        rt.ServerBindSettled();
+        rt.ServerBindSettled(bound: true);
 
         await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-1","confirmed":true}""");
+    }
+
+    /// <summary>A private agent, or one whose bind failed, must not send a dialog's text to the server.</summary>
+    [Test]
+    public async Task A_dialog_on_an_unbound_session_is_cancelled_without_asking() {
+        var asked = false;
+        var (rt, proc) = NewRuntime(requestInteraction: (_, _) => {
+            asked = true;
+            return Task.FromResult(new AcpInteractionDecision("answered", "yes", null, null, null, null));
+        });
+        await using var _ = rt;
+        await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
+        rt.ServerBindSettled(bound: false);
+
+        proc.Push(DialogRequest("confirm"));
+
+        await Assert.That(await UiResponseAsync(proc)).IsEqualTo("""{"type":"extension_ui_response","id":"ui-1","cancelled":true}""");
+        await Assert.That(asked).IsFalse();
     }
 
     [Test]
@@ -585,7 +603,7 @@ public class PiRpcHostedAgentRuntimeTests {
         });
         await using var _ = rt;
         await rt.WaitForSessionReadyAsync(CancellationToken.None).WaitAsync(HangGuard);
-        rt.ServerBindSettled();
+        rt.ServerBindSettled(bound: true);
 
         proc.Push("""{"type":"extension_ui_request","id":"ui-1","method":"select","title":"t","options":["a"],"timeout":50}""");
 

@@ -58,6 +58,13 @@ public class PiDialogBridgeTests {
     }
 
     [Test]
+    public async Task A_select_with_more_options_than_the_server_takes_is_not_routed() {
+        var options = string.Join(",", Enumerable.Range(0, PiDialogBridge.MaxOptions + 1).Select(i => $"\"o{i}\""));
+
+        await Assert.That(PiDialogBridge.ToInteraction("a", "s", Parse($$"""{"id":"ui-1","method":"select","title":"t","options":[{{options}}]}"""))).IsNull();
+    }
+
+    [Test]
     [Arguments("""{"id":"ui-1","method":"select","title":"t","options":[]}""")]
     [Arguments("""{"id":"ui-1","method":"select","title":"t"}""")]
     [Arguments("""{"id":"ui-1","method":"notify","message":"m"}""")]

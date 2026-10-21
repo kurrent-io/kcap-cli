@@ -49,7 +49,8 @@ internal interface IAcpTranscriptSource {
     /// accepted an event of it.</summary>
     void ReleaseFirstTurn() { }
 
-    /// <summary>The server has bound this session, or never will (a silent agent, a failed bind). The server
-    /// refuses an interaction for a session it has not bound, so one asked before this reaches nobody.</summary>
-    void ServerBindSettled() { }
+    /// <summary>The server has bound this session (<paramref name="bound"/>), or never will: a silent agent,
+    /// whose data must not reach the server, or a failed bind. The server refuses an interaction for a session
+    /// it has not bound, so nothing may be asked before this, and nothing at all when it is false.</summary>
+    void ServerBindSettled(bool bound) { }
 }

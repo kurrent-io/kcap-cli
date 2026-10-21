@@ -166,9 +166,9 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// own default rather than blocking on stdin.</summary>
     readonly Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? _requestInteraction;
 
-    /// <summary>Completed by <see cref="ServerBindSettled"/>. A launch prompt's dialog can arrive before
-    /// it, and must wait rather than be refused.</summary>
-    readonly TaskCompletionSource _bindSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    /// <summary>Completed by <see cref="ServerBindSettled"/> with whether the server bound the session. A
+    /// launch prompt's dialog can arrive before it, and must wait rather than be refused.</summary>
+    readonly TaskCompletionSource<bool> _bindSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     readonly ReapVerdictGate _gate;
 
@@ -273,7 +273,7 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
 
     public ChannelReader<AcpEventEnvelope> Envelopes => _transcript.Reader;
 
-    public void ServerBindSettled() => _bindSettled.TrySetResult();
+    public void ServerBindSettled(bool bound) => _bindSettled.TrySetResult(bound);
 
     /// <summary>Rule (a). A factory MUST await this after constructing the runtime and BEFORE
     /// returning control to the orchestrator. Faults — never hangs — on every path that cannot
@@ -444,9 +444,9 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ownerToken, timeoutCts.Token);
 
             try {
-                await _bindSettled.Task.WaitAsync(cts.Token).ConfigureAwait(false);
-
-                if (PiDialogBridge.ToInteraction(_agentId, AcpSessionId, frame.Root) is { } interaction) {
+                if (!await _bindSettled.Task.WaitAsync(cts.Token).ConfigureAwait(false))
+                    _logger.LogInformation("Pi: cancelling dialog {RequestId}: the session is not bound on the server (agentId={AgentId}).", requestId, _agentId);
+                else if (PiDialogBridge.ToInteraction(_agentId, AcpSessionId, frame.Root) is { } interaction) {
                     var decision = await _requestInteraction(interaction, cts.Token).ConfigureAwait(false);
                     response = PiDialogBridge.ToResponse(requestId, decision, frame.Root);
                 }

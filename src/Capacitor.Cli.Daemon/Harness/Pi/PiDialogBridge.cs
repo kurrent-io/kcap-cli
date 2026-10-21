@@ -14,11 +14,14 @@ internal static class PiDialogBridge {
     /// only part that can grow without limit.</summary>
     internal const int MaxPromptLength = 8 * 1024;
 
+    /// <summary>The server refuses a card with more options than this.</summary>
+    internal const int MaxOptions = 32;
+
     /// <summary>The methods Pi blocks on until a host answers.</summary>
     public static bool IsDialog(string? method) => method is "select" or "confirm" or "input" or "editor";
 
-    /// <summary>Null when the request cannot be asked (a select with nothing to pick); the caller
-    /// cancels it so Pi does not wait forever.</summary>
+    /// <summary>Null when the request cannot be asked (a select with nothing to pick, or more than the
+    /// server takes); the caller cancels it so Pi does not wait forever.</summary>
     public static AcpInteractionRequest? ToInteraction(string agentId, string sessionId, JsonElement request) {
         var method = request.Str("method");
         var title  = request.Str("title") ?? "";
@@ -28,7 +31,7 @@ internal static class PiDialogBridge {
 
         switch (method) {
             case "select":
-                if (SelectOptions(request) is not { Length: > 0 } labels) return null;
+                if (SelectOptions(request) is not { Length: > 0 and <= MaxOptions } labels) return null;
                 options = [.. labels.Select((label, i) => new AcpInteractionOption(i.ToString(CultureInfo.InvariantCulture), label, null))];
                 prompt  = title;
                 break;
