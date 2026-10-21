@@ -200,6 +200,20 @@ public class ServerConnectionServiceTests {
     }
 
     [Test]
+    public async Task LaunchRefusalSurfacesTheServerTextWithoutSignalRsWrapper() {
+        await using var host = await HubTestHost.StartAsync();
+        HubTestHost.LaunchHandler = _ => throw new HubException("Daemon 'd' is full.");
+        await using var lane = Lane(host);
+        lane.Start();
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        var outcome = await ((ILaunchClient)lane).StartAsync(
+            new LaunchRequest("d", "/r", "claude", null), CancellationToken.None);
+
+        await Assert.That(outcome.Error).IsEqualTo("Daemon 'd' is full.");
+    }
+
+    [Test]
     public async Task LaunchWhileDisconnectedFailsWithoutThrowing() {
         await using var lane = new ServerConnectionService(TimeProvider.System, "http://127.0.0.1:1", () => Task.FromResult<string?>(null));
         lane.Start();

@@ -465,9 +465,9 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         } catch (OperationCanceledException) {
             throw;
         } catch (HubException ex) when (ex.Message.Contains(WireTokens.SessionNotVisible, StringComparison.Ordinal)) {
-            return HubCallOutcome.Denied(ex.Message);
+            return HubCallOutcome.Denied(HubErrorText.Of(ex));
         } catch (Exception ex) {
-            return HubCallOutcome.Failed(ex.Message);
+            return HubCallOutcome.Failed(HubErrorText.Of(ex));
         }
     }
 
@@ -495,9 +495,9 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         } catch (OperationCanceledException) {
             throw;
         } catch (HubException ex) when (ex.Message.Contains(WireTokens.SessionNotVisible, StringComparison.Ordinal)) {
-            return (HubCallOutcome.Denied(ex.Message), default);
+            return (HubCallOutcome.Denied(HubErrorText.Of(ex)), default);
         } catch (Exception ex) {
-            return (HubCallOutcome.Failed(ex.Message), default);
+            return (HubCallOutcome.Failed(HubErrorText.Of(ex)), default);
         }
     }
 
@@ -512,7 +512,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
                 HubMethods.RequestLaunchAgentV2, LaunchPayload.For(request), ct).ConfigureAwait(false);
             return new LaunchOutcome(Started: true, AgentId: agentId, Error: null);
         } catch (Exception ex) {
-            return new LaunchOutcome(false, null, ex.Message, IsUnauthorized(ex));
+            return new LaunchOutcome(false, null, HubErrorText.Of(ex), IsUnauthorized(ex));
         }
     }
 
