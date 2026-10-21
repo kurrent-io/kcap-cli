@@ -179,8 +179,16 @@ public sealed class ToolCallItem(string name, string detail, ToolCategory catego
     /// pulsing status pill so a live row is never blank.
     public bool IsRunning => _outcome == ToolOutcome.Running && !_isAwaitingPermission;
 
-    /// Absolute path of a Read (or similar) whose target is an image file. The view loads it.
-    public string? PreviewPath { get; init; }
+    string? _previewPath;
+    public string? PreviewPath {
+        get => _previewPath;
+        set {
+            if (_previewPath == value) return;
+            _previewPath = value;
+            this.RaisePropertyChanged();
+            this.RaisePropertyChanged(nameof(HasPreview));
+        }
+    }
     public bool HasPreview => !string.IsNullOrEmpty(PreviewPath);
 
 }

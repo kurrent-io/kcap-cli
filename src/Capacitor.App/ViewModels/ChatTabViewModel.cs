@@ -1364,9 +1364,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                             : foreignLabel is not null ? FirstOrAny(e.ToolInputJson, category)
                             : ToolDetail.From(e.ToolInputJson, _root, category);
                         var label = entry?.Label ?? (isToolSearch ? "Looked up tools" : foreignLabel ?? ToolSummary.RowLabel(name, category, e.ToolInputJson));
-                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson) {
-                            PreviewPath = category == ToolCategory.Read ? ToolDetail.ImageFile(e.ToolInputJson) : null,
-                        };
+                        var item = new ToolCallItem(name, detail, category, label, entry?.Card ?? ToolCardKind.None, e.ToolInputJson);
                         if (e.ToolCallId is { } id) {
                             _pendingTools[id] = item;
                             if (name == ClaudeElicitation.ToolName) NoteQuestionCall(id, e.ToolInputJson);
@@ -1387,6 +1385,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                                 && ToolCards.Build(call.CardKind, call.InputJson, e.ToolResult) is { } card)
                                 call.SetCard(card, CardOpener(card));
                             call.Outcome = e.ToolIsError ? ToolOutcome.Error : ToolOutcome.Done;
+                            if (!e.ToolIsError && _origin == AgentOrigin.Local && call.Category == ToolCategory.Read)
+                                call.PreviewPath = ToolDetail.ResolvePreviewPath(ToolDetail.ImageFile(call.InputJson), _root);
                         }
                         break;
                 }

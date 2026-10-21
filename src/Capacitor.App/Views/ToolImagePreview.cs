@@ -2,8 +2,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
-using Avalonia.Svg.Skia;
+using Avalonia.Threading;
+using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
@@ -11,8 +11,10 @@ namespace Capacitor.App.Views;
 public sealed class ToolImagePreview : Button {
     const double Thumb = 140;
     const double Expanded = 520;
-    const int DecodeWidth = 960;
-    const long MaxBytes = 20 * 1024 * 1024;
+    protected override Type StyleKeyOverride => typeof(Button);
+    ToolPreviewImages? _loaded;
+    int _generation;
+    internal Task Loading { get; private set; } = Task.CompletedTask;
 
     public static readonly StyledProperty<string?> PathProperty =
         AvaloniaProperty.Register<ToolImagePreview, string?>(nameof(Path));
@@ -48,30 +50,43 @@ public sealed class ToolImagePreview : Button {
 
     protected override void OnPropertyChanged(AvaloniaPropertyChangedEventArgs change) {
         base.OnPropertyChanged(change);
-        if (change.Property == PathProperty) Load(change.GetNewValue<string?>());
+        if (change.Property == PathProperty) Loading = LoadAsync(change.GetNewValue<string?>());
     }
 
-    void Load(string? path) {
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnAttachedToVisualTree(e);
+        Loading = LoadAsync(Path);
+    }
+
+    protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e) {
+        base.OnDetachedFromVisualTree(e);
+        _generation++;
+        Release();
+    }
+
+    void Release() {
         _image.Source = null;
+        _loaded?.Dispose();
+        _loaded = null;
         IsVisible = false;
+    }
+
+    async Task LoadAsync(string? path) {
+        var generation = ++_generation;
+        Release();
         _expanded = false;
         _image.MaxHeight = Thumb;
         _image.MaxWidth = 480;
-        if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
-        try {
-            var info = new FileInfo(path);
-            if (info.Length == 0 || info.Length > MaxBytes) return;
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            if (path.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)) {
-                var source = SvgSource.LoadFromStream(stream, null);
-                if (source is null) return;
-                _image.Source = new SvgImage { Source = source };
-            } else {
-                _image.Source = Bitmap.DecodeToWidth(stream, DecodeWidth);
+        if (string.IsNullOrEmpty(path)) return;
+        var loaded = await Task.Run(() => ToolPreviewImages.Acquire(path)).ConfigureAwait(false);
+        await Dispatcher.UIThread.InvokeAsync(() => {
+            if (generation != _generation || path != Path) {
+                loaded?.Dispose();
+                return;
             }
+            _loaded = loaded;
+            _image.Source = loaded?.Image;
             IsVisible = _image.Source is not null;
-        } catch (Exception ex) {
-            Console.Error.WriteLine($"kcap: image preview failed: {ex.Message}");
-        }
+        });
     }
 }

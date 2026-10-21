@@ -219,7 +219,7 @@
                                                IsVisible="{Binding IsAwaitingPermission}"
                                                Foreground="{Binding IsError, Converter={x:Static views:ToolOutcomeBrushConverter.Instance}}" />
                             </Panel>
-                            <views:ToolImagePreview Grid.Row="1" Grid.ColumnSpan="3" Classes="toolBody" Margin="0,6,0,2" Path="{Binding PreviewPath}" />
+                            <views:ToolImagePreview Grid.Row="1" Grid.ColumnSpan="3" Classes="toolBody kcapGhost" Margin="0,6,0,2" Path="{Binding PreviewPath}" />
                         </Grid>
                         <Border x:Name="ToolCard" Classes="toolCard" IsVisible="{Binding HasCard}">
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">

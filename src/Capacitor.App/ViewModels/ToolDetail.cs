@@ -58,7 +58,6 @@ public static class ToolDetail {
         }
     }
 
-    /// For a tool nothing describes: the first string argument, in declaration order.
     public static string? ImageFile(string? inputJson) {
         foreach (var key in PathKeys) {
             var path = RawForKey(inputJson, key);
@@ -66,6 +65,17 @@ public static class ToolDetail {
             if (IsImageExtension(path)) return path;
         }
         return null;
+    }
+
+    internal static string? ResolvePreviewPath(string? path, string? root) {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        try {
+            if (Path.IsPathFullyQualified(path)) return path;
+            return string.IsNullOrEmpty(root) || !Path.IsPathFullyQualified(root)
+                ? null : Path.GetFullPath(path, root);
+        } catch (ArgumentException) {
+            return null;
+        }
     }
 
     static bool IsImageExtension(string path) {
@@ -79,6 +89,7 @@ public static class ToolDetail {
             || ext.Equals(".svg", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// For a tool nothing describes: the first string argument, in declaration order.
     public static string FirstString(string? inputJson) {
         if (string.IsNullOrEmpty(inputJson)) return "";
         try {
