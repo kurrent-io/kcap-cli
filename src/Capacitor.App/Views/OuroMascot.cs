@@ -24,7 +24,8 @@ public sealed class OuroMascot : Image {
     int _step;
 
     public OuroMascot() {
-        _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(120), DispatcherPriority.Render, (_, _) => Advance());
+        _timer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(120) };
+        _timer.Tick += (_, _) => Advance();
         Source = Frames[0];
     }
 
