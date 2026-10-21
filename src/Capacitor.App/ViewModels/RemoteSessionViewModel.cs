@@ -437,9 +437,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (row.AgentId is not { } subagentId || _sessionIds.Value is not { } sessionId || _readSubagent is not { } read) return;
         var vendor = _row.Vendor;
         SubagentPaneViewModel? pane = null;
+        // The chat opens its feed while the pane is still being built; until then the row it opened on answers.
         pane = new SubagentPaneViewModel(
             _runs, row, Title, AgentOrigin.Remote, AgentId, vendor, $"{sessionId}/{subagentId}",
-            _ => new RemoteSubagentFeed(sessionId, subagentId, vendor, read, () => pane?.IsRunning ?? false, _time, Log),
+            _ => new RemoteSubagentFeed(sessionId, subagentId, vendor, read, () => pane?.IsRunning ?? row.IsRunning, _time, Log),
             _opener, _time, _permissions, CloseSubagent);
         ReplaceSubagent(pane);
         ActiveTab = RemoteTab.Chat;
