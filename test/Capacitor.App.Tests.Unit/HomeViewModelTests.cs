@@ -995,7 +995,8 @@ public class HomeViewModelTests {
     }
 
     /// The Start banner is the whole story for a stopped local server: the connection banner under
-    /// it must neither spin "Connecting" nor, after the catch-up bound, tell the user to sign in.
+    /// it must neither spin "Connecting", nor tell the user to install an agent, nor, after the
+    /// catch-up bound, tell the user to sign in.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_stopped_local_server_shows_no_connecting_or_sign_in_notice() {
@@ -1012,7 +1013,8 @@ public class HomeViewModelTests {
                 () => Task.CompletedTask, CancellationToken.None);
             vm.AttachLocalServerRecovery(local);
 
-            Connect(daemon, "disconnected");
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected", supportedVendors: []));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
 
             await Assert.That(local.Visible).IsTrue();

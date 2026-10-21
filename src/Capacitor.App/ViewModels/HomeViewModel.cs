@@ -680,11 +680,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
+        // The no-harness fallback goes in ahead of NoticeForLocalServer, whose null for a stopped
+        // local server must stay null.
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
-                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null))
-            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _machineSelectionChanges,
-                (notice, none, sel) => notice ?? (none ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null));
+            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
+                (notice, none, local, down, sel) => NoticeForLocalServer(
+                    notice ?? (none ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null), local, down, sel.Remote ? sel.Name : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
