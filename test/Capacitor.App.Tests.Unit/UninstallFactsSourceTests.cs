@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using TUnit.Core.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -12,9 +13,8 @@ public class UninstallFactsSourceTests {
         terminalPath ?? (_ => Task.FromResult<string?>(null)), Tmp.GetResolvedPath("Kcap.app"),
         TimeSpan.FromMilliseconds(100), TimeProvider.System, log ?? TextWriter.Null);
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Gathers_every_fact() {
-        if (OperatingSystem.IsWindows()) return;
         Tmp.CreateExecutable("bin/kcap", "#!/bin/sh\n");
         var bin = Tmp.GetResolvedPath("bin");
 

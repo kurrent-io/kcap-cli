@@ -1,4 +1,5 @@
 using Capacitor.App.Platform.Mac;
+using TUnit.Core.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -12,9 +13,8 @@ public class OtherKcapInstallsTests {
         return Tmp.GetResolvedPath(relative);
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Ignores_links_into_the_bundle() {
-        if (OperatingSystem.IsWindows()) return;
         var inside = Exe("Kcap.app/Contents/MacOS/kcap");
         var bin    = Tmp.CreateDir("bin");
         File.CreateSymbolicLink(Path.Combine(bin, "kcap"), inside);
@@ -24,9 +24,8 @@ public class OtherKcapInstallsTests {
         await Assert.That(found.Count).IsEqualTo(0);
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Reports_an_npm_install_with_its_command() {
-        if (OperatingSystem.IsWindows()) return;
         var real = Exe("lib/node_modules/@kurrent/kcap/bin/kcap");
         var bin  = Tmp.CreateDir("bin");
         File.CreateSymbolicLink(Path.Combine(bin, "kcap"), real);
@@ -37,9 +36,8 @@ public class OtherKcapInstallsTests {
         await Assert.That(found[0].RemoveCommand).IsEqualTo("npm uninstall -g @kurrent/kcap");
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Reports_an_unknown_install_without_a_command() {
-        if (OperatingSystem.IsWindows()) return;
         Exe("bin/kcap");
 
         var found = OtherKcapInstalls.Find(Tmp.GetResolvedPath("bin"), Bundle);
@@ -48,9 +46,8 @@ public class OtherKcapInstallsTests {
         await Assert.That(found[0].RemoveCommand).IsNull();
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Reports_one_install_reached_twice() {
-        if (OperatingSystem.IsWindows()) return;
         var real = Exe("real/kcap");
         var a    = Tmp.CreateDir("a");
         var b    = Tmp.CreateDir("b");

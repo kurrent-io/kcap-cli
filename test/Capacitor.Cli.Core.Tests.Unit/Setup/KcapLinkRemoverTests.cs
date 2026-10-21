@@ -1,4 +1,6 @@
+using System.Runtime.Versioning;
 using Capacitor.Cli.Core.Setup;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Setup;
 
@@ -73,10 +75,8 @@ public class KcapLinkRemoverTests {
         await Assert.That(File.Exists(file)).IsTrue();
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows), UnsupportedOSPlatform("windows")]
     public async Task Reports_a_link_it_cannot_remove() {
-        if (OperatingSystem.IsWindows()) return;
-
         var binary = Binary();
         var folder = Folder();
         var link   = Path.Combine(folder, "kcap");

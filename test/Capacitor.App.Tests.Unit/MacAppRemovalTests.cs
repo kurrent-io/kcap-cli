@@ -1,7 +1,9 @@
+using System.Runtime.Versioning;
 using Capacitor.App.Platform.Mac;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
 using TUnit.Assertions.Enums;
+using TUnit.Core.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -43,10 +45,8 @@ public class MacAppRemovalTests {
         return bundle;
     }
 
-    [Test]
+    [Test, RunOn(OS.MacOs), UnsupportedOSPlatform("windows")]
     public async Task Removes_only_links_into_the_bundle() {
-        if (!OperatingSystem.IsMacOS()) return;
-
         var bundle = Bundle();
         var other  = Tmp.CreateFile("other-kcap", "");
         Tmp.CreateDir("ours");
@@ -91,10 +91,8 @@ public class MacAppRemovalTests {
         await Assert.That(File.Exists(unrelated)).IsTrue();
     }
 
-    [Test]
+    [Test, RunOn(OS.MacOs), UnsupportedOSPlatform("windows")]
     public async Task Repointed_link_never_reaches_the_admin_prompt() {
-        if (!OperatingSystem.IsMacOS()) return;
-
         var bundle = Bundle();
         var other  = Tmp.CreateFile("other-kcap", "");
         Tmp.CreateDir("bin");
@@ -108,10 +106,8 @@ public class MacAppRemovalTests {
         await Assert.That(runner.Calls).IsEqualTo(0);
     }
 
-    [Test]
+    [Test, RunOn(OS.MacOs), UnsupportedOSPlatform("windows")]
     public async Task Undeletable_link_into_the_bundle_asks_for_admin() {
-        if (!OperatingSystem.IsMacOS()) return;
-
         var bundle = Bundle();
         Tmp.CreateDir("locked");
         var folder = Tmp.GetResolvedPath("locked");
