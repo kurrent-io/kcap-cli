@@ -2766,7 +2766,8 @@ kcap feedback --feedback                               # send feedback; prompts 
 > started from; then the new binary runs `kcap refresh`. The version it replaced
 > stays; older ones are deleted unless something still runs from them. A daemon
 > started from a script install restarts on the new version once it is idle,
-> Windows included. A daemon service
+> Windows included, provided it was started on a release that watches for updates
+> there; restart an older Windows daemon once with `kcap daemon restart`. A daemon service
 > installed from a script install is moved onto the `current` path, so it
 > follows updates. Switching from npm, a daemon service installed under npm keeps
 > running the npm binary: run `kcap daemon service install` again once the
