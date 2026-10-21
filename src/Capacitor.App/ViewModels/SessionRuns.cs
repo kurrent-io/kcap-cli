@@ -128,6 +128,7 @@ public sealed class SessionRuns(TimeProvider time) {
         if (row.IsEnded) return;
         row.MarkBackground();
         Name(row, detached.AgentId);
+        PairUnpaired();
     }
 
     /// Names the subagent a call started, from a source that reads it outside the projected lines.

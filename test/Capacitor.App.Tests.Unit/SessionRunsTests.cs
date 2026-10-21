@@ -588,6 +588,17 @@ public class SessionRunsTests {
         await Assert.That(string.Join(",", s.Rows.Select(row => row.CanOpen))).IsEqualTo("True,True,False");
     }
 
+    /// A detach names its own row by its own id, which leaves the held id's owner as the one candidate left.
+    [Test]
+    public async Task A_held_id_pairs_once_a_detach_names_the_other_candidate() {
+        var s = new SessionRuns(Clock());
+        s.Apply(Signals(Started("c1"), Started("c2", T0.AddSeconds(1)), Identified(null, "a1")));
+
+        s.Apply(Signals(Detached("c2", "b2")));
+
+        await Assert.That(string.Join(",", s.Rows.Select(row => row.AgentId ?? "-"))).IsEqualTo("a1,b2");
+    }
+
     /// A candidate that ends could have owned a held id, so the id is dropped rather than placed on the one left;
     /// a fresh id then pairs with it.
     [Test]
