@@ -118,7 +118,7 @@ public static class KcapToolCatalogue {
         if (string.IsNullOrEmpty(toolName)) return null;
         var (server, tool) = Split(toolName);
         if (server is null || server.Length == 0 || tool.Length == 0) return null;
-        return $"{Humanise(server)} · {tool.Replace('_', ' ')}";
+        return $"{Humanise(NormalizeForeignServer(server))} · {tool.Replace('_', ' ')}";
     }
 
     public static bool IsToolSearch(string? toolName) =>
@@ -148,9 +148,9 @@ public static class KcapToolCatalogue {
         var names = new List<string>(items.Count);
         foreach (var (server, clean) in items) {
             var formatted = cleanCounts[clean] > 1 && !string.IsNullOrEmpty(server)
-                ? $"{Humanise(server)} · {clean}"
+                ? $"{Humanise(NormalizeForeignServer(server))} · {clean}"
                 : clean;
-            if (!names.Contains(formatted, StringComparer.Ordinal)) names.Add(formatted);
+            names.Add(formatted);
         }
         return string.Join(", ", names);
     }
@@ -176,10 +176,6 @@ public static class KcapToolCatalogue {
         if (cut <= 0) return ("", cut < 0 ? rest : rest[(cut + Separator.Length)..]);
         var server = rest[..cut];
         if (server.StartsWith("plugin_", StringComparison.Ordinal)) server = server[(server.LastIndexOf('_') + 1)..];
-        // Claude.ai remote MCP ids are `claude_ai_<Product>`. The product is the name a person reads.
-        const string claudeAi = "claude_ai_";
-        if (server.StartsWith(claudeAi, StringComparison.Ordinal) && server.Length > claudeAi.Length)
-            server = server[claudeAi.Length..];
         return (server, rest[(cut + Separator.Length)..]);
     }
 
@@ -188,7 +184,14 @@ public static class KcapToolCatalogue {
         if (string.IsNullOrEmpty(toolName)) return null;
         var (server, tool) = Split(toolName);
         if (string.IsNullOrEmpty(server) || tool.Length == 0 || ServerCategories.ContainsKey(server)) return null;
-        return Humanise(server);
+        return Humanise(NormalizeForeignServer(server));
+    }
+
+    static string NormalizeForeignServer(string server) {
+        const string claudeAi = "claude_ai_";
+        return server.StartsWith(claudeAi, StringComparison.Ordinal) && server.Length > claudeAi.Length
+            ? server[claudeAi.Length..]
+            : server;
     }
 
     static string Humanise(string token) {

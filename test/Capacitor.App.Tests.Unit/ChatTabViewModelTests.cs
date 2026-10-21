@@ -484,14 +484,22 @@ public class ChatTabViewModelTests {
     }
 
     [Test]
+    [Arguments("mcp__plugin_linear_linear__save_issue", "Linear · save issue", "Linear")]
+    [Arguments("mcp__claude_ai_Linear__save_issue", "Linear · save issue", "Linear")]
+    [Arguments("mcp__claude_ai_kcap-plans__some_tool", "Kcap plans · some tool", "Kcap plans")]
+    [Arguments("mcp__claude_ai_kcap-plans__declare_plan_document", "Kcap plans · declare plan document", "Kcap plans")]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_foreign_mcp_call_reads_as_server_and_tool_with_its_first_argument() {
+    public async Task A_foreign_mcp_call_reads_as_server_and_tool_with_its_first_argument(string name, string label, string chip) {
         await RunOnUiAsync(async () => {
             var h = Claude();
-            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [LinearCallLine])));
+            var line = LinearCallLine.Replace("mcp__plugin_linear_linear__save_issue", name, StringComparison.Ordinal);
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [line])));
 
-            var call = Group(h.Chat, 0).Calls[0];
-            await Assert.That(call.Label).IsEqualTo("Linear · save issue");
+            var group = Group(h.Chat, 0);
+            var call = group.Calls[0];
+            await Assert.That(group.KindChip).IsEqualTo(chip);
+            await Assert.That(call.CardKind).IsEqualTo(ToolCardKind.None);
+            await Assert.That(call.Label).IsEqualTo(label);
             await Assert.That(call.Detail).IsEqualTo("Add tests");
             await Assert.That(call.Category).IsEqualTo(ToolCategory.Other);
             await h.TeardownAsync();
