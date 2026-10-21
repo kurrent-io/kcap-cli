@@ -3406,6 +3406,10 @@ public class ChatTabViewModelTests {
             await Assert.That(chat.QueuedMessages.Single().DispatchId).IsEqualTo(second.DispatchId);
             queue.OnNext([first, second]);
             await Assert.That(chat.QueuedMessages.Count).IsEqualTo(1);
+            queue.OnNext([second]);
+            // A subscription response can arrive after the newer removal push.
+            queue.OnNext([first, second]);
+            await Assert.That(chat.QueuedMessages.Count).IsEqualTo(1);
 
             lane.DiscardHandler = _ => Task.FromResult(HubCallOutcome.Failed("old server"));
             await chat.DiscardQueuedCommand.Execute(chat.QueuedMessages.Single());
