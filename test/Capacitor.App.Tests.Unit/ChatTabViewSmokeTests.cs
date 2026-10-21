@@ -316,10 +316,15 @@ public class ChatTabViewSmokeTests {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (var i = 0; i < 80; i++) {
                 var middle = host.Scroll.Viewport.Height / 2;
+                var inTailReserve = items.ItemsPanelRoot is { } panel
+                    && panel.TranslatePoint(new Point(0, panel.Bounds.Height), host.Scroll) is { } end
+                    && end.Y <= middle;
                 // At the scroll end the tail reserve can leave the middle blank, so read the visible row nearest it.
                 var reading = drag ? null : items.GetRealizedContainers()
                     .Select(container => (container, top: container.TranslatePoint(default, host.Scroll)?.Y))
-                    .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0)
+                    .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0
+                        && (inTailReserve
+                            || top <= middle && top + row.container.Bounds.Height > middle))
                     .OrderBy(row => Math.Max(0, Math.Max(row.top!.Value - middle, middle - row.top.Value - row.container.Bounds.Height)))
                     .Select(row => row.container)
                     .FirstOrDefault();
@@ -570,6 +575,47 @@ public class ChatTabViewSmokeTests {
     }
 
     [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [Arguments(true, true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Selection_tracking_survives_clearing_and_reusing_a_markdown_row(bool plainFallback, bool reuse) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var thinking = plainFallback
+                    ? ThinkingLine.Replace("weighing it", string.Concat(Enumerable.Repeat("> ", 128)) + "x")
+                    : ThinkingLine;
+                var path = Tmp.CreateFile("tracked-selection.jsonl", Enumerable.Repeat(UserLine, 20).Append(thinking).ToArray());
+                await host.LoadAsync(path);
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>().Single(v => v.Classes.Contains("thinking"));
+                var plain = markdown.Content as SelectableTextBlock;
+                if (plainFallback) {
+                    await Assert.That(plain).IsNotNull();
+                    plain!.SelectionStart = 0;
+                    plain.SelectionEnd = 4;
+                } else markdown.SelectAll();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                var offset = host.Scroll.Offset.Y;
+                await host.AppendAndTickAsync(path, 2);
+                host.Settle();
+                await Assert.That(host.Scroll.Offset.Y).IsEqualTo(offset);
+                await Assert.That(host.AtBottom()).IsFalse();
+                if (reuse) markdown.Text = "replacement";
+                else if (plain is not null) plain.ClearSelection();
+                else markdown.ClearSelection();
+                await Assert.That(markdown.HasSelection).IsFalse();
+                host.Scroll.ScrollToEnd();
+                host.Settle();
+                await host.AppendAndTickAsync(path, 4);
+                host.Settle();
+                await Assert.That(host.AtBottom()).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
     [Arguments(false)]
     [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
@@ -697,22 +743,65 @@ public class ChatTabViewSmokeTests {
     public async Task A_link_in_an_assistant_row_opens_through_the_tabs_command() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("link.jsonl", [AssistantLinkLine]));
+            var path = Tmp.CreateFile("link.jsonl", Enumerable.Repeat(UserLine, 40).Append(AssistantLinkLine).ToArray());
+            await host.LoadAsync(path);
 
-            await Assert.That(host.Chat.Items).Count().IsEqualTo(1);
+            await Assert.That(host.Chat.Items).Count().IsEqualTo(41);
 
-            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph"));
+            var paragraph = host.View.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("markdown-paragraph") && MarkdownViewHarness.Reads(t).Contains("docs", StringComparison.Ordinal));
             var glyph = paragraph.TextLayout.HitTestTextPosition("See ".Length);
             var origin = paragraph.TranslatePoint(new Point(glyph.X + paragraph.Padding.Left + 2, glyph.Y + paragraph.Padding.Top + glyph.Height / 2), host.Window)!.Value;
             host.Window.MouseMove(origin);
             host.Window.MouseDown(origin, MouseButton.Left);
+            await host.AppendAndTickAsync(path, 4);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
             host.Window.MouseUp(origin, MouseButton.Left);
-            Dispatcher.UIThread.RunJobs();
+            host.Settle();
 
+            await Assert.That(host.AtBottom()).IsTrue();
             await Assert.That(host.Opener.Opened).IsEquivalentTo(new[] { "https://example.com/docs" });
             await host.CloseAsync();
         });
     }
+
+    [Test]
+    [Arguments(false, false)]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Follow_tail_resumes_after_a_primary_press(bool releaseOutside, bool loseCapture) => RunOnUiAsync(async () => {
+        var host = new Host();
+        try {
+            var path = Tmp.CreateFile("press-tail.jsonl", Enumerable.Repeat(UserLine, 40).ToArray());
+            await host.LoadAsync(path);
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var point = PresentAndLocate(host, items);
+            host.Window.MouseMove(point);
+            host.Window.MouseDown(point, MouseButton.Left);
+            await host.AppendAndTickAsync(path, 4);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
+            host.Window.MouseDown(point, MouseButton.Right, RawInputModifiers.LeftMouseButton);
+            host.Window.MouseUp(point, MouseButton.Right, RawInputModifiers.LeftMouseButton);
+            await host.AppendAndTickAsync(path, 2);
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsFalse();
+            if (loseCapture) {
+                IPointer? pointer = null;
+                host.Window.AddHandler(InputElement.PointerMovedEvent, (_, e) => pointer = e.Pointer, RoutingStrategies.Tunnel);
+                host.Window.MouseMove(point, RawInputModifiers.LeftMouseButton);
+                pointer!.Capture(items);
+                pointer.Capture(null);
+            } else {
+                var release = releaseOutside ? PresentAndLocate(host, host.Composer) : point;
+                host.Window.MouseUp(release, MouseButton.Left);
+            }
+            host.Settle();
+            await Assert.That(host.AtBottom()).IsTrue();
+            if (loseCapture) host.Window.MouseUp(point, MouseButton.Left);
+        } finally { await host.CloseAsync(); }
+    });
 
     /// A labelled row shows its verb phrase beside the detail; once the result lands the same item
     /// renders as a card with the page's name and its actions, and the plain row is gone.
