@@ -8,6 +8,9 @@ using Capacitor.Cli.Core.Harness;
 // ReSharper disable ShortLivedHttpClient
 
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Harness.Claude;
+using Capacitor.Cli.Harness.Codex;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Commands.Harness;
@@ -32,10 +35,11 @@ namespace Capacitor.Cli.Commands.Harness;
 ///                       app-server runtime owns approvals there. Otherwise in a daemon-launched
 ///                       hosted agent (a loopback bridge named), bounce through the daemon's
 ///                       LocalPermissionBridge and wait for the dashboard's decision (fail-closed on
-///                       bridge errors: deny + exit nonzero). Otherwise: POST /hooks/permission-record
+///                       bridge errors: deny + exit nonzero). Otherwise the approval policy and judge
+///                       answer allow or deny; failing that, POST /hooks/permission-record
 ///                       (fire-and-forget; CLI emits no decision so Codex's own prompt takes over).
 ///   UserPromptSubmit  → swallowed (v1 — neither vendor consumes them)
-///   PreToolUse        → swallowed
+///   PreToolUse        → a matching deny rule denies the call, in every launch mode; else nothing
 ///   PostToolUse       → swallowed (a hosted agent's tool-settled notice still goes to its daemon)
 /// </remarks>
 sealed class CodexHookCommand(
@@ -293,8 +297,8 @@ sealed class CodexHookCommand(
                 "SessionStart"      => await HandleSessionStart(node, activeProfile, clock.Budget(Ceiling)),
                 "Stop"              => await HandleStop(node),
                 "PermissionRequest" => await HandlePermissionRequest(node),
+                "PreToolUse"        => await HandlePreToolUse(node),
                 "UserPromptSubmit"
-                  or "PreToolUse"
                   or "PostToolUse"  => 0,  // v1: swallow informational events
                 _                   => 0   // unknown — silently ignore
             };
@@ -520,6 +524,14 @@ sealed class CodexHookCommand(
         return 0;
     }
 
+    /// <summary>A deny rule binds a call Codex would run unasked, in every launch mode: a watched session, a
+    /// daemon-hosted terminal, and the hosted app-server, where this hook also fires.</summary>
+    async Task<int> HandlePreToolUse(JsonNode node) {
+        if (node is JsonObject payload && TryGetString(node, "session_id") is { } sessionId)
+            await new CodexPolicySeam(config, clock.Time).HandlePreToolUseAsync(payload, sessionId, Console.Out);
+        return 0;
+    }
+
     async Task<int> HandlePermissionRequest(JsonNode node) {
         // An envelope-sourced hosted session answers approvals over the app-server protocol itself:
         // Codex's requestApproval reaches the daemon's CodexApprovalBridge, which surfaces it to the
@@ -552,6 +564,14 @@ sealed class CodexHookCommand(
     }
 
     async Task<int> HandlePermissionRequestStub(JsonNode node) {
+        if (node is JsonObject payload && TryGetString(node, "session_id") is { } sessionId) {
+            var budget = clock.Budget(Ceiling).Remaining;
+            var seam   = new CodexPolicySeam(config, clock.Time, PolicyJudgeGateway.ForHook(http, Url, clock.Time));
+            if (await seam.HandlePermissionRequestAsync(payload, sessionId, Console.Out,
+                    budget < CodexPolicySeam.JudgeBudget ? budget : CodexPolicySeam.JudgeBudget) == SeamAnswer.Answered)
+                return 0;
+        }
+
         // Terminal Codex sessions can't answer a Capacitor UI prompt, so we
         // record the event server-side (best-effort) and emit no decision —
         // Codex falls back to its built-in in-CLI approval flow and the user
