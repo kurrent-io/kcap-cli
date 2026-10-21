@@ -575,6 +575,37 @@ public class ChatTabViewSmokeTests {
     }
 
     [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_code_padding_selection_holds_the_chat_while_output_arrives() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var code = ThinkingLine.Replace("weighing it", "```\\nhello world\\n```");
+                var path = Tmp.CreateFile("padding-selection.jsonl", Enumerable.Repeat(UserLine, 20).Append(code).ToArray());
+                await host.LoadAsync(path);
+                var markdown = host.View.GetVisualDescendants().OfType<MarkdownView>().Single(v => v.Classes.Contains("thinking"));
+                PresentAndLocate(host, markdown);
+                var block = markdown.GetVisualDescendants().OfType<TextBlock>().Single(t => MarkdownViewHarness.Reads(t).Contains("hello world", StringComparison.Ordinal));
+                var first = block.TextLayout.HitTestTextPosition(0);
+                var last = block.TextLayout.HitTestTextPosition(8);
+                var start = block.TranslatePoint(new Point(first.X + block.Padding.Left - 8, first.Height / 2 + block.Padding.Top), host.Window)!.Value;
+                var end = block.TranslatePoint(new Point(last.X + block.Padding.Left, last.Height / 2 + block.Padding.Top), host.Window)!.Value;
+                host.Window.MouseMove(start);
+                host.Window.MouseDown(start, MouseButton.Left);
+                host.Window.MouseMove(end, RawInputModifiers.LeftMouseButton);
+                host.Window.MouseUp(end, MouseButton.Left);
+                host.Settle();
+                await Assert.That(markdown.HasSelection).IsTrue();
+                var offset = host.Scroll.Offset.Y;
+                await host.AppendAndTickAsync(path, 2);
+                host.Settle();
+                await Assert.That(host.Scroll.Offset.Y).IsEqualTo(offset);
+                await Assert.That(markdown.HasSelection).IsTrue();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
     [Arguments(false, false)]
     [Arguments(true, false)]
     [Arguments(false, true)]
