@@ -97,6 +97,30 @@ public class AcpInteractionBridgePolicyTests {
         return harness;
     }
 
+    /// <summary>Rules that cannot be read; reading any of them throws.</summary>
+    sealed class UnreadableRules : IReadOnlyList<PolicyRule> {
+        public PolicyRule this[int index] => throw new InvalidOperationException("unreadable policy");
+        public int Count => throw new InvalidOperationException("unreadable policy");
+        public IEnumerator<PolicyRule> GetEnumerator() => throw new InvalidOperationException("unreadable policy");
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    static PolicySnapshot Unreadable => new("snap-broken", [
+        new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Rules, new PolicyDocument(1, new UnreadableRules(), null))], false, []);
+
+    /// <summary>A policy that fails to evaluate might have denied the call, so no preset approves it.</summary>
+    [Test]
+    [Arguments(AcpPermissionPresets.Edit, "edit")]
+    [Arguments(AcpPermissionPresets.Auto, "execute")]
+    public async Task A_policy_that_fails_to_evaluate_sends_the_call_to_a_human(string preset, string kind) {
+        var h = Build(Unreadable, preset);
+
+        await h.HandleAsync(kind == "execute" ? ShellFrame(kind, "git push --force", Standard) : PathFrame(kind, "/wt/src/a.cs", Standard));
+
+        await Assert.That(h.Forwarded).IsTrue();
+        await Assert.That(h.Notices).IsEmpty();
+    }
+
     [Test]
     public async Task Deny_answers_with_the_agents_own_reject_option() {
         var h = Build(Governed);

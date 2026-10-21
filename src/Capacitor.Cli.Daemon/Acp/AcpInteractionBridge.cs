@@ -259,6 +259,8 @@ internal sealed partial class AcpInteractionBridge(
                 evaluation   = PolicyEngine.Evaluate(snapshot, policyAction, EvaluationMode.Full);
             } catch (Exception ex) {
                 LogPolicyEvaluationFailed(ex, agentId);
+                // A policy that could not be read might have denied this call, so no preset may approve it.
+                policyForcedAsk = true;
             }
 
             if (policyAction is { } act && evaluation is { } eval) {
