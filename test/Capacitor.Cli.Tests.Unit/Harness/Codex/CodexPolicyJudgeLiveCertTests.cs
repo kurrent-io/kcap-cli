@@ -10,6 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Harness.Codex;
 /// network command raises an approval, under a throwaway <c>CODEX_HOME</c> whose hooks record what <c>kcap</c>
 /// was asked and answered.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class CodexPolicyJudgeLiveCertTests {
     const string LiveGateEnvVar = "KCAP_CODEX_POLICY_LIVE";
     const string VendorLabel    = "codex-policy";
@@ -122,7 +123,7 @@ public class CodexPolicyJudgeLiveCertTests {
             exit $code
             """);
 
-        JsonArray Hook(int timeout) => [new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = recorder, ["timeout"] = timeout }) }];
+        JsonArray Hook(int timeout) => new(new JsonObject { ["hooks"] = new JsonArray(new JsonObject { ["type"] = "command", ["command"] = recorder, ["timeout"] = timeout }) });
         home.CreateFile("hooks.json", new JsonObject {
             ["hooks"] = new JsonObject {
                 ["SessionStart"] = Hook(30), ["Stop"] = Hook(30), ["PreToolUse"] = Hook(30), ["PermissionRequest"] = Hook(600),

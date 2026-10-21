@@ -400,6 +400,7 @@ sealed class CodexHookCommand(
 
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
+        if (sessionId is not null) FreezePolicySnapshot(sessionId, TryGetString(enrichedNode, "workspace_root"));
 
         // spawn-before-post. A lapsed-auth or transient/unreachable failure durably
         // spools the payload instead of dropping it (Spooled) — never AuthLapsed here, unlike the
@@ -522,6 +523,16 @@ sealed class CodexHookCommand(
         // "invalid stop hook JSON output". Emit the schema default explicitly.
         WriteSessionScopedOutput(Console.Out);
         return 0;
+    }
+
+    /// <summary>Freezes the session's approval policy at its start, so an edit landing before its first tool call
+    /// cannot change what governs it.</summary>
+    void FreezePolicySnapshot(string sessionId, string? repoRoot) {
+        try {
+            new PolicySnapshotStore(config).LoadOrBuild(sessionId, repoRoot);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            // The first tool call builds it instead; the hook never fails over a snapshot.
+        }
     }
 
     /// <summary>A deny rule binds a call Codex would run unasked, in every launch mode: a watched session, a

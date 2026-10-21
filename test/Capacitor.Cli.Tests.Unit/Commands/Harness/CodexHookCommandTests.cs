@@ -5,6 +5,7 @@ using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Policy;
 using Capacitor.Cli.PrDetection;
 
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
@@ -57,6 +58,9 @@ public class CodexHookCommandTests : IDisposable {
         var root = JsonDocument.Parse(requests[0].RequestMessage.Body!).RootElement;
         await Assert.That(root.GetProperty("session_id").GetString()).IsEqualTo("019e032205fc7570be6575719c3ea861");
         await Assert.That(root.GetProperty("home_dir").GetString()).IsNotNull();
+
+        // The approval policy is frozen at session start, under the key PreToolUse reads it by.
+        await Assert.That(new PolicySnapshotStore(Config.Root).TryLoad("019e032205fc7570be6575719c3ea861")).IsNotNull();
 
         // SessionStart also writes Codex's required JSON output to stdout.
         // We can't reliably capture stdout here because the test path spawns a
