@@ -5,7 +5,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// <summary>
 /// The usage-data disclosure as a page of its own, just before the summary. Shown only while the
 /// notice is still due; Next records the choice. An opt-out that couldn't be saved holds the page once
-/// to say so, then locks the choice and lets setup finish with the notice still due: this process has
+/// to say so in place of the choice, then lets setup finish with the notice still due: this process has
 /// already stopped sending, so a Share picked afterwards could not take effect.
 /// </summary>
 public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
@@ -35,8 +35,9 @@ public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
     /// Acknowledged elsewhere since the run began: nothing left to ask.
     public bool PassThrough => Satisfied;
 
-    /// False when an environment variable decides, so the page only discloses.
-    public bool ChoiceVisible => _notice?.CanTurnOff == true;
+    /// False when an environment variable decides, so the page only discloses, and after an unsaved opt-out,
+    /// whose message the choice would contradict.
+    public bool ChoiceVisible => _notice?.CanTurnOff == true && !_unsavedShown;
 
     public bool Share {
         get => _share;
@@ -51,8 +52,6 @@ public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
         set => Share = !value;
     }
 
-    public bool CanChoose => !_unsavedShown;
-
     public string? Problem => _unsavedShown ? UsageDataNotice.NotSaved : null;
 
     public Task OnEnterAsync(CancellationToken ct) => Task.CompletedTask;
@@ -60,7 +59,7 @@ public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
     public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
         if (direction == WizardNavigation.Back || _unsavedShown || _notice is not { Visible: true }) return Task.FromResult(true);
 
-        if (_share || !ChoiceVisible) {
+        if (_share || !_notice.CanTurnOff) {
             _notice.Acknowledge();
             return Task.FromResult(true);
         }
@@ -69,7 +68,7 @@ public sealed class UsageDataStepViewModel : ReactiveObject, IWizardStep {
 
         _unsavedShown = true;
         this.RaisePropertyChanged(nameof(Problem));
-        this.RaisePropertyChanged(nameof(CanChoose));
+        this.RaisePropertyChanged(nameof(ChoiceVisible));
 
         return Task.FromResult(false);
     }

@@ -71,7 +71,7 @@
         <DataTemplate DataType="vm:UsageDataStepViewModel">
             <StackPanel Spacing="12">
                 <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
-                    <StackPanel Spacing="2" IsEnabled="{Binding CanChoose}">
+                    <StackPanel Spacing="2">
                         <RadioButton x:Name="ShareUsageOption" Classes="onboardingOption" GroupName="UsageData"
                                      IsChecked="{Binding Share, Mode=TwoWay}">
                             <StackPanel Spacing="2">
