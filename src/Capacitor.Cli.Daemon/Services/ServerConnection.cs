@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Http;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -16,9 +17,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     readonly HubConnection             _hub;
     readonly TimeProvider _time;
     readonly DaemonConfig              _config;
-    readonly TokenStore                _tokens;
     readonly ILogger<ServerConnection> _logger;
     readonly RegistrationGate          _gate                = new();
+    // The first identity a provider call returned since the connect began, and the one a connection was
+    // established with. A later call (a long-polling poll or 401 retry) authenticates nothing the
+    // connection's principal follows, so only the first is kept, and only an established connection
+    // commits it. A call with no bearer claims nothing: automatic reconnect retries without a reset, and
+    // an early failed attempt must not hide the identity a later one succeeds with.
+    HubIdentity?                       _pendingAs;
+    HubIdentity?                       _negotiatedAs;
+    string?                            _lastUnavailable;
     readonly PendingPermissionRegistry _pendingPermissions  = new();
     readonly PendingAcpInteractionRegistry _pendingAcpInteractions = new();
     readonly AgentRunEventQueue        _eventQueue;
@@ -119,6 +127,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
+    /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
+    public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
     /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
     /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
@@ -206,36 +217,70 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         catch (Exception ex) { _logger.LogDebug(ex, "CommandRejected send failed (old server or transient)"); }
     }
 
+    /// <summary>The credential every lane to this server sends: the hub, agent-run events, attachments.</summary>
+    internal ICredentialSource Credentials { get; }
+
+    static HttpMessageHandler NoRedirects(HttpMessageHandler handler) {
+        switch (handler) {
+            case HttpClientHandler h:  h.AllowAutoRedirect = false; break;
+            case SocketsHttpHandler s: s.AllowAutoRedirect = false; break;
+        }
+
+        return handler;
+    }
+
     public ServerConnection(
-            DaemonConfig config, TokenStore tokens, ILoggerFactory loggerFactory,
+            DaemonConfig config, ICredentialSource credentials, ILoggerFactory loggerFactory,
             ILogger<ServerConnection> logger, TimeProvider time, DaemonStatusNotifier? statusNotifier = null) {
         _time            = time;
         _config          = config;
-        _tokens          = tokens;
         _logger          = logger;
         _statusNotifier  = statusNotifier ?? new();
+        Credentials      = credentials;
 
         // A refused bearer is logged with its expiry and the server's error code on both lanes that
         // carry it, so a 401 can be told apart from a lapsed token without the server's log.
+        CredentialHealth = new DaemonCredentialHealth(_statusNotifier.Pulse);
         void ReportRejection(string report) => logger.LogWarning("Server refused the daemon's bearer — {Report}", report);
+        // Only the hub's own negotiate and socket say why the hub cannot connect; an event post's
+        // refusal is logged alone, whatever the hub is doing when it returns.
+        void ReportHubRejection(string report) {
+            ReportRejection(report);
+            CredentialHealth.ObserveRejection();
+        }
+
+        // Checked on every send and every hub negotiation, reconnects included: after a purge the port may belong
+        // to anything.
+        var refusal = config.DestinationRefusal;
+        // It follows redirects itself, so it can check each hop; the handler under it follows none.
+        DelegatingHandler Guarded(HttpMessageHandler inner, Action<string> report) =>
+            new LocalDestinationHandler(config.LocalRoot, config.ServerUrl, refusal, followRedirects: true) {
+                InnerHandler = new BearerRejectionReportHandler(time, report) { InnerHandler = NoRedirects(inner) },
+            };
 
         _eventQueue = new(
-            config, tokens, time, loggerFactory.CreateLogger<AgentRunEventQueue>(),
-            new HttpClient(new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = new HttpClientHandler() }));
+            config, credentials, time, loggerFactory.CreateLogger<AgentRunEventQueue>(), new HttpClient(Guarded(new HttpClientHandler(), ReportRejection)));
 
         _hub = new HubConnectionBuilder()
             .WithUrl(
                 $"{config.ServerUrl.TrimEnd('/')}/hubs/sessions",
                 options => {
                     options.AccessTokenProvider = async () => {
-                        var resolution = await tokens.GetValidTokensForServerAsync(config.Profiles.Name, config.ServerUrl);
-
-                        return resolution.Tokens?.AccessToken;
+                        var state = await credentials.ResolveAsync(default);
+                        CredentialHealth.Observe(state);
+                        if (HubIdentity.Of(state) is { } identity) Interlocked.CompareExchange(ref _pendingAs, identity, null);
+                        if (state.Bearer is null) LogHubSignInUnavailable(state);
+                        else Volatile.Write(ref _lastUnavailable, null);
+                        return state.Bearer;
                     };
-                    options.HttpMessageHandlerFactory = inner =>
-                        new BearerRejectionReportHandler(time, ReportRejection) { InnerHandler = inner };
-                    options.WebSocketFactory = (context, ct) => BearerRejectionReportHandler.ConnectWebSocketAsync(
-                        context.Uri, context.Options.AccessTokenProvider, time, ReportRejection, ct);
+                    options.HttpMessageHandlerFactory = inner => Guarded(inner, ReportHubRejection);
+                    HttpClientExtensions.AddObservationHeaders(options.Headers, config.UpdateCheckOff);
+                    options.WebSocketFactory = (context, ct) => {
+                        LocalDestination.Check(context.Uri, config.LocalRoot, config.ServerUrl, refusal);
+
+                        return BearerRejectionReportHandler.ConnectWebSocketAsync(
+                            context.Uri, context.Options.AccessTokenProvider, time, ReportHubRejection, ct);
+                    };
                 }
             )
             .WithAutomaticReconnect(new RetryPolicy())
@@ -493,6 +538,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// without a live SignalR transport.</summary>
     internal virtual HubConnectionState HubState => _hub.State;
 
+    /// <summary>Whether the daemon's sign-in is why the hub cannot connect.</summary>
+    internal DaemonCredentialHealth CredentialHealth { get; }
+
     /// <summary>The heartbeat's gate: only a <c>Connected</c> hub is pinged and, on a hung ping,
     /// force-reconnected. Any other state means automatic reconnect owns recovery.</summary>
     public bool IsConnected => HubState == HubConnectionState.Connected;
@@ -531,12 +579,17 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     // exhausts to Disconnected (firing Closed), so this converges.
                     if (HubState == HubConnectionState.Disconnected) {
                         LogConnecting(_config.ServerUrl);
+                        Volatile.Write(ref _pendingAs, null);
                         await StartHubAsync(ct);
+                        CommitNegotiatedIdentity();
                         // Hub is now Connected (pre-registration) — pulse so a subscriber that
                         // snapshotted while still "connecting" converges without waiting for
                         // RegisterDaemonAsync too.
                         _statusNotifier.Pulse();
                     }
+
+                    // A connected hub has accepted the bearer, whatever registration then makes of it.
+                    if (HubState == HubConnectionState.Connected) CredentialHealth.ObserveConnected();
 
                     await RegisterDaemonAsync();
                     _connectedTimestamp = _time.GetTimestamp();
@@ -686,7 +739,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             EvalProtocolVersion: 2,
             VendorModels: _config.VendorModels,
             SupportsRawInput: AdvertisesRawInput,
-            SupportsBranchBaseRef: true);
+            SupportsBranchBaseRef: true,
+            ResumingAgents: GetResumingAgents?.Invoke());
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
@@ -743,22 +797,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     // change afterwards.
     RepoStoreFingerprint? FingerprintRepoStore() => new RepoPathStore(_config.ConfigRoot, _time).Fingerprint();
 
-    async Task<string[]> MergeRepoPathsAsync() {
-        var persisted = await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync();
-
-        if (_config.AllowedRepoPaths.Length == 0)
-            return persisted;
-
-        // Union: persisted paths first (sorted by last_used desc), then config-only paths
-        var comparer = RepoPathStore.PathComparison == StringComparison.Ordinal
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
-        var seen = new HashSet<string>(persisted, comparer);
-        var merged = new List<string>(persisted);
-        merged.AddRange(_config.AllowedRepoPaths.Select(p => p.TrimEnd('/', '*')).Where(seen.Add));
-
-        return [..merged];
-    }
+    async Task<string[]> MergeRepoPathsAsync() =>
+        AdvertisedRepoPaths.Merge(await new RepoPathStore(_config.ConfigRoot, _time).GetSortedPathsAsync(), _config.AllowedRepoPaths);
 
     /// <summary>
     /// Auto-reconnect started: the transport is no longer Connected and the
@@ -767,6 +807,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// re-runs <see cref="RegisterDaemonAsync"/>.
     /// </summary>
     Task OnReconnecting(Exception? error) {
+        Volatile.Write(ref _pendingAs, null);
         _gate.MarkUnregistered();
         _statusNotifier.Pulse();
 
@@ -788,10 +829,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     internal virtual string? CurrentConnectionId => _hub.ConnectionId;
 
     async Task OnReconnected(string? connectionId) {
+        CommitNegotiatedIdentity();
         _statusNotifier.Pulse();
         LogReconnected();
         await RegisterDaemonAsync();
         _connectedTimestamp = _time.GetTimestamp();
+        CredentialHealth.ObserveConnected();
     }
 
     /// <summary>
@@ -812,6 +855,29 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// connection as a daemon (slot displaced or never registered).
     /// </summary>
     public Task ReRegisterAsync() => RegisterDaemonAsync();
+
+    public async Task<bool> CredentialChangedAsync(CancellationToken ct) =>
+        Volatile.Read(ref _negotiatedAs) is { } negotiated
+     && HubIdentity.Changed(negotiated, await Credentials.ResolveAsync(ct));
+
+    void CommitNegotiatedIdentity() => Volatile.Write(ref _negotiatedAs, Volatile.Read(ref _pendingAs));
+
+    // Once per change of reason, so a hub retrying every 30 s does not repeat it. A server that takes
+    // no sign-in sends no bearer by design.
+    void LogHubSignInUnavailable(CredentialState state) {
+        if (state.Status == AuthStatus.NoAuthRequired) return;
+
+        var issuer = state.Resolution?.IssuedServerUrl ?? "unknown";
+        var reason = $"{state.Status}|{issuer}|{state.Problem}";
+        if (Interlocked.Exchange(ref _lastUnavailable, reason) == reason) return;
+
+        if (state.Problem is { Length: > 0 } problem)
+            LogHubCredentialProblem(_config.ServerUrl, problem);
+        else if (state.Status == AuthStatus.WrongServer)
+            LogHubTokenFromAnotherServer(_config.ServerUrl, issuer);
+        else
+            LogHubNoSignIn(state.Status, _config.ServerUrl);
+    }
 
     /// <summary>
     /// Stops the underlying hub. <see cref="OnClosed"/> fires and calls
@@ -882,16 +948,40 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     // Outgoing messages to server
-    public virtual Task AgentRegisteredAsync(
+    /// <summary>Registers the agent and returns the server's answer. A server without <c>AgentRegisteredAcked</c>
+    /// gets the unanswered <c>AgentRegistered</c> instead, read as accepted; that server is remembered for the
+    /// rest of the connection, and a reconnect, which may reach an upgraded server, asks again.</summary>
+    public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, AgentStartTitle? title = null)
-        => _hub.InvokeAsync(
-            "AgentRegistered",
-            new AgentRegistered(
-                agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-                title?.Text, title?.Derived ?? false),
-            cancellationToken: _ct);
+            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
+        var registration = new AgentRegistered(
+            agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
+            title?.Text, title?.Derived ?? false, vendor);
+        var connection = CurrentConnectionId ?? "";
+
+        if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
+            try {
+                return await InvokeAgentRegisteredAckedRawAsync(registration)
+                    ?? throw new InvalidOperationException($"The server answered the registration of agent {agentId} with no outcome");
+            } catch (Exception ex) when (IsUnknownHubMethod(ex)) {
+                Volatile.Write(ref _registrationAckMissingOn, connection);
+            }
+        }
+
+        await InvokeAgentRegisteredRawAsync(registration);
+
+        return AgentRegisteredResponse.Accepted;
+    }
+
+    /// <summary>The connection id on which the server answered <c>AgentRegisteredAcked</c> as an unknown method.</summary>
+    string? _registrationAckMissingOn;
+
+    internal virtual Task<AgentRegisteredResponse?> InvokeAgentRegisteredAckedRawAsync(AgentRegistered registration)
+        => _hub.InvokeAsync<AgentRegisteredResponse?>("AgentRegisteredAcked", registration, cancellationToken: _ct);
+
+    internal virtual Task InvokeAgentRegisteredRawAsync(AgentRegistered registration)
+        => _hub.InvokeAsync("AgentRegistered", registration, cancellationToken: _ct);
 
     /// <summary>
     /// Reports the hosted agent's fixed PTY dimensions to the server, which stores
@@ -1670,6 +1760,15 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Daemon name '{Name}' is already in use by another live daemon on this account. Server rejected DaemonConnect: {Reason}")]
     partial void LogNameInUse(string name, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon is configured for {ServerUrl}, but its profile's token was issued by {IssuedBy}. Run `kcap login` for {ServerUrl}, or reinstall the daemon on the profile that holds it.")]
+    partial void LogHubTokenFromAnotherServer(string serverUrl, string issuedBy);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon has no usable sign-in for {ServerUrl} ({Status}). Run `kcap login` for that server.")]
+    partial void LogHubNoSignIn(AuthStatus status, string serverUrl);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The daemon cannot sign in to {ServerUrl}: {Problem}")]
+    partial void LogHubCredentialProblem(string serverUrl, string problem);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Connecting to {Url}...")]
     partial void LogConnecting(string url);

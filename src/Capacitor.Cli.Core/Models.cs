@@ -304,6 +304,11 @@ record SessionTitlePayload {
 
     [JsonPropertyName("cache_write_tokens")]
     public long CacheWriteTokens { get; init; }
+
+    /// <summary>The server's title-source tag. Absent, it records the title as a raw placeholder that
+    /// its backfill may regenerate.</summary>
+    [JsonPropertyName("source")]
+    public string? Source { get; init; }
 }
 
 record WhatsDonePayload {
@@ -622,12 +627,7 @@ public record EvalRetrospective {
     public List<string> Suggestions { get; init; } = [];
 }
 
-// Cross-eval memory — DEV-1434 / DEV-1438. Judges may optionally emit a
-// retain_fact when they spot a cross-cutting pattern; the CLI POSTs it to
-// the session-scoped endpoint and the server derives repo scope from the
-// session (facts live on JudgeFacts-repo-{repoHash}-{category} streams).
-// Facts accumulated on the same repo by any team member are fetched at
-// eval startup and injected into each judge's prompt as "known patterns".
+// A judge's retain_fact, posted to the session's judge-facts endpoint; the server derives the repo scope.
 record JudgeFactPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -654,35 +654,8 @@ record JudgeFactPayload {
     public string? EvidenceScopeToken { get; init; }
 }
 
-public record JudgeFact {
-    [JsonPropertyName("category")]
-    public required string Category { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("fact_hash")]
-    public string? FactHash { get; init; }
-
-    [JsonPropertyName("fact")]
-    public required string Fact { get; init; }
-
-    // Nullable for backward compat with older servers that don't return this field.
-    [JsonPropertyName("retainer_github_id")]
-    public long? RetainerGitHubId { get; init; }
-
-    [JsonPropertyName("source_session_id")]
-    public required string SourceSessionId { get; init; }
-
-    [JsonPropertyName("source_eval_run_id")]
-    public required string SourceEvalRunId { get; init; }
-
-    [JsonPropertyName("retained_at")]
-    public required DateTimeOffset RetainedAt { get; init; }
-}
-
-// Snapshot of a judge fact at eval time. Sent in the facts_used field of
-// SessionEvalCompletedPayload so the server can persist which facts were
-// in scope when the eval ran, even if the live judge_facts pool is later
-// modified (muted, deleted, replaced).
+// The element type of facts_used. Judges are given no retained facts, so the CLI always sends the list
+// empty; the server still reads it on the evals that carried some.
 public record EvalFactSnapshotPayload {
     [JsonPropertyName("category")]
     public required string Category { get; init; }
@@ -1067,7 +1040,6 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(EvalRetrospectiveV2))]
 [JsonSerializable(typeof(SessionEvalCompletedPayloadV2))]
 [JsonSerializable(typeof(JudgeFactPayload))]
-[JsonSerializable(typeof(List<JudgeFact>))]
 [JsonSerializable(typeof(EvalFactSnapshotPayload))]
 [JsonSerializable(typeof(List<EvalFactSnapshotPayload>))]
 [JsonSerializable(typeof(EvalCatalogDto))]
@@ -1178,6 +1150,8 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(QuarantinedAgentInfo))]
 [JsonSerializable(typeof(DaemonStatusReport))]
 [JsonSerializable(typeof(StatusReportRequest))]
+[JsonSerializable(typeof(ResumingAgentClaim))]
+[JsonSerializable(typeof(ResumingAgentClaim[]))]
 // Surface 3 (new-harness detection): per-machine coding-agent inventory carried on the status report.
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventory))]
 [JsonSerializable(typeof(Capacitor.Cli.Core.Setup.HarnessInventoryEntry))]
@@ -1204,6 +1178,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(AgentPidRecord))]
 [JsonSerializable(typeof(PidIdentityKind))]
 [JsonSerializable(typeof(AgentRegistered))]
+[JsonSerializable(typeof(AgentRegisteredResponse))]
 [JsonSerializable(typeof(AgentStatusChanged))]
 [JsonSerializable(typeof(AgentUnregistered))]
 [JsonSerializable(typeof(LaunchFailed))]
@@ -1454,6 +1429,14 @@ public static class AcpEventKind {
     /// existing additive folds (session totals, per-model attribution, cost) count them unchanged. An
     /// older server treats it as an unrecognised Kind (dropped, cursor still advances).</summary>
     public const string TokenUsage         = "token_usage";
+
+    /// <summary>A subagent the hosted agent started: <see cref="AcpEventEnvelope.AgentId"/> names it,
+    /// <see cref="AcpEventEnvelope.AgentType"/> its role. Its own events then carry that
+    /// <see cref="AcpEventEnvelope.AgentId"/>. An older server treats it as an unrecognised Kind.</summary>
+    public const string SubagentStarted    = "subagent_started";
+
+    /// <summary>The subagent named by <see cref="AcpEventEnvelope.AgentId"/> finished.</summary>
+    public const string SubagentCompleted  = "subagent_completed";
 }
 
 /// <summary>
@@ -1541,7 +1524,19 @@ public readonly record struct AcpEventEnvelope(
         long?   UsageCachedInputTokens = null,
         long?   UsageCacheWriteInputTokens = null,
         long?   UsageOutputTokens      = null,
-        long?   UsageReasoningTokens   = null
+        long?   UsageReasoningTokens   = null,
+
+        // session_started — the repository the hosted agent's worktree belongs to, which is how the
+        // server attributes a hosted session to it. Additive and nullable, so ContractVersion stays 1.
+        string? RepoOwner     = null,
+        string? RepoName      = null,
+        string? RepoRemoteUrl = null,
+        string? RepoBranch    = null,
+
+        // The subagent an event belongs to, and on subagent_started its role; null for the hosted
+        // agent's own events. A server without these fields records a subagent's events as the parent's.
+        string? AgentId   = null,
+        string? AgentType = null
     );
 
 /// <summary>
@@ -1898,7 +1893,8 @@ public readonly record struct DaemonStatusReport(
         // Echo of the nonce from a server-sent StatusReportRequest (RequestStatusReport2), null on
         // every unsolicited report. The server's idle-marker coordinator confirms a claim only
         // against the report carrying ITS nonce — an unechoed report can never confirm one.
-        string?                       EchoNonce                     = null
+        string?                       EchoNonce                     = null,
+        ResumingAgentClaim[]?         ResumingAgents                = null
     );
 
 /// <summary>The server's correlated status-report request (hub method <c>RequestStatusReport2</c>,
@@ -2241,7 +2237,8 @@ public readonly record struct DaemonConnect(
         // A launch's base ref may name a local branch, which the daemon resolves on its own machine
         // before falling back to a fetch. False from a daemon predating it, whose fetch-only path
         // cannot see a branch that exists only here.
-        bool                                        SupportsBranchBaseRef = false
+        bool                                        SupportsBranchBaseRef = false,
+        ResumingAgentClaim[]?                       ResumingAgents = null
     );
 
 public sealed record UnattendedVendorCapability(
@@ -2293,7 +2290,11 @@ public readonly record struct AgentRegistered(
         string? RuntimeTransport = null,
         // The session's start title, with the same meaning as on LaunchAgentCommand.
         string? Title        = null,
-        bool    TitleDerived = false
+        bool    TitleDerived = false,
+        // The agent's vendor. A re-registration after a reconnect has no launch on the server to
+        // read it from. Trailing name-bound field — an older server ignores it, an older daemon
+        // never sets it.
+        string? Vendor = null
     );
 
 public readonly record struct AgentStatusChanged(

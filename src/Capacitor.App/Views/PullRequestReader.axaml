@@ -18,7 +18,7 @@
                         AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
-                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal prAfterLabel" />
+                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal" />
                     </StackPanel>
                 </Button>
             </Grid>
@@ -26,14 +26,13 @@
                        MaxLines="3" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Title}" Foreground="{StaticResource KcapTextBrush}" />
             <TextBlock Text="{Binding Branches}" Classes="prMuted" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Branches}"
                        IsVisible="{Binding HasBranches}" />
-            <TextBlock Text="{Binding OverviewFreshnessLabel}" IsVisible="{Binding HasStaleOverview}" Classes="prNote" />
             <Border IsVisible="{Binding HasNotice}" HorizontalAlignment="Left" Background="{StaticResource KcapWarningDimBrush}" CornerRadius="6" Padding="10,8">
                 <TextBlock Text="{Binding Notice}" Classes="prNote" Foreground="{StaticResource KcapWarningBrush}" />
             </Border>
         </StackPanel>
         <StackPanel Grid.Row="1" Margin="24,8,24,0">
             <Border BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1">
-                <TabStrip x:Name="ReaderTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" IsEnabled="{Binding CanReveal}"
+                <TabStrip x:Name="ReaderTabs" SelectedIndex="{Binding SelectedTabIndex, Mode=TwoWay}" IsEnabled="{Binding CanNavigate}"
                           ItemContainerTheme="{StaticResource PullRequestTabTheme}" AutomationProperties.Name="Pull request sections">
                     <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
                     <TabStripItem Content="Overview" />
@@ -60,7 +59,7 @@
                  Equal margin keeps the pills centered between the section rule and the row beneath. -->
             <Grid x:Name="ReviewTabsRow" ColumnDefinitions="*,Auto" ColumnSpacing="10" Margin="0,8,0,8" Height="30" IsVisible="{Binding IsReviewSection}">
                 <TabStrip x:Name="ReviewTabs" SelectedIndex="{Binding SelectedReviewTabIndex, Mode=TwoWay}" VerticalAlignment="Center"
-                          IsEnabled="{Binding CanReveal}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}"
+                          IsEnabled="{Binding CanNavigate}" ItemContainerTheme="{StaticResource PullRequestReviewTabTheme}"
                           AutomationProperties.Name="Review sections">
                     <TabStrip.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabStrip.ItemsPanel>
                     <TabStripItem Content="Reviewers" />
@@ -77,14 +76,15 @@
         </StackPanel>
         <ScrollViewer x:Name="ReaderScroll" Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" BringIntoViewOnFocusChange="False">
             <StackPanel Margin="24,0,24,24" Spacing="10">
-                <!-- Lists sit on the section edge; overview has no row padding, so it keeps a small top inset. -->
+                <!-- Lists sit on the section edge; overview and a section's leading note have no row padding, so they keep a small top inset. -->
                 <StackPanel IsVisible="{Binding IsOverview}" Margin="0,8,0,0" Spacing="10">
                     <TextBlock Text="{Binding DescriptionNote}" Classes="prNote" IsVisible="{Binding DescriptionNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                    <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" Flavor="GitHub" />
+                    <views:MarkdownView Text="{Binding Description}" OpenLink="{Binding OpenBodyLinkCommand}" Flavor="GitHub"
+                                        ReferenceBase="{Binding ReferenceBase}" />
                     <TextBlock Text="Description preview truncated. Open the pull request in your browser for the full text."
                                IsVisible="{Binding DescriptionTruncated}" Classes="prNote" />
                 </StackPanel>
-                <TextBlock Text="{Binding PageNote}" Classes="prNote" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock x:Name="PageNoteText" Text="{Binding PageNote}" Classes="prNote" Margin="0,12,0,0" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <!-- Loading and empty share one slot, glyph size and type so the one gives way to the other in place. -->
                 <StackPanel x:Name="LoadingState" Classes="prSectionState" Classes.shown="{Binding ShowsLoading}">
                     <views:AppIcon Kind="LoaderCircle" Size="20" Classes="prStateGlyph kcapSpinning" />
@@ -167,6 +167,7 @@
                                                              FontSize="11.5" TextWrapping="Wrap" Foreground="{StaticResource KcapMutedBrush}" />
                                     </Border>
                                     <views:MarkdownView Text="{Binding Body}" IsVisible="{Binding HasBody}" Flavor="GitHub"
+                                        ReferenceBase="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).ReferenceBase}"
                                         OpenLink="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).OpenBodyLinkCommand}" />
                                     <TextBlock Text="{Binding ItemNote}" IsVisible="{Binding HasItemNote}" Classes="prNote" />
                                     <Button Content="View replies" IsVisible="{Binding IsThread}" Classes="kcapGhost kcapQuiet prFlushLeft" HorizontalAlignment="Left"

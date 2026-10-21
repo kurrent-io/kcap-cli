@@ -1,5 +1,6 @@
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Tests.Unit;
@@ -57,6 +58,24 @@ public class SessionStatusDotsTests {
             new(id, "agent", "claude", "/repo", status, null, null, null, DateTime.UtcNow, null, null,
                 Title: title, AwaitingInput: awaiting, LiveSubagents: subagents),
             Repo);
+
+    /// A dialog on the terminal blocks the agent whatever the turn verdict says, so a row reads
+    /// Needs you even mid-turn, and the worktree counts it.
+    [Test]
+    public async Task A_terminal_dialog_makes_a_working_row_need_you() {
+        var dialog = new TerminalDialogDto("Trust this MCP server?", "", ["Yes", "No"], 0, "");
+        var row = AgentRow.FromLocal(
+            new("a", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null,
+                AwaitingInput: false, TerminalDialog: dialog),
+            Repo);
+
+        var status = SessionStatusDots.ForRow(row, pending: false);
+        await Assert.That(status.Kind).IsEqualTo(AgentStatusKind.NeedsYou);
+        await Assert.That(status.Tip).Contains("Waiting for you in Terminal");
+        await Assert.That(status.Tip).DoesNotContain("Pending response");
+        await Assert.That(SessionStatusDots.NeedsAttention(row)).IsTrue();
+        await Assert.That(SessionStatusDots.NeedsAttention(row with { TerminalDialog = null })).IsFalse();
+    }
 
     [Test]
     public async Task One_verdict_ranks_failed_then_needs_you_then_working_then_idle() {
@@ -153,5 +172,57 @@ public class SessionStatusDotsTests {
         await Assert.That(named.Tip).Contains("Claude Code\nHarness");
         await Assert.That(status.Tip).Contains("\n\nada@example.com\nRequester");
         await Assert.That(status.Tip).Contains("\n\n/repo/wt\nBorrowed from");
+    }
+
+    [Test]
+    public async Task A_resuming_row_is_in_flight_and_pulses() {
+        var status = SessionStatusDots.ForRow(Local("a", status: "Resuming"), pending: false);
+
+        await Assert.That(status.Kind).IsEqualTo(AgentStatusKind.Resuming);
+        await Assert.That(status.Label).IsEqualTo("Resuming");
+        await Assert.That(status.IsInFlight).IsTrue();
+        await Assert.That(status.Pulses).IsTrue();
+        await Assert.That(status.ShowsRing).IsTrue();
+        await Assert.That(status.IsWarning).IsFalse();
+        await Assert.That(status.Tip).Contains("Resuming after a daemon restart");
+    }
+
+    [Test]
+    public async Task An_interrupted_row_needs_attention_and_names_the_reason() {
+        var row = AgentRow.FromLocal(
+            new("a", "agent", "claude", "/repo", "Interrupted", null, null, null, DateTime.UtcNow, null, null, Interruption: "too_old"),
+            Repo);
+
+        var status = SessionStatusDots.ForRow(row, pending: false);
+
+        await Assert.That(row.Interruption).IsEqualTo("too_old");
+        await Assert.That(status.Kind).IsEqualTo(AgentStatusKind.Interrupted);
+        await Assert.That(status.Label).IsEqualTo("Interrupted");
+        await Assert.That(status.IsWarning).IsTrue();
+        await Assert.That(status.ShowsPause).IsTrue();
+        await Assert.That(status.IsInFlight).IsFalse();
+        await Assert.That(status.Pulses).IsFalse();
+        await Assert.That(status.Facts.Select(f => (f.Text, f.Caption))).Contains(("too_old", "Reason"));
+        await Assert.That(SessionStatusDots.NeedsAttention(row)).IsTrue();
+    }
+
+    [Test]
+    public async Task An_interrupted_row_with_no_reason_still_says_how_to_retry() {
+        var status = SessionStatusDots.ForRow(Local("a", status: "Interrupted"), pending: false);
+
+        await Assert.That(status.Tip).Contains("kcap agent resume a");
+        await Assert.That(status.Facts.Any(f => f.Caption == "Reason")).IsFalse();
+    }
+
+    [Test]
+    public async Task A_rollup_puts_an_interrupted_session_ahead_of_working_and_resuming_ones() {
+        var rows = new[] { Local("w", awaiting: false), Local("r", status: "Resuming"), Local("i", status: "Interrupted") };
+
+        var rollup = SessionStatusDots.Rollup(rows, new HashSet<string>())!;
+        var resuming = SessionStatusDots.Rollup([Local("r", status: "Resuming"), Local("s", status: "Resuming")], new HashSet<string>())!;
+
+        await Assert.That(rollup.Kind).IsEqualTo(AgentStatusKind.Interrupted);
+        await Assert.That(rollup.AccessibleName).IsEqualTo("1 session interrupted");
+        await Assert.That(resuming.AccessibleName).IsEqualTo("2 sessions resuming");
     }
 }

@@ -29,9 +29,9 @@ public class HistoryStepViewModelTests {
         public IReadOnlyList<HarnessId> Scope = [HarnessId.Claude, HarnessId.Cursor];
         public readonly HistoryStepViewModel Vm;
 
-        public Harness(ImportDiscoveryReport? report) {
+        public Harness(ImportDiscoveryReport? report, bool onLocalPath = false) {
             Cli.DiscoverBehavior = _ => Task.FromResult(report);
-            Vm = new HistoryStepViewModel(Cli, () => Scope, action => action(), "test-mac", TimeProvider.System);
+            Vm = new HistoryStepViewModel(Cli, () => Scope, action => action(), "test-mac", TimeProvider.System, () => onLocalPath);
         }
 
         public async Task EnterAsync() {
@@ -183,6 +183,45 @@ public class HistoryStepViewModelTests {
 
         await Assert.That(h.Vm.State).IsEqualTo(expected);
         await Assert.That(h.Vm.EmptyMessage).IsNotNull();
+    }
+
+    /// Every line the local path can show, across each empty arm and the repository list.
+    static async Task<List<string?>> LocalLinesAsync(bool onLocalPath) {
+        var lines = new List<string?>();
+        var none = new Harness(Report(), onLocalPath) { Scope = [] };
+        await none.EnterAsync();
+        lines.Add(none.Vm.EmptyMessage);
+        foreach (var report in new[] { new ImportDiscoveryReport([], 12, []), null }) {
+            var h = new Harness(report, onLocalPath);
+            await h.EnterAsync();
+            lines.Add(h.Vm.EmptyMessage);
+        }
+        var repos = new Harness(Report(unmatched: 4), onLocalPath);
+        await repos.EnterAsync();
+        lines.Add(repos.Vm.UnmatchedNote);
+        lines.Add(repos.Vm.DeclineNote);
+
+        return lines;
+    }
+
+    [Test]
+    public async Task The_local_path_names_no_terminal_command() {
+        var lines = await LocalLinesAsync(onLocalPath: true);
+
+        await Assert.That(lines.All(l => l is not null)).IsTrue();
+        foreach (var line in lines) {
+            await Assert.That(line!).DoesNotContain("kcap import");
+            await Assert.That(line).DoesNotContain("kcap remap");
+            await Assert.That(line).DoesNotContain("kcap setup");
+        }
+    }
+
+    [Test]
+    public async Task The_cloud_path_keeps_its_terminal_commands() {
+        var lines = await LocalLinesAsync(onLocalPath: false);
+
+        await Assert.That(lines.All(l => l is not null && (l.Contains("kcap import", StringComparison.Ordinal)
+            || l.Contains("kcap remap", StringComparison.Ordinal)))).IsTrue();
     }
 
     [Test]

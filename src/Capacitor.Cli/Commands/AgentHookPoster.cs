@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -261,7 +263,7 @@ internal sealed class AgentHookPoster(
         lifecycle.ReapOlderThan(TimeSpan.FromDays(30));
         transcript.ReapOlderThan(TimeSpan.FromDays(30));
         SessionCommits.ReapOlderThan(config, TimeSpan.FromDays(30), time);
-        AgentSessions.OnThisMachine(config).Reap();
+        SpoolEnds(AgentSessions.OnThisMachine(config).ReapExited(Url), Url, lifecycle, time);
 
         // Distinct from the POST guards' diagnostic: a reader must be able to tell which guard fired,
         // and a test must be able to prove THIS one did.
@@ -285,11 +287,46 @@ internal sealed class AgentHookPoster(
                 await LifecycleSpoolDrain.RunAsync(
                     new CursorMarkers(config, time), client, Url!, lifecycle, transcript, sessionId, budget,
                     time, cts.Token,
-                    onWhatsDoneRequested: (sid, vendor) => watchers.SpawnWhatsDoneGenerator(sid, vendor));
+                    onWhatsDoneRequested: watchers.SpawnWhatsDoneGenerator);
             }
         } catch {
             // Best-effort — a drain hiccup must never disrupt the vendor's own hook.
         }
+    }
+
+    /// <summary>
+    /// Queues a SessionEnd for each session whose agent process is gone, so the app stops showing it as
+    /// live when nothing told the server (a private daemon agent, a daemon that cannot reach the server).
+    /// Only for a session recorded against the server this process posts to: one recorded elsewhere is
+    /// that server's to close, through its own sweep. The drain delivers the end like any spooled one,
+    /// and a server that already ended the session ignores it.
+    /// </summary>
+    internal static int SpoolEnds(IReadOnlyList<ExitedSession> exited, string? url, HookSpool spool, TimeProvider time) {
+        if (url is null) return 0;
+
+        var spooled = 0;
+        foreach (var session in exited) {
+            if (session.Origin is not { Vendor: { } vendor, Server: { } server } origin || !AgentSessions.SameServer(server, url)) continue;
+
+            // The fields every vendor's session-end binding requires, as the watcher's own end sends them.
+            var body = new JsonObject {
+                ["session_id"]      = session.Session.Value,
+                ["transcript_path"] = origin.TranscriptPath ?? "",
+                ["cwd"]             = origin.Cwd ?? "",
+                ["hook_event_name"] = "SessionEnd",
+                ["reason"]          = "parent_exited",
+                ["ended_at"]        = time.GetUtcNow().ToString("O", CultureInfo.InvariantCulture),
+            }.ToJsonString();
+            // An earlier end of a session since resumed left a marker that would discard this one.
+            // What is spooled behind it are that run's stragglers, dropped as the drain would drop them.
+            if (spool.IsMarkedEnded(session.Session.Value)) {
+                spool.DiscardRemainder(session.Session.Value);
+                spool.ClearEnded(session.Session.Value);
+            }
+            if (spool.Append(session.Session.Value, $"session-end/{vendor}", body)) spooled++;
+        }
+
+        return spooled;
     }
 
     /// <summary>

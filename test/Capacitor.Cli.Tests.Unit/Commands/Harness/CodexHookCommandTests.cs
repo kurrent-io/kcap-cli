@@ -813,6 +813,19 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(node["agent_id"]).IsNull().Because("the hook's own node is not mutated");
     }
 
+    /// A subagent's permission hook carries the subagent in its own <c>agent_id</c>, the field the
+    /// bridge reads as the hosted agent. It moves to <c>subagent_id</c>, dashless as the tool-settled
+    /// relay sends it, so the main agent's turn end leaves the subagent's prompt alone.
+    [Test]
+    [Arguments("agent-1")]
+    [Arguments(null)]
+    public async Task Bridge_payload_carries_a_subagents_agent_id_as_its_subagent_id(string? hostedId) {
+        var node = System.Text.Json.Nodes.JsonNode.Parse("""{"session_id":"abc","agent_id":"01a15350-0841-7c70-95e8-30667b7a04b9","agent_type":"default","tool_name":"Bash","tool_input":{"command":"ls"}}""")!;
+        var bridge = CodexHookCommand.BuildBridgePayload(node, hostedId);
+        await Assert.That(bridge["subagent_id"]!.GetValue<string>()).IsEqualTo("01a1535008417c7095e830667b7a04b9");
+        await Assert.That(bridge["agent_id"]?.GetValue<string>()).IsEqualTo(hostedId);
+    }
+
     sealed class Accepting : HttpMessageHandler {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
             Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) {

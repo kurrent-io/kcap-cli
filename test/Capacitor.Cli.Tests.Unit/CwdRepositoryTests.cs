@@ -63,6 +63,27 @@ public class CwdRepositoryTests {
     }
 
     [Test]
+    public async Task Concurrent_first_callers_share_one_resolution() {
+        var commands = new List<string>();
+        var inner    = RecordingRunner(commands);
+        var release  = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        CommandRunner gated = async (cmd, args, cwd, timeout) => {
+            await release.Task;
+            Task<string?> reply;
+            lock (commands) reply = inner(cmd, args, cwd, timeout);
+            return await reply;
+        };
+        var repo = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, gated);
+
+        var first  = repo.GetHashAsync().AsTask();
+        var second = repo.GetHashAsync().AsTask();
+        release.SetResult();
+
+        await Assert.That(await first).IsEqualTo(await second);
+        await Assert.That(commands.Count(c => c == "git remote get-url origin")).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task Outside_a_checkout_there_is_no_repository_and_no_hash() {
         var repo = new CwdRepository(Config.Root, Cwd.Path, new GitProviderRouter(), TimeProvider.System, (_, _, _, _) => Task.FromResult<string?>(null));
 

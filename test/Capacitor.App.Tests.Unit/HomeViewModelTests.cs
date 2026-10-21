@@ -922,6 +922,236 @@ public class HomeViewModelTests {
         });
     }
 
+    /// The same signed-out lane that offers Sign in above offers nothing once the server is the
+    /// local installation: there is no credential to repair, and the Start banner owns recovery.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_server_never_shows_the_launcher_sign_in() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(vm.LocalServer).IsSameReferenceAs(local);
+        });
+    }
+
+    /// The Start banner is the whole story for a stopped local server: the connection banner under
+    /// it must neither spin "Connecting" nor, after the catch-up bound, tell the user to sign in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_stopped_local_server_shows_no_connecting_or_sign_in_notice() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var time = new FakeTimeProvider();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999", time: time);
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            Connect(daemon, "disconnected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(local.Visible).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsNull();
+            await Assert.That(vm.ConnectionBannerVisible).IsFalse();
+
+            time.Advance(HomeViewModel.CatchUpLimit);
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+
+            await Assert.That(vm.ConnectionNotice).IsNull();
+            await Assert.That(vm.BannerMessage ?? "").DoesNotContain("Sign in");
+            await Assert.That(vm.SignInVisible).IsFalse();
+        });
+    }
+
+    (HomeViewModel Vm, LocalServerRecoveryViewModel Local, FakeServerLane Lane, FakeDaemonClientService Daemon) LocalServerWithRemote(
+            bool remoteConnected, List<IDisposable> owned) {
+        var daemon = new FakeDaemonClientService();
+        var remote = new FakeRemoteAgents();
+        remote.DaemonsSubject.OnNext([
+            new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = remoteConnected, RepoPaths = ["/w/repo"] },
+        ]);
+        var lane = new FakeServerLane();
+        var vm = new HomeViewModel(
+            daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
+            daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
+            appServerUrl: "http://localhost:9999");
+        var local = new LocalServerRecoveryViewModel(
+            lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+            () => Task.CompletedTask, CancellationToken.None);
+        vm.AttachLocalServerRecovery(local);
+        owned.Add(vm);
+        owned.Add(local);
+        Connect(daemon, "connected");
+
+        return (vm, local, lane, daemon);
+    }
+
+    /// The Start banner speaks for this Mac only: under a remote pick it must not hide that machine's notice.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_pick_keeps_its_notice_while_the_local_server_is_down() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var owned = new List<IDisposable>();
+            try {
+                var (vm, local, lane, _) = LocalServerWithRemote(remoteConnected: true, owned);
+                await vm.SelectMachineAsync("home-pc", isLocal: false);
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+                await Assert.That(local.Visible).IsTrue();
+                await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ConnectingNotice);
+            } finally {
+                owned.ForEach(d => d.Dispose());
+            }
+        });
+    }
+
+    /// A remote machine that dropped off is that machine's story, not the local server's, and never a sign-in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_offline_remote_pick_under_a_running_local_server_names_the_machine() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var owned = new List<IDisposable>();
+            try {
+                var (vm, local, lane, _) = LocalServerWithRemote(remoteConnected: false, owned);
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+                await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+                await Assert.That(local.Visible).IsFalse();
+                await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.RemoteOfflineNotice("home-pc"));
+                await Assert.That(vm.ConnectionNotice!).DoesNotContain("Sign in");
+            } finally {
+                owned.ForEach(d => d.Dispose());
+            }
+        });
+    }
+
+    /// Selecting this Mac again restores the local server's own handling.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task This_mac_selected_under_a_down_local_server_leaves_the_start_banner_alone() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var owned = new List<IDisposable>();
+            try {
+                var (vm, local, lane, daemon) = LocalServerWithRemote(remoteConnected: true, owned);
+                await vm.SelectMachineAsync("home-pc", isLocal: false);
+                await vm.SelectMachineAsync(daemon.DaemonName, isLocal: true);
+                Connect(daemon, "disconnected");
+                lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+                await Assert.That(local.Visible).IsTrue();
+                await Assert.That(vm.ConnectionNotice).IsNull();
+            } finally {
+                owned.ForEach(d => d.Dispose());
+            }
+        });
+    }
+
+    /// A local server takes no sign-in: its refusal must not ask for one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_local_server_names_a_restart_not_a_sign_in() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            Connect(daemon, "connected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+
+            await Assert.That(vm.ConnectionNotice ?? "").DoesNotContain("Sign in");
+            await Assert.That(vm.BannerMessage ?? "").DoesNotContain("Sign in");
+            await Assert.That(vm.ConnectionNotice).IsNotNull();
+        });
+    }
+
+    /// A local server takes no sign-in, so no state of its connection may ask for one.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task No_local_server_notice_asks_for_a_sign_in() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            var time = new FakeTimeProvider();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(),
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999", time: time);
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+            var shown = new List<string>();
+            void Record() => shown.AddRange(new[] { vm.ConnectionNotice, vm.BannerMessage }.OfType<string>());
+
+            Connect(daemon, "disconnected");
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connecting));
+            Record();
+            time.Advance(HomeViewModel.CatchUpLimit);
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Dormant));
+            Record();
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.SignedOut));
+            Record();
+
+            await Assert.That(shown).IsNotEmpty();
+            await Assert.That(shown.Where(t => t.Contains("sign in", StringComparison.OrdinalIgnoreCase))).IsEmpty();
+        });
+    }
+
+    /// Suppressing the server notices must not hide the daemon's own: a local server with the
+    /// daemon down still says so.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_server_keeps_the_daemon_down_notice() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var path = Tmp.PathTo("app-state.json");
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "http://localhost:9999");
+            using var local = new LocalServerRecoveryViewModel(
+                lane.Status, isLocalServer: true, _ => Task.FromResult(new ProcessResult(0, "", "", false)),
+                () => Task.CompletedTask, CancellationToken.None);
+            vm.AttachLocalServerRecovery(local);
+
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying, "Connection refused"));
+
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.DaemonDownNotice);
+        });
+    }
+
     /// First paint after wizard auth never calls NotifySignInCompleted — Home is constructed
     /// afterwards. A live app lane plus a daemon still saying "disconnected" is catch-up, not
     /// "sign in again".
@@ -950,8 +1180,8 @@ public class HomeViewModelTests {
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(
                 serverUrl: "https://other.example", connection: "disconnected"));
-            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.ServerLostNotice);
-            await Assert.That(vm.SignInVisible).IsTrue();
+            await Assert.That(vm.ConnectionNotice).IsEqualTo(HomeViewModel.DaemonOnOtherServerNotice("https://other.example", "HTTP://LOCALHOST:9999/"));
+            await Assert.That(vm.SignInVisible).IsFalse();
             await Assert.That(vm.BannerBusy).IsFalse();
 
             daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "disconnected"));
@@ -1067,10 +1297,33 @@ public class HomeViewModelTests {
         });
     }
 
+    /// A daemon attached by name that serves another server says so, and offers no sign-in, which could
+    /// not move it, whatever the app's own lane is doing.
     [Test]
-    [Arguments(ServerLaneState.Connecting, "https://app.example", "https://other.example")]
-    [Arguments(ServerLaneState.Retrying, "https://app.example", "https://other.example")]
-    [Arguments(ServerLaneState.Connected, "https://app.example", "https://other.example")]
+    [Arguments(ServerLaneState.Connecting, "reconnecting")]
+    [Arguments(ServerLaneState.Connected, "reconnecting")]
+    [Arguments(ServerLaneState.Connected, "connected")]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_daemon_serving_another_server_says_so_instead_of_asking_for_sign_in(ServerLaneState laneState, string connection) {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var daemon = new FakeDaemonClientService();
+            var lane = new FakeServerLane();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(Tmp.PathTo("app-state.json")), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                laneStatus: lane.Status, appServerUrl: "https://kurrent.kcap.ai");
+            daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(serverUrl: "https://norton.kcap.ai:443", connection: connection));
+            daemon.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, null));
+            lane.StatusSubject.OnNext(new ServerLaneStatus(laneState));
+
+            await Assert.That(vm.ConnectionNotice)
+                .IsEqualTo("This machine's daemon is running for norton.kcap.ai, not kurrent.kcap.ai, so it cannot run agents here.");
+            await Assert.That(vm.SignInVisible).IsFalse();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+        });
+    }
+
+    /// Without both servers known there is no mismatch to report, so a lost connection still asks for sign-in.
+    [Test]
     [Arguments(ServerLaneState.Connected, null, "https://other.example")]
     [Arguments(ServerLaneState.Connected, "https://app.example", "")]
     [NotInParallel("AvaloniaSession")]
@@ -1805,6 +2058,133 @@ public class HomeViewModelTests {
     public async Task DenialReasonRendersFriendly() =>
         await Assert.That(HomeViewModel.FriendlyLaunchFailure("launch_denied_by_owner: prompt_no_ui"))
             .Contains("consent policy denied");
+
+    [Test]
+    public async Task A_cancelled_launch_reads_as_cancelled() =>
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure(WireTokens.LaunchCancelled)).IsEqualTo("The launch was cancelled.");
+
+    [Test]
+    public async Task An_empty_snapshot_failure_is_a_sentence() {
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure("standalone_snapshot_empty"))
+            .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure("git commit -m Initial snapshot failed:"))
+            .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure(
+                "git commit -m Initial snapshot failed: On branch main\nnothing to commit"))
+            .IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+        await Assert.That(HomeViewModel.FriendlyLaunchFailure(
+                "git commit -m Initial snapshot failed: fatal: unable to write new index file"))
+            .IsEqualTo(HomeViewModel.WorkspacePrepFailed + " Unable to write new index file");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Changing_repository_clears_the_start_error() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var vm = Build(out var launch, out _, path);
+            launch.Next = new LaunchOutcome(false, null, "git commit -m Initial snapshot failed:");
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+
+            // Same folder under a different casing is still that folder on macOS/Windows.
+            if (!OperatingSystem.IsLinux()) {
+                await vm.SelectRepositoryAsync("/repo/A");
+                await Assert.That(vm.StartError).IsEqualTo(HomeViewModel.EmptyFolderStartMessage);
+            }
+
+            await vm.SelectRepositoryAsync("/repo/b");
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_the_previous_repository_does_not_stick() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System, launchFailures: failures);
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectRepositoryAsync("/repo/b");
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_the_previous_machine_does_not_stick() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService();
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/repo/a"],
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
+                launchFailures: failures, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/repo/a");
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failure_for_local_does_not_stick_on_a_same_named_remote() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var daemon = new FakeDaemonClientService { DaemonName = "home-pc" };
+            Connect(daemon);
+            var launch = new RecordingLaunchClient { Next = new LaunchOutcome(true, "agent-9", null) };
+            var failures = new Subject<LaunchFailure>();
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo {
+                    Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/repo/a"],
+                    MachineId = "remote-machine",
+                },
+            ]);
+            using var vm = new HomeViewModel(
+                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
+                launchFailures: failures, daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"),
+                localMachineId: "local-machine");
+
+            await vm.SelectRepositoryAsync("/repo/a");
+            await vm.StartCommand.Execute();
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            failures.OnNext(new LaunchFailure("agent-9", "git commit -m Initial snapshot failed:"));
+
+            await Assert.That(vm.SelectedMachine).IsEqualTo("home-pc");
+            await Assert.That(vm.RemoteMachineSelected).IsTrue();
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/repo/a");
+            await Assert.That(vm.StartError).IsNull();
+        });
+    }
 
     [Test]
     [NotInParallel("AvaloniaSession")]

@@ -1,4 +1,4 @@
-# Kurrent Capacitor CLI
+# kcap CLI
 
 **File paths:** CLI source at `src/Capacitor.Cli/`, shared core at `src/Capacitor.Cli.Core/`, transcript normalization at `src/Capacitor.Models.Transcripts/`, daemon at `src/Capacitor.Cli.Daemon/`, desktop app at `src/Capacitor.App/`, npm packages at `npm/`, Claude Code plugin at `kcap/`.
 
@@ -15,7 +15,7 @@ Namespaces follow the directory (`Capacitor.Cli.Core.Harness.Codex`, `Capacitor.
 ## What this project does
 
 The `kcap` CLI records coding-agent sessions by forwarding hook payloads and transcript data to a
-Kurrent Capacitor server. It also hosts an agent daemon for remote agent management and provides PR
+kcap server. It also hosts an agent daemon for remote agent management and provides PR
 review context via MCP tools.
 
 ## Invariants
@@ -88,6 +88,15 @@ running notes file that every PR edits.
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
+  command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
+  contains its pattern. The PTY launch writes the prompt to an owner-only file under the daemon's
+  state directory and passes a pointer; only a slash command stays inline, because the agent runs
+  one only as the literal first message.
+- **The daemon's state directory is owner-only on Windows too, and securing it never blocks a
+  boot.** `OwnerOnlyDirectory` gives it a protected DACL (the user and SYSTEM) at every start, so
+  what is inside stops inheriting from a relocated `KCAP_DAEMONS_DIR`. A failure warns and boots:
+  refusing would brick a daemon whose state sits where no ACL can be set.
 - **The PTY read loop never awaits a consumer.** Local sinks and the cloud sink take chunks through
   a non-blocking `TryEnqueue` under `SinksLock`, and each drains on its own pump. A consumer that
   falls behind is cut off and replayed from the ring — a local client by reattaching, the cloud
@@ -100,7 +109,7 @@ running notes file that every PR edits.
   an in-progress task and its count); selection and open items (the selected rail session or selected
   master-list row) use `KcapInfo*` / `KcapSelectionBrush`; labels and keys use text/muted/surface
   tokens.
-- **Desktop-app chrome is the Kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
+- **Desktop-app chrome is the kcap theme, not Fluent's defaults.** `FluentTheme` is the substrate
   in `App.axaml`; menus, flyouts, buttons, fields and list rows opt into `kcapPanel`, `kcapGhost`,
   `kcapChip`, `kcapField`. A bare `MenuFlyout`/`MenuItem` keeps Fluent's grey hover bar on the dark
   canvas. Copy the launcher pickers and the rail help flyout (`kcapPanel` + ghost rows), do not add
@@ -264,7 +273,7 @@ Description: **before writing it, open [.github/PULL_REQUEST_TEMPLATE.md](.githu
 - Controls: `kcapPanel` flyouts, `kcapGhost` rows and icon buttons, `kcapChip` compact buttons,
   `kcapField` inputs. Fluent `MenuItem` chrome, default `Button` / `ToggleButton` presenters, and
   Fluent accent on a menu or toolbar are out — Fluent paints `PART_ContentPresenter` unless the
-  Kcap class restyles it.
+  kcap class restyles it.
 - Hierarchy and chrome: chat tool rows and inline `ToolCard`s lead with a human verb in
   `KcapTextBrush` and trailing target/path/detail in `KcapMutedBrush` (only rows with their own prose
   description or question text omit the verb label). Inline cards inside `Border.toolGroup` sit flush

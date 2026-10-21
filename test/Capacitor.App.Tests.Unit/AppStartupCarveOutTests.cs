@@ -38,7 +38,7 @@ public class AppStartupCarveOutTests {
         var profile = new Profile { ServerUrl = ServerUrl, Daemon = new DaemonSettings { Name = "acme-daemon" } };
         WriteConfig(SingleProfileConfig(profile));
 
-        var (resolvedProfile, server, daemonName) = AppUnderTest.ResolveConsentFlipIdentity(Config.Root);
+        var (resolvedProfile, server, daemonName) = AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root);
 
         await Assert.That(resolvedProfile).IsEqualTo(ProfileName);
         await Assert.That(server).IsEqualTo(ServerIdentity.Canonicalize(ServerUrl));
@@ -50,7 +50,7 @@ public class AppStartupCarveOutTests {
     public async Task ResolveConsentFlipIdentity_falls_back_to_the_raw_server_when_unparseable() {
         WriteConfig(SingleProfileConfig(new Profile { ServerUrl = "not a url" }));
 
-        var (_, server, _) = AppUnderTest.ResolveConsentFlipIdentity(Config.Root);
+        var (_, server, _) = AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root);
 
         await Assert.That(server).IsEqualTo("not a url");
     }
@@ -58,7 +58,7 @@ public class AppStartupCarveOutTests {
     // No config.json at all: ConfigMutator.LoadPure degrades to a fresh default rather than throwing.
     [Test]
     public async Task ResolveConsentFlipIdentity_no_config_file_yields_the_default_profile_with_no_server() {
-        var (resolvedProfile, server, daemonName) = AppUnderTest.ResolveConsentFlipIdentity(Config.Root);
+        var (resolvedProfile, server, daemonName) = AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root);
 
         await Assert.That(resolvedProfile).IsEqualTo("default");
         await Assert.That(server).IsEqualTo("");

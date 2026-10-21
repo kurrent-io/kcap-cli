@@ -1,0 +1,24 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+        xmlns:svc="clr-namespace:Capacitor.App.Services"
+        xmlns:views="clr-namespace:Capacitor.App.Views"
+        x:Class="Capacitor.App.Views.AboutWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="About kcap"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
+        Width="360" Height="300" CanResize="False" WindowStartupLocation="CenterOwner"
+        Background="{StaticResource KcapCanvasBrush}">
+    <StackPanel Margin="24" Spacing="10" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <views:ProductWordmark Width="201.4" Height="60" HorizontalAlignment="Center" Margin="0,0,0,6" />
+        <TextBlock x:Name="AboutVersionText"
+                   Text="{Binding Source={x:Static svc:AppVersion.Display}, StringFormat='Version {0}'}"
+                   Foreground="{StaticResource KcapMutedBrush}" FontSize="13" HorizontalAlignment="Center" />
+        <TextBlock Text="© Kurrent, Inc." Foreground="{StaticResource KcapFaintBrush}" FontSize="12"
+                   HorizontalAlignment="Center" />
+        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,8,0,0">
+            <Button x:Name="AboutDocsButton" Classes="kcapChip" Content="Documentation" Command="{Binding OpenDocsCommand}" />
+            <Button x:Name="AboutChangelogButton" Classes="kcapChip" Content="Changelog" Command="{Binding OpenChangelogCommand}" />
+        </StackPanel>
+    </StackPanel>
+</Window>

@@ -196,16 +196,20 @@ public class SessionStartAdditionalContextTests {
         await Assert.That(ctx).IsEqualTo("first\n\nlast");
     }
 
+    /// <summary>The cut is reported by name, and the fragment that fitted is not.</summary>
     [Test]
     public async Task BuildEnvelope_cuts_a_trimmable_fragment_at_a_line_break_to_fit_the_cap() {
         var line = new string('m', 99);
         var list = string.Join('\n', Enumerable.Repeat(line, 200));
+        var said = new List<string>();
 
-        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope([new("nudge"), new(list, Trimmable: true)])!);
+        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope(
+            [new("nudge", Name: "nudge"), new(list, Trimmable: true, Name: "memory")], said.Add)!);
 
         await Assert.That(ctx.Length).IsLessThanOrEqualTo(SessionStartAdditionalContext.MaxContextChars);
         await Assert.That(ctx).StartsWith("nudge\n\n" + line);
         await Assert.That(ctx).EndsWith(line);
+        await Assert.That(said).IsEquivalentTo(["session-start memory cut: over Claude Code's 10000-character context cap"]);
     }
 
     [Test]
@@ -222,10 +226,12 @@ public class SessionStartAdditionalContextTests {
     [Test]
     public async Task BuildEnvelope_drops_an_untrimmable_fragment_that_does_not_fit_whole() {
         var block = "<data>\n" + string.Join('\n', Enumerable.Repeat(new string('d', 99), 200)) + "\n</data>";
+        var said  = new List<string>();
 
-        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope([new("nudge"), new(block, Rank: 1)])!);
+        var ctx = Context(SessionStartAdditionalContext.BuildRankedEnvelope([new("nudge"), new(block, Rank: 1, Name: "next work")], said.Add)!);
 
         await Assert.That(ctx).IsEqualTo("nudge");
+        await Assert.That(said).IsEquivalentTo(["session-start next work dropped: over Claude Code's 10000-character context cap"]);
     }
 
     [Test]

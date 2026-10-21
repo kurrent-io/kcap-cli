@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core.Http;
 
 namespace Capacitor.Cli.Core.Auth;
 
@@ -22,7 +23,7 @@ public sealed record StatusOutcome(int StatusCode, StatusResponse? Body);
 // (availability/status) or StatusCode 0 (provision) rather than throwing, so a
 // transient blip during `kcap setup` can't crash the interactive create-tenant
 // flow. Mirrors AuthProxyClient's swallow-and-degrade convention.
-public sealed class TenantProvisioningClient(HttpClient http) {
+public sealed class TenantProvisioningClient(HttpClient http, ClientAgent agent) {
     public async Task<AvailabilityResponse?> CheckAvailabilityAsync(
             string baseUrl, string token, string slug, CancellationToken ct) {
         try {
@@ -52,6 +53,7 @@ public sealed class TenantProvisioningClient(HttpClient http) {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json")
             };
             req.Headers.Authorization = new("Bearer", token);
+            req.Headers.TryAddWithoutValidation("User-Agent", agent.UserAgent);
 
             using var resp = await http.SendAsync(req, ct);
             ProvisionResponse? body = null;

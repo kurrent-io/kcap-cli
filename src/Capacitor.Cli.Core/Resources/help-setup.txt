@@ -2,6 +2,16 @@ kcap setup — Configure server, login, and install hooks
 
 Usage: kcap setup [<tenant>] [options]
 
+On macOS and Windows the desktop app is the easier way to set up. kcap setup
+is for the terminal, and with --no-prompt for scripts, sandboxes and fleets:
+see "Unattended setup" below for both editions.
+
+A bare kcap setup in a terminal first asks how you want to run kcap, as
+the desktop app does: "For you, locally" runs the local edition (--local,
+macOS only); "For your team, cloud" opens sign-up in your browser, where you
+create the workspace, then discovers it once you press Enter; "Already have a
+workspace?" goes straight to discovery.
+
 With no <tenant> or --server-url, setup discovers your workspace: it signs you
 in with your organization's single sign-on, then lets you pick from the
 workspaces you belong to, or offers to create one if you have none. --github
@@ -32,8 +42,42 @@ Options:
                               option has nothing to apply to, so both are refused.
                               Not `kcap login --discover`, which does pick a workspace
                               and saves it.
-  --daemon-name <name>        Daemon name, used with --no-prompt and after a
-                              browser answer (the terminal prompt asks otherwise)
+  --local                     Install and start a kcap server on this machine
+                              instead of using a hosted workspace (macOS on Apple
+                              silicon). See "Local edition" below. Cannot be
+                              combined with <tenant>, --server-url, --discover,
+                              --org, --slug, --tier, --invite-code, --device,
+                              --github or --muse-assistant.
+  --single-user               With --local: confirm this machine has one user.
+                              Required by --no-prompt and --json.
+  --yes                       With --local: confirm the install. Required by
+                              --no-prompt and --json for an install; reusing an
+                              existing installation needs no confirmation.
+  --embedding-model <model>   With --local: embed with this Ollama model for
+                              search by meaning, pulling it if Ollama lacks it.
+                              The model fixes the width of the stored vectors,
+                              so changing it later embeds everything again.
+  --no-embeddings             With --local: do not configure Ollama, removing a
+                              model an earlier setup configured. Remembered, so a
+                              later setup without either flag keeps it.
+  --json                      With --no-prompt: write one JSON object per line
+                              to stdout for the whole run, ending with "done"
+                              or "failed", and the narration to stderr. See
+                              "Unattended setup" below.
+                              With --local alone (the desktop app's form): run
+                              only the server and login steps, ending with
+                              "committed" or "failed". Exits 0 on "committed", 1
+                              on "failed" (2 for answer_required and
+                              invalid_arguments), and 130 when an interrupt
+                              (Ctrl+C or SIGTERM) was received, whichever line
+                              came last. Takes only --single-user, --yes,
+                              --no-update-check, --embedding-model and
+                              --no-embeddings, and uses a running Ollama unless
+                              told otherwise. With --discover: the workspace
+                              report.
+  --daemon-name <name>        Daemon name. With --no-prompt, a name another
+                              machine's daemon holds fails (exit 1); otherwise it is the
+                              prompt's suggestion, moved to a free variant if held
   --default-visibility <vis>  Default visibility: private, project, org_public, public
   --org <name>                Organization name for a workspace to create, instead
                               of being prompted for it. Requires --slug.
@@ -51,9 +95,11 @@ Options:
                               --slug, while creating one is invite-only. Without
                               it, an invite-only run ends naming where to request
                               one; the prompted flow asks for the code instead.
-  --no-prompt                 Non-interactive mode (requires <tenant> or
-                              --server-url, or --org + --slug to create a
-                              workspace as part of the run)
+  --no-prompt                 Ask nothing (requires <tenant>, --server-url,
+                              --local, or --org + --slug to create a workspace
+                              as part of the run). Signs in with a machine
+                              credential or a stored token when there is one;
+                              see "Unattended setup" below.
   --github                    Sign in with GitHub instead of org SSO during
                               the login step (default is org SSO when a
                               browser is available)
@@ -63,6 +109,8 @@ Options:
                               with GitHub. Without it the browser is opened and
                               you can still press "d" to switch — unless input is
                               redirected, which uses a device code outright.
+  --skip-harnesses            Install kcap into no coding agent, whatever is
+                              detected: the "no" to the step's one question.
   --skip-claude-hooks         Don't install the Claude Code plugin even if
                               the claude CLI is detected on PATH.
   --skip-codex-hooks          Don't install Codex CLI hooks/skills even if
@@ -70,7 +118,7 @@ Options:
   --skip-codex-network-access Don't enable Codex sandbox network access. By
                               default, after installing Codex hooks the wizard
                               also allows Codex's workspace-write sandbox to
-                              reach your Capacitor server(s) so kcap skills
+                              reach your kcap server(s) so kcap skills
                               (recap, errors, …) work — Codex blocks sandbox
                               network by default. Writes a network_proxy
                               allowlist to ~/.codex/config.toml limited to your
@@ -121,6 +169,10 @@ Options:
                               Antigravity (the shared ~/.gemini/GEMINI.md).
   --skip-antigravity-skills   Skip copying the kcap skills into ~/.gemini/skills
                               (where Antigravity reads them, not ~/.agents/skills).
+  --skip-mistral-vibe-hooks   Don't install the Mistral Vibe hooks even if Vibe
+                              is detected (~/.vibe/ or vibe on PATH).
+  --skip-mistral-vibe-mcp     Skip registering the kcap MCP servers for Mistral
+                              Vibe (its config.toml).
   --skip-grok-hooks           Don't install the Grok hooks even if Grok is
                               detected (~/.grok/ or grok on PATH).
   --skip-muse-hooks           Don't install the Muse Code hooks even if Muse is
@@ -148,8 +200,81 @@ Options:
                               approve in the chat before each stage contacts
                               them, and reads "cannot reach server" as "not yet
                               approved" with a retry hint. Run from the
-                              connect-capacitor skill; see README → Unattended
+                              connect-kcap skill; see README → Unattended
                               setup → Muse Assistant.
+
+Unattended setup: --no-prompt never asks. Each question has a flag; one with
+a safe default takes it, and one without is refused (exit 2) before anything
+changes.
+
+  kcap setup --local --single-user --yes --no-embeddings --no-prompt
+  KCAP_CLIENT_ID=… KCAP_CLIENT_SECRET=… \
+    kcap setup --server-url https://acme.kcap.ai --no-prompt
+
+  Question                              Flag                    --no-prompt
+  How to run kcap                       <tenant>, --server-url,  required
+                                        --local, --org/--slug
+  Re-run on a configured machine        -                       yes
+  One user on this machine (local)      --single-user           required
+  Install kcap local (local)            --yes                   required*
+  Ollama for search by meaning (local)  --embedding-model,      required**
+                                        --no-embeddings
+  Default visibility                    --default-visibility    org_public
+                                                                (private
+                                                                with --local)
+  Install kcap for detected agents      --skip-harnesses,       yes
+                                        --skip-<agent>-hooks
+  Codex sandbox network                 --skip-codex-network-access  yes
+  Another Claude/Codex config dir       - (kcap accounts add)   no
+  Keep provider API keys                --use-provider-api-key  kept
+  Daemon name                           --daemon-name           suggested
+  Import past sessions                  --skip-import           yes
+  * except to reuse an installation  ** while Ollama runs and nothing is recorded
+
+  Signing in: a machine credential (KCAP_CLIENT_ID and KCAP_CLIENT_SECRET, from
+  kcap machine create) is checked with the server and used; if the server
+  refuses it or does not confirm it (no response, or any status but 2xx),
+  the run fails rather than waiting for a person. A 404, from a server without
+  the check endpoint, is accepted. A daemon service cannot
+  carry the secret, so none is installed: run `kcap daemon start -d` where the
+  variables are set. Without one, a token stored for that server by an earlier
+  `kcap login` is used. Otherwise setup signs in as it does interactively, with
+  a device code someone has to approve.
+
+  Exit codes: 0 done; 1 failed (setup did not finish; what it changed stays,
+  and re-running carries on); 2 refused (nothing attempted: a wrong
+  argument, or an answer a run that cannot ask needs); 130 interrupted.
+
+  --json with --no-prompt: one JSON object per line on stdout, the narration
+  on stderr. Each step (server, sign_in, visibility, harnesses, daemon, import)
+  opens with step_started and closes with step_completed, carrying what it
+  decided (server_url and provider; credential machine|stored|sign_in|none;
+  visibility; harnesses; the daemon's name and service outcome, or skipped; the
+  import's outcome ran|skipped). With --local the install's own events come
+  inside the server step. The last line is done (with server_url) or failed,
+  naming its step and a code: the local install's codes, answer_required,
+  invalid_arguments, server_unreachable, workspace_unavailable, sign_in_failed,
+  machine_credential_rejected, daemon_name_held, cancelled, or setup_failed.
+
+Local edition: `kcap setup --local` runs a kcap server on this machine
+instead of a hosted workspace, then continues with login, hooks and the daemon
+against it. macOS on Apple silicon only for now. The first version is for a
+machine with one user: on a shared machine, other OS users can open the web UI
+and act as its admin, so setup asks you to confirm that and the install itself
+(--single-user and --yes; --no-prompt and --json cannot ask and require both).
+Under --no-prompt its sessions default to private visibility.
+Running it again reuses the existing installation.
+When Ollama is running on http://localhost:11434, setup offers it for search by
+meaning with mxbai-embed-large (1024 dimensions, about 670 MB), pulls the model
+if missing, and restarts the server when the model changes. --no-prompt asks
+nothing, so with Ollama running and nothing recorded yet it needs
+--embedding-model or --no-embeddings. Without Ollama, or when the pull fails,
+setup carries on and search works by keyword. A failed or cancelled
+install removes what it created and keeps its logs/ directory. A machine with
+a profile for another server is refused for now, and musl builds of kcap are
+not supported.
+KCAP_LOCAL_BUNDLE_BASE_URL and KCAP_LOCAL_BUNDLE_VERSION redirect the download
+for development and pre-release builds; the manifest must still verify.
 
 The setup wizard detects every supported coding agent: Claude Code and Codex CLI
 via PATH; Cursor via user-dir presence (~/.cursor/) so IDE-only users without
@@ -201,16 +326,22 @@ is never overridden. Answering "Not now" installs nothing. The audience chosen
 on that screen becomes your default visibility, and the Import screen's answer
 runs the import from this machine, so the terminal does not ask either again.
 
-After a browser answer the terminal asks nothing more. The daemon takes
---daemon-name if given, else this profile's name (your user name on a first
-run). If another machine holds it, setup tries the name suffixed with this
-machine's, then numbered variants of that, and ends with an error naming
---daemon-name if all of them are taken. The provider API key
-setting is kept as it is; change it with
-`kcap config set use_provider_api_key true|false`. When the browser's Done
-screen ran the daemon as a service, setup says so instead of suggesting
-`kcap daemon start -d`. A finished browser flow with no import answer skips
-the import prompt and names `kcap import --all` for later.
+The daemon step asks only for a name. It suggests --daemon-name, else
+KCAP_DAEMON_NAME, else the profile's daemon name, else this machine's name;
+when a daemon on another machine of your account holds it, the first free
+of name-1, name-2, and so on. Setup then installs the daemon as a background
+service and starts it, so it runs after a restart and the service manager
+restarts it if it dies. When the name differs from the one the profile had,
+the old name's service is removed in the same step on macOS and Windows, so
+the machine keeps one daemon; one that belongs to another profile, or whose
+daemon is busy, or any when the new name already had a service, is left in
+place, as it is on Linux, and setup prints the `kcap daemon service uninstall
+--name` command that removes it. After a browser answer the terminal asks
+nothing more:
+the suggested name is used as it is. The provider API key setting is kept as
+it is; change it with `kcap config set use_provider_api_key true|false`. A
+finished browser flow with no import answer skips the import prompt and names
+`kcap import --all` for later.
 
 When you sign in with Kurrent's hosted auth and discovery finds no tenant, setup
 asks how to continue: create one for you (organization name, workspace slug and

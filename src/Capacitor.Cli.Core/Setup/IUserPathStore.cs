@@ -6,4 +6,7 @@ public interface IUserPathStore {
 
     /// Appends one directory, keeping every existing entry byte for byte.
     void Append(string directory);
+
+    /// Stores a whole new value, keeping the value's registry kind.
+    void Replace(string path);
 }

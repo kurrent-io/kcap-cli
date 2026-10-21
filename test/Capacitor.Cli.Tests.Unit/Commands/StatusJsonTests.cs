@@ -96,17 +96,17 @@ public class StatusJsonTests {
     }
 
     // A marker with no usable PID is a file someone still has to clean up, so it counts as stale
-    // without ever being listed as a daemon.
+    // without ever being listed as a daemon. A live daemon carries its version without build metadata.
     [Test]
     public async Task Dead_and_unreadable_markers_are_stale_and_never_listed() {
         var payload = Payload(daemons: [
-            new StatusCommand.DaemonEntry("laptop", 42, true),
+            new StatusCommand.DaemonEntry("laptop", 42, true, "1.3.0-beta.7+822bc79"),
             new StatusCommand.DaemonEntry("gone", 43, false),
             new StatusCommand.DaemonEntry("corrupt", null, false),
         ]);
 
         await Assert.That(payload.Daemon.Running).IsTrue();
-        await Assert.That(payload.Daemon.Daemons).IsEquivalentTo([new StatusDaemonEntryJson("laptop", 42)]);
+        await Assert.That(payload.Daemon.Daemons).IsEquivalentTo([new StatusDaemonEntryJson("laptop", 42, "1.3.0-beta.7")]);
         await Assert.That(payload.Daemon.StalePidFiles).IsTrue();
     }
 

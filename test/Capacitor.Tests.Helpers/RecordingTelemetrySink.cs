@@ -30,7 +30,16 @@ public sealed class RecordingTelemetrySink : ITelemetrySink {
         return Task.FromResult(true);
     }
 
+    public bool Discarded { get; private set; }
+    public bool Abandoned { get; private set; }
+
     public void Discard() {
+        Discarded = true;
+        lock (_events) _events.Clear();
+    }
+
+    public void Abandon() {
+        Abandoned = true;
         lock (_events) _events.Clear();
     }
 }

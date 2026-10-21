@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services.Onboarding;
 using ReactiveUI.Reactive;
 
@@ -10,8 +11,10 @@ namespace Capacitor.App.ViewModels.Onboarding;
 /// Back/Next/Skip all funnel through Current's CanLeaveAsync veto; Next on the last step finishes.
 public sealed class OnboardingViewModel : ReactiveObject {
     readonly CancellationToken _shutdownToken;
+    readonly Subject<Unit>     _restated = new();
     bool _closed;
     bool _navigating;
+    bool _advancePending;
 
     internal bool Closed => _closed;
 
@@ -21,15 +24,26 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// Attention lines are rendered here. Null in tests that don't need them.
     public WizardLifecycleSurface? Surface { get; }
 
-    int _index;
+    UsageDataNotice? _usageNotice;
+    /// The usage-data disclosure, set by the composition root once the graph is built.
+    public UsageDataNotice? UsageNotice {
+        get => _usageNotice;
+        set => this.RaiseAndSetIfChanged(ref _usageNotice, value);
+    }
 
-    IWizardStep _current = null!;
+    int _index;
+    readonly bool[] _visited;
+
+    IWizardStep? _current;
     public IWizardStep Current {
-        get => _current;
+        get => _current!;
         private set {
+            if (_current is not null) _current.AdvanceRequested -= OnAdvanceRequested;
             if (_current is INotifyPropertyChanged leaving) leaving.PropertyChanged -= OnCurrentChanged;
+            _advancePending = false;
             this.RaiseAndSetIfChanged(ref _current, value);
-            if (_current is INotifyPropertyChanged entering) entering.PropertyChanged += OnCurrentChanged;
+            if (value is INotifyPropertyChanged entering) entering.PropertyChanged += OnCurrentChanged;
+            value.AdvanceRequested += OnAdvanceRequested;
             this.RaisePropertyChanged(nameof(Eyebrow));
             this.RaisePropertyChanged(nameof(NextLabel));
             this.RaisePropertyChanged(nameof(SkipLabel));
@@ -37,14 +51,27 @@ public sealed class OnboardingViewModel : ReactiveObject {
         }
     }
 
-    public string Eyebrow =>
-        $"STEP {_index + 1} OF {Steps.Count} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+    /// Counts the pages this run shows: a page it passes through is not a step, unless it was already shown
+    /// before it began passing through.
+    public string Eyebrow {
+        get {
+            var (position, total) = (0, 0);
+            for (var i = 0; i < Steps.Count; i++) {
+                if (!_visited[i] && Steps[i].PassThrough) continue;
+                total++;
+                if (i <= _index) position++;
+            }
+            return $"STEP {position} OF {total} · {Current.Eyebrow.ToUpper(CultureInfo.CurrentCulture)}";
+        }
+    }
 
     public string NextLabel => Current.NextLabel ?? (_index == Steps.Count - 1 ? "Get started" : "Next");
     public string SkipLabel => Current.SkipLabel;
     public bool NextVisible => !Current.OwnsPrimaryAction;
     public bool SkipVisible => _index < Steps.Count - 1 && Current.Skippable && !Current.OwnsPrimaryAction;
-    public bool BackVisible => _index > 0;
+    public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
+    public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible
+        || ShowLifecycleStatus || ShowLifecycleAttention;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -63,12 +90,12 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
     public bool NextIsSecondary => Current.ShowsOwnPrimary;
 
-    /// The outcome lines name the daemon step's own action. Other pages have no such button.
+    /// The daemon is enabled beside the steps; its outcome lines land on the page that closes setup.
     public bool ShowLifecycleStatus =>
-        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.StatusText);
+        Current.Id == WizardStepId.Done && !string.IsNullOrEmpty(Surface?.StatusText);
 
     public bool ShowLifecycleAttention =>
-        Current.Id == WizardStepId.Daemon && !string.IsNullOrEmpty(Surface?.AttentionText);
+        Current.Id == WizardStepId.Done && !string.IsNullOrEmpty(Surface?.AttentionText);
 
     // Shared across Back/Next/Skip: only one of the three may be mid-transition at a time.
     internal bool Navigating {
@@ -91,51 +118,94 @@ public sealed class OnboardingViewModel : ReactiveObject {
     /// The constructor's own initial-entry call, exposed so a test can await it deterministically.
     internal Task PendingEnterForTesting { get; }
 
+    /// The navigation the current step's own action last started, so a test can await it.
+    internal Task PendingAdvanceForTesting { get; private set; } = Task.CompletedTask;
+
     public OnboardingViewModel(
             IEnumerable<IWizardStep> steps, CancellationToken shutdownToken = default,
-            WizardLifecycleSurface? surface = null, WizardStepId? startAt = null) {
+            WizardLifecycleSurface? surface = null, WizardStepId? startAt = null,
+            IObservable<bool>? canFinishLater = null, IObservable<Unit>? restate = null) {
         _shutdownToken = shutdownToken;
         Surface = surface;
         var applicable = steps.Where(s => s.Applicable).ToList();
         Steps = applicable;
         if (Steps.Count == 0) throw new ArgumentException("at least one applicable step is required", nameof(steps));
 
-        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : 0;
+        _visited = new bool[Steps.Count];
+        // A run starts on the first page that offers a choice.
+        _index = startAt is { } id ? Math.Max(0, applicable.FindIndex(s => s.Id == id)) : FirstShownFrom(0);
+        _visited[_index] = true;
         Current = Steps[_index];
 
         var currentChanged = this.WhenAnyValue(x => x.Current);
         var idle = this.WhenAnyValue(x => x.Navigating).Select(busy => !busy);
-        var canBack = currentChanged.CombineLatest(idle, (_, notBusy) => notBusy && _index > 0);
+        var canBack = currentChanged.CombineLatest(idle, _restated.StartWith(Unit.Default),
+            (_, notBusy, _) => notBusy && PreviousShownIndex() >= 0);
 
         BackCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Back), canBack);
         SkipCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Skip),
             this.WhenAnyValue(x => x.CanGoSkip));
         NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next),
             this.WhenAnyValue(x => x.CanGoNext));
-        FinishLaterCommand = ReactiveCommand.Create(RequestClose, idle);
+        FinishLaterCommand = ReactiveCommand.Create(RequestClose,
+            idle.CombineLatest(canFinishLater ?? Observable.Return(true), (notBusy, allowed) => notBusy && allowed));
+
+        // State other steps' PassThrough reads, changed outside the current step.
+        restate?.Subscribe(_ => RestateActions());
 
         if (surface is not null) {
             surface.WhenAnyValue(x => x.StatusText)
-                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleStatus)));
+                .Subscribe(_ => {
+                    this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
+                    this.RaisePropertyChanged(nameof(FooterVisible));
+                });
             surface.WhenAnyValue(x => x.AttentionText)
-                .Subscribe(_ => this.RaisePropertyChanged(nameof(ShowLifecycleAttention)));
+                .Subscribe(_ => {
+                    this.RaisePropertyChanged(nameof(ShowLifecycleAttention));
+                    this.RaisePropertyChanged(nameof(FooterVisible));
+                });
         }
 
         PendingEnterForTesting = SafeEnterAsync(Current);
     }
 
+    void OnAdvanceRequested() {
+        if (_navigating) _advancePending = true;
+        else PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
+    }
+
+    // The advance a step raised mid-navigation runs once, after the gate it was refused at opens.
+    void ReleaseGate() {
+        Navigating = false;
+        if (!_advancePending) return;
+
+        _advancePending = false;
+        if (!_closed) PendingAdvanceForTesting = NavigateAsync(WizardNavigation.Next);
+    }
+
+    int PreviousShownIndex() {
+        for (var i = _index - 1; i >= 0; i--) {
+            if (!Steps[i].PassThrough) return i;
+        }
+
+        return -1;
+    }
+
     void OnCurrentChanged(object? sender, PropertyChangedEventArgs e) {
+        // A choice on this page, such as the edition, can change which later pages pass through.
+        this.RaisePropertyChanged(nameof(Eyebrow));
         switch (e.PropertyName) {
             case nameof(IWizardStep.NextLabel): this.RaisePropertyChanged(nameof(NextLabel)); break;
             case nameof(IWizardStep.SkipLabel): this.RaisePropertyChanged(nameof(SkipLabel)); break;
-            case nameof(IWizardStep.Eyebrow):   this.RaisePropertyChanged(nameof(Eyebrow)); break;
             case nameof(IWizardStep.OwnsPrimaryAction) or nameof(IWizardStep.Skippable)
-                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip):
+                or nameof(IWizardStep.ShowsOwnPrimary) or nameof(IWizardStep.CanContinue) or nameof(IWizardStep.CanSkip)
+                or nameof(IWizardStep.BackVisible):
                 RestateActions();
                 break;
             case nameof(SignInStepViewModel.TenantPickerVisible)
                 or nameof(SignInStepViewModel.TenantChoicePending):
                 this.RaisePropertyChanged(nameof(TenantActionsVisible));
+                this.RaisePropertyChanged(nameof(FooterVisible));
                 this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
                 this.RaisePropertyChanged(nameof(CancelTenantCommand));
                 break;
@@ -143,11 +213,13 @@ public sealed class OnboardingViewModel : ReactiveObject {
     }
 
     void RestateActions() {
+        this.RaisePropertyChanged(nameof(Eyebrow));
         this.RaisePropertyChanged(nameof(CanGoNext));
         this.RaisePropertyChanged(nameof(CanGoSkip));
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(FooterVisible));
         this.RaisePropertyChanged(nameof(NextIsPrimary));
         this.RaisePropertyChanged(nameof(NextIsSecondary));
         this.RaisePropertyChanged(nameof(ShowLifecycleStatus));
@@ -155,19 +227,21 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(TenantActionsVisible));
         this.RaisePropertyChanged(nameof(ConfirmTenantCommand));
         this.RaisePropertyChanged(nameof(CancelTenantCommand));
+        _restated.OnNext(Unit.Default);
     }
 
     /// Idempotent — a Done-finish close and the window's own Closing event both route here.
     internal void RequestClose() {
         if (_closed) return;
         _closed = true;
+        _advancePending = false;
         this.RaisePropertyChanged(nameof(CanGoNext));
         this.RaisePropertyChanged(nameof(CanGoSkip));
         CloseRequested?.Invoke();
     }
 
     /// <summary>
-    /// Jump straight to a step (the Sign-in step's retarget answer). Goes through the SAME
+    /// Jump straight to a step (an expired browser sign-up back to Edition). Goes through the SAME
     /// serialized gate and the same <see cref="IWizardStep.CanLeaveAsync"/> veto as a button
     /// transition. False = refused: a navigation is already in flight, or that step isn't part of
     /// this run (an inapplicable step was filtered out at construction).
@@ -193,6 +267,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         if (_navigating || _closed) return;
         Navigating = true;
         try {
+            if (direction == WizardNavigation.Back && PreviousShownIndex() < 0) return;
             if (!await SafeCanLeaveAsync(Current, direction)) return;
 
             if (direction == WizardNavigation.Next && _index == Steps.Count - 1) {
@@ -200,11 +275,11 @@ public sealed class OnboardingViewModel : ReactiveObject {
                 return;
             }
 
-            var target = direction == WizardNavigation.Back ? _index - 1 : FirstShownFrom(_index + 1);
+            var target = direction == WizardNavigation.Back ? PreviousShownIndex() : FirstShownFrom(_index + 1);
             // Clamp, don't trust the arithmetic — a corrupted _index must never throw here.
             await MoveToAsync(Math.Clamp(target, 0, Steps.Count - 1));
         } finally {
-            Navigating = false;
+            ReleaseGate();
         }
     }
 
@@ -223,13 +298,14 @@ public sealed class OnboardingViewModel : ReactiveObject {
 
             await MoveToAsync(target);
         } finally {
-            Navigating = false;
+            ReleaseGate();
         }
     }
 
     // Caller holds the Navigating gate and the leaving step has already released it.
     async Task MoveToAsync(int index) {
         _index = index;
+        _visited[index] = true;
         Current = Steps[_index];
         await SafeEnterAsync(Current);
     }

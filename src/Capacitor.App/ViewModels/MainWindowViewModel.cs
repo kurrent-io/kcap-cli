@@ -3,6 +3,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Capacitor.Cli.Core.LocalIpc;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.Views;
@@ -79,7 +80,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     ObservableAsPropertyHelper<string>? _agentCountText;
     public string AgentCountText => _agentCountText?.Value ?? "";
 
-    internal const string RestartPendingMessage = "Daemon update pending — it restarts once no agents are running.";
+    internal const string RestartPendingMessage = "Daemon update pending — it restarts once its agents finish their current turn, then resumes them unless daemon.auto_resume is off.";
 
     // The daemon has a restart-after-update queued (DaemonRestartPendingWatcher) and we are
     // attached to it: a passive marker only, the restart is the daemon's own.
@@ -136,7 +137,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     /// Caption under the URL in the org label's hover — the org is what you point at, the
     /// server it talks to is what the hover tells you.
-    public const string ServerUrlTip = "Capacitor server for this organization";
+    public const string ServerUrlTip = "kcap server for this organization";
     public const string VersionIdentityTip = "Version of the kcap daemon on this machine";
     public const string AgentCountTip = "Agents running on this daemon";
 
@@ -177,6 +178,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// so the rail footer does not read as a second "Default" next to connection state).
     public string TenantName { get; }
 
+    /// The local stack's rail row beside the daemon's; null unless the server is this machine's local installation.
+    public LocalStackViewModel? LocalStack { get; init; }
+
     /// The launch auto-open's staleness token — see NavigationGate. Read from the SHARED gate, not
     /// a per-window counter, so a window built after shutdown began sees the latch too.
     public int NavigationGeneration => _navigation.Generation;
@@ -204,7 +208,11 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
 
-    public string AppVersionLabel { get; } = $"Kurrent Capacitor {AppVersion.Display}";
+    public string AppVersionLabel { get; } = $"kcap {AppVersion.Display}";
+
+    /// macOS opens its About panel from the native app menu; Windows has none, so the rail's help
+    /// flyout opens the app's own.
+    public bool ShowsAbout { get; } = OperatingSystem.IsWindows();
 
     /// Opens the bug/feedback window for one category; inert without an action to route it to.
     public ReactiveCommand<FeedbackCategory, Unit> OpenFeedbackCommand { get; }
@@ -314,6 +322,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             NavigationGate? navigation = null, Action<Func<Task>>? trackWorkspaceTeardown = null,
             Func<string, WorkspaceViewModel>? workspaceFactory = null, SessionRailViewModel? rail = null,
             string? tenantName = null, IObservable<string?>? lifecycleAttention = null,
+            IObservable<string?>? identityReport = null,
             IObservable<ServerLaneStatus>? laneStatus = null, IObservable<bool>? restartPending = null,
             Func<string, AgentOrigin?>? originOf = null, Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             IAgentDirectory? directory = null,
@@ -436,16 +445,27 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .DistinctUntilChanged()
                 .ObserveOn(RxSchedulers.MainThreadScheduler);
 
+            // The daemon's own sign-in explains a hub that will not connect, so the footer says
+            // Signed out instead of reconnecting forever. The app's Sign in repairs it only when the
+            // daemon runs on the app's own profile.
+            var daemonSignIn = status
+                .CombineLatest(snapshots.Select(s => (DaemonInfoDto?)s.Daemon).StartWith((DaemonInfoDto?)null),
+                    (st, daemon) => DaemonSignInFor(st, daemon, tenantName))
+                .DistinctUntilChanged()
+                .ObserveOn(RxSchedulers.MainThreadScheduler);
+            var signedOut = signInExpired.CombineLatest(daemonSignIn, (app, daemon) => app || daemon.SignedOut)
+                .DistinctUntilChanged();
+
             _signInVisible = signInExpired
-                .Select(expired => expired && offersSignIn)
+                .CombineLatest(daemonSignIn, (app, daemon) => (app || daemon is { SignedOut: true, OursToRepair: true }) && offersSignIn)
                 .ToProperty(this, x => x.SignInVisible, false)
                 .DisposeWith(disposables);
 
-            _connectionDisplay = status.CombineLatest(daemonConnection, signInExpired, ConnectionDisplayFor)
+            _connectionDisplay = status.CombineLatest(daemonConnection, signedOut, ConnectionDisplayFor)
                 .ToProperty(this, x => x.ConnectionDisplay, "")
                 .DisposeWith(disposables);
 
-            _statusBrush = status.CombineLatest(daemonConnection, signInExpired, StatusBrushFor)
+            _statusBrush = status.CombineLatest(daemonConnection, signedOut, StatusBrushFor)
                 .ToProperty(this, x => x.StatusBrush, Paint(StatusColors.Unavailable))
                 .DisposeWith(disposables);
 
@@ -533,8 +553,19 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ToProperty(this, x => x.ConnectionHasDetail, false)
                 .DisposeWith(disposables);
 
+            // A connect clears the progress lines back to the standing identity report, whichever of the two the
+            // main thread happens to see first.
+            string? identity = null;
+            identityReport?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(report => {
+                    var shown = identity;
+                    identity = report;
+                    if (report is not null) StartMessage = report;
+                    else if (shown is not null && ReferenceEquals(StartMessage, shown)) StartMessage = null;
+                })
+                .DisposeWith(disposables);
             status.Where(s => s.State == AttachState.Connected)
-                .Subscribe(_ => StartMessage = null)
+                .Subscribe(_ => StartMessage = identity)
                 .DisposeWith(disposables);
 
             // Reconnect / already-running kicks only reattach. If we land Unreachable again while
@@ -657,13 +688,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
-        WatchOrigin(next);
+        WatchOpen(next);
     }
 
-    /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
-    /// Nothing here ends a session — the row that wins says whether it did.
-    void WatchOrigin(ISessionWorkspace? workspace) {
-        var watch = workspace switch {
+    /// An open workspace follows its row across lanes, both directions, carrying the tab in use,
+    /// and closes once its session ends: the rail has already dropped it.
+    void WatchOpen(ISessionWorkspace? workspace) {
+        var moves = workspace switch {
             RemoteSessionViewModel remote => remote.OriginChangedChanges
                 .Where(moved => moved)
                 .Take(1)
@@ -675,6 +706,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .Subscribe(_ => Rebind(local, AgentOrigin.Remote, local.IsTerminalActive, local.IsPullRequestActive)),
             _ => Disposable.Empty,
         };
+        var ended = workspace?.Ended
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); });
+        var watch = new CompositeDisposable(moves, ended ?? Disposable.Empty);
         // A watch that fired while it was still being armed has already swapped the workspace and
         // armed the next one: keeping this subscription would retire that one unwatched.
         if (ReferenceEquals(CurrentWorkspace, workspace)) _rebind.Disposable = watch;
@@ -766,6 +801,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             : profileName;
 
     internal const string SignedOutDisplay = "Signed out";
+
+    /// Whether the daemon reports its own sign-in as what keeps its hub from connecting, and whether
+    /// signing the app in repairs that: only with a resolved app profile, and the daemon on it or not
+    /// saying which.
+    internal static (bool SignedOut, bool OursToRepair) DaemonSignInFor(
+            AttachStatus status, DaemonInfoDto? daemon, string? appProfile) =>
+        status.State == AttachState.Connected && daemon is { Credential: not null } && daemon.Connection != "connected"
+            ? (true, appProfile is not null
+                     && (daemon.Profile is null || string.Equals(daemon.Profile, appProfile, StringComparison.Ordinal)))
+            : (false, false);
 
     // Single word for the merged status line. Expired sign-in wins: waiting on the daemon hub
     // will not restore a session. Otherwise local attach State is checked FIRST — the daemon's

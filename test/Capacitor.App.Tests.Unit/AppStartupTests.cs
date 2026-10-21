@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -60,22 +61,29 @@ public class AppStartupTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task BuildAndShowMainWindow_takes_over_the_onboarding_window() {
-        var (same, paneVisible, surfaceVisible, handedVm) = await AvaloniaSession.DispatchAsync(async () => {
+        var appState = AppState();
+        await appState.UpdateAsync(s => s with { WindowWidth = 1552, WindowHeight = 888 });
+        var savedState = await appState.LoadAsync();
+        // The handover uses its prepared snapshot, even if the store changes before it is applied.
+        await appState.UpdateAsync(s => s with { WindowWidth = 1600, WindowHeight = 900 });
+        var (same, paneVisible, surfaceVisible, handedVm, width, height) = await AvaloniaSession.DispatchAsync(async () => {
             var (desktop, _) = FakeClassicDesktopLifetime.Create();
-            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Welcome)]);
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)]);
             await wizard.PendingEnterForTesting;
             var onboarding = AppUnderTest.ShowWizardWindow(desktop, wizard);
+            onboarding.Width = 820;
+            onboarding.Height = 700;
             Dispatcher.UIThread.RunJobs();
 
             var service = new FakeDaemonClientService();
             var (actions, notifier) = NewActions(service);
             var window = AppUnderTest.BuildAndShowMainWindow(
-                service, Config.Root, AppState(), actions, notifier, new FakeTicker(), CancellationToken.None,
-                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: onboarding);
+                service, Config.Root, appState, actions, notifier, new FakeTicker(), CancellationToken.None,
+                TestActivity.New(), new NeverLaunchClient(), TimeProvider.System, adopt: (onboarding, savedState));
             Dispatcher.UIThread.RunJobs();
 
             var result = (ReferenceEquals(window, onboarding), window.OnboardingPane.IsVisible,
-                window.SessionsSurface.IsVisible, window.DataContext is MainWindowViewModel);
+                window.SessionsSurface.IsVisible, window.DataContext is MainWindowViewModel, window.Width, window.Height);
             window.Close();
             return result;
         });
@@ -84,6 +92,8 @@ public class AppStartupTests {
         await Assert.That(paneVisible).IsFalse();
         await Assert.That(surfaceVisible).IsTrue();
         await Assert.That(handedVm).IsTrue();
+        await Assert.That(width).IsEqualTo(1552);
+        await Assert.That(height).IsEqualTo(888);
     }
 
     [Test]
@@ -420,6 +430,49 @@ public class AppStartupTests {
         // A second DisposeAsync (mirroring the real catch path's `_service = null` guard against
         // a later OnShutdownRequested double-dispose) must be a safe no-op, not a throw.
         await service.DisposeAsync();
+    }
+
+    /// The error window's close shuts the app down directly, so this is the only place a running
+    /// upgrade is interrupted and waited for before the process can exit under a switch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task HandleStartupFailureAsync_settles_a_running_local_upgrade_before_the_error_window() {
+        var interrupts = 0;
+        bool? windowShownAtInterrupt = null;
+        Func<bool>? windowShown = null;
+        var cli = new FakeKcapCli {
+            LocalUpgradeBehavior = async (_, interrupt, _) => {
+                var interrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                await using (interrupt.Register(() => {
+                    Interlocked.Increment(ref interrupts);
+                    windowShownAtInterrupt = windowShown?.Invoke();
+                    interrupted.TrySetResult();
+                })) {
+                    await interrupted.Task;
+                }
+                return new StreamingResult(1, false, []);
+            },
+        };
+        var upgrade = new LocalUpgradeController(() => cli, action => action());
+
+        var settled = await AvaloniaSession.DispatchAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            windowShown = () => fake.MainWindow is not null;
+            await upgrade.StartAsync(CancellationToken.None);
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, new CancellationTokenSource(), [],
+                upgrade: upgrade);
+            Dispatcher.UIThread.RunJobs();
+            var result = upgrade.Outcome is not null && !upgrade.Running;
+            // The headless session is shared by every UI test; an error window left open stays active.
+            fake.MainWindow?.Close();
+            return result;
+        });
+
+        await Assert.That(interrupts).IsEqualTo(1);
+        await Assert.That(windowShownAtInterrupt).IsNotNull();
+        await Assert.That(windowShownAtInterrupt!.Value).IsFalse();
+        await Assert.That(settled).IsTrue();
     }
 
     sealed class NeverObservation : IDaemonObservation {

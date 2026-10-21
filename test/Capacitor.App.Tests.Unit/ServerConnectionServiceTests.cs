@@ -3,6 +3,7 @@ using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
 using Capacitor.App.Services;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Remote.Models;
 using Eventuous.SignalR;
 using Microsoft.AspNetCore.SignalR;
@@ -13,6 +14,8 @@ namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel(nameof(HubTestHost))]
 public class ServerConnectionServiceTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
     static ServerConnectionService Lane(HubTestHost host, string? token = null) =>
         new(TimeProvider.System, host.Url, () => Task.FromResult(token));
 
@@ -21,8 +24,17 @@ public class ServerConnectionServiceTests {
     static ServerConnectionService Lane(HubTestHost host, TimeSpan[] reconnectDelays) =>
         new(TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), reconnectDelays);
 
-    static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 10) =>
-        await source.Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
+    /// The default bound is a hang guard, not a measure: it outlasts the lane's first four redial pauses
+    /// (18 s), so a cold-start attempt that fails and recovers still connects inside it. A timeout names
+    /// every value seen, so a lane stuck short of the match says where.
+    static async Task<T> Next<T>(IObservable<T> source, Func<T, bool> match, int seconds = 30) {
+        var seen = new List<T>();
+        try {
+            return await source.Do(v => { lock (seen) seen.Add(v); }).Where(match).Take(1).ToTask().WaitAsync(TimeSpan.FromSeconds(seconds));
+        } catch (TimeoutException) {
+            lock (seen) throw new TimeoutException($"No match within {seconds}s; saw: [{string.Join(", ", seen)}]");
+        }
+    }
 
     [Test]
     public async Task ConnectsAndServesDaemons() {
@@ -34,6 +46,30 @@ public class ServerConnectionServiceTests {
         await Next(lane.Status, s => s.State == ServerLaneState.Connected);
         var daemons = await lane.GetConnectedDaemonsAsync(CancellationToken.None);
         await Assert.That(daemons![0].Name).IsEqualTo("work-mac");
+    }
+
+    /// A local server refuses a hub negotiation that names no kcap version above its client floor, and a server reads
+    /// a version without the update-check opt-out as the update check being on.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task The_negotiation_carries_the_cli_version_and_the_update_check_opt_out(bool updateCheckOff) {
+        string? negotiated = null;
+        string? updateCheck = null;
+        await using var host = await HubTestHost.StartAsync(inspect: request => {
+            if (request.Path.Value?.EndsWith("/negotiate", StringComparison.Ordinal) != true) return;
+            negotiated  = request.Headers[Capacitor.Cli.Core.HttpClientExtensions.CliVersionHeader].ToString();
+            updateCheck = request.Headers[Capacitor.Cli.Core.HttpClientExtensions.UpdateCheckHeader].ToString();
+        });
+        await using var lane = new ServerConnectionService(
+            TimeProvider.System, host.Url, () => Task.FromResult<string?>(null), updateCheckOff: updateCheckOff);
+        lane.Start();
+
+        await Next(lane.Status, s => s.State == ServerLaneState.Connected);
+
+        await Assert.That(Capacitor.Cli.Core.HttpClientExtensions.CliVersion).IsNotNull();
+        await Assert.That(negotiated).IsEqualTo(Capacitor.Cli.Core.HttpClientExtensions.CliVersion);
+        await Assert.That(updateCheck).IsEqualTo(updateCheckOff ? "off" : "");
     }
 
     [Test]
@@ -643,5 +679,40 @@ public class ServerConnectionServiceTests {
         await second.WaitAsync(TimeSpan.FromSeconds(10));
         await Assert.That(received.Single().StreamPosition).IsEqualTo(5UL);
         await WaitUntilAsync(() => HubTestHost.StreamUnsubscribes.Count == 2, what: "the second unsubscribe");
+    }
+
+    /// <summary>The installation is retired between negotiation and the WebSocket upgrade, the one moment the
+    /// negotiation's own check has already passed: the upgrade, which carries the bearer, must never reach the
+    /// port.</summary>
+    [Test]
+    public async Task A_websocket_upgrade_after_the_installation_is_retired_never_reaches_the_port() {
+        var root = new LocalRoot(Tmp.CreateDir("local"));
+        root.EnsureCreated();
+
+        InstallRegistry? installed = null;
+        var negotiations = 0;
+        var upgrades     = 0;
+
+        await using var host = await HubTestHost.StartAsync(onRequest: (path, upgrade) => {
+            if (path.EndsWith("/negotiate", StringComparison.Ordinal) && Interlocked.Increment(ref negotiations) == 1)
+                LocalStateFiles.PublishRegistry(root, installed!.RetireActive());
+            if (upgrade) Interlocked.Increment(ref upgrades);
+        });
+
+        var port = new Uri(host.Url).Port;
+        installed = InstallRegistry.Empty.WithActive(new("0123456789abcdef0123456789abcdef", port, $"http://localhost:{port}", "1.0.0"));
+        LocalStateFiles.PublishRegistry(root, installed);
+
+        await using var lane = new ServerConnectionService(
+            TimeProvider.System, host.Url, () => Task.FromResult<string?>("token"), localRoot: root);
+        var connected = false;
+        using var watch = lane.Status.Subscribe(s => connected |= s.State == ServerLaneState.Connected);
+        lane.Start();
+
+        await Next(lane.Status, s => s.State == ServerLaneState.Retrying);
+
+        await Assert.That(Volatile.Read(ref negotiations)).IsGreaterThanOrEqualTo(1);
+        await Assert.That(Volatile.Read(ref upgrades)).IsEqualTo(0);
+        await Assert.That(connected).IsFalse();
     }
 }

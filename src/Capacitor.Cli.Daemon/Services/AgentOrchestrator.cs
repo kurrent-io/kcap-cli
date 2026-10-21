@@ -15,6 +15,7 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Harness.Antigravity;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -62,6 +63,54 @@ internal record AgentInstance(
         CancellationTokenSource ReadCts
     ) {
     public string?              SessionId         { get; set; }
+
+    /// The vendor's own session id, the one a resume hands back to the vendor CLI.
+    public string?              VendorSession     { get; set; }
+
+    /// Set when this agent stops to be resumed by a successor daemon: teardown then keeps its
+    /// worktree, attachments, MCP config, vendor launcher state, PID record and resume-ledger entry.
+    public bool                 ResumePending     { get; set; }
+
+    /// The interrupted session this agent continues, until its own session id is known and the
+    /// takeover of that session's work has started.
+    public string?              ContinuedFromSessionId { get; set; }
+
+    /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
+    public bool                 StopRequested     { get; set; }
+
+    /// Who reports this run's ending: <see cref="AgentOrchestrator.RunReportUnclaimed"/>, owed by a stop,
+    /// or sent. Claimed once, so a stop and the finalizer never both report it.
+    public int                  RunReport;
+
+    /// Stops in progress, under the orchestrator's ledger lock; the last to settle sends the owed report.
+    public int                  StopsInFlight;
+
+    /// Orders a reconnect's status send against a stop's report: whichever starts its sends first is sent first.
+    public readonly Lock        StatusSendGate = new();
+
+    /// Completes once every stop has settled and the report is sent, so the finalizer ends the session
+    /// only after it.
+    public TaskCompletionSource StopSettled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    int _reopenedTranscript;
+
+    /// Whether the server records the ACP session this agent reopened. Pending until it accepts the
+    /// session's first event or refuses it; one transition wins, so a held first turn is released only
+    /// when the resume has not already been judged failed.
+    public ReopenedTranscript ReopenedTranscript => (ReopenedTranscript)Volatile.Read(ref _reopenedTranscript);
+
+    public void MarkReopenedTranscriptPending() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Pending, (int)ReopenedTranscript.None);
+
+    public bool TryAcceptReopenedTranscript() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Accepted, (int)ReopenedTranscript.Pending)
+            == (int)ReopenedTranscript.Pending;
+
+    /// True when the transcript is refused, whether by this call or an earlier one.
+    public bool TryRefuseReopenedTranscript() =>
+        Interlocked.CompareExchange(ref _reopenedTranscript, (int)ReopenedTranscript.Refused, (int)ReopenedTranscript.Pending)
+            is (int)ReopenedTranscript.Pending or (int)ReopenedTranscript.Refused;
+
     public string               Status            { get; set; } = "Starting";
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }
@@ -71,6 +120,9 @@ internal record AgentInstance(
     /// The usage-limit menu last matched on this agent's screen, or null when the screen does
     /// not show one. Read by the status snapshot; written only from the PTY read loop.
     public UsageLimitNoticeDto? UsageLimit { get; set; }
+
+    /// The select dialog on this agent's screen, or null. Written only from the PTY read loop.
+    public TerminalDialogDto? TerminalDialog { get; set; }
 
     /// The agent's own transcript — Claude's project .jsonl or Codex's rollout — resolved once
     /// by discovery and cached: the status payload and the Codex send-path probe both read it,
@@ -229,6 +281,11 @@ internal record AgentInstance(
     /// </summary>
     public string PendingEndReason { get; set; } = "agent_exited";
 
+    /// <summary>Why this daemon stopped the agent, for a flow driver only: a person's stop
+    /// (<c>agent_stopped</c>) or one the daemon made itself. Kept apart from <see cref="PendingEndReason"/>,
+    /// which a park acknowledgement can reset; the session's end reason is unchanged.</summary>
+    public string? StopDetail { get; set; }
+
     /// <summary>True while a park ack is outstanding; a sweep skips an agent already parking; reset
     /// on ambiguous ack to allow retry.</summary>
     public bool ParkAttemptInFlight { get; set; }
@@ -267,6 +324,13 @@ internal record AgentInstance(
     /// and does not attach the SignalR sink. An explicit share (Phase 2) clears this.
     /// </summary>
     public bool IsPrivate { get; init; }
+
+    /// <summary>Set when the server refused this agent's registration: it holds no live entry under the id, and a
+    /// status sent for it could overwrite the failure it recorded. The agent keeps running with nothing sent.</summary>
+    public bool RegistrationRefused { get; set; }
+
+    /// <summary>No per-agent server call applies: a private agent, or one whose registration was refused.</summary>
+    public bool IsServerSilent => IsPrivate || RegistrationRefused;
 
     /// <summary>Owned worktree (daemon-created — safe to remove on cleanup) vs borrowed cwd
     /// (the user's own checkout — never removed).</summary>
@@ -680,7 +744,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// the sink starts its pump, so admission under the lock leaves no untracked pump and no
     /// tracked sink that has not started.</summary>
     internal CloudTerminalSink? TryStartCloudSink(AgentInstance agent) {
-        if (agent.IsPrivate) return null;
+        if (agent.IsServerSilent) return null;
 
         lock (_cloudSinksLock) {
             if (_cloudSinksClosed) return null;
@@ -792,8 +856,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _pidRecordRoot = recordRoot;
         _attachmentStore = new AttachmentStore(recordRoot);
         _attachmentFetcher = new AttachmentFetcher(
-            httpClientFactory, () => _tokens.GetValidTokensForServerAsync(_config.Profiles.Name, _config.ServerUrl), logger);
+            httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
+        ResumeLedger = ResumeLedgerStore.For(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
@@ -869,7 +934,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnStopAgentV2          += HandleStopAgentV2;
         _server.OnAckProcessedPrefix   += ack => _processor?.AckPrefix(ack);
         _server.OnRequestStatusReport  += () => SendDaemonStatusReportOnceAsync();
-        _server.OnRequestStatusReport2 += nonce => SendDaemonStatusReportOnceAsync(nonce);
+        _server.OnRequestStatusReport2 += SendDaemonStatusReportOnceAsync;
         _server.GetHighestAcceptedSeq  =  () => _processor?.HighestAcceptedSeq;
         _server.GetLastProcessedSeq    =  () => _processor?.LastProcessedSeq;
         _server.GetQuarantined         =  () => [.. QuarantineSnapshot()];
@@ -880,12 +945,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         _server.GetLiveAgentIds = () => [
             .. _agents
-                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsPrivate)
+                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
                 .Select(kvp => kvp.Key)
         ];
 
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
+        _server.GetResumingAgents = ResumingClaims;
 
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
@@ -936,9 +1002,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <para>The PID-record arm is load-bearing, not belt-and-braces: <see cref="HandleStopAgent"/> falls
     /// back to <see cref="TryStopByPidRecordAsync"/> for an id this incarnation never registered, which is
     /// how the server's registry-independent physical stop reaps a prior incarnation's survivor. Such a stop
-    /// is NOT the no-op that justifies dropping unknown targets, so admission has to see it.</para></summary>
+    /// is NOT the no-op that justifies dropping unknown targets, so admission has to see it.</para>
+    ///
+    /// <para>A resume-ledger entry is a target for the same reason: the stop withdraws it.</para></summary>
     bool IsKnownStopTarget(string agentId) =>
-        !string.IsNullOrEmpty(agentId) && (_agents.ContainsKey(agentId) || (_pidRecords?.Exists(agentId) ?? false));
+        !string.IsNullOrEmpty(agentId)
+     && (_agents.ContainsKey(agentId)
+      || (_pidRecords?.Exists(agentId) ?? false)
+      || _resumeCandidates.ContainsKey(agentId)
+      || (ResumeLedger is { } ledger && File.Exists(ledger.EntryPath(agentId))));
 
     /// <summary>§3.3: snapshot the processor and, when it is still null, RESERVE the inline slot in the SAME
     /// critical section publication uses. Returns null to mean "run inline, then call
@@ -973,27 +1045,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// Antigravity turn's child exiting and the next one starting, when no PID record exists.
     internal bool IsLiveJournalStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
 
-    /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem.
-    internal bool IsLiveAttachmentStem(string stem) => _agents.Keys.Any(id => AgentFileNames.For(id) == stem);
+    /// <see cref="AttachmentStore.SweepOrphans"/>'s live-agent check, same hash as the journal stem. An
+    /// agent the loaded resume ledger names, or one whose files a ledgered continuation still uses, is
+    /// live too: the sweep runs before any of them publishes.
+    internal bool IsLiveAttachmentStem(string stem) =>
+        _agents.Keys.Concat(_ledgerAgentIds).Any(id => AgentFileNames.For(id) == stem);
 
     /// Mutation FIRST, Pulse() second — always (a pulse published before its mutation lets a
     /// subscriber read the new version, snapshot the OLD state, and wait forever). These
     /// helpers are the only writers of agent status and registry membership, so the ordering
     /// cannot be forgotten at a call site.
     internal void SetAgentStatus(AgentInstance agent, string status) {
-        agent.Status = status;
+        lock (_membership) agent.Status = status;
         _statusNotifier.Pulse();
     }
 
     internal void PublishAgent(AgentInstance agent) {
-        _agents[agent.Id] = agent;
+        lock (_membership) _agents[agent.Id] = agent;
         _statusNotifier.Pulse();
     }
 
     internal void UnpublishAgent(string agentId) {
-        _agents.TryRemove(agentId, out _);
+        lock (_membership) _agents.TryRemove(agentId, out _);
         _statusNotifier.Pulse();
     }
+
+    /// <summary>Held by every change of agent status, agent membership and pending launches, and by
+    /// <see cref="BusyForStatus"/>, so that count is one consistent observation however launches overlap.</summary>
+    readonly Lock _membership = new();
 
     internal void SetResolvedTitle(AgentInstance agent, string title) {
         if (agent.ResolvedTitle == title) return;
@@ -1059,8 +1138,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// the vendor's own terminal. Keyed on the broker alone, so a request outliving its agent's
     /// table entry is still retired.
     void HandleToolSettled(string agentId, ToolSettledNotice notice) {
-        if (notice.ToolUseId is { } toolUseId) _permissionBroker.TryWithdrawTool(agentId, notice.SessionId, toolUseId);
-        else _permissionBroker.WithdrawTurn(agentId, notice.SessionId, notice.SubagentId);
+        if (notice.ToolUseId is { } toolUseId)
+            _permissionBroker.TryWithdrawTool(agentId, notice.SessionId, toolUseId, notice.SubagentId, notice.ToolName, notice.ToolInput, notice.SentAt);
+        else _permissionBroker.WithdrawTurn(agentId, notice.SessionId, notice.SubagentId, notice.SentAt);
     }
 
     /// The bridge's subagent report for a hosted Claude session: applied to the attributed agent's
@@ -1357,7 +1437,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Surface 3 (new-harness detection): the last cached machine inventory (null until the first
             // send refreshes it); the server raises the "installed but not configured" notification from it.
             HarnessInventory: CurrentHarnessInventory(),
-            EchoNonce: echoNonce);
+            EchoNonce: echoNonce,
+            ResumingAgents: ResumingClaims());
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
     /// roll-up. A blocked known-id candidate (pending_marker / legacy_unresolvable /
@@ -1536,6 +1617,45 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// admission (fails closed) rather than minting processes beyond the budget.</summary>
     internal int EffectiveCount => _agents.Count + (_quarantine?.Count ?? 0);
 
+    readonly Lock _capacityLock = new();
+    int _capacityReservations;
+
+    /// <summary>A slot held from a launch's capacity check until it publishes, so concurrent launches
+    /// awaiting their handshakes cannot all pass the last free slot. Null when the daemon is full;
+    /// <see cref="DaemonConfig.MaxConcurrentAgents"/> 0 is unlimited and never refuses.</summary>
+    CapacityReservation? TryReserveCapacity() {
+        lock (_capacityLock) {
+            if (_config.MaxConcurrentAgents > 0 && EffectiveCount + _capacityReservations >= _config.MaxConcurrentAgents)
+                return null;
+
+            _capacityReservations++;
+            return new CapacityReservation(this);
+        }
+    }
+
+    /// <summary>Released exactly once: on dispose, or by <see cref="Publish"/>, which hands the slot to
+    /// the published agent under the same lock the check reads.</summary>
+    sealed class CapacityReservation(AgentOrchestrator owner) : IDisposable {
+        bool _released;
+
+        public void Publish(AgentInstance agent) {
+            lock (owner._capacityLock) {
+                owner.PublishAgent(agent);
+                Release();
+            }
+        }
+
+        public void Dispose() {
+            lock (owner._capacityLock) Release();
+        }
+
+        void Release() {
+            if (_released) return;
+            _released = true;
+            owner._capacityReservations--;
+        }
+    }
+
     /// <summary>Phase B (D4): this daemon's stable logical id = a hash of its name, written
     /// into each child's <c>KCAP_DAEMON_ID</c> marker. Per-name so a different daemon under the same
     /// user is never mistaken for ours by the env-marker scan.</summary>
@@ -1673,12 +1793,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// this id — consult the PID record and, if a live process still matches its EXACT identity (and,
     /// on Unix, carries the expected <c>KCAP_AGENT_ID</c> env — ambiguity spares), reap it by identity
     /// and delete the record on confirmed death. This makes the server's registry-independent S2 stop
-    /// effective even against a NEW daemon incarnation that never knew the agent in memory.</summary>
-    async Task<bool> TryStopByPidRecordAsync(string agentId) {
-        if (FindPidRecord(agentId) is not { } record) return false;
-
-        return await StopByPidRecordAsync(record);
-    }
+    /// effective even against a NEW daemon incarnation that never knew the agent in memory. True when no
+    /// survivor is left: none was recorded, or the recorded one is confirmed gone.</summary>
+    async Task<bool> TryStopByPidRecordAsync(string agentId) =>
+        FindPidRecord(agentId) is not { } record || await StopByPidRecordAsync(record);
 
     async Task<bool> StopByPidRecordAsync(AgentPidRecord record) {
         var confirmedGone = await ProcessReaper.ReapByRecordAsync(record, _logger, _time, _shutdownCts.Token);
@@ -1875,7 +1993,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// a DUPLICATE id, which would double-count against the server's capacity tally.</para></summary>
     internal IReadOnlyList<LiveAgentInfo> BuildLiveAgents() {
         var live = _agents.Values
-            .Where(a => a.Status is "Starting" or "Running" && !a.IsPrivate)
+            .Where(a => a.Status is "Starting" or "Running" && !a.IsServerSilent)
             .Select(a => new LiveAgentInfo(
                 a.Id, a.Kind.ToString(), a.CreatedAt, a.FlowRunId, a.FlowRole,
                 ActivitySeq:  a.ActivityClock.ActivitySeq,
@@ -1917,6 +2035,83 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
 
+    /// <summary>LaunchFailed reason for a launch the owner stopped before its agent registered.</summary>
+    internal const string LaunchCancelledReason = "launch_cancelled";
+
+    /// <summary>A server launch from submission until it settles, so a local stop can cancel it while it
+    /// is queued or starting, before its agent exists.</summary>
+    internal sealed class CancellableLaunch : IDisposable {
+        readonly CancellationTokenSource _cts = new();
+        readonly TaskCompletionSource    _settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action? _remove;
+        int     _started;
+        int     _handoff;
+
+        internal CancellableLaunch(LaunchKind kind, Action remove) {
+            Kind    = kind;
+            _remove = remove;
+        }
+
+        public LaunchKind        Kind        { get; }
+        public CancellationToken Token       => _cts.Token;
+        public bool              IsCancelled => _cts.IsCancellationRequested;
+        public Task              Settled     => _settled.Task;
+
+        /// <summary>The agent this launch published, if it got that far.</summary>
+        public AgentInstance?    Published   { get; set; }
+
+        public void Cancel() {
+            try { _cts.Cancel(); } catch (ObjectDisposedException) { /* already settled */ }
+        }
+
+        /// <summary>The lane reaches the launch. False when it was cancelled first. Ordered against
+        /// <see cref="HasStarted"/> read after <see cref="Cancel"/>, so a launch the stopper sees unstarted
+        /// always sees the cancel.</summary>
+        public bool TryStart() {
+            Interlocked.Exchange(ref _started, 1);
+            return !IsCancelled;
+        }
+
+        public bool HasStarted => Interlocked.CompareExchange(ref _started, 0, 0) == 1;
+
+        /// <summary>The stopper stops waiting. True when the launch had not settled: it then stops any agent
+        /// it publishes itself.</summary>
+        public bool Abandon() => Interlocked.Exchange(ref _handoff, 1) == 0;
+
+        /// <summary>The launch settles. True when its stopper had already stopped waiting.</summary>
+        public bool SettleAbandoned() => Interlocked.Exchange(ref _handoff, 1) == 1;
+
+        public void Dispose() {
+            Interlocked.Exchange(ref _remove, null)?.Invoke();
+            Interlocked.Exchange(ref _handoff, 1);
+            _settled.TrySetResult();
+            _cts.Dispose();
+        }
+    }
+
+    readonly Dictionary<string, List<CancellableLaunch>> _cancellableLaunches = new(StringComparer.Ordinal);
+
+    CancellableLaunch TrackCancellableLaunch(string agentId, LaunchKind kind) {
+        CancellableLaunch? launch = null;
+        launch = new CancellableLaunch(kind, () => {
+            lock (_cancellableLaunches) {
+                if (!_cancellableLaunches.TryGetValue(agentId, out var list)) return;
+                list.Remove(launch!);
+                if (list.Count == 0) _cancellableLaunches.Remove(agentId);
+            }
+        });
+        lock (_cancellableLaunches) {
+            if (!_cancellableLaunches.TryGetValue(agentId, out var list)) _cancellableLaunches[agentId] = list = [];
+            list.Add(launch);
+        }
+
+        return launch;
+    }
+
+    CancellableLaunch[] CancellableLaunchesFor(string agentId) {
+        lock (_cancellableLaunches) return _cancellableLaunches.TryGetValue(agentId, out var list) ? [.. list] : [];
+    }
+
     /// <summary>Registers an in-flight launch so <see cref="BuildLiveAgents"/> can describe it during
     /// the handshake, returning a scope that removes it again. <c>using</c>-scoped rather than a
     /// hand-written call per exit — that is what makes no-leak structural across success, coded
@@ -1926,8 +2121,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     internal IDisposable TrackPendingLaunch(
             string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
             string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
-        _pendingLaunches[agentId] = new PendingLaunch(
-            agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
+        lock (_membership)
+            _pendingLaunches[agentId] = new PendingLaunch(
+                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
         _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
@@ -1935,7 +2131,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     sealed class PendingLaunchScope(AgentOrchestrator owner, string agentId) : IDisposable {
         public void Dispose() {
-            if (owner._pendingLaunches.TryRemove(agentId, out _)) owner._statusNotifier.Pulse();
+            bool removed;
+            lock (owner._membership) removed = owner._pendingLaunches.TryRemove(agentId, out _);
+            if (removed) owner._statusNotifier.Pulse();
         }
     }
 
@@ -2013,9 +2211,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// them — relocated off the pump, never refused for its format.</para></summary>
     async Task HandleLaunchAgent(LaunchAgentCommand cmd) {
         var anySeq = cmd.Epoch is not null || cmd.Seq is not null || cmd.CommandId is not null;
+        var launch = TrackCancellableLaunch(cmd.AgentId, cmd.Kind);
 
         if (!anySeq) {
-            await DispatchUnsequencedLaunchAsync(cmd);
+            await DispatchUnsequencedLaunchAsync(cmd, launch);
             return;
         }
 
@@ -2027,11 +2226,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (Processor is { } proc && cmd.Epoch is { } epoch && cmd.Seq is { } seq && cmd.CommandId is { } cmdId) {
             var execution = proc.SubmitAsync(
                 new SequencedItem(SequencedKind.Launch, epoch, seq, cmdId, cmd.AgentId),
-                () => HandleLaunchAgentCore(cmd));
-            _ = ObserveDetachedExecution(execution, cmd.AgentId);
+                () => HandleLaunchAgentCore(cmd, launch));
+            _ = ObserveDetachedExecution(execution, cmd.AgentId, launch);
             return;
         }
 
+        launch.Dispose();
         await _server.LaunchFailedAsync(cmd.AgentId, "Malformed sequenced launch: partial Epoch/Seq/CommandId");
     }
 
@@ -2039,7 +2239,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// hosted-agent and PR-review launch has, since the sequenced tuple rides only the review-flow
     /// settlement lane (§1.9). It is committed onto the same serial lane as sequenced traffic so arrival
     /// order holds across formats, and the pump is free the instant the commit returns.</summary>
-    async Task DispatchUnsequencedLaunchAsync(LaunchAgentCommand cmd) {
+    async Task DispatchUnsequencedLaunchAsync(LaunchAgentCommand cmd, CancellableLaunch launch) {
         var proc = SnapshotProcessorReservingInlineSlot();
 
         if (proc is null) {
@@ -2051,7 +2251,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // HandleLaunchAgentCore, which ServerConnection.SafeInvoke logs and swallows — so no
             // LaunchFailed reaches the server for a launch torn down mid-prompt by shutdown. That is
             // shutdown-only and the server's own reconciliation lanes are the backstop; do NOT re-add one.
-            try { await HandleLaunchAgentCore(cmd); }
+            try { await HandleLaunchAgentCore(cmd, launch); }
             finally { ReleaseInlineSlot(); }
             return;
         }
@@ -2060,9 +2260,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Coalesced/DroppedUnknownTarget are stop-only outcomes: launches never coalesce and are never
         // admission-checked (a launch CREATES its target).
         var outcome = proc.SubmitUnsequenced(new UnsequencedItem(
-            UnsequencedKind.Launch, cmd.AgentId, UnsequencedLaunchPayloadKey, () => HandleLaunchAgentCore(cmd)));
+            UnsequencedKind.Launch, cmd.AgentId, UnsequencedLaunchPayloadKey, () => HandleLaunchAgentCore(cmd, launch)));
 
         if (outcome is not SubmitOutcome.Refused) return;
+
+        launch.Dispose();
 
         // Refused == the lane stopped accepting, i.e. daemon shutdown. The CALLER owns the consequence, and
         // its own send failure is swallowed: the daemon is exiting, nothing here can act on it, and this
@@ -2080,9 +2282,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="CommandRejected"/>. In normal operation this task completes successfully — RunLaneAsync's
     /// own finally always resolves it — so reaching the catch below is itself a defensive, not expected,
     /// path.</summary>
-    async Task ObserveDetachedExecution(Task execution, string agentId) {
+    async Task ObserveDetachedExecution(Task execution, string agentId, CancellableLaunch? launch = null) {
         try { await execution; }
         catch (Exception ex) { LogDetachedCommandFault(ex, agentId); }
+        finally { launch?.Dispose(); }
     }
 
     /// <summary>The daemon's rename fence; every new agent admits through it.</summary>
@@ -2090,7 +2293,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Admits a server launch through the rename fence; a fenced daemon fails it as a semantic
     /// rejection, so the server does not read it as a transient full daemon.</summary>
-    async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd) {
+    async Task<CommandOutcome> HandleLaunchAgentCore(LaunchAgentCommand cmd, CancellableLaunch launch) {
+        using var settle    = launch;
         using var admission = _admission.TryAdmit();
         if (admission is null) {
             _logger.LogWarning("Launch {AgentId} refused: the daemon is being renamed", cmd.AgentId);
@@ -2099,7 +2303,28 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
-        return await HandleAdmittedLaunchAsync(cmd);
+        using var hold = BeginLaunchHold();
+
+        try {
+            if (launch.TryStart()) {
+                var outcome = await HandleAdmittedLaunchAsync(cmd, hold, launch.Token, agent => launch.Published = agent);
+                // Cancelled past its last cancellation point, with no stopper left waiting to stop what it
+                // published: that instance only, never another the id has come to hold since.
+                if (launch.SettleAbandoned() && launch.Published is { } published
+                    && ReferenceEquals(_agents.GetValueOrDefault(cmd.AgentId), published)) {
+                    published.StopDetail ??= "launch_abandoned";
+                    _ = StopAgentCoreAsync(published);
+                }
+
+                return outcome;
+            }
+        } catch (OperationCanceledException) when (launch.IsCancelled && !_shutdownCts.IsCancellationRequested) {
+            // Cancelled before the launch body reached its own cleanup (the consent prompt).
+        }
+
+        await _server.LaunchFailedAsync(cmd.AgentId, LaunchCancelledReason);
+
+        return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
     }
 
     /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
@@ -2112,26 +2337,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
     /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
     /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
-    async Task<CommandOutcome> HandleAdmittedLaunchAsync(LaunchAgentCommand cmd) {
-        var agentId       = cmd.AgentId;
-        var prompt        = cmd.Prompt;
-        var startTitle    = StartTitleOf(cmd);
-        var model         = cmd.Model;
-        // A protocol-v3 explicit-reviewer-model launch pins the server-resolved LaunchModel VERBATIM.
-        // Compute the effective model ONCE here so every site that records/reports the model this
-        // launch REQUESTS — the launch log and the runtime start context — reads the same value.
-        // (What the server sees registered is registeredModel below: for an ACP runtime the
-        // handshake-confirmed model narrows this request; PTY runtimes register it as-is.)
-        // Null block ⇒ legacy path, cmd.Model unchanged.
-        // Explicitly string?, not var: ModelSelectionLaunchPolicy below clears this when the selected
-        // runtime cannot apply a model, and "no model reported" must be representable in the type.
-        string? effectiveModel = cmd.ExplicitReviewerModel?.LaunchModel ?? model;
-        var effort        = cmd.Effort;
-        var repoPath      = cmd.RepoPath;
-        var tools         = cmd.Tools;
-        var attachmentIds = cmd.AttachmentIds;
-        var isReview      = cmd.Kind == LaunchKind.Review;
-        var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
+    async Task<CommandOutcome> HandleAdmittedLaunchAsync(
+            LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        var agentId = cmd.AgentId;
 
         // A caller-selected ACP permission preset is a pure, side-effect-free rejection (wrong-vendor /
         // non-interactive / borrowed / unknown token), validated BEFORE the consent gate: an ineligible
@@ -2159,7 +2367,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var consentInput = new LaunchConsentInput(
             cmd.RequesterUserId, cmd.RequesterIsOwner ?? false,
             LaunchConsentEngine.KindToken(cmd.Kind), cmd.RepoPath, cmd.Vendor, cmd.RequesterDisplay);
-        var consent = await _consentGate.DecideAsync(cmd.AgentId, consentInput, _shutdownCts.Token);
+        CancellationTokenSource? consentCts = null;
+        LaunchConsentOutcome consent;
+        try {
+            consentCts = cancel.CanBeCanceled ? CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancel) : null;
+            consent    = await _consentGate.DecideAsync(cmd.AgentId, consentInput, consentCts?.Token ?? _shutdownCts.Token);
+        } finally {
+            consentCts?.Dispose();
+        }
+        cancel.ThrowIfCancellationRequested();
         if (!consent.Allowed) {
             _logger.LogWarning("Launch {AgentId} denied by consent policy ({Source})", cmd.AgentId, consent.Source);
             await _server.LaunchFailedAsync(cmd.AgentId,
@@ -2168,13 +2384,43 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
 
+        return await LaunchAdmittedAsync(cmd, consent, hold, cancel: cancel, onPublished: onPublished);
+    }
+
+    /// <summary>The admitted launch after its consent decision. A <paramref name="resume"/> relaunches a
+    /// ledgered agent into its existing worktree; a failure before the agent publishes leaves both the
+    /// worktree and the ledger entry in place for the fallback.</summary>
+    async Task<CommandOutcome> LaunchAdmittedAsync(
+            LaunchAgentCommand cmd, LaunchConsentOutcome consent, LaunchHold hold, ResumeLaunch? resume = null,
+            CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
+        var agentId       = cmd.AgentId;
+        var isPrivate     = resume?.IsPrivate ?? false;
+        var prompt        = cmd.Prompt;
+        var startTitle    = StartTitleOf(cmd);
+        var model         = cmd.Model;
+        // A protocol-v3 explicit-reviewer-model launch pins the server-resolved LaunchModel VERBATIM.
+        // Compute the effective model ONCE here so every site that records/reports the model this
+        // launch REQUESTS — the launch log and the runtime start context — reads the same value.
+        // (What the server sees registered is registeredModel below: for an ACP runtime the
+        // handshake-confirmed model narrows this request; PTY runtimes register it as-is.)
+        // Null block ⇒ legacy path, cmd.Model unchanged.
+        // Explicitly string?, not var: ModelSelectionLaunchPolicy below clears this when the selected
+        // runtime cannot apply a model, and "no model reported" must be representable in the type.
+        string? effectiveModel = cmd.ExplicitReviewerModel?.LaunchModel ?? model;
+        var effort        = cmd.Effort;
+        var repoPath      = cmd.RepoPath;
+        var tools         = cmd.Tools;
+        var attachmentIds = cmd.AttachmentIds;
+        var isReview      = cmd.Kind == LaunchKind.Review;
+        var isReviewFlow  = cmd.Kind == LaunchKind.ReviewFlow;
+
         // Guard for a null/blank vendor before the dictionary lookup: LaunchAgentCommand crosses
         // the SignalR boundary where the non-null annotation isn't enforced, and Dictionary
         // .TryGetValue(null) throws ArgumentNullException — which SafeInvoke would swallow, dropping
         // the launch with no LaunchFailed reaching the server. (The removed vendor allowlist used to
         // absorb this incidentally.)
         if (string.IsNullOrWhiteSpace(cmd.Vendor) || !_runtimeFactories.TryGetValue(cmd.Vendor, out var runtimeFactory)) {
-            await _server.LaunchFailedAsync(cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, $"Unknown vendor: {cmd.Vendor}");
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2183,7 +2429,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // runtime can't run unattended — before creating a worktree, so there's nothing to
         // clean up. This guards every newly registered runtime through the same capability seam.
         if (UnattendedLaunchPolicy.RejectionReason(cmd.Vendor, runtimeFactory.SupportsUnattended, isReviewFlow) is { } unattendedRejection) {
-            await _server.LaunchFailedAsync(cmd.AgentId, unattendedRejection);
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, unattendedRejection);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2204,7 +2450,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             var unhonorableModel = effectiveModel!;
 
             if (modelDisposition == ModelSelectionDisposition.Reject) {
-                await _server.LaunchFailedAsync(cmd.AgentId,
+                await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     ModelSelectionLaunchPolicy.RejectionReason(cmd.Vendor, unhonorableModel));
 
                 return new CommandOutcome(
@@ -2217,7 +2463,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
 
         if (isReviewFlow && cmd.Borrowed && !runtimeFactory.SupportsBorrowedReviewFlow) {
-            await _server.LaunchFailedAsync(cmd.AgentId,
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                 $"Borrowed review flows are not certified for '{cmd.Vendor}'; retry with an owned review worktree.");
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2229,7 +2475,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // PR-review launch would defeat a containment invariant, so it fails the launch outright
         // rather than being silently dropped or silently honoured.
         if (CodexPosturePolicy.RejectionReason(cmd) is { } postureRejection) {
-            await _server.LaunchFailedAsync(cmd.AgentId, postureRejection);
+            await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId, postureRejection);
 
             return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
         }
@@ -2247,7 +2493,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // before the caller heard anything. The single-attempt launch probe did not bound the
                 // launch path at all while this sat in front of the rejection; my claim that it did
                 // was wrong.
-                await _server.LaunchFailedAsync(cmd.AgentId,
+                await LaunchFailedUnlessPrivateAsync(isPrivate, cmd.AgentId,
                     $"{(certificationCheck.Transient ? "reviewer_certification_transient" : "reviewer_certification_changed")}: {certificationCheck.Reason}.");
 
                 // The self-heal: a certification mismatch usually means the advertisement is stale.
@@ -2269,9 +2515,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
         // is the user's real checkout — never removed on any path (spec's top safety invariant).
         var snapshotBorrow = cmd.Borrowed && runtimeFactory.BorrowedReviewRequiresIndependentSnapshot;
-        var work = cmd.Borrowed && !snapshotBorrow
-            ? WorkLocation.BorrowedCwd
-            : WorkLocation.OwnedWorktree;
+        var work = resume?.Work
+            ?? (cmd.Borrowed && !snapshotBorrow ? WorkLocation.BorrowedCwd : WorkLocation.OwnedWorktree);
         string? borrowedSnapshotSource = null;
 
         // The per-reviewer bridge token URL (if this is an unattended review-flow launch), hoisted to
@@ -2297,22 +2542,25 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // one clock per launch, never three.
         var activityClock = CreateActivityClock();
 
+        CapacityReservation? capacity = null;
+
         try {
-            // MaxConcurrentAgents == 0 is unlimited: the gate is skipped entirely, never compared.
-            if (_config.MaxConcurrentAgents > 0 && EffectiveCount >= _config.MaxConcurrentAgents) {
-                await _server.LaunchFailedAsync(agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
+            capacity = TryReserveCapacity();
+            if (capacity is null) {
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"At max capacity ({_config.MaxConcurrentAgents} agents)");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.DaemonCapacity);
             }
 
-            if (!_config.IsRepoAllowed(repoPath)) {
-                await _server.LaunchFailedAsync(agentId, $"Repo path not allowed: {repoPath}");
+            // A local spawn was never held to the allowed-repo list, so neither is its resume.
+            if (resume is not { Origin: "local" } && !_config.IsRepoAllowed(repoPath)) {
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path not allowed: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
             if (!Directory.Exists(repoPath)) {
-                await _server.LaunchFailedAsync(agentId, $"Repo path does not exist: {repoPath}");
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo path does not exist: {repoPath}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
@@ -2328,7 +2576,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             if (isReview) {
                 if (cmd.Review is not { } review) {
-                    await _server.LaunchFailedAsync(agentId, "Review launch missing PR info");
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, "Review launch missing PR info");
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
@@ -2339,7 +2587,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var actual = await GetOriginRemoteAsync(repoPath, _time);
 
                 if (actual is null) {
-                    await _server.LaunchFailedAsync(agentId, $"No origin remote at {repoPath}");
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"No origin remote at {repoPath}");
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
@@ -2347,7 +2595,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var expected = $"github.com/{review.Owner}/{review.Repo}";
 
                 if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) {
-                    await _server.LaunchFailedAsync(agentId, $"Repo at {repoPath} no longer matches {review.Owner}/{review.Repo} (origin: {actual})");
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Repo at {repoPath} no longer matches {review.Owner}/{review.Repo} (origin: {actual})");
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
                 }
@@ -2360,7 +2608,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Validate effort level before expensive worktree setup
             if (!string.IsNullOrEmpty(effort) && !ValidEffortLevels.Contains(effort)) {
-                await _server.LaunchFailedAsync(agentId, $"Invalid effort level: {effort}");
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, $"Invalid effort level: {effort}");
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
@@ -2373,7 +2621,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? $"refs/pull/{reviewInfo.PrNumber}/head"
                 : cmd.BaseRef;
 
-            if (cmd.Borrowed) {
+            if (resume is not null) {
+                worktree = resume.Worktree;
+            } else if (cmd.Borrowed) {
                 // Defense-in-depth re-authorization: the server already probed this cwd, but the
                 // daemon NEVER borrows a path just because the server said so (TOCTOU-safe). The
                 // reason is surfaced verbatim to the server via the catch → LaunchFailedAsync below;
@@ -2427,7 +2677,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // session/request_permission would otherwise put a decision event ahead of the snapshot
             // it names, and the event lane preserves insertion order. Keyed by the agent id — no
             // vendor session id exists yet.
-            if (policySnapshot is { IsEmpty: false } uploadable) {
+            if (!isPrivate && policySnapshot is { IsEmpty: false } uploadable) {
                 if (uploadable.Degraded)
                     LogPolicySnapshotDegraded(agentId,
                         uploadable.Degradations.Count > 0 ? uploadable.Degradations[0] : "unspecified");
@@ -2455,7 +2705,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // only a published agent keeps the directory.
                 if (placement == AttachmentPlacement.DaemonStore) storeLease = _attachmentStore.Lease(agentId);
 
-                var fetch = await _attachmentFetcher.FetchAsync(root, placement, attachmentIds, _shutdownCts.Token);
+                // A local stop ends the fetch as it ends the handshake.
+                using var fetchCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, cancel);
+                var fetch = await _attachmentFetcher.FetchAsync(root, placement, attachmentIds, fetchCts.Token);
 
                 if (fetch.Batch is null) {
                     LogAttachmentFetchFailed(agentId, fetch.FailedId, fetch.Error);
@@ -2512,11 +2764,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (codexReviewer &&
                     !KcapMcpRegistry.TryResolveReviewFlowAllowlist(
                         cmd.McpAllowlist, out reviewerServers, out var rejected)) {
-                    await _server.LaunchFailedAsync(agentId,
+                    await LaunchFailedUnlessPrivateAsync(isPrivate, agentId,
                         $"Review-flow reviewer MCP allowlist contains a server that is not auto-approvable: '{rejected}'.");
 
                     if (work == WorkLocation.OwnedWorktree) {
-                        try { await WorktreeManager.RemoveAsync(worktree, _time); } catch { /* best-effort */ }
+                        try { await RemoveOwnedWorktreeAsync(worktree, agentId); } catch { /* best-effort */ }
                     }
 
                     return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
@@ -2550,6 +2802,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
 
             journal = TranscriptJournal.ForAgent(_pidRecordRoot, agentId, _logger, _time);
+
+            var pinnedSessionId = resume is null ? MintPinnedSessionId(cmd) : null;
 
             var runtimeCtx = new RuntimeStartContext(
                 AgentId: agentId,
@@ -2598,7 +2852,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // action during its own startup uses the documents this launch was reported with.
                 PolicySnapshot: policySnapshot,
                 Journal: journal,
-                FlowRole: isReviewFlow ? cmd.FlowRole : null
+                FlowRole: isReviewFlow ? cmd.FlowRole : null,
+                IsPrivate: isPrivate,
+                PinnedSessionId: pinnedSessionId,
+                RequestedTransport: resume?.Entry.Transport
             );
 
             HostedRuntimeStart start;
@@ -2608,15 +2865,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
+            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId);
+
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
-            using var pendingLaunch = TrackPendingLaunch(
+            using var pendingLaunch = isPrivate ? null : TrackPendingLaunch(
                 agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
                 vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
 
             try {
-                start = await runtimeFactory.StartAsync(runtimeCtx, _shutdownCts.Token);
+                // A resume's start also ends with its attempt, so a stop during the handshake does not wait for the vendor.
+                // A fresh launch's start ends with a local stop the same way.
+                using var startCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdownCts.Token, resume?.Token ?? cancel);
+                start = await runtimeFactory.StartAsync(runtimeCtx, startCts.Token);
             } catch (Exception ex) when (ex is CodexHooksNotInstalledException or CodexReviewerMcpIsolationException
                                             or CodexUnsupportedWindowsException) {
                 // CodexHooksNotInstalledException: hooks preflight failed in Prepare.
@@ -2630,7 +2892,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // §3.5: DescribeLaunchFailure covers a null/whitespace ex.Message with the typed
                 // fallback; these three exception types always carry a real message, but every
                 // LaunchFailed send site routes through the same fallback rather than assuming so.
-                await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
 
                 // No AgentInstance was created, so CleanupAgentAsync won't run — revoke the reviewer
                 // token here (if we minted one) so it doesn't leak into the live-token set.
@@ -2639,8 +2901,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // Still need to clean up the worktree before returning — but ONLY if we own it.
                 // A borrowed cwd is the user's real checkout; removing it here would `git worktree
                 // remove` the user's tree (spec's top safety invariant; mirrors CleanupAgentAsync).
-                if (work == WorkLocation.OwnedWorktree) {
-                    try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
+                if (work == WorkLocation.OwnedWorktree && resume is null) {
+                    try { await RemoveOwnedWorktreeAsync(worktree, agentId); } catch {
                         /* best-effort */
                     }
                 }
@@ -2648,6 +2910,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // No AgentInstance was created here either, so the journal is otherwise never
                 // completed or deleted — this arm returns before the outer catch below.
                 await DiscardFailedLaunchJournalAsync(journal, agentId);
+                if (resume is null) DiscardFailedLaunchLedger(agentId);
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
@@ -2706,7 +2969,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
-                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : null,
+                SessionId           = start.Transcript is { } t ? SessionIds.Canonical(t.AcpSessionId) : pinnedSessionId ?? resume?.Entry.SessionId,
+                VendorSession       = start.Runtime.VendorResumeToken ?? start.Transcript?.AcpSessionId ?? pinnedSessionId ?? resume?.Entry.VendorSession,
                 TranscriptPath      = start.Transcript is null ? null : journal.IsOpen ? journal.Path : null,
                 Journal             = start.Transcript is null ? null : journal,
                 ActivityClock       = activityClock,
@@ -2730,11 +2994,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 RequesterUserId     = cmd.RequesterUserId,
                 RequesterDisplay    = cmd.RequesterDisplay,
                 InactivityBoundSeconds = cmd.InactivityBoundSeconds,
-                StartTitle          = startTitle
+                StartTitle          = startTitle,
+                IsPrivate           = isPrivate,
+                // Keeps the worktree and the entry through any failure until the resume is judged.
+                ResumePending       = resume is not null
             };
-            PublishAgent(agent);
+            if (resume is null) {
+                capacity.Publish(agent);
+            } else if (!TryPublishResumed(agent, resume, capacity)) {
+                await AbandonWithdrawnResumeAsync(agent, journal);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+            }
             published = true;
+            onPublished?.Invoke(agent);
             storeLease?.Keep();
+            if (resume is null) WriteLedger(agent, cmd, "server", consent);
+            hold.Dispose();
 
             // Phase B (D4 §6.4(2)): capture the start-identity + write the durable PID record
             // immediately after the process exists (before registration) so a daemon crash right after
@@ -2742,7 +3018,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // routes it through the single-flight cleanup (the agent is already in _agents).
             PersistPidRecordOrThrow(agent, runtime.Pid, runtime.StartIdentity);
 
-            await RegisterAgentAsync(agent);
+            var registration = await RegisterAgentAsync(agent);
+
+            // A resume the server refused must not run under an id it holds no entry for; the resume
+            // lane takes it from here, and the pending resume keeps the worktree and ledger entry.
+            if (!registration.Registered && resume is not null) {
+                resume.RefusedRegistration = registration.RefusedReason ?? "";
+
+                try {
+                    await runtime.TerminateAsync(ShutdownTerminateGrace);
+                } catch (Exception ex) {
+                    LogCleanupStepFailed(ex, "terminating a resume whose registration was refused", agentId);
+                }
+
+                await CleanupAgentAsync(agentId);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+            }
 
             // Slash commands are reported out of band, and the server drops a report for an agent it
             // has not yet registered — so attach the callback (which synchronously flushes any list
@@ -2751,9 +3043,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // same way. PTY runtimes never raise the callback; Claude has no live stream, so it is
             // probed once, off the launch path, and only for an interactive launch (a review-flow
             // reviewer has no composer).
-            runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
+            if (!agent.IsServerSilent) runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
 
-            if (string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
+            if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
                 _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
@@ -2767,7 +3059,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!runtime.EmitsTerminalOutput) {
                 SetAgentStatus(agent, "Running");
                 agent.HasReceivedOutput = true;
-                if (!agent.IsPrivate) TrySendAgentStatus(agent, "Running", null, out _);
+                if (!agent.IsServerSilent) TrySendAgentStatus(agent, "Running", null, out _);
 
                 // LaunchStage is Starting-only; cleared at the exact instant this agent leaves it.
                 agent.ActivityClock.ClearLaunchStage();
@@ -2782,7 +3074,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // StartAcpForwardingAsync itself still enforces the load-bearing ordering (bind strictly
             // after RegisterAgentAsync above, strictly before any AcpSessionEvents) by awaiting the
             // bind before constructing the forwarder.
-            if (start.Transcript is { } transcript) {
+            // A private agent records nothing, so there is no acceptance to wait for.
+            if (isPrivate && start.Transcript is { Reopened: true } privateTranscript) privateTranscript.ReleaseFirstTurn();
+
+            // A refused agent keeps running with nothing sent, so a held first turn goes out without the claim.
+            if (agent.RegistrationRefused && start.Runtime.RequiresSourceClaimBeforeFirstTurn) _ = BeginRefusedFirstTurnAsync(agent, start.Runtime);
+
+            if (!agent.IsServerSilent && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
                 // FinalizeAgentRunAsync to cancel even if the agent finalizes before the bind below
                 // ever resolves (see AgentInstance.AcpCts).
@@ -2845,12 +3143,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // Report the resolved model so the server can display / validate the real model the agent
             // is running. Best-effort: never let a report failure break the launch.
-            if (cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
+            if (!agent.IsServerSilent && cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
                 // Task 8: a protocol-v3 explicit-model reviewer launch reports the CONCRETE
                 // resolved model via the dedicated ReportExplicitReviewerModelResolved channel, keyed by
                 // the durable LaunchAttemptId, so the server's one-shot waiter can validate + re-price it.
                 ReportExplicitReviewerModel(agentId, cmd.Vendor, explicitReviewerModel, runtimeFactory);
-            } else if (string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
+            } else if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
                 // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
                 // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
                 // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
@@ -2877,12 +3175,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (published) {
                 await CleanupAgentAsync(agentId);
                 // §3.5: never forward a null/whitespace ex.Message raw.
-                await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
             }
 
             // No AgentInstance owns the journal, so complete it here.
             await DiscardFailedLaunchJournalAsync(journal, agentId);
+            if (resume is null) DiscardFailedLaunchLedger(agentId);
 
             // If a reviewer token was minted before the failure and no AgentInstance was created to
             // own it, revoke it here so it can't linger in the bridge's live-token set.
@@ -2894,7 +3193,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // creates no worktree and no mirror here; its attachments, if its runtime places them in
             // the daemon store, are released by the lease in the finally below. StartAsync throwing
             // means mcpConfigPath was never assigned.
-            if (worktree != null && work == WorkLocation.OwnedWorktree) {
+            if (worktree != null && work == WorkLocation.OwnedWorktree && resume is null) {
                 if (_launchers.TryGetValue(cmd.Vendor, out var launcherForCleanup)) {
                     try {
                         // Build a transient AgentInstance with a no-op PTY just so launcher.Cleanup
@@ -2921,21 +3220,24 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     }
                 }
 
-                try { await WorktreeManager.RemoveAsync(worktree, _time); } catch {
+                try { await RemoveOwnedWorktreeAsync(worktree, agentId); } catch {
                     /* best-effort */
                 }
             }
 
-            // §3.5: this is the landing site for a factory pre-StartAsync failure — including a
-            // reclassified AcpReviewerReapedException (design spec §3.2) — thrown before any
-            // AgentInstance exists, so DescribeLaunchFailure's fallback is the ONLY cover a blank
-            // message gets here.
-            await _server.LaunchFailedAsync(agentId, AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
+            // A factory failure before any AgentInstance exists lands here, so the fallback description is
+            // the only cover a blank message gets. A resume whose attempt was cancelled ended by a stop or
+            // a shutdown, not by failing.
+            if (resume is null || ex is not OperationCanceledException)
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId,
+                    cancel.IsCancellationRequested ? LaunchCancelledReason : AcpHostedAgentRuntimeFactory.DescribeLaunchFailure(ex));
 
-            // Phase B2-b (sequenced-settlement design §4.2.2): a pre-insert failure — the worktree (if any)
-            // was torn down and no agent was ever registered; terminal for the sequenced lane.
+            // A pre-insert failure: the worktree, if any, was torn down and no agent was registered;
+            // terminal for the sequenced lane.
             return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
         } finally {
+            capacity?.Dispose();
+
             if (storeLease is not null) {
                 // Never drop a directory a LIVE incarnation under this id owns: a relaunch that fails
                 // before publishing finds the previous agent still holding the id, and that agent's
@@ -3013,8 +3315,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     void ReportCommands(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
         try {
-            if (_agents.TryGetValue(agentId, out var agent))
+            if (_agents.TryGetValue(agentId, out var agent)) {
                 SetCommands(agent, commands);
+                if (agent.IsServerSilent) return;
+            }
 
             _ = _server.ReportAgentCommandsAsync(agentId, commands);
         } catch (Exception ex) {
@@ -3131,8 +3435,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var dialogDetector = agent is { Kind: LaunchKind.ReviewFlow, Runtime.EmitsTerminalOutput: true }
             ? new ConsentDialogDetector()
             : null;
-        var usageLimit = agent is { Vendor: "claude", Runtime.EmitsTerminalOutput: true }
-            ? new ClaudeUsageLimitDetector()
+        var screen = agent is { Vendor: "claude", Runtime.EmitsTerminalOutput: true }
+            ? new ClaudeScreenWatcher(agent.CurrentCols, agent.CurrentRows)
             : null;
 
         try {
@@ -3144,17 +3448,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 if (agent.Status == "Starting") {
                     SetAgentStatus(agent, "Running");
-                    if (!agent.IsPrivate) TrySendAgentStatus(agent, "Running", null, out _);
+                    if (!agent.IsServerSilent) TrySendAgentStatus(agent, "Running", null, out _);
                     RescheduleQuietTurn();
                 }
 
-                // Consent/trust dialogs are a PRE-SESSION concern: they render once at startup, before
-                // any session exists. Once the session is live (SessionId resolved from the transcript
-                // by DetectSessionIdAsync) the dialog phase is over — stop scanning so ordinary
-                // reviewer/tool output that merely quotes a banner phrase (e.g. a reviewer reading the
-                // detector's own source) can't latch a false wedge and kill a healthy reviewer.
-                if (usageLimit is not null) NoteUsageLimit(agent, usageLimit, data);
+                if (screen is not null) NoteScreen(agent, screen, data);
 
+                // Consent/trust dialogs render once at startup, before any session exists. Once the
+                // session is live, stop scanning so output that merely quotes a banner phrase (a
+                // reviewer reading the detector's own source) can't latch a false wedge.
                 if (dialogDetector is not null) {
                     if (agent.SessionId is not null) {
                         dialogDetector = null; // session live — release the detector + its window
@@ -3200,12 +3502,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    /// <summary>Publishes a change in the live usage-limit menu. The scrape runs on the PTY read
-    /// and must not wait: a miss leaves the previous notice, and only a real change pulses status.</summary>
-    void NoteUsageLimit(AgentInstance agent, ClaudeUsageLimitDetector detector, byte[] data) {
-        var notice = detector.Observe(data);
-        if (Equals(agent.UsageLimit, notice)) return;
-        agent.UsageLimit = notice;
+    /// <summary>Publishes a change in the menus on the live screen. The scrape runs on the PTY read
+    /// and must not wait, and only a real change pulses status.</summary>
+    void NoteScreen(AgentInstance agent, ClaudeScreenWatcher screen, byte[] data) {
+        screen.Resize(agent.CurrentCols, agent.CurrentRows);
+        var (usageLimit, dialog) = screen.Observe(data);
+        if (Equals(agent.UsageLimit, usageLimit) && Equals(agent.TerminalDialog, dialog)) return;
+        agent.UsageLimit     = usageLimit;
+        agent.TerminalDialog = dialog;
         _statusNotifier.Pulse();
     }
 
@@ -3231,7 +3535,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         SetAgentStatus(agent, "Failed");
         agent.PendingEndReason = "consent_dialog_wedge";
 
-        if (!agent.IsPrivate) {
+        if (!agent.IsServerSilent) {
             _ = _server.LaunchFailedAsync(agent.Id, reason);
             TrySendAgentStatus(agent, "Failed", null, out _);
             _ = _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped("failed", null));
@@ -3299,7 +3603,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // The CAS above (already committed) and this status are both visible before we await.
                 SetAgentStatus(agent, "Failed");
 
-                if (!agent.IsPrivate) {
+                if (!agent.IsServerSilent) {
                     // Own try/catch, deliberately separate from this method's own outer one below —
                     // a report fault must never skip CleanupAgentAsync or the normal unregister
                     // (capacity decrement + the durable death record ride AgentUnregistered and must
@@ -3329,7 +3633,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ? exitCode is null or 0 ? "Completed" : "Failed"
                 : "Failed";
 
-            if (agent.Status is not "Completed" and not "Failed") {
+            // Under the lock a stop marks itself requested by, so a stop already under way keeps its report.
+            bool reportsItself;
+            lock (_ledgerLock)
+                reportsItself = agent.Status is not "Completed" and not "Failed" && !agent.StopRequested
+                    && ClaimRunReport(agent, RunReportSent);
+
+            if (reportsItself) {
                 if (!agent.Runtime.HasExited) LogOutputEndedWhileRunning(agent.Id);
 
                 // A startup failure means the process exited before establishing
@@ -3369,19 +3679,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // worktree, so a startup failure is diagnosable post-mortem (see FailedLaunchLog).
                     PersistFailedLaunchLog(agent, reason);
 
-                    if (!agent.IsPrivate) _ = _server.LaunchFailedAsync(agent.Id, reason);
+                    if (!agent.IsServerSilent) _ = _server.LaunchFailedAsync(agent.Id, reason);
                 }
 
                 SetAgentStatus(agent, status);
 
-                // PrivateLocal agents make no per-agent server calls (deny-all).
-                if (!agent.IsPrivate) {
-                    if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
+                // PrivateLocal agents make no per-agent server calls (deny-all). A refused report must
+                // not skip the local teardown below: that leaks the process and keeps the forwarder alive.
+                if (!agent.IsServerSilent) {
+                    try {
+                        if (TrySendAgentStatus(agent, status, null, out var statusSend)) await statusSend;
+                    } catch (Exception ex) {
+                        LogCleanupStepFailed(ex, "reporting the final status", agent.Id);
+                    }
 
-                    var stopReason = status == "Completed" ? "exited" : "failed";
+                    try {
+                        var stopReason = status == "Completed" ? "exited" : "failed";
 
-                    await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                        await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(stopReason, exitCode));
+                    } catch (Exception ex) {
+                        LogCleanupStepFailed(ex, "recording the run's stop", agent.Id);
+                    }
                 }
+            } else if (agent.StopRequested) {
+                // The read loop ends as soon as a stop cancels it, before the stop has terminated the
+                // agent and reported it; the session ends only after that report.
+                try { await agent.StopSettled.Task.WaitAsync(StopSettleWait, _time); } catch (TimeoutException) { /* report what is known */ }
+
+                SendOwedStopReport(agent);
             }
 
             LogAgentExited(agent.Id, exitCode);
@@ -3391,7 +3716,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // FinalDrainAcpTranscriptAsync's remarks); it always returns within AcpFinalDrainBudget
             // regardless of outcome. PTY agents have no AcpForwarder and take none of this path — the
             // runtime is disposed exactly where it always was, inside CleanupAgentAsync below.
-            if (agent.AcpForwarder is { } acpForwarder) {
+            if (!agent.IsServerSilent && agent.AcpForwarder is { } acpForwarder) {
                 await FinalDrainAcpTranscriptAsync(agent, acpForwarder);
             }
 
@@ -3430,7 +3755,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // server's B5 close authority owns the eventual close. Every other teardown step (the ACP
             // final-drain above, UnregisterAcpBinding + CleanupAgentAsync below) still runs, so the slot
             // is freed exactly as a reap frees it.
-            if (!agent.IsPrivate && agent.PendingEndReason != ReviewerParkedResumableReason) {
+            if (!agent.IsServerSilent && agent.PendingEndReason != ReviewerParkedResumableReason) {
                 var endTask = _server.EndAgentSessionAsync(agent.Id, agent.PendingEndReason);
 
                 try {
@@ -3553,7 +3878,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="StopAgentCoreAsync"/> already swallows the stop's, leaving only the gate wait.</summary>
     async Task ReapReviewerAsync(ReapCandidate candidate) {
         try {
-            if (!await TryClaimReapAsync(candidate)) return;
+            if (!await TryClaimReapAsync(candidate, _shutdownCts.Token)) return;
 
             await StopClaimedReapAsync(candidate);
         } catch (Exception ex) {
@@ -3580,7 +3905,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// the one park-specific exception to <see cref="AgentInstance.ReapClaimed"/> being write-once,
     /// since a claim that neither parks nor reaps must not condemn a live agent) so the next sweep
     /// re-selects and retries.</para></summary>
-    async Task ParkReviewerAsync(ReapCandidate candidate) {
+    async Task ParkReviewerAsync(ReapCandidate candidate, CancellationToken ct) {
         var a = candidate.Agent;
 
         // One park attempt at a time per agent (a sweep skips an agent already parking); reset on an
@@ -3591,7 +3916,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // status + the activity generation captured at selection (FencedOnActivity: true — a
             // delivery since selection has advanced the seq and the park aborts here). A lost claim
             // tears down nothing; clear the guard so the next sweep can retry.
-            if (!await TryClaimReapAsync(candidate)) {
+            if (!await TryClaimReapAsync(candidate, ct)) {
                 a.ParkAttemptInFlight = false;
 
                 return;
@@ -3604,7 +3929,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Never throws: a transport error / timeout / unknown-method folds to Ambiguous rather than a
             // false Rejected, so an uncertain reply never triggers a destructive teardown.
             var ack = await _server.ReportParticipantParkedAsync(
-                a.Id, canonicalSessionId, ReviewerParkedResumableReason, _shutdownCts.Token);
+                a.Id, canonicalSessionId, ReviewerParkedResumableReason, ct);
 
             switch (ack) {
                 case ParkAck.Parked:
@@ -3693,14 +4018,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// reap that would SIGTERM/SIGKILL the child — the only thing that unblocks that write — would be
     /// queued behind the write itself. Before this fence existed the reap was unconditional and broke
     /// the cycle by construction; the two arms below restore that property deliberately.</para></summary>
-    async Task<bool> TryClaimReapAsync(ReapCandidate candidate) {
+    async Task<bool> TryClaimReapAsync(ReapCandidate candidate, CancellationToken ct) {
         var agent = candidate.Agent;
         bool entered;
 
         try {
-            entered = await agent.BorrowedSnapshotGate.WaitAsync(ReapClaimGateWait, _shutdownCts.Token);
+            entered = await agent.BorrowedSnapshotGate.WaitAsync(ReapClaimGateWait, ct);
         } catch (OperationCanceledException) {
-            return false; // daemon teardown supersedes the reap — it kills the registered children itself
+            return false; // the caller gave up: daemon teardown kills the registered children itself
         }
 
         if (!entered) {
@@ -3848,11 +4173,23 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// would let a parked consent prompt delay reviewer reaping — the exact inversion of its purpose.</summary>
     internal async Task HandleStopAgent(string agentId) {
         if (!_agents.TryGetValue(agentId, out var agent)) {
-            // Phase B (D4 §6.4(3)): no in-memory agent — this may be a survivor of a PRIOR
-            // daemon incarnation the server is still trying to stop (S2). Fall back to the PID record:
-            // reap by exact identity if a matching live process is still there.
-            await TryStopByPidRecordAsync(agentId);
-            return;
+            // An agent a restart left resuming or interrupted has only its ledger entry; a private one is
+            // never the server's to stop. One whose resume published since the miss is stopped as live.
+            var discard = TryReadLedger(agentId) is { Launch.IsPrivate: false } ? DiscardResumeEntry(agentId) : default;
+
+            if (discard.Live is not { } late) {
+                // No in-memory agent: this may be a survivor of a prior daemon incarnation the server is
+                // still trying to stop. Fall back to the PID record: reap by exact identity if a matching
+                // live process is still there.
+                var gone = await TryStopByPidRecordAsync(agentId);
+
+                // A survivor that would not die may still be working in the worktree.
+                if (gone && discard is { LeavesResourcesToStop: true, Entry: { } entry }) await RemoveDiscardedResourcesAsync(entry);
+
+                return;
+            }
+
+            agent = late;
         }
 
         // Defence-in-depth: a --private agent is invisible to the server (unregistered, not in
@@ -3892,6 +4229,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<bool> StopAgentCoreAsync(AgentInstance agent) {
         var agentId = agent.Id;
 
+        // A resume still being judged ends like any stopped agent; a shutdown's own resume mark stays.
+        lock (_ledgerLock) {
+            agent.StopRequested = true;
+            if (!_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
+            agent.StopsInFlight++;
+        }
+
         try {
             LogStopping(agentId);
 
@@ -3919,6 +4263,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // the Completed send below. No-op in production.
             StopGateAfterSnapshotHookForTest?.Invoke();
 
+            // The server hears of the stop only once termination is confirmed or refuted, below. An
+            // unregistered agent has no server-side row.
+            if (!agent.IsServerSilent) ClaimRunReport(agent, RunReportOwedByStop);
+
             // Set status BEFORE cancelling ReadCts so the read loop's finally
             // block sees "Completed" and skips its own status change / event append.
             if (!suppressCompleted) SetAgentStatus(agent, "Completed");
@@ -3928,18 +4276,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Phase B (D3): but PRESERVE a backstop reason the heartbeat already stamped
             // (reviewer_ttl_expired / reviewer_idle_expired) — only overwrite the "agent_exited"
             // default, so server-side attribution can tell a TTL/idle reap from a user stop.
-            if (agent.PendingEndReason == "agent_exited") agent.PendingEndReason = "agent_stopped";
-
-            // An unregistered agent has no server-side row to update.
-            if (!agent.IsPrivate) {
-                // Atomic check + send-INITIATION under the runtime's own gate: the round-1 second
-                // check narrowed but did not CLOSE the check-to-send race — a verdict could publish
-                // between the check and this send. The gate holds the publication lock across BOTH,
-                // so a Completed frame, if sent at all, is initiated before publication and is
-                // therefore ordered-before any LaunchFailed on the single hub connection.
-                if (agent.Runtime is ITerminationVerdictSource || !suppressCompleted)
-                    TrySendAgentStatus(agent, "Completed", null, out _);
-                _ = _server.AppendAgentRunEventAsync(agentId, new AgentRunStopped("user", null));
+            if (agent.PendingEndReason == "agent_exited") {
+                agent.PendingEndReason = "agent_stopped";
+                agent.StopDetail ??= "agent_stopped";
             }
 
             // Try a graceful shutdown first: send /exit so claude can fire its own
@@ -3971,12 +4310,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // terminate — not escape via the OUTER catch and skip terminate, which on the reap path
             // leaves a permanent zombie (ReapClaimed latched, agent still Running, every future reap
             // CAS-refused).
+            // A shutdown stop has the supervisor's exit budget to fit in, not a user's patience.
+            var shuttingDown = _shutdownCts.IsCancellationRequested;
             Task graceful = Task.CompletedTask;
 
             try {
-                graceful = agent.Runtime.RequestGracefulStopAsync();
-                await graceful.WaitAsync(GracefulExitWait, _time);
-                await agent.Runtime.WaitForExitAsync(GracefulExitWait);
+                if (shuttingDown) {
+                    await AwaitGracefulExitAsync(agent, ShutdownStopGrace, CancellationToken.None);
+                } else {
+                    graceful = agent.Runtime.RequestGracefulStopAsync();
+                    await graceful.WaitAsync(GracefulExitWait, _time);
+                    await agent.Runtime.WaitForExitAsync(GracefulExitWait);
+                }
             } catch (TimeoutException ex) {
                 // WaitAsync abandons the send rather than cancelling it (nothing CAN cancel it), so the
                 // abandoned task is observed separately — it completes on its own once the terminate
@@ -3992,7 +4337,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // so we can tell from logs whether the graceful path is actually working
             // in production or if this vendor's CLI is consistently being SIGTERMed instead.
             if (!agent.Runtime.HasExited) {
-                LogGracefulExitTimedOut(agentId, GracefulExitWait.TotalSeconds, agent.Vendor);
+                LogGracefulExitTimedOut(agentId, (shuttingDown ? ShutdownStopGrace : GracefulExitWait).TotalSeconds, agent.Vendor);
             }
 
             // Cancel the read loop and terminate the process. We deliberately do NOT end
@@ -4006,18 +4351,73 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // teardown, and is idempotent: if claude already fired its own session-end
             // during the graceful window above, the backstop call is a server-side no-op.
             await agent.ReadCts.CancelAsync();
-            await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(10));
+            await agent.Runtime.TerminateAsync(shuttingDown ? ShutdownTerminateGrace : StopTerminateGrace);
 
             // TerminateAsync's SIGKILL is followed by a single non-blocking waitpid, so the
             // child is usually not reaped yet; poll briefly before calling the stop a failure.
-            if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(TimeSpan.FromSeconds(2));
+            if (!agent.Runtime.HasExited) await agent.Runtime.WaitForExitAsync(StopExitPoll);
 
             return agent.Runtime.HasExited;
         } catch (Exception ex) {
             LogStopError(ex, agentId);
 
             return false;
+        } finally {
+            // The last stop to settle reports what it found, a stop that threw included. Decided and claimed
+            // under the lock that registers a stop, so no stop already under way is missed.
+            bool last, claimed;
+            lock (_ledgerLock) {
+                last    = --agent.StopsInFlight == 0;
+                claimed = last && ClaimOwedStopReport(agent);
+            }
+            if (claimed) SendStopReport(agent);
+            if (last) agent.StopSettled.TrySetResult();
         }
+    }
+
+    internal const int RunReportUnclaimed  = 0;
+    internal const int RunReportOwedByStop = 1;
+    internal const int RunReportSent       = 2;
+
+    static bool ClaimRunReport(AgentInstance agent, int claim) =>
+        Interlocked.CompareExchange(ref agent.RunReport, claim, RunReportUnclaimed) == RunReportUnclaimed;
+
+    static readonly TimeSpan StopTerminateGrace = TimeSpan.FromSeconds(10);
+    static readonly TimeSpan StopExitPoll       = TimeSpan.FromSeconds(2);
+
+    /// <summary>How long the finalizer waits for a stop still terminating: longer than the slowest stop
+    /// (the graceful send and exit waits, the terminate grace and the post-kill poll), so only a stop
+    /// that hangs is reported for it.</summary>
+    TimeSpan StopSettleWait => 2 * GracefulExitWait + StopTerminateGrace + StopExitPoll + TimeSpan.FromSeconds(10);
+
+    /// <summary>The report a stop owes the server, sent at most once: Completed and a user stop when the
+    /// agent is confirmed gone, Failed when it is not, since a live agent must never read as stopped. A
+    /// published launch-failure verdict has already reported Failed, so only the stop event follows it.
+    /// The finalizer sends it only when a stop stalled past its wait. The sends are started, not awaited:
+    /// a stop must not wait on a hub that is reconnecting, and starting them before the stop settles is
+    /// what orders them ahead of the session's end.</summary>
+    void SendOwedStopReport(AgentInstance agent) {
+        if (ClaimOwedStopReport(agent)) SendStopReport(agent);
+    }
+
+    static bool ClaimOwedStopReport(AgentInstance agent) =>
+        Interlocked.CompareExchange(ref agent.RunReport, RunReportSent, RunReportOwedByStop) == RunReportOwedByStop;
+
+    void SendStopReport(AgentInstance agent) {
+        lock (agent.StatusSendGate) SendStopReportGated(agent);
+    }
+
+    void SendStopReportGated(AgentInstance agent) {
+        var gone = agent.Runtime.HasExited;
+        if (!gone) {
+            LogStopUnconfirmed(agent.Id);
+            SetAgentStatus(agent, "Failed");
+            TrySendAgentStatus(agent, "Failed", null, out _);
+        } else if (!VerdictForbidsNonFailureStatus(agent)) {
+            TrySendAgentStatus(agent, "Completed", null, out _);
+        }
+
+        _ = _server.AppendAgentRunEventAsync(agent.Id, new AgentRunStopped(gone ? "user" : "failed", null));
     }
 
     /// <summary>Observes an abandoned graceful-stop send (see <see cref="StopAgentCoreAsync"/>) so its
@@ -4067,7 +4467,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             psi.ArgumentList.Add("generate-whats-done");
             psi.ArgumentList.Add(sessionId);
 
-            using var proc = Process.Start(psi);
+            using var proc = Process.Start(WindowsLaunchCommand.Apply(psi, _config.Binaries));
 
             if (proc is null) {
                 LogWhatsDoneSpawnFailed(null, sessionId);
@@ -4657,12 +5057,19 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// terminal dims + AgentRunStarted, then persists/announces the repo path. No-ops for a
     /// PrivateLocal agent. Shared by the hosted launch and the registered local launch so the
     /// two cannot drift. Dims come from <see cref="AgentInstance.CurrentCols"/>/<c>CurrentRows</c>
-    /// (hosted = HostedPtyCols/Rows; local = the client's terminal size).
+    /// (hosted = HostedPtyCols/Rows; local = the client's terminal size). A refusal sends nothing
+    /// further: the server holds no entry for the dims or the run to attach to.
     /// </summary>
-    async Task RegisterAgentAsync(AgentInstance agent) {
-        if (agent.IsPrivate) return;
+    async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
+        if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+
+        if (!registration.Registered) {
+            agent.RegistrationRefused = true;
+            LogRegistrationRefused(agent.Id, registration.RefusedReason);
+            return registration;
+        }
 
         // Report the PTY size so read-only viewers lock their xterm to it. Best-effort.
         try {
@@ -4686,12 +5093,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 }
             }
         );
+
+        return registration;
     }
 
     /// <summary>The only caller of <c>AgentStatusChangedAsync</c>. A failure status is always sent. Any
     /// other status for a runtime that can publish a termination verdict is initiated under that runtime's
-    /// gate, so it cannot follow — and clear — a launch failure.</summary>
+    /// gate, so it cannot follow — and clear — a launch failure. Nothing is sent for an agent whose
+    /// registration was refused.</summary>
     internal bool TrySendAgentStatus(AgentInstance agent, string status, string? sessionId, out Task send) {
+        if (agent.RegistrationRefused) {
+            send = Task.CompletedTask;
+            return false;
+        }
+
         Task Send() => _server.AgentStatusChangedAsync(agent.Id, status, sessionId ?? agent.SessionId);
 
         if (string.Equals(status, "Failed", StringComparison.Ordinal) || agent.Runtime is not ITerminationVerdictSource source) {
@@ -4733,7 +5148,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// replayed on every future reconnect with nothing left to ever drain it) — the liveness check
     /// immediately below the bind await closes that race.
     /// </summary>
+    /// <remarks>A <see cref="IAcpTranscriptSource.Reopened"/> session already has events on the server,
+    /// and a forwarder numbering from 0 would have each new one deduplicated away until it passed the
+    /// server's cursor. <c>AcpSessionStarted</c> reports no cursor, so it is read with an empty
+    /// <c>AcpSessionEvents</c> batch, which the server answers without appending. Neither call reveals a
+    /// terminal binding, which only drops the next event, so the session's first turn is held until the
+    /// server has accepted the event before it.</remarks>
     async Task StartAcpForwardingAsync(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts) {
+        var reopened = transcript.Reopened;
+        if (reopened) agent.MarkReopenedTranscriptPending();
+
         try {
             await _server.AcpSessionStartedAsync(
                 agent.Id,
@@ -4745,10 +5169,37 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 acpCts.Token
             );
 
-            // Non-envelope AcpSessionStarted bind: no source-claim cursor, so always a fresh forwarder
-            // (SessionStarted@0). §2.7 B4's rebind cursor rides ONLY the source-claim path below.
-            StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq: -1);
+            var acceptedSeq = -1L;
+
+            if (reopened) {
+                var cursor = await _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, [], acpCts.Token);
+
+                if (cursor.Rejected) {
+                    agent.TryRefuseReopenedTranscript();
+                    LogReopenedTranscriptRefused(agent.Id);
+
+                    return;
+                }
+
+                acceptedSeq = cursor.AcceptedSeq;
+            }
+
+            StartForwarderAfterBind(agent, transcript, vendor, acpCts, acceptedSeq);
+
+            if (!reopened) return;
+
+            if (agent.AcpForwarder is { } forwarder
+             && await forwarder.Forwarder.FirstEventAccepted.WaitAsync(acpCts.Token)
+             && agent.TryAcceptReopenedTranscript()) {
+                transcript.ReleaseFirstTurn();
+
+                return;
+            }
+
+            agent.TryRefuseReopenedTranscript();
+            LogReopenedTranscriptRefused(agent.Id);
         } catch (Exception ex) {
+            if (reopened) agent.TryRefuseReopenedTranscript();
             LogAcpBindFailed(ex, agent.Id);
         }
     }
@@ -4761,12 +5212,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>AcpSessionStarted</c> — can reuse it verbatim without re-binding. Synchronous (no awaits). The
     /// CALLER owns the try/catch.
     ///
-    /// <para><paramref name="acceptedSeq"/> (§2.7 B4): a FRESH bind (<c>-1</c>, the default) builds the
-    /// SessionStarted@0 initial envelope and the forwarder's local seq starts at 0. An envelope-sourced
-    /// REBIND (a parked reviewer relaunch, <c>≥ 0</c>) initializes the forwarder from the source-claim's
-    /// canonical <c>AcceptedSeq</c> instead — no SessionStarted, new events numbered from that seq + 1
-    /// (see §2.5 item 6). Only the <see cref="StartEnvelopeSourcedSessionAsync"/> source-claim path can
-    /// carry a cursor; the non-envelope <see cref="StartAcpForwardingAsync"/> path always passes -1.</para>
+    /// <para><paramref name="acceptedSeq"/>: <c>-1</c> for a session the server holds no events of, which
+    /// starts with SessionStarted@0; otherwise the server's cursor — a parked reviewer's source claim, or
+    /// a session a restart resume reopened — and the forwarder sends no SessionStarted and numbers from
+    /// the next seq.</para>
     /// </summary>
     void StartForwarderAfterBind(AgentInstance agent, IAcpTranscriptSource transcript, string vendor, CancellationTokenSource acpCts, long acceptedSeq = -1) {
         // Liveness check: the bind await (either path) can span a reconnect outage. If finalize already
@@ -4805,7 +5254,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             _time.GetUtcNow().ToString("O"),
             cwd: transcript.Cwd,
             model: transcript.ResolvedModel,
-            rawSessionId: transcript.AcpSessionId
+            rawSessionId: transcript.AcpSessionId,
+            repository: HostedSessionRepository.Read(transcript.Cwd)
         );
 
         var forwarder = new AcpTranscriptForwarder(
@@ -4819,6 +5269,16 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
         agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
+    }
+
+    /// <summary>The held first turn of an agent the server refused: no claim can be made for it, and holding the
+    /// turn would leave the agent idle for good.</summary>
+    async Task BeginRefusedFirstTurnAsync(AgentInstance agent, IHostedAgentRuntime runtime) {
+        try {
+            await runtime.BeginFirstTurnAsync(agent.ReadCts.Token);
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "starting the first turn of an agent whose registration was refused", agent.Id);
+        }
     }
 
     /// <summary>
@@ -5081,7 +5541,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// </summary>
     internal async Task ReRegisterAgentsAsync() {
         // PrivateLocal agents are never registered with the server, so never re-register them.
-        foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsPrivate)) {
+        foreach (var agent in _agents.Values.Where(a => (a.Status is "Starting" or "Running") && !a.IsServerSilent)) {
             // A published launch-window verdict (or its reported flag) means this agent is terminally
             // Failed and about to be unregistered by the finalizer — re-sending its (possibly stale
             // "Running") non-failure Status would clear the FailureReason the verdict's LaunchFailed
@@ -5093,7 +5553,31 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.StartTitle);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+
+                    // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
+                    // left out of later re-registrations too. A status sent for the refused id could clear the
+                    // failure the server recorded for it.
+                    if (!registration.Registered) {
+                        agent.RegistrationRefused = true;
+                        LogRegistrationRefused(agent.Id, registration.RefusedReason);
+
+                        // The forwarder would go on sending the transcript under the refused id.
+                        if (agent.AcpCts is { } acpCts) {
+                            try { await acpCts.CancelAsync(); } catch { /* best-effort */ }
+                        }
+
+                        // Readiness returns once this pass ends, and a live sink would then mirror under the refused id.
+                        if (agent.CloudSink is { } cloud) {
+                            try {
+                                await cloud.StopAsync(TimeSpan.Zero);
+                            } catch (Exception ex) {
+                                LogCloudSinkStopFailed(ex, agent.Id);
+                            }
+                        }
+
+                        break;
+                    }
 
                     // The acknowledgement is what re-registered means: whatever was written to
                     // the old connection may not have arrived, and that holds even if the sends
@@ -5106,8 +5590,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // now published, else initiates it before publication can proceed so it is
                     // ordered-before any LaunchFailed. Awaited OUTSIDE the lock (the gate only holds
                     // it across initiation), preserving the retry-on-failure semantics.
-                    if (!TrySendAgentStatus(agent, agent.Status, null, out var statusSend))
-                        break; // verdict published → terminal Failed; skip this agent's re-registration
+                    // A stop under way reports the ending once termination is confirmed; its Completed is not yet
+                    // true. Started under the gate a stop's report takes, so it can never follow that report.
+                    Task? statusSend;
+                    lock (agent.StatusSendGate) {
+                        // The stop state and the status together, under the lock a stop marks itself requested by.
+                        string? status;
+                        lock (_ledgerLock) status = agent.StopRequested ? null : agent.Status;
+                        if (status is null) break;
+                        if (!TrySendAgentStatus(agent, status, null, out statusSend))
+                            break; // verdict published → terminal Failed; skip this agent's re-registration
+                    }
                     await statusSend;
 
                     // Re-send the fixed PTY dims. The server stores them in memory, so a
@@ -5244,11 +5737,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     // Mutation first, pulse second — and the pulse before any server call, which can
                     // stall on a reconnect and must never hold the app's status push hostage.
                     agent.SessionId ??= winner.SessionId;
+                    agent.VendorSession ??= winner.SessionId;
                     agent.TranscriptPath = winner.Path;
+                    UpdateLedgerSession(agent);
+                    StartContinuationTakeover(agent);
                     _statusNotifier.Pulse();
                     LogSessionIdDetected(agent.Id, winner.SessionId);
 
-                    if (agent.IsPrivate || cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
+                    if (agent.IsServerSilent || cts.IsCancellationRequested || agent.Status is "Completed" or "Failed") return;
                     await _server.AppendAgentRunEventAsync(agent.Id, new AgentRunHeartbeat(winner.SessionId));
                     if (TrySendAgentStatus(agent, agent.Status, winner.SessionId, out var detected)) await detected;
                 }, cts.Token);
@@ -5299,7 +5795,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // routes to the PARK path — slot freed, Codex thread kept for resume; every reap rule keeps
             // flowing to the reap path unchanged. Both are fire-and-forget and contain their own faults.
             foreach (var candidate in FindReviewersToReap())
-                _ = candidate.Park ? ParkReviewerAsync(candidate) : ReapReviewerAsync(candidate);
+                _ = candidate.Park ? ParkReviewerAsync(candidate, _shutdownCts.Token) : ReapReviewerAsync(candidate);
 
             // PrivateLocal agents get no heartbeats and no stuck-Starting auto-stop (deny-all;
             // the local user is present and drives them directly).
@@ -5308,10 +5804,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 if (agent.Status                         == "Starting" &&
                     _time.GetUtcNow().UtcDateTime - agent.LastOutputAt > StartupTimeout) {
                     LogAgentStuck(agent.Id, (_time.GetUtcNow().UtcDateTime - agent.LastOutputAt).TotalSeconds, agent.Runtime.Pid, agent.Runtime.HasExited);
+                    agent.StopDetail ??= "agent_startup_timeout";
                     _ = HandleStopAgent(agent.Id);
 
                     continue;
                 }
+
+                if (agent.RegistrationRefused) continue;
 
                 _ = _server.AppendAgentRunEventAsync(
                     agent.Id,
@@ -5340,6 +5839,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task RunTokenRefreshLoopAsync(CancellationToken ct) {
+        // A local installation is sent no bearer, so a token left in the store is never refreshed.
+        if (_config.Profiles.Resolution.SendsNoBearer) return;
+
         var loop = new TokenRefreshLoop(new TokenStoreRefreshPort(_tokens, _config.Profiles.Name, ProactiveRefreshWindow), _logger, ProactiveRefreshMinInterval, _time);
 
         while (await _tokenRefresh.WaitForNextTickAsync(ct)) {
@@ -5411,7 +5913,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     IReadOnlyList<TitleAgentView> SnapshotAgentsForTitles() =>
         [.. _agents.Values.Select(a => new TitleAgentView(
             a.Id, a.Vendor, a.Prompt,
-            a.IsPrivate ? null : a.SessionId ?? (a.Runtime as IAcpTranscriptSource)?.AcpSessionId,
+            a.IsServerSilent ? null : a.SessionId ?? (a.Runtime as IAcpTranscriptSource)?.AcpSessionId,
             a.TranscriptPath, a.CreatedAt, a.StartTitle))];
 
     internal static HarnessTitlePost? NativeTitleFor(TitleAgentView agent) =>
@@ -5457,7 +5959,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { await journal.CompleteAsync(); } catch (Exception ex) { LogCleanupStepFailed(ex, "completing transcript journal", agentId); }
         }
 
-        if (_launchers.TryGetValue(agent.Vendor, out var launcher)) {
+        // The launcher's teardown deletes the MCP config and the vendor's project link, which a
+        // pending resume still needs.
+        if (!agent.ResumePending && _launchers.TryGetValue(agent.Vendor, out var launcher)) {
             try { launcher.Cleanup(agent); } catch (Exception ex) { LogCleanupStepFailed(ex, "launcher.Cleanup", agentId); }
         }
 
@@ -5465,11 +5969,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // user's own checkout (local in-place launch) — NEVER delete it or its branch:
         // RemoveAsync would Directory.Delete / `git worktree remove --force` + `branch -D`.
         // This is the spec's top safety invariant.
-        if (agent.Work == WorkLocation.OwnedWorktree) {
-            try { await WorktreeManager.RemoveAsync(agent.Worktree, _time); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
+        // A pending resume keeps everything the successor daemon resumes from.
+        if (agent.Work == WorkLocation.OwnedWorktree && !agent.ResumePending) {
+            try { await RemoveOwnedWorktreeAsync(agent.Worktree, agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing worktree", agentId); }
         }
 
-        try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
+        if (!agent.ResumePending) {
+            try { _attachmentStore.Remove(agentId); } catch (Exception ex) { LogCleanupStepFailed(ex, "removing attachments", agentId); }
+        }
 
         // Phase B (D4 §6.4(2)/(2a)): confirm the process is actually gone before dropping its PID
         // record. Prove "still ours" with the STORED spawn identity — NEVER a freshly-recaptured token:
@@ -5485,7 +5992,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // still matches (true) OR is uncomparable (null — unreadable/foreign token). Delete only on a
         // proven-gone pid: dead, a conclusive recycle (MatchesTri == false), or an agent that was never
         // identified. Collapsing the uncomparable case to "gone" would drop a live child's record.
-        if (agent.StartIdentity is { } startIdentity
+        if (agent.ResumePending) {
+            // The record stays for the successor daemon.
+        } else if (agent.StartIdentity is { } startIdentity
             && ProcessIdentity.IsAlive(pid)
             && ProcessIdentity.MatchesTri(pid, startIdentity) != false) {
             _quarantine?.Add(new AgentKillQuarantine.Entry(
@@ -5496,6 +6005,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             DeletePidRecord(agentId); // confirmed dead / conclusively recycled pid / never-identified
         }
 
+        if (!agent.ResumePending) DeleteLedger(agentId);
+
         // Now drop the agent from the live registry — after a surviving child is already in quarantine,
         // so a concurrent launch never sees EffectiveCount transiently under-count this agent.
         WithdrawAndUnpublish(agentId);
@@ -5505,17 +6016,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // disconnection through SignalR's transport-level signals. Filtered
         // catch covers the residual race where shutdown fires mid-call.
         // PrivateLocal agents were never registered, so never unregister them (deny-all).
-        if (!agent.IsPrivate && !_shutdownCts.IsCancellationRequested) {
+        if (!agent.IsServerSilent && !_shutdownCts.IsCancellationRequested) {
             try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
         }
     }
 
-    /// <summary>The code of the runtime's own termination verdict — the part before any colon, since
-    /// some verdicts append free text the server must not echo to a driver. Null when nothing reaped it.</summary>
+    /// <summary>Why this daemon ended the agent, for a flow driver to read beside its stop code: the code of the
+    /// runtime's own termination verdict — the part before any colon, since some verdicts append free text the
+    /// server must not echo to a driver — else why this daemon stopped it on its own, else the end reason a
+    /// stop or reap stamped, such as <c>agent_stopped</c>. Null for an agent that exited on its own.</summary>
     internal static string? StopReasonCode(AgentInstance agent) {
-        if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict) return null;
+        if (agent.Runtime is not ITerminationVerdictSource source || source.ReadVerdict() is not { } verdict)
+            return agent.StopDetail ?? (agent.PendingEndReason is "agent_exited" or "" ? null : agent.PendingEndReason);
 
         var colon = verdict.Reason.IndexOf(':');
         var code  = (colon < 0 ? verdict.Reason : verdict.Reason[..colon]).Trim();
@@ -5540,7 +6054,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Only agents this teardown still owns. One whose own finalizer already ran has reported its
         // real ending and is waiting on cleanup; reporting it again would append a second stop event
         // over the top of a truer one and race that finalizer's unregister.
-        var live = _agents.Values.Where(a => !a.IsPrivate && a.Status is "Starting" or "Running").ToList();
+        var live = _agents.Values.Where(a => !a.IsServerSilent && !a.ResumePending && a.Status is "Starting" or "Running").ToList();
 
         if (live.Count == 0) return;
 
@@ -5636,14 +6150,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 LogDisposeStepFailed(ex, "processor-drain");
             }
 
-            foreach (var agent in _agents.Values.Where(a => a.Status is "Starting" or "Running")) {
-                try {
-                    await agent.ReadCts.CancelAsync();
-                    await agent.Runtime.TerminateAsync(TimeSpan.FromSeconds(5));
-                } catch {
-                    /* best-effort */
-                }
-            }
+            await StopAgentsForShutdownAsync([.. _agents.Values.Where(a => a.Status is "Starting" or "Running")]);
 
             // Children are gone; tell the server so before the registry is torn down. Without this the
             // daemon's whole account of a shutdown is the transport dropping, which says a daemon went
@@ -5964,6 +6471,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to re-register agent {AgentId}")]
     partial void LogReRegisterFailed(Exception ex, string agentId);
 
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Server refused the registration of agent {AgentId} ({Reason})")]
+    partial void LogRegistrationRefused(string agentId, string? reason);
+
     [LoggerMessage(Level = LogLevel.Warning, Message = "Failed to send terminal dimensions for agent {AgentId} (read-only viewers may render garbled until the next reconnect)")]
     partial void LogTerminalDimsSendFailed(Exception ex, string agentId);
 
@@ -5972,6 +6482,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Error {Step} for agent {AgentId}")]
     partial void LogCleanupStepFailed(Exception ex, string step, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Kept the worktree of agent {AgentId} at {Path} (branch {Branch}): it holds {Reason}. Remove it with `git worktree remove` once the work is saved")]
+    partial void LogWorktreeKept(string agentId, string path, string branch, string reason);
+
+    async Task RemoveOwnedWorktreeAsync(WorktreeInfo worktree, string agentId) {
+        var removal = await WorktreeManager.RemoveAsync(worktree, _time);
+        if (removal.KeptBecause is { } reason) LogWorktreeKept(agentId, worktree.Path, worktree.Branch, reason);
+    }
+
+    [LoggerMessage(Level = LogLevel.Error, Message = "Agent {AgentId} did not exit after a stop; reporting it Failed rather than Completed")]
+    partial void LogStopUnconfirmed(string agentId);
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Failed to report resolved model for agent {AgentId} (continuing)")]
     partial void LogReportResolvedModelFailed(Exception ex, string agentId);
@@ -6026,6 +6547,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "ACP bind/forwarder setup failed for agent {AgentId} — proceeding with no live transcript for this session")]
     partial void LogAcpBindFailed(Exception ex, string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "The server records nothing of the ACP session agent {AgentId} reopened; its first turn stays held")]
+    partial void LogReopenedTranscriptRefused(string agentId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "ACP bind for agent {AgentId} resolved after the agent had already finalized — aborting setup without registering a binding")]
     partial void LogAcpBindAbortedAgentGone(string agentId);
@@ -6187,12 +6711,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// ack-gated teardown) — the seam for driving the arm-A park state machine against a fake
     /// <see cref="ServerConnection"/> whose <see cref="ServerConnection.ReportParticipantParkedAsync"/>
     /// returns a chosen <see cref="ParkAck"/>.</summary>
-    internal Task ParkReviewerForTest(ReapCandidate candidate) => ParkReviewerAsync(candidate);
+    internal Task ParkReviewerForTest(ReapCandidate candidate) => ParkReviewerAsync(candidate, _shutdownCts.Token);
 
     /// <summary>Test-only: the claim ALONE, without the teardown it gates. Lets a contention test pin
     /// which side won the section without also driving a stop whose (slow, side-effecting) teardown is
     /// not what is under test.</summary>
-    internal Task<bool> TryClaimReapForTest(ReapCandidate candidate) => TryClaimReapAsync(candidate);
+    internal Task<bool> TryClaimReapForTest(ReapCandidate candidate) => TryClaimReapAsync(candidate, _shutdownCts.Token);
 
     /// <summary>Test-only: the post-claim stop ALONE, without a real claim ahead of it — lets a test
     /// swap <c>_agents</c>' entry for <c>candidate</c>'s id between "claim won" and this call to prove
@@ -6211,8 +6735,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             string agentId, string vendor, ExplicitReviewerModelLaunch block, IReviewerModelResolver? resolver) =>
         BuildExplicitReviewerModelReport(agentId, vendor, block, resolver);
 
-    internal Task RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
+    internal Task<AgentRegisteredResponse> RegisterAgentForTestAsync(AgentInstance agent) => RegisterAgentAsync(agent);
     internal Task ReRegisterAgentsForTestAsync() => ReRegisterAgentsAsync();
+    internal void ReportCommandsForTest(string agentId, IReadOnlyList<HostedAgentCommand> commands) => ReportCommands(agentId, commands);
     internal void HandleResizeTerminalForTest(ResizeTerminalCommand cmd) => _ = HandleResizeTerminal(cmd);
     internal LocalPermissionBridge PermissionBridgeForTest => _permissionBridge;
 }

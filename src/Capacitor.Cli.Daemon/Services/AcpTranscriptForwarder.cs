@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Threading.Channels;
 using Capacitor.Cli.Core;
 using Microsoft.Extensions.Logging;
@@ -64,6 +65,11 @@ internal sealed class AcpTranscriptForwarder {
     static readonly TimeSpan DefaultStalledGapResendDelay = TimeSpan.FromSeconds(1);
     const int                DefaultMaxStalledGapResends  = 5;
 
+    // One invocation shares the daemon's single SignalR connection with DaemonPing, whose deadline is
+    // 5 s: a multi-megabyte batch queues the ping behind it, the deadline forces a reconnect, and the
+    // retry resends the same batch. Each batch stays under this size unless one envelope alone exceeds it.
+    internal const int DefaultMaxBatchBytes = 256 * 1024;
+
     readonly Func<AcpEventEnvelope[], CancellationToken, Task<AcpBatchAck>> _send;
     readonly ChannelReader<AcpEventEnvelope>                                _envelopes;
     readonly ILogger                                                       _logger;
@@ -73,6 +79,10 @@ internal sealed class AcpTranscriptForwarder {
     readonly TimeSpan                                                      _maxSendRetryDelay;
     readonly int                                                           _maxStalledGapResends;
     readonly TimeSpan                                                      _stalledGapResendDelay;
+    readonly int                                                           _maxBatchBytes;
+
+    /// <summary>Drained envelopes, seq already assigned, not yet sent.</summary>
+    readonly Queue<AcpEventEnvelope> _pending = new();
 
     /// <summary>
     /// Every sent-but-not-yet-acked envelope, keyed by seq, always in ascending order (a
@@ -98,6 +108,13 @@ internal sealed class AcpTranscriptForwarder {
     /// </summary>
     public bool IsTerminal { get; private set; }
 
+    readonly long _firstCanonicalSeq;
+    readonly TaskCompletionSource<bool> _firstAccepted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <summary>True once the server has accepted the first canonical envelope; false when the forwarder
+    /// stops first, a rejected or terminal binding among the reasons.</summary>
+    public Task<bool> FirstEventAccepted => _firstAccepted.Task;
+
     /// <summary>Test-only visibility into the unacked buffer's current size.</summary>
     internal int UnackedCount => _unacked.Count;
 
@@ -122,7 +139,8 @@ internal sealed class AcpTranscriptForwarder {
             TimeSpan?                                                      maxSendRetryDelay = null,
             int?                                                           maxStalledGapResends = null,
             TimeSpan?                                                      stalledGapResendDelay = null,
-            long?                                                          resumeFromSeq = null
+            long?                                                          resumeFromSeq = null,
+            int?                                                           maxBatchBytes = null
         ) {
         _send                   = send;
         _envelopes              = envelopes;
@@ -137,10 +155,12 @@ internal sealed class AcpTranscriptForwarder {
         } else {
             _initialEnvelope = (initialEnvelope ?? throw new ArgumentNullException(nameof(initialEnvelope))) with { Seq = 0 };
         }
+        _firstCanonicalSeq      = _initialEnvelope is null ? _nextSeq : 0;
         _initialSendRetryDelay  = initialSendRetryDelay ?? DefaultInitialSendRetryDelay;
         _maxSendRetryDelay      = maxSendRetryDelay ?? DefaultMaxSendRetryDelay;
         _maxStalledGapResends   = maxStalledGapResends ?? DefaultMaxStalledGapResends;
         _stalledGapResendDelay  = stalledGapResendDelay ?? DefaultStalledGapResendDelay;
+        _maxBatchBytes          = maxBatchBytes ?? DefaultMaxBatchBytes;
     }
 
     /// <summary>
@@ -187,30 +207,28 @@ internal sealed class AcpTranscriptForwarder {
                     _highestSent = initial.Seq;
                     batch = [initial];
                 } else {
-                    var drained = await DrainNewEnvelopesAsync(ct).ConfigureAwait(false);
+                    if (_pending.Count == 0) {
+                        // Channel completed. The unacked buffer is always empty here: we only ever reach
+                        // this branch right after a normal ack removed everything ≤ AcceptedSeq.
+                        if (await DrainNewEnvelopesAsync(ct).ConfigureAwait(false) is not { } drained)
+                            return;
 
-                    // Channel completed. The buffer is always empty here: we only ever reach this
-                    // branch right after a normal ack removed everything ≤ AcceptedSeq, and a
-                    // normal ack (by construction below) always covers every envelope sent so far.
-                    if (drained is null)
-                        return;
+                        foreach (var envelope in drained) _pending.Enqueue(envelope);
+                    }
+
+                    batch = DequeuePendingBatch();
 
                     // Canonical-only bookkeeping. Ephemerals are fire-and-forget: not retained for
                     // resend, and not counted in the high-water mark the ack is compared against. An
                     // all-ephemeral batch therefore leaves _highestSent untouched, so the ack that
                     // follows cannot look like a terminal-drop.
-                    foreach (var envelope in drained.Where(static e => !e.Ephemeral))
+                    foreach (var envelope in batch.Where(static e => !e.Ephemeral)) {
                         _unacked[envelope.Seq] = envelope;
-
-                    for (var i = drained.Length - 1; i >= 0; i--) {
-                        if (drained[i].Ephemeral) continue;
-
-                        _highestSent = drained[i].Seq;
-                        break;
+                        _highestSent           = envelope.Seq;
                     }
-
-                    batch = drained;
                 }
+
+                if (batch.Length == 0) continue; // every pending envelope was an oversized ephemeral
 
                 var ack = await SendWithRetryAsync(batch, ct).ConfigureAwait(false);
 
@@ -266,9 +284,13 @@ internal sealed class AcpTranscriptForwarder {
 
                 foreach (var seq in _unacked.Keys.Where(seq => seq <= ack.AcceptedSeq).ToArray())
                     _unacked.Remove(seq);
+
+                if (ack.AcceptedSeq >= _firstCanonicalSeq) _firstAccepted.TrySetResult(true);
             }
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             // normal shutdown — see this method's remarks.
+        } finally {
+            _firstAccepted.TrySetResult(false);
         }
     }
 
@@ -293,8 +315,93 @@ internal sealed class AcpTranscriptForwarder {
         while (_envelopes.TryRead(out var raw))
             (batch ??= []).Add(raw.Ephemeral ? raw : raw with { Seq = _nextSeq++ });
 
-        return batch?.ToArray();
+        return batch is null ? null : DropSupersededEphemerals(batch);
     }
+
+    /// <summary>
+    /// An ephemeral carries its item's whole content so far and a viewer keeps only the latest one, so
+    /// one followed in the same drain by a newer ephemeral of the same item and kind, or by any
+    /// canonical envelope of that item, is never sent. A long command's output would otherwise ride
+    /// once per delta, each copy as large as everything before it.
+    /// </summary>
+    internal static AcpEventEnvelope[] DropSupersededEphemerals(List<AcpEventEnvelope> drained) {
+        var kept         = new List<AcpEventEnvelope>(drained.Count);
+        var laterAny     = new HashSet<string>(StringComparer.Ordinal);
+        var laterOfKind  = new HashSet<(string, string)>();
+
+        for (var i = drained.Count - 1; i >= 0; i--) {
+            var e = drained[i];
+
+            if (e.ItemId is not { } item) {
+                kept.Add(e);
+                continue;
+            }
+
+            if (e.Ephemeral) {
+                if (laterAny.Contains(item) || !laterOfKind.Add((item, e.Kind))) continue;
+            } else {
+                laterAny.Add(item);
+            }
+
+            kept.Add(e);
+        }
+
+        kept.Reverse();
+
+        return [.. kept];
+    }
+
+    /// <summary>
+    /// The next pending batch within <see cref="_maxBatchBytes"/>, at least one envelope. An ephemeral
+    /// over the budget is dropped rather than sent: it is never persisted, and its item's canonical
+    /// envelope delivers the content.
+    /// </summary>
+    AcpEventEnvelope[] DequeuePendingBatch() {
+        var  batch = new List<AcpEventEnvelope>();
+        long bytes = 0;
+
+        while (_pending.TryPeek(out var next)) {
+            var size = EstimateBytes(next);
+
+            if (next.Ephemeral && size > _maxBatchBytes) {
+                _pending.Dequeue();
+                continue;
+            }
+
+            if (batch.Count > 0 && bytes + size > _maxBatchBytes) break;
+
+            batch.Add(_pending.Dequeue());
+            bytes += size;
+        }
+
+        return [.. batch];
+    }
+
+    /// <summary>An upper bound on the envelope's serialized size: every string at its escaped length,
+    /// plus a fixed allowance for the property names and scalar fields.</summary>
+    internal static long EstimateBytes(in AcpEventEnvelope e) =>
+        1024L
+      + EscapedBytes(e.Text) + EscapedBytes(e.ToolInputJson) + EscapedBytes(e.ToolResult)
+      + EscapedBytes(e.ToolName) + EscapedBytes(e.ToolCallId) + EscapedBytes(e.ToolKind) + EscapedBytes(e.ItemId)
+      + EscapedBytes(e.Cwd) + EscapedBytes(e.Model) + EscapedBytes(e.RawSessionId) + EscapedBytes(e.SessionMode)
+      + EscapedBytes(e.EndReason) + EscapedBytes(e.TimestampIso) + EscapedBytes(e.Kind);
+
+    // The hub's serializer uses the default encoder, which writes every non-ASCII and HTML-sensitive
+    // character as a six-byte \uXXXX escape; counting characters would let such text blow the budget.
+    static long EscapedBytes(string? s) {
+        if (s is null) return 0;
+
+        var safe = s.AsSpan().IndexOfAnyExcept(PlainJsonChars);
+        if (safe < 0) return s.Length;
+
+        long bytes = safe;
+        foreach (var c in s.AsSpan(safe)) bytes += PlainJsonChars.Contains(c) ? 1 : 6;
+
+        return bytes;
+    }
+
+    static readonly SearchValues<char> PlainJsonChars = SearchValues.Create(
+        " !#$%()*,-./0123456789:;=?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_abcdefghijklmnopqrstuvwxyz{|}~");
 
     /// <summary>
     /// Sends one batch, retrying indefinitely (bounded backoff, capped at

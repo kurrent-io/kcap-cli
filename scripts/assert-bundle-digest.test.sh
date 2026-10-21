@@ -68,6 +68,14 @@ make_win_bundle() { # <dir> <daemon-content> <embedded-digest>
 }
 make_win_bundle "$tmp/win" "daemon-bytes" "$digest"
 assert "windows matching pair" 0 "$tmp/win" "$tmp/daemon.sha256"
+
+# An extracted AppImage: the binaries sit in bin/ beside the app, without extensions.
+make_linux_bundle() { # <dir> <daemon-content> <embedded-digest>
+  make_bundle "$1.src" "$2" "$3"; mkdir -p "$1/bin"
+  mv "$1.src/Contents/MacOS/kcap" "$1.src/Contents/MacOS/kcap-daemon" "$1/bin/"
+}
+make_linux_bundle "$tmp/linux" "daemon-bytes" "$digest"
+assert "linux matching pair" 0 "$tmp/linux" "$tmp/daemon.sha256"
 make_win_bundle "$tmp/win-swapped" "different-daemon-bytes" "$digest"
 assert "windows substituted daemon" 1 "$tmp/win-swapped" "$tmp/daemon.sha256"
 

@@ -13,7 +13,7 @@ public sealed class ProcessWatcherSpawner(
     string? Url => profiles.Resolution.ServerUrl;
 
     public async Task SpawnAsync(WatcherSpawnRequest request) {
-        var (key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor) = request;
+        var (key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor, requestedParentPid) = request;
 
         // Defence in depth: ShouldSpawnAfter already refuses for an unusable URL, but a caller that
         // bypassed it would otherwise write a PID file asserting capture that cannot happen — a
@@ -37,7 +37,7 @@ public sealed class ProcessWatcherSpawner(
             // walks the ppid ancestry to find the agent by name, which is robust to the
             // differing process-group topologies of Claude (transient hook group → bare
             // getpgrp() resolves a dead PID) and Codex (inherits the agent's group).
-            var parentPid     = ProcessHelpers.GetCodingAgentPid(vendor);
+            var parentPid     = requestedParentPid ?? ProcessHelpers.GetCodingAgentPid(vendor);
             var arguments     = BuildSpawnArgs(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, parentPid, vendor);
 
             var psi = new ProcessStartInfo(kcapPath, arguments) {

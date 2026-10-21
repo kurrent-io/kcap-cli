@@ -5,10 +5,12 @@ using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Http;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Skills;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Harness.MuseAssistant;
+using Capacitor.Cli.LocalEdition;
 using Microsoft.Extensions.DependencyInjection;
 using Capacitor.Cli.PrDetection;
 
@@ -25,12 +27,13 @@ public static class CommandServices {
             this IServiceCollection services, ConfigRoot config, UserHome home, WorkingDirectory workdir, DaemonStore daemons,
             ProfileContext profiles, ProfileOverrides env, MachineAuth machine,
             AuthEndpoints endpoints, HookClock clock, string? baseUrl,
-            TelemetryStartup telemetryStartup) {
+            TelemetryStartup telemetryStartup, LocalRoot localRoot) {
         services
             .AddCapacitorContext(config, home, workdir, daemons, profiles)
             .AddCapacitorCommands();
 
         services.AddSingleton(endpoints);
+        services.AddSingleton(localRoot);
         services.AddSingleton(clock);
         // The hook's own clock, not a second one: every deadline a command measures has to share the
         // provider the budget was anchored on, or a faked one moves only half of them.
@@ -59,7 +62,7 @@ public static class CommandServices {
                 sp.GetRequiredService<BinaryProbe>(),
                 sp.GetRequiredService<AccountStore>()));
 
-        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles));
+        services.AddSingleton(_ => new CapacitorServer(baseUrl, config, profiles, localRoot));
         services.AddCapacitorHttp(env, machine);
         services.AddCapacitorTelemetry(config, telemetryStartup);
 
@@ -96,6 +99,7 @@ public static class CommandServices {
         services.AddTransient<CleanupCommand>();
         services.AddTransient<ConfigCommand>();
         services.AddTransient<CurateCommand>();
+        services.AddTransient<MemoriesCommand>();
         services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();
@@ -105,6 +109,8 @@ public static class CommandServices {
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
         services.AddTransient<ImportCommand>();
+        services.AddTransient<IOutgoingRecorders, OutgoingRecorders>();
+        services.AddTransient<LocalCommand>();
         services.AddTransient<Capture.CaptureRepairCommand>();
         services.AddTransient<LoginCommand>();
         services.AddTransient<MachineCommand>();
@@ -126,6 +132,10 @@ public static class CommandServices {
         services.AddTransient<ReviewCommand>();
         services.AddTransient<SessionsCommand>();
         services.AddTransient<SetupCommand>();
+        services.AddTransient<ILocalInstallerFactory, LocalInstallerFactory>();
+        services.AddTransient<ILocalStackFactory, LocalStackFactory>();
+        services.AddTransient<LocalUpgradeCommand>();
+        services.AddTransient<LocalCommand>();
         services.AddSingleton<ChosenServerHttp>();
         services.AddSingleton<IOnboardingFacadeFactory, SetupFacadeFactory>();
         services.AddSingleton<ISetupImportRunner, SetupImportRunner>();

@@ -12,6 +12,12 @@ public sealed partial class PullRequestContextViewModel {
     public string RepositoryLabel => _selected is { } choice ? $"{choice.Link.Owner}/{choice.Link.RepoName}" : "";
     public string NumberLabel => _selected is { } choice ? "#" + choice.Link.Number.ToString(CultureInfo.InvariantCulture) : "";
     public bool HasNumberLabel => NumberLabel.Length > 0;
+    /// The repository GitHub references in a body are read against; none off github.com, where the
+    /// reader cannot tell a reference from text.
+    public string? ReferenceBase => _selected?.Subject is { } subject && PullRequestWire.IsGitHub(subject)
+        ? $"https://github.com/{Uri.EscapeDataString(subject.Owner)}/{Uri.EscapeDataString(subject.RepoName)}"
+        : null;
+
     public string ProviderLabel => _selected?.Subject.Provider switch { "github" => "GitHub", "gitlab" => "GitLab", _ => "Source" };
     public bool CanOpenSource => _selected is { IsAvailable: true };
     /// Host exit beside status/repo once the card has settled on an overview or a legacy list.
@@ -20,10 +26,15 @@ public sealed partial class PullRequestContextViewModel {
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
     public bool IsDiscussion => _section is "reviews" or "threads" or "thread_comments" or "conversation";
-    public IReadOnlyList<PullRequestRow> ReviewerRows => IsReviewers ? Rows : [];
-    public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? Rows : [];
-    public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? Rows : [];
-    public string FreshnessLabel => IsOverview ? FetchedLabel : SnapshotLabel;
+    public IReadOnlyList<PullRequestRow> ReviewerRows => IsReviewers ? _reviewerRows : [];
+    public IReadOnlyList<PullRequestRow> CheckRows => IsChecks ? _checkRows : [];
+    public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? _discussionRows : [];
+    public string FreshnessLabel {
+        get {
+            var time = IsOverview || HasStaleOverview ? FetchedLabel : SnapshotLabel;
+            return HasStaleOverview ? "Earlier snapshot" + (time.Length > 0 ? " · " + time : "") : time;
+        }
+    }
     public bool HasStaleOverview => CanDisplay && (_grace || _overviewRead?.Kind == PullRequestReadKind.Stale);
     public string OverviewFreshnessLabel => HasStaleOverview ? "Earlier snapshot" + (FetchedLabel.Length > 0 ? " · " + FetchedLabel : "") : FetchedLabel;
 
@@ -58,7 +69,7 @@ public sealed partial class PullRequestContextViewModel {
             if (!CanDisplay) return new("");
             var checks = _sections.GetValueOrDefault("checks");
             if (checks is { Coverage: "complete", Stopped: false, Total.Kind: "exact", Completed: { } completed }
-                && checks.Head == _overview?.HeadSha && _time.GetUtcNow().UtcDateTime - completed < RowsFreshFor
+                && checks.Head == _overview?.HeadSha && (HasStaleOverview || _time.GetUtcNow().UtcDateTime - completed < RowsFreshFor)
                 && completed >= _overview?.Checks?.Availability.FetchedAt && checks.Pages.Sum(page => page.Rows.Length) == checks.Total.Value) {
                 var rows = checks.Pages.SelectMany(page => page.Rows).ToArray();
                 if (rows.Length == 0) return new("No checks reported", Detail: "No checks were reported for this commit.");
@@ -84,6 +95,41 @@ public sealed partial class PullRequestContextViewModel {
         }
     }
 
+    /// Empty when the overview carries no thread summary, as a server without one sends, or when a zero is only
+    /// a lower bound, which says nothing about the threads it could not read.
+    public PullRequestStatus ThreadsStatus =>
+        CanDisplay && _overview?.Threads is { Availability.Status: "ready", Unresolved: { Value: { } count } unresolved }
+            ? count == 0
+                ? unresolved.Kind == "exact" ? new("No unresolved threads", "success", "Every review thread is resolved.") : new("")
+                : new($"{count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}",
+                      "warning", "Review threads are still waiting on a reply or a fix.")
+            : new("");
+    public bool HasThreadsStatus => ThreadsStatus.Text.Length > 0;
+
+    /// What the agent is asked to do about everything that keeps an open pull request from merging, or
+    /// null when nothing does.
+    internal string? FixPrompt {
+        get {
+            if (!CanDisplay || _overview is not { Lifecycle: "open" or "draft" } overview) return null;
+            var asks = new List<string>();
+            if (overview.Mergeable == false) asks.Add("resolve the merge conflicts with the base branch");
+            if (overview.Threads is { Availability.Status: "ready", Unresolved: { Value: > 0 and var count } unresolved })
+                asks.Add($"address the {count}{(unresolved.Kind == "exact" ? "" : "+")} unresolved review thread{(count == 1 && unresolved.Kind == "exact" ? "" : "s")}");
+            if (ChecksStatus.Kind == "failure") asks.Add("fix the failing checks");
+            return asks.Count == 0 ? null : $"Get pull request {NumberLabel} ready to merge: {string.Join("; ", asks)}.";
+        }
+    }
+    /// The draft the user has not sent stays, with the prompt after it; a draft already holding the prompt is left as is.
+    internal static string WithFixPrompt(string draft, string prompt) =>
+        string.IsNullOrWhiteSpace(draft) ? prompt
+        : draft.Contains(prompt, StringComparison.Ordinal) ? draft
+        : draft.TrimEnd() + "\n\n" + prompt;
+
+    public bool ShowsFix => FixPrompt is not null && _canRequestFix();
+
+    /// Call when the host's composer gains or loses the ability to send, so <see cref="ShowsFix"/> is read again.
+    internal void FixAvailabilityChanged() => NotifyValue(ShowsFix);
+
     void NotifyPresentation() {
         NotifyValue(HasMultipleChoices);
         NotifyValue(SectionEyebrow);
@@ -92,6 +138,7 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(NumberLabel);
         NotifyValue(HasNumberLabel);
         NotifyValue(ProviderLabel);
+        NotifyValue(ReferenceBase);
         NotifyValue(CanOpenSource);
         NotifyValue(ShowsOpenSource);
         NotifyValue(IsChecks);
@@ -106,8 +153,11 @@ public sealed partial class PullRequestContextViewModel {
         NotifyValue(LifecycleStatus);
         NotifyValue(ReviewStatus);
         NotifyValue(ChecksStatus);
-        NotifyRows(ReviewerRows, nameof(ReviewerRows));
-        NotifyRows(CheckRows, nameof(CheckRows));
-        NotifyRows(DiscussionRows, nameof(DiscussionRows));
+        NotifyValue(ThreadsStatus);
+        NotifyValue(HasThreadsStatus);
+        NotifyValue(ShowsFix);
+        NotifyValue(!ReferenceEquals(ReviewerRows, _reviewerRows), nameof(ReviewerRows));
+        NotifyValue(!ReferenceEquals(CheckRows, _checkRows), nameof(CheckRows));
+        NotifyValue(!ReferenceEquals(DiscussionRows, _discussionRows), nameof(DiscussionRows));
     }
 }

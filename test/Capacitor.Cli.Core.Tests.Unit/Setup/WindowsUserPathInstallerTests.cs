@@ -17,6 +17,8 @@ public class WindowsUserPathInstallerTests {
             Appends++;
             Value = string.IsNullOrEmpty(Value) ? directory : Value + ";" + directory;
         }
+
+        public void Replace(string path) => Value = path;
     }
 
     string Target => Path.Combine(Tmp.Path, "app", "kcap.exe");
@@ -93,5 +95,25 @@ public class WindowsUserPathInstallerTests {
         var result = await new WindowsUserPathInstaller(new FakeUserPathStore(null), probe).InstallAsync(Target, CancellationToken.None);
 
         await Assert.That(result.Outcome).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task Remove_takes_the_cli_folder_off_and_keeps_every_other_entry_byte_for_byte() {
+        var store = new FakeUserPathStore($@"C:\tools;""{TargetDir.ToUpperInvariant()}\"";%USERPROFILE%\bin;;D:\x");
+
+        var removed = new WindowsUserPathInstaller(store, new FakeLoginShellProbe()).Remove(Target);
+
+        await Assert.That(removed).IsTrue();
+        await Assert.That(store.Value).IsEqualTo(@"C:\tools;%USERPROFILE%\bin;;D:\x");
+    }
+
+    [Test]
+    public async Task Remove_without_the_folder_on_PATH_writes_nothing() {
+        var store = new FakeUserPathStore(@"C:\tools;D:\x");
+
+        var removed = new WindowsUserPathInstaller(store, new FakeLoginShellProbe()).Remove(Target);
+
+        await Assert.That(removed).IsFalse();
+        await Assert.That(store.Value).IsEqualTo(@"C:\tools;D:\x");
     }
 }

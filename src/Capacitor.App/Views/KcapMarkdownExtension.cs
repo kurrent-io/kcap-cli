@@ -38,7 +38,7 @@ public sealed partial class KcapMarkdownExtension(MarkdownFlavor flavor) : IMark
         renderer.ImageLoaders.Clear();
     }
 
-    static MarkdownHyperlink Hyperlink(string url) {
+    internal static MarkdownHyperlink Hyperlink(string url) {
         var link = new MarkdownHyperlink { NavigateUri = new Uri(url, UriKind.Absolute) };
         link.Classes.Add("markdown-link");
         return link;

@@ -1,4 +1,4 @@
-kcap — CLI companion for Kurrent Capacitor
+kcap — record and explore coding-agent sessions
 
 Usage: kcap <command> [options]
 
@@ -8,6 +8,12 @@ Getting Started:
   login                            Authenticate via OAuth (browser)
   logout                           Remove stored credentials
   whoami                           Show current user; verify the server accepts your token
+
+Local server (kcap setup --local):
+  local status                     Explain the local installation's state and what to do about it
+  local start | stop | restart     Start, stop or restart the local server
+  local logs [-n N]                Print the end of the local server's log
+  local open                       Open the local web UI in a browser
 
 Vendor accounts:
   accounts                         Manage the Claude and Codex config directories kcap records
@@ -42,13 +48,16 @@ Harness setup nudges:
 
 Agents:
   agent start <vendor> [-d] [--worktree] [--private] [--title T] [-- <args>]  Start a daemon-hosted agent
-  agent ls                         List this daemon's agents (id, status, kind, repo, title)
+  agent ls                         List this daemon's agents (id, status, state, kind, repo, title)
   agent attach <id>                Attach your terminal to a running agent (id prefix ok)
+  agent resume <id>                Retry an agent a daemon restart left interrupted
   agent stop <id> | --all [-y] [--force]  Stop one agent, or all of them
 
 Daemon:
   daemon start [-d] [--name N]     Start the daemon (foreground, or -d for background; refuses on duplicate name)
-  daemon stop [--name N] [--yes]   Stop a daemon (prompts on multi unless --yes)
+  daemon stop [--name N] [--yes] [--keep-agents]
+                                   Stop a daemon and end its agents (--keep-agents
+                                   keeps them to resume; prompts on multi unless --yes)
   daemon status [--name N]         Show daemon status (lists all when --name omitted)
   daemon doctor [--clean]          Diagnose lock-file state, optionally clean stale entries
   repos                            List known repos (sorted by last used)
@@ -76,6 +85,9 @@ Session:
 
 Curation:
   curate apply [--dry-run] [--yes]   Write promoted guidelines into CLAUDE.md / AGENTS.md
+
+Memories:
+  memories import [opts]           Copy Claude Code's local memory notes into server memories
 
 Pages:
   page publish <file.html> [opts]  Publish a self-contained HTML page, print its link

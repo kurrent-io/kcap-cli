@@ -20,6 +20,22 @@ public class FrameCodecTests {
     }
 
     [Test]
+    public async Task RuntimeStarted_round_trips_the_stamp_to_the_tick() {
+        var at = new DateTimeOffset(2026, 10, 20, 9, 30, 15, TimeSpan.Zero).AddTicks(1234567);
+        var r = await RoundTrip(LocalFrame.RuntimeStarted(at));
+        await Assert.That(r.Type).IsEqualTo(FrameType.RuntimeStarted);
+        await Assert.That(r.StartedAt).IsEqualTo(at);
+        await Assert.That(r.StartedAt.UtcTicks).IsEqualTo(at.UtcTicks);
+    }
+
+    [Test]
+    public async Task AttachWithRuntime_round_trips_the_agent_id() {
+        var r = await RoundTrip(new LocalFrame(FrameType.AttachWithRuntime) { Text = "agent-1" });
+        await Assert.That(r.Type).IsEqualTo(FrameType.AttachWithRuntime);
+        await Assert.That(r.Text).IsEqualTo("agent-1");
+    }
+
+    [Test]
     public async Task Resize_round_trips_dimensions() {
         var r = await RoundTrip(LocalFrame.Resize(203, 51));
         await Assert.That(r.Cols).IsEqualTo((ushort)203);

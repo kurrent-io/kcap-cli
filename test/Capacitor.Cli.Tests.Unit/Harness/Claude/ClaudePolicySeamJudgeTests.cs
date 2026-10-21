@@ -36,13 +36,14 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
     string Transcript() => Tmp.CreateFile("transcript.jsonl",
         """{"type":"user","uuid":"11111111-1111-1111-1111-111111111111","promptId":"p1","message":{"role":"user","content":"push when the tests pass"}}""" + "\n");
 
-    JsonObject Payload(string hookEvent, string command, string? callId = "toolu_1") {
+    JsonObject Payload(string hookEvent, string command, string? callId = "toolu_1", string? permissionMode = null) {
         var node = new JsonObject {
             ["hook_event_name"] = hookEvent, ["session_id"] = Sid, ["tool_name"] = "Bash",
             ["tool_input"] = new JsonObject { ["command"] = command }, ["cwd"] = Tmp.PathTo("repo"),
             ["transcript_path"] = Transcript(),
         };
         if (callId is not null) node["tool_use_id"] = callId;
+        if (permissionMode is not null) node["permission_mode"] = permissionMode;
         return node;
     }
 
@@ -239,5 +240,102 @@ public class ClaudePolicySeamJudgeTests : IDisposable {
         await Assert.That(JsonNode.Parse(stdout.ToString())!["hookSpecificOutput"]!["decision"]!["behavior"]!
             .GetValue<string>()).IsEqualTo("allow");
         await Assert.That(Decisions().Single()["judge"]!["consultation_id"]!.GetValue<string>()).IsEqualTo("c-1");
+    }
+
+    [Test]
+    [Arguments("default")]
+    [Arguments("acceptEdits")]
+    [Arguments(null)]
+    public async Task PreToolUse_consults_in_a_mode_where_Claude_would_prompt(string? mode) {
+        WriteUserPolicy(JudgeOn);
+        Judge("allow");
+        var stdout = new StringWriter();
+        await Seam.HandlePreToolUseAsync(Payload("PreToolUse", "git push", permissionMode: mode).ToJsonString(), Sid, false, stdout, Ample);
+
+        await Assert.That(JudgeRequests().Count).IsEqualTo(1);
+        await Assert.That(stdout.ToString()).Contains("\"allow\"");
+    }
+
+    /// <summary>A hook allow overrides the mode: under dontAsk it runs a call the mode refuses, under
+    /// auto it skips the classifier. Where Claude asks nobody at PreToolUse, the judge is not asked
+    /// either, and an unknown mode is left to the human.</summary>
+    [Test]
+    [Arguments("auto")]
+    [Arguments("dontAsk")]
+    [Arguments("bypassPermissions")]
+    [Arguments("plan")]
+    [Arguments("a_future_mode")]
+    public async Task PreToolUse_never_consults_in_a_mode_where_Claude_asks_nobody(string mode) {
+        WriteUserPolicy(JudgeOn);
+        Judge("allow");
+        var stdout = new StringWriter();
+        await Seam.HandlePreToolUseAsync(Payload("PreToolUse", "git push", permissionMode: mode).ToJsonString(), Sid, false, stdout, Ample);
+
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        await Assert.That(stdout.ToString()).IsEmpty();
+    }
+
+    /// <summary>PermissionRequest fires only when Claude is about to show a prompt, so it consults in
+    /// any mode that raised one.</summary>
+    [Test]
+    [Arguments("auto")]
+    [Arguments("plan")]
+    [Arguments("acceptEdits")]
+    public async Task A_raised_prompt_consults_whatever_the_mode(string mode) {
+        WriteUserPolicy(JudgeOn);
+        Judge("allow");
+        var answer = await Seam.HandlePermissionRequestAsync(
+            Payload("PermissionRequest", "git push", callId: null, permissionMode: mode), Sid, new StringWriter(), Ample);
+
+        await Assert.That(answer).IsEqualTo(SeamAnswer.Answered);
+        await Assert.That(JudgeRequests().Count).IsEqualTo(1);
+    }
+
+    /// <summary>The prompt for a question or a plan is the human's answer itself; a judge allow would
+    /// give it for them.</summary>
+    [Test]
+    [Arguments("AskUserQuestion")]
+    [Arguments("ExitPlanMode")]
+    public async Task A_human_interaction_tool_never_consults_at_either_seam(string tool) {
+        WriteUserPolicy(JudgeOn);
+        Judge("allow");
+        var pre = Payload("PreToolUse", "unused");
+        pre["tool_name"] = tool;
+        pre["tool_input"] = new JsonObject { ["plan"] = "do it" };
+        var prompt = Payload("PermissionRequest", "unused", callId: null);
+        prompt["tool_name"] = tool;
+        prompt["tool_input"] = new JsonObject { ["plan"] = "do it" };
+
+        var stdout = new StringWriter();
+        await Seam.HandlePreToolUseAsync(pre.ToJsonString(), Sid, false, stdout, Ample);
+        var answer = await Seam.HandlePermissionRequestAsync(prompt, Sid, stdout, Ample);
+
+        await Assert.That(_server.LogEntries.Count).IsEqualTo(0);
+        await Assert.That(answer).IsEqualTo(SeamAnswer.NotAnswered);
+        await Assert.That(stdout.ToString()).IsEmpty();
+    }
+
+    /// <summary>Claude sends a subagent's calls with its <c>agent_id</c> and the session's own
+    /// transcript, so the consultation declares the human turns of the session it serves.</summary>
+    [Test]
+    public async Task A_subagents_call_consults_with_the_sessions_turns() {
+        WriteUserPolicy(JudgeOn);
+        Judge("allow");
+        var pre = Payload("PreToolUse", "git push", permissionMode: "default");
+        pre["agent_id"] = "a21be961c5b50b65d";
+        pre["agent_type"] = "general-purpose";
+        var prompt = Payload("PermissionRequest", "git push", callId: null, permissionMode: "default");
+        prompt["agent_id"] = "a21be961c5b50b65d";
+
+        await Seam.HandlePreToolUseAsync(pre.ToJsonString(), Sid, false, new StringWriter(), Ample);
+        await Seam.HandlePermissionRequestAsync(prompt, Sid, new StringWriter(), Ample);
+
+        var requests = JudgeRequests();
+        await Assert.That(requests.Count).IsEqualTo(2);
+        foreach (var request in requests) {
+            await Assert.That(request["agent_id"]).IsNull();
+            await Assert.That(request["turns"]!["user_messages"]![0]!["id"]!.GetValue<string>())
+                .IsEqualTo("11111111-1111-1111-1111-111111111111");
+        }
     }
 }

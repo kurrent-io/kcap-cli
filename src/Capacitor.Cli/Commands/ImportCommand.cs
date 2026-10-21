@@ -3086,7 +3086,9 @@ class ImportCommand(
                 InputTokens      = result.InputTokens,
                 OutputTokens     = result.OutputTokens,
                 CacheReadTokens  = result.CacheReadTokens,
-                CacheWriteTokens = result.CacheWriteTokens
+                CacheWriteTokens = result.CacheWriteTokens,
+                // A model-generated title, the same kind `kcap watch` sends as client-auto.
+                Source           = "client-auto"
             };
 
             var       payloadJson = JsonSerializer.Serialize(payload, CapacitorJsonContext.Default.SessionTitlePayload);

@@ -9,15 +9,16 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended }
+public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended, Refused }
 
 /// A read-only view of a terminal on another machine: the server replays its buffer, then
 /// streams. The pane takes the source's size, and reports a viewport back only while it is on
 /// screen — the server takes the minimum across viewers, so a hidden pane would clamp the live
 /// agent's PTY for everyone. Every access establishment subscribes again onto a fresh surface, so
-/// a replay never stacks on scrollback. Subscribing is attempted only once access stands: the
-/// server refuses with silence, so an empty pane after that is "no output yet", never "not
-/// allowed".
+/// a replay never stacks on scrollback. Subscribing waits for the pane's first showing, so a
+/// workspace kept on its Chat tab costs the server no replay or stream, and for access to stand. A
+/// server that refuses the terminal says so, and the pane reads Refused; a server that does not
+/// report refusals leaves an empty pane that only looks like "no output yet".
 public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
     const int MaxCols = 500, MaxRows = 200;
@@ -43,6 +44,10 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     bool _ended;
     SessionAccessState? _access;
     bool _visible;
+    bool _everShown;
+    /// A superseded subscribe that the hub took while a newer one was in flight: membership is the
+    /// connection's, so it is given back only if that newer one is refused.
+    bool _strayMembership;
     /// Whether a viewport of ours stands in the server's aggregate: it holds a viewer's size until
     /// told otherwise, so a reported one must always be given back and an unreported one never.
     bool _reported;
@@ -67,8 +72,11 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         RemoteTerminalPhase.Connecting => "Connecting…",
         RemoteTerminalPhase.Offline    => "Not connected to the session",
         RemoteTerminalPhase.Ended      => "This session has ended.",
+        RemoteTerminalPhase.Refused    => RefusedNote,
         _                              => "",
     };
+    internal const string RefusedNote = "You don't have access to this session's terminal.";
+
     public bool ShowsBanner => Phase != RemoteTerminalPhase.Live;
     public string SizeNote => _sourceSize is { } s ? $"{s.Cols}×{s.Rows} · sized by the source" : "";
     public IReadOnlyList<SpecialKeyChoice> Keys => SpecialKeyMapper.Choices;
@@ -88,6 +96,11 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         visible.DistinctUntilChanged().ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(shown => {
             _visible = shown;
             if (!shown) { _ = ReleaseViewportAsync(); return; }
+            if (!_everShown) {
+                _everShown = true;
+                if (!_ended) Follow(_access);
+                return;
+            }
             if (Surface is { } surface) ReportViewport(surface.CurrentSize);
         }).DisposeWith(_disposables);
         // The host's verdict can be withdrawn: a transient registry snapshot drops the row and the
@@ -121,7 +134,10 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
 
     /// Establishing is the pre-verdict handshake, not a refusal.
     void Follow(SessionAccessState? state) {
-        if (state == SessionAccessState.Established) { Attach(); return; }
+        if (state == SessionAccessState.Established) {
+            if (_everShown) Attach();
+            return;
+        }
         Detach(state is null or SessionAccessState.Establishing ? RemoteTerminalPhase.Waiting : RemoteTerminalPhase.Offline);
     }
 
@@ -152,7 +168,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         } catch (OperationCanceledException) {
             // Teardown cancelled _token while the hub may already have taken the subscribe —
             // ReleaseAsync's own calls carry CancellationToken.None.
-            if (!_receiving) _ = ReleaseAsync();
+            Dispatcher.UIThread.Post(() => { if (!_receiving) _ = ReleaseAsync(); });
             return;
         } catch (Exception ex) {
             outcome = HubCallOutcome.Failed(ex.Message);
@@ -160,9 +176,23 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         await Dispatcher.UIThread.InvokeAsync(() => {
             // Group membership belongs to the connection, not to this attempt: unsubscribing for a
             // superseded one would deafen the pane a newer attach is already receiving on.
-            if (generation != _generation) { if (!_receiving) _ = ReleaseAsync(); return; }
+            if (generation != _generation) {
+                if (outcome.Result != HubCallResult.Ok) return;
+                if (!_receiving) _ = ReleaseAsync();
+                else _strayMembership = true;
+                return;
+            }
             // A refused subscribe must not render frames meant for another viewer on the connection.
-            if (outcome.Result != HubCallResult.Ok) { _receiving = false; Phase = RemoteTerminalPhase.Offline; return; }
+            if (outcome.Result != HubCallResult.Ok) {
+                _receiving = false;
+                Phase = outcome.Result == HubCallResult.Denied ? RemoteTerminalPhase.Refused : RemoteTerminalPhase.Offline;
+                if (_strayMembership) {
+                    _strayMembership = false;
+                    _ = ReleaseAsync();
+                }
+                return;
+            }
+            _strayMembership = false;
             _subscribed = true;
             Phase = RemoteTerminalPhase.Live;
             ReportViewport(surface.CurrentSize);
@@ -189,8 +219,9 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _generation++;
         _receiving = false;
         Phase = phase;
-        if (!_subscribed) return;
+        if (!_subscribed && !_strayMembership) return;
         _subscribed = false;
+        _strayMembership = false;
         _ = ReleaseAsync();
     }
 
@@ -223,8 +254,9 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _receiving = false;
         _disposables.Dispose();
         try { _lifetime.Cancel(); } catch (ObjectDisposedException) { }
-        if (_subscribed) {
+        if (_subscribed || _strayMembership) {
             _subscribed = false;
+            _strayMembership = false;
             await ReleaseAsync();
         }
         Surface = null;

@@ -9,6 +9,7 @@ using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Policy;
+using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -217,6 +218,32 @@ public class ClaudeHookCommandTests {
         var posted = fx.Sent.Single(s => s.StartsWith("/hooks/session-end|", StringComparison.Ordinal));
         var body   = JsonNode.Parse(posted[(posted.IndexOf('|') + 1)..]);
         await Assert.That(body!["policy_pass_through_count"]!.GetValue<long>()).IsEqualTo(1L);
+    }
+
+    [Test, NotInParallel]
+    public async Task Session_end_for_a_resuming_hosted_agent_posts_nothing() {
+        using var daemons = new TempDaemonStore();
+        ResumeLedgerStore.For(daemons.Store, "daemon-1").Write(ResumeLedgerEntries.For("agent-1", ResumeState.Resuming));
+        using var dir = EnvScope.Exclusive("KCAP_DAEMONS_DIR", daemons.Directory);
+        using var fx  = new Fixture(Config.Root) { Hosted = new HostedAgent("agent-1", false, DaemonBridge.None) };
+
+        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","cwd":"/tmp"}""");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.Sent.Any(s => s.StartsWith("/hooks/session-end|", StringComparison.Ordinal))).IsFalse();
+    }
+
+    [Test, NotInParallel]
+    public async Task Session_end_for_a_running_hosted_agent_still_posts() {
+        using var daemons = new TempDaemonStore();
+        ResumeLedgerStore.For(daemons.Store, "daemon-1").Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running));
+        using var dir = EnvScope.Exclusive("KCAP_DAEMONS_DIR", daemons.Directory);
+        using var fx  = new Fixture(Config.Root) { Hosted = new HostedAgent("agent-1", false, DaemonBridge.None) };
+
+        var exit = await fx.HandleAsync($$"""{"hook_event_name":"SessionEnd","session_id":"{{Sid}}","cwd":"/tmp"}""");
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(fx.Sent.Any(s => s.StartsWith("/hooks/session-end|", StringComparison.Ordinal))).IsTrue();
     }
 
     /// <summary>Session-end is the only eviction the policy directories get, so what it leaves
@@ -442,7 +469,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains("## Plans");
         await Assert.That(ctx).Contains("Flows you may offer");
-        await Assert.That(ctx).Contains("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).Contains("## kcap is set up");
     }
 
     [Test, NotInParallel]
@@ -456,8 +483,8 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("Team memory");
         await Assert.That(ctx).DoesNotContain("## Work items");
         await Assert.That(ctx).DoesNotContain("## Plans");
-        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
-        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("kcap session id:");
+        await Assert.That(ctx).DoesNotContain("## kcap is set up");
         await Assert.That(ctx).DoesNotContain("Flows you may offer");
         await Assert.That(fx.MemoryIndexRequested).IsFalse();
         await Assert.That(fx.FlowDefinitionsRequestCount).IsEqualTo(0);
@@ -477,7 +504,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains("## Plans");
         await Assert.That(ctx).DoesNotContain("newer kcap version");
-        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("## kcap is set up");
     }
 
     /// <summary>Withholding the notice must not spend it: it belongs to the person's next session.</summary>
@@ -501,7 +528,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).DoesNotContain("Team memory");
         await Assert.That(ctx).DoesNotContain("## Work items");
         await Assert.That(ctx).DoesNotContain("## Plans");
-        await Assert.That(ctx).DoesNotContain("## Kurrent Capacitor is set up");
+        await Assert.That(ctx).DoesNotContain("## kcap is set up");
     }
 
     const string ProactiveCatalog = """{"definitions":[{"id":"code-review","offer":"proactive","when_to_use":"After a change is complete."}]}""";
@@ -574,7 +601,7 @@ public class ClaudeHookCommandTests {
         using var absent = new TempDir();
         using var fx = new Fixture(Config.Root);
         fx.RespondJson = "{}";
-        fx.MemoryIndexBody = """{"entries":[],"projects":[{"slug":"capacitor","name":"Kurrent Capacitor"}]}""";
+        fx.MemoryIndexBody = """{"entries":[],"projects":[{"slug":"capacitor","name":"kcap"}]}""";
 
         var sid = Guid.NewGuid().ToString("N");
         var (exit, stdout) = await RunCapturingStdoutAsync(() =>
@@ -585,7 +612,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(query).Contains("include=projects");
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains(
-            "This repo belongs to project \"capacitor\" (Kurrent Capacitor). " +
+            "This repo belongs to project \"capacitor\" (kcap). " +
             "Save learnings that span its repos with project: \"capacitor\".");
         await Assert.That(ctx).DoesNotContain("## Team memory");
     }
@@ -725,10 +752,10 @@ public class ClaudeHookCommandTests {
             fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(stdout).Contains("Kurrent Capacitor session id:");
+        await Assert.That(stdout).Contains("kcap session id:");
 
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
-        await Assert.That(ctx).Contains($"Kurrent Capacitor session id: `{sid}`.");
+        await Assert.That(ctx).Contains($"kcap session id: `{sid}`.");
     }
 
     [Test, NotInParallel]
@@ -745,15 +772,15 @@ public class ClaudeHookCommandTests {
         var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
         await Assert.That(ctx).Contains("## Work items");
         await Assert.That(ctx).Contains($"`{sid}`");
-        await Assert.That(ctx).DoesNotContain("Kurrent Capacitor session id:");
+        await Assert.That(ctx).DoesNotContain("kcap session id:");
     }
 
     /// <summary>Pins that a memory index far past Claude Code's context cap is what gets trimmed, not
-    /// the plans nudge: the index alone must exceed the cap, otherwise this proves nothing.</summary>
+    /// the plans nudge or the flows offer: the index alone must exceed the cap, otherwise this proves nothing.</summary>
     [Test, NotInParallel]
-    public async Task session_start_keeps_the_plans_nudge_when_the_memory_index_overflows_the_context_cap() {
-        using var fx = new Fixture(Config.Root) { RespondJson = "{}" };
-        fx.RegisterClaudeMcpServer("kcap-plans");
+    public async Task session_start_keeps_the_plans_nudge_and_the_flows_offer_when_the_memory_index_overflows_the_context_cap() {
+        using var fx = new Fixture(Config.Root) { RespondJson = "{}", FlowDefinitionsBody = ProactiveCatalog };
+        fx.RegisterClaudeMcpServer("kcap-plans", "kcap-flows");
         var entries = Enumerable.Range(0, 150).Select(i => new JsonObject {
             ["memory_id"] = $"m{i}", ["slug"] = $"slug-{i}", ["audience"] = "team",
             ["description"] = new string('d', 200), ["kind"] = "project",
@@ -773,6 +800,7 @@ public class ClaudeHookCommandTests {
         await Assert.That(ctx).Contains("## Team memory");
         await Assert.That(ctx.IndexOf("## Plans", StringComparison.Ordinal))
             .IsLessThan(ctx.IndexOf("## Team memory", StringComparison.Ordinal));
+        await Assert.That(ctx).Contains("- code-review: After a change is complete.");
     }
 
     /// <summary>Pins that guidelines rendered ahead of the plans nudge cannot crowd it out, and that
@@ -1237,6 +1265,23 @@ public class ClaudeHookCommandTests {
         var postTimeout = time.TimerAtSend!.Value;
         await Assert.That(body["next_work_budget_ms"]!.GetValue<int>())
             .IsEqualTo((int)Math.Floor((postTimeout - NextWorkEmitter.FeedRequestReserve).TotalMilliseconds));
+    }
+
+    /// <summary>A start whose feed sent no list (out of time, or nothing to list) still carries the
+    /// completion guidance, which otherwise rides only on the list.</summary>
+    [Test, NotInParallel]
+    public async Task an_ack_without_a_next_work_list_still_carries_the_completion_guidance() {
+        using var fx = new Fixture(Config.Root) { RespondJson = """{"top_clusters":[{"text":"Run the fast suite first","category":"pattern"}]}""" };
+        fx.RegisterClaudeMcpServer("kcap-workitems");
+        var sid = Guid.NewGuid().ToString("N");
+
+        var (exit, stdout) = await RunCapturingStdoutAsync(() =>
+            fx.HandleAsync($$"""{"hook_event_name":"SessionStart","session_id":"{{sid}}","cwd":"{{AbsentCwd(Tmp)}}","source":"startup"}"""));
+        await Assert.That(exit).IsEqualTo(0);
+
+        var ctx = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["additionalContext"]!.GetValue<string>();
+        await Assert.That(ctx).Contains(NextWorkEmitter.InstructionOnly);
+        await Assert.That(ctx).DoesNotContain("<next-work-data>");
     }
 
     [Test, NotInParallel]

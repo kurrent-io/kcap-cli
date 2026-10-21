@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Grok;
 using Capacitor.Cli.Harness.Grok;
 using WireMock.RequestBuilders;
@@ -21,6 +22,8 @@ public class GrokImportTests : IDisposable {
     const string Child  = "01a135a0-64af-7661-94e6-282ec3ef065c";
 
     public void Dispose() => _server.Stop();
+
+    static readonly Func<string, Task<RepositoryPayload?>> NoRepository = _ => Task.FromResult<RepositoryPayload?>(null);
 
     static string Line(string sid, string kind, string extra, string method = "session/update") =>
         "{\"timestamp\":1,\"method\":\"" + method + "\",\"params\":{\"sessionId\":\"" + sid
@@ -52,7 +55,7 @@ public class GrokImportTests : IDisposable {
             _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+        var source = new GrokImportSource(new GrokPaths(Home, null), NoRepository, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         await Assert.That(discovered.Select(d => d.SessionId)).IsEquivalentTo(new[] { Parent.Replace("-", "") });
@@ -82,6 +85,39 @@ public class GrokImportTests : IDisposable {
         await Assert.That(batches[1].GetProperty("agent_id").GetString()).IsEqualTo(Child.Replace("-", ""));
     }
 
+    /// <summary>Grok's own session-start names no repository, so import sends the one detected for the
+    /// session's cwd on a transcript batch of its own, ahead of the content, which is how the server
+    /// attributes the session to it.</summary>
+    [Test]
+    public async Task An_imported_session_names_its_repository_before_its_content() {
+        WriteFixture();
+        _server.Given(Request.Create().WithPath("/api/sessions/*/last-line").UsingGet()).RespondWith(Response.Create().WithStatusCode(404));
+        foreach (var route in new[] { "/hooks/session-start/grok", "/hooks/transcript", "/hooks/subagent-start", "/hooks/subagent-stop", "/hooks/session-end/grok" })
+            _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
+
+        var detectedFor = new List<string>();
+        Func<string, Task<RepositoryPayload?>> detect = cwd => {
+            detectedFor.Add(cwd);
+            return Task.FromResult<RepositoryPayload?>(new RepositoryPayload { Owner = "kurrent-io", RepoName = "demo", Branch = "main", RemoteUrl = "https://github.com/kurrent-io/demo.git" });
+        };
+
+        using var client = new HttpClient();
+        var source     = new GrokImportSource(new GrokPaths(Home, null), detect, TimeProvider.System);
+        var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
+        var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
+        await source.ImportSessionAsync(classified.Single(), new ImportContext(client, _server.Url!, ForcePrivate: false), CancellationToken.None);
+
+        var batches = _server.LogEntries.Where(e => e.RequestMessage.Path == "/hooks/transcript")
+            .Select(e => JsonDocument.Parse(e.RequestMessage.Body!).RootElement).ToList();
+
+        await Assert.That(detectedFor).IsEquivalentTo(new[] { "/repo/demo" });
+        await Assert.That(batches[0].GetProperty("lines").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(batches[0].GetProperty("vendor").GetString()).IsEqualTo("grok");
+        await Assert.That(batches[0].GetProperty("repository").GetProperty("owner").GetString()).IsEqualTo("kurrent-io");
+        await Assert.That(batches[0].GetProperty("repository").GetProperty("repo_name").GetString()).IsEqualTo("demo");
+        await Assert.That(batches[1].GetProperty("lines").GetArrayLength()).IsGreaterThan(0);
+    }
+
     /// <summary>The live watcher records only the parent, so re-importing a fully watched session is
     /// what attaches its subagents. The parent's last mapped line is its first: the subagent lines
     /// after it map to nothing, and must not keep the session from reading as already loaded.</summary>
@@ -96,7 +132,7 @@ public class GrokImportTests : IDisposable {
             _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+        var source = new GrokImportSource(new GrokPaths(Home, null), NoRepository, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = (await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None)).Single();
@@ -131,7 +167,7 @@ public class GrokImportTests : IDisposable {
                .RespondWith(Response.Create().WithStatusCode(200).WithBody("""{"last_line_number":0}"""));
 
         using var client = new HttpClient();
-        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+        var source = new GrokImportSource(new GrokPaths(Home, null), NoRepository, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);
@@ -152,7 +188,7 @@ public class GrokImportTests : IDisposable {
             _server.Given(Request.Create().WithPath(route).UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
 
         using var client = new HttpClient();
-        var source = new GrokImportSource(new GrokPaths(Home, null), TimeProvider.System);
+        var source = new GrokImportSource(new GrokPaths(Home, null), NoRepository, TimeProvider.System);
 
         var discovered = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0), CancellationToken.None);
         var classified = await source.ClassifyAsync(discovered, new ClassifyContext(client, _server.Url!, MinLines: 0, Home: Home), CancellationToken.None);

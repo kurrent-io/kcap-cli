@@ -56,17 +56,19 @@ public class ClaudeHookToolSettledRelayTests {
         return entry is null ? null : JsonNode.Parse(entry.RequestMessage.Body!);
     }
 
-    async Task<(int Exit, int ServerPosts)> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
+    async Task<(int Exit, int ServerPosts)> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "",
+            string toolInput = """{"command":"ls"}""", string toolName = "Bash") {
         var handler = new CountingHandler();
         using var client = new HttpClient(handler);
-        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
+        var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"{{{Sid}}}","cwd":"/tmp","tool_name":"{{{toolName}}}","tool_input":{{{toolInput}}}{{{extraFields}}}}""";
         var exit = await new ClaudeHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None)
             .HandleWithDeps(new HookSpool(Config.Root, time: TimeProvider.System), new StringReader(payload), () => Task.FromResult(new AuthAttempt(client, AuthStatus.Ok, null, null)), new StringWriter());
         return (exit, handler.Posts);
     }
 
     /// The server has no route for a tool's completion and the transcript watcher already carries
-    /// its result, so the hook's only work is the notice.
+    /// its result, so the hook's only work is the notice. It carries the call's name and input too,
+    /// which are all Claude's id-less permission prompt can be matched by.
     [Test, NotInParallel]
     [Arguments("PostToolUse")]
     [Arguments("PostToolUseFailure")]
@@ -83,18 +85,40 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(body["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
         await Assert.That(body["session_id"]!.GetValue<string>()).IsEqualTo(Sid);
         await Assert.That(body["cwd"]!.GetValue<string>()).IsEqualTo("/tmp");
+        await Assert.That(body["tool_name"]!.GetValue<string>()).IsEqualTo("Bash");
+        await Assert.That(body["tool_input"]!.ToJsonString()).IsEqualTo("""{"command":"ls"}""");
+        await Assert.That(body["sent_at"]!.GetValue<long>()).IsGreaterThan(0);
     }
 
-    /// A subagent's tool call runs the same hook with the parent's environment; its id is unique
-    /// across the session, so the notice needs no other scope.
+    /// A subagent's tool call runs the same hook with the parent's environment. Its id is unique
+    /// across the session, but a prompt matched by name and input needs the subagent as well.
     [Test, NotInParallel]
-    public async Task A_subagents_finished_tool_relays_its_id_too() {
+    public async Task A_subagents_finished_tool_relays_its_id_and_subagent() {
         using var bridge = Bridge();
 
         var (exit, _) = await RunAsync(HostedOn(bridge), "PostToolUse", extraFields: $",\"tool_use_id\":\"toolu_02Y\",\"agent_id\":\"{Sub}\"");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(Relayed(bridge)!["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_02Y");
+        await Assert.That(Relayed(bridge)!["subagent_id"]!.GetValue<string>()).IsEqualTo(Sub);
+    }
+
+    /// A name or input past the prompt's caps was never held, and sending it would push the notice
+    /// past the bridge's body cap, so both are left out and the id still goes.
+    [Test, NotInParallel]
+    [Arguments(513, 10)]
+    [Arguments(4, 64 * 1024)]
+    public async Task An_oversized_match_key_is_left_out_and_the_id_still_relayed(int nameLength, int commandLength) {
+        using var bridge = Bridge();
+
+        var (exit, _) = await RunAsync(HostedOn(bridge), "PostToolUse", extraFields: ",\"tool_use_id\":\"toolu_03Z\"",
+            toolInput: $"{{\"command\":\"{new string('x', commandLength)}\"}}", toolName: new string('B', nameLength));
+
+        await Assert.That(exit).IsEqualTo(0);
+        var body = Relayed(bridge)!;
+        await Assert.That(body["tool_use_id"]!.GetValue<string>()).IsEqualTo("toolu_03Z");
+        await Assert.That(body["tool_name"]).IsNull();
+        await Assert.That(body["tool_input"]).IsNull();
     }
 
     /// A tool that ran without its id cannot be named; the turn's end still retires its prompt.
@@ -122,6 +146,7 @@ public class ClaudeHookToolSettledRelayTests {
         await Assert.That(body["tool_use_id"]).IsNull();
         await Assert.That(body["subagent_id"]).IsNull();
         await Assert.That(body["agent_id"]!.GetValue<string>()).IsEqualTo("agent-1");
+        await Assert.That(body["sent_at"]!.GetValue<long>()).IsGreaterThan(0).Because("a late turn end must not retire the next turn's prompt");
     }
 
     [Test, NotInParallel]
@@ -134,6 +159,7 @@ public class ClaudeHookToolSettledRelayTests {
         var body = Relayed(bridge)!;
         await Assert.That(body["tool_use_id"]).IsNull();
         await Assert.That(body["subagent_id"]!.GetValue<string>()).IsEqualTo(Sub);
+        await Assert.That(body["sent_at"]!.GetValue<long>()).IsGreaterThan(0);
         await Assert.That(bridge.LogEntries.Any(e => e.RequestMessage.Path == "/tok/claude/input-wait")).IsFalse();
     }
 

@@ -63,6 +63,7 @@ public class WizardSimpleStepsTests {
         string? _value;
         public string? Read() => _value;
         public void Append(string directory) => _value = directory;
+        public void Replace(string path) => _value = path;
     }
 
     // ── Shim: install / claim / outcome mapping ─────────────────────────────
@@ -90,6 +91,53 @@ public class WizardSimpleStepsTests {
 
             return Task.FromResult(true);
         }
+    }
+
+    sealed class ScriptedInstaller(ShimResult result) : ICliPathInstaller {
+        public string Disclosure => "";
+        public ShimPreflight Preflight(string target) => throw new NotSupportedException();
+        public Task<ShimResult> InstallAsync(string target, CancellationToken ct) => Task.FromResult(result);
+    }
+
+    static readonly ShimResult[] UnfinishedShims = [
+        new(ShimOutcome.InstalledButNotOnPath, null, null),
+        new(ShimOutcome.InstalledButNotOnPath, "Add: export PATH=\"/usr/local/bin:$PATH\"", null),
+        new(ShimOutcome.Failed, "Permission denied.", "sudo ln -s /x /usr/local/bin/kcap"),
+    ];
+
+    static async Task<List<string?>> PathFixMessagesAsync(bool onLocalPath) =>
+        await AvaloniaSession.DispatchAsync(async () => {
+            var messages = new List<string?>();
+            foreach (var result in UnfinishedShims) {
+                var vm = new PathFixViewModel(new ScriptedInstaller(result), new FakeAppStateStore(), "/x", () => onLocalPath);
+                await vm.InstallAsync();
+                messages.Add(vm.Message);
+            }
+
+            return messages;
+        });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_path_fix_on_the_local_path_names_no_terminal_command() {
+        var messages = await PathFixMessagesAsync(onLocalPath: true);
+
+        foreach (var message in messages) {
+            await Assert.That(message).IsNotNull();
+            await Assert.That(message!).DoesNotContain("kcap ");
+            await Assert.That(message).DoesNotContain("sudo");
+            await Assert.That(message).DoesNotContain("export PATH");
+        }
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_path_fix_on_the_cloud_path_keeps_its_terminal_recovery() {
+        var messages = await PathFixMessagesAsync(onLocalPath: false);
+
+        await Assert.That(messages[0]).Contains("run kcap --version");
+        await Assert.That(messages[1]).Contains("export PATH");
+        await Assert.That(messages[2]).Contains("sudo ln -s");
     }
 
     sealed class ShimHarness : IDisposable {
@@ -228,6 +276,18 @@ public class WizardSimpleStepsTests {
         await Assert.That(satisfied).IsFalse();
         await Assert.That(message).IsEqualTo("This machine could not find its own kcap, so nothing changed.");
         await Assert.That(updates).IsEqualTo(0);
+    }
+
+    /// A daemon that stopped short says why, rather than claiming setup is still under way.
+    [Test]
+    public async Task The_daemon_line_names_what_stopped_the_daemon() {
+        var stopped  = new DoneStepViewModel(() => DoneFacts.Empty with { DaemonProblem = "kcap isn't available on this machine." });
+        var underWay = new DoneStepViewModel(() => DoneFacts.Empty);
+        await stopped.OnEnterAsync(CancellationToken.None);
+        await underWay.OnEnterAsync(CancellationToken.None);
+
+        await Assert.That(stopped.DaemonLine).StartsWith("kcap isn't available on this machine.");
+        await Assert.That(underWay.DaemonLine).StartsWith("The daemon is being set up");
     }
 
     // ── templates ────────────────────────────────────────────────────────────
@@ -392,99 +452,5 @@ public class MachineNameViewModelTests {
         } finally {
             File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
-    }
-}
-
-/// The last page reads its headline and figures off what the earlier pages did.
-public class DoneStepViewModelTests {
-    static DoneFacts Facts(IReadOnlyList<string>? recording = null, bool hazard = false, HistoryImportRun? import = null) =>
-        new(recording ?? ["Claude Code"], false, hazard, import, true, "test-mac", "https://acme.kcap.ai");
-
-    static async Task<HistoryImportRun> FinishedRun(int imported, int failed) {
-        var cli = new FakeKcapCli {
-            ImportBehavior = (_, onLine, _) => {
-                onLine(new StreamedLine(ProcessStreamKind.Stdout, $"  {imported} imported · 0 skipped · {failed} failed"));
-                return Task.FromResult(new StreamingResult(0, false, []));
-            },
-        };
-        var run = new HistoryImportRun(100, 2, "from the last 90 days", 1, action => action());
-        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"])]);
-        await run.Completion;
-
-        return run;
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_headline_follows_what_actually_happened() {
-        var (imported, remembering, nothing, blocked) = await AvaloniaSession.DispatchAsync(async () => {
-            async Task<string> TitleFor(DoneFacts facts) {
-                var vm = new DoneStepViewModel(() => facts);
-                await vm.OnEnterAsync(CancellationToken.None);
-                return vm.Title;
-            }
-
-            return (await TitleFor(Facts(import: await FinishedRun(40, 0))), await TitleFor(Facts()),
-                await TitleFor(Facts(recording: [])), await TitleFor(Facts(hazard: true)));
-        });
-
-        await Assert.That(imported).IsEqualTo("Your work so far");
-        await Assert.That(remembering).IsEqualTo("From now on, your agents remember");
-        await Assert.That(nothing).IsEqualTo("No new recording connections");
-        await Assert.That(blocked).IsEqualTo("No new recording connections");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Failed_uploads_are_named_with_where_they_still_are() {
-        var (visible, title, body, landed, unit) = await AvaloniaSession.DispatchAsync(async () => {
-            var vm = new DoneStepViewModel(() => Facts(import: null));
-            var run = await FinishedRun(30, 3);
-            vm = new DoneStepViewModel(() => Facts(import: run));
-            await vm.OnEnterAsync(CancellationToken.None);
-
-            return (vm.FailedVisible, vm.FailedTitle, vm.FailedBody, vm.LandedValue, vm.LandedUnit);
-        });
-
-        await Assert.That(visible).IsTrue();
-        await Assert.That(title).IsEqualTo("3 sessions failed to upload");
-        await Assert.That(body).Contains("test-mac");
-        await Assert.That(body).Contains("retry");
-        await Assert.That(landed).IsEqualTo("30");
-        await Assert.That(unit).IsEqualTo("/ 100");
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task The_facts_are_read_again_on_every_entry() {
-        var calls = await AvaloniaSession.DispatchAsync(async () => {
-            var count = 0;
-            var vm = new DoneStepViewModel(() => { count++; return Facts(); });
-            await vm.OnEnterAsync(CancellationToken.None);
-            await vm.OnEnterAsync(CancellationToken.None);
-            return count;
-        });
-
-        await Assert.That(calls).IsEqualTo(2);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Open_your_workspace_opens_the_signed_in_server() {
-        var opened = await AvaloniaSession.DispatchAsync(async () => {
-            var opener = new RecordingUrlOpener();
-            var vm = new DoneStepViewModel(() => Facts(), opener);
-            await vm.OnEnterAsync(CancellationToken.None);
-            vm.OpenWorkspaceCommand.Execute().Subscribe();
-            Dispatcher.UIThread.RunJobs();
-            return opener.Opened.ToList();
-        });
-
-        await Assert.That(opened).IsEquivalentTo(["https://acme.kcap.ai"]);
-    }
-
-    sealed class RecordingUrlOpener : IUrlOpener {
-        public readonly List<string> Opened = [];
-        public void Open(string url) => Opened.Add(url);
     }
 }

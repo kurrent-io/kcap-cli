@@ -7,8 +7,8 @@ public enum ShimOutcome { Installed, InstalledButNotOnPath, Cancelled, Failed }
 public sealed record ShimResult(ShimOutcome Outcome, string? Detail, string? SudoFallback);
 
 /// Installs a `kcap` symlink to a resolved CLI so a terminal PATH that omits the CLI's own location
-/// still finds it: in the first stable login-PATH folder this user can already write to, else in
-/// `/usr/local/bin` behind an admin prompt. Mechanics only — the once-ever offer and tray-menu wiring
+/// still finds it: in the first stable login-PATH folder this user can already write to, else at
+/// `destination`, which needs an admin prompt only when it lies outside the user's home. Mechanics only — the once-ever offer and tray-menu wiring
 /// live in the desktop app's ShimOfferCoordinator. `destination` is a parameter so tests drive the
 /// real filesystem taxonomy against a temp path instead of the actual /usr/local/bin/kcap.
 public sealed class PathShimInstaller(
@@ -18,9 +18,13 @@ public sealed class PathShimInstaller(
 
     const string OsascriptPath = "/usr/bin/osascript";
 
-    public string Disclosure =>
-        "This links kcap into a folder on your terminal's PATH, so kcap works from any terminal. " +
-        "If none of those folders is writable, macOS asks once for your admin password.";
+    public string Disclosure => UserOwned
+        ? "This links kcap into a folder on your terminal's PATH, so kcap works from any terminal."
+        : "This links kcap into a folder on your terminal's PATH, so kcap works from any terminal. " +
+          "If none of those folders is writable, macOS asks once for your admin password.";
+
+    bool UserOwned => home is not null
+        && Path.GetFullPath(destination).StartsWith(Path.TrimEndingDirectorySeparator(home.Path) + Path.DirectorySeparatorChar, StringComparison.Ordinal);
 
     public ShimPreflight Preflight(string target) => Preflight(destination, target);
 
@@ -44,6 +48,8 @@ public sealed class PathShimInstaller(
                 return new ShimResult(ShimOutcome.Failed, $"{destination} already exists ({Describe(destination)}) and was left untouched.", null);
         }
 
+        if (UserOwned) return await LinkInHomeAsync(target, destination, ct).ConfigureAwait(false);
+
         var result = await runner.RunAsync(OsascriptPath, OsascriptArgs(target), new RunOptions(), ct).ConfigureAwait(false);
 
         if (result.ExitCode == 0) return await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
@@ -58,6 +64,16 @@ public sealed class PathShimInstaller(
         var sudoFallback = "sudo mkdir -p /usr/local/bin && sudo ln -s " + PosixQuote(target) + " /usr/local/bin/kcap";
         var detail = string.IsNullOrWhiteSpace(result.Stderr) ? "osascript failed." : result.Stderr.Trim();
         return new ShimResult(ShimOutcome.Failed, detail, sudoFallback);
+    }
+
+    async Task<ShimResult> LinkInHomeAsync(string target, string destination, CancellationToken ct) {
+        try {
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.CreateSymbolicLink(destination, target);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return new ShimResult(ShimOutcome.Failed, ex.Message, null);
+        }
+        return await ProbeOutcomeAsync(destination, ct).ConfigureAwait(false);
     }
 
     async Task<ShimResult?> TryLinkOnTerminalPathAsync(string target, CancellationToken ct) {

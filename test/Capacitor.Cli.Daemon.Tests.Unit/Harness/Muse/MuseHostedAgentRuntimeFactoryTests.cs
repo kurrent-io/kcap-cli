@@ -17,7 +17,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 public class MuseHostedAgentRuntimeFactoryTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(10);
 
-    const string Kcap = "/usr/local/bin/kcap";
+    const string kcap = "/usr/local/bin/kcap";
     const string SearchTool = "mcp__kcap_sessions__search_sessions";
 
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -62,7 +62,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         Model: model, Effort: null, Tools: null,
         IsReview: isReview, IsReviewFlow: isReviewFlow, Review: null,
         Cols: 80, Rows: 24,
-        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: Kcap,
+        ServerUrl: "http://kcap.test", DaemonBridgeUrl: null, CapacitorPath: kcap,
         McpAllowlist: allowlist, Work: work, DaemonId: "daemon-1", DaemonEpoch: "epoch-1",
         IsBorrowedSnapshot: borrowedSnapshot, ResumeSessionId: resume);
 
@@ -85,7 +85,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
         configure?.Invoke(host);
 
         Rig? rig = null;
-        var connection = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        var connection = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         var factory = new MuseHostedAgentRuntimeFactory(
@@ -117,6 +117,23 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
     static async Task<HostedRuntimeStart> StartAsync(Rig rig, RuntimeStartContext ctx) =>
         await rig.Factory.StartAsync(ctx, CancellationToken.None).WaitAsync(HangGuard);
+
+    [Test]
+    public async Task Interactive_resume_is_supported_and_review_flow_is_not() {
+        const string resumed = "01a13695-0736-75d0-8f4e-f121585b8453";
+        var rig = NewRig();
+
+        await Assert.That(rig.Factory.SupportsRestartResume(null)).IsTrue();
+
+        var start = await StartAsync(rig, Ctx(resume: resumed));
+        await using var _ = start.Runtime;
+        var resume = Params(await rig.Host.WaitForWriteAsync("session/resume"));
+        await Assert.That((string?)resume["sessionId"]).IsEqualTo(resumed);
+
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await StartAsync(NewRig(), Ctx(isReviewFlow: true, prompt: "review", allowlist: ["kcap-sessions"], resume: resumed)));
+        await Assert.That(refused!.Message).StartsWith("muse_reviewer_resume_unsupported");
+    }
 
     [Test]
     public async Task IsAvailable_follows_the_binary() {
@@ -188,7 +205,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         foreach (var (_, server) in servers) {
             await Assert.That((string?)server!["transport"]).IsEqualTo("stdio");
-            await Assert.That((string?)server["command"]).IsEqualTo(Kcap);
+            await Assert.That((string?)server["command"]).IsEqualTo(kcap);
             await Assert.That((string?)server["mode"]).IsEqualTo("required");
         }
 
@@ -432,7 +449,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
 
         var minted = (string)Params(await relayed.Host.WaitForWriteAsync("session/start"))["sessionId"]!;
         var sessionStart = relayed.Relays.Single();
-        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(Kcap);
+        await Assert.That(sessionStart.CapacitorPath).IsEqualTo(kcap);
         await Assert.That(sessionStart.SessionId).IsEqualTo(minted);
         await Assert.That(sessionStart.AgentId).IsEqualTo("agent-1");
         await Assert.That(sessionStart.ServerUrl).IsEqualTo("http://kcap.test");

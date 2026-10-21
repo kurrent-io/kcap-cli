@@ -121,4 +121,34 @@ public class WindowsTaskUnitTests {
 
         await Assert.That(xml).Contains($"<UserId>{Environment.UserDomainName}\\{Environment.UserName}</UserId>");
     }
+
+    /// <summary>The wrapper is found from the task itself, so a task installed under another config root
+    /// can still be traced to its daemon.</summary>
+    [Test]
+    [Arguments(@"C:\Users\u\.config\kcap\daemon-service-laptop.cmd")]
+    [Arguments(@"C:\Users\R&D (x)\kcap\daemon-service-laptop.cmd")]
+    public async Task The_wrapper_is_read_back_from_the_task_definition(string wrapper) {
+        var xml = WindowsTaskUnit.TaskXml(Spec(), wrapper);
+
+        await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsEqualTo(wrapper);
+    }
+
+    /// <summary>Tasks installed by older releases keep the action those releases wrote until reinstalled.</summary>
+    [Test]
+    [Arguments("cmd.exe", "/d /s /v:off /c &quot;&quot;C:\\k\\daemon-service-laptop.cmd&quot;&quot;")]
+    [Arguments("cmd.exe", "/c &quot;C:\\k\\daemon-service-laptop.cmd&quot;")]
+    public async Task An_action_an_older_release_wrote_still_names_its_wrapper(string command, string arguments) {
+        var xml = $"<Task><Actions><Exec><Command>{command}</Command><Arguments>{arguments}</Arguments></Exec></Actions></Task>";
+
+        await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsEqualTo(@"C:\k\daemon-service-laptop.cmd");
+    }
+
+    [Test]
+    [Arguments("<Task><Actions><Exec><Command>other.exe</Command><Arguments>--flag</Arguments></Exec></Actions></Task>")]
+    [Arguments("<Task><Actions><Exec><Command>notepad.exe</Command></Exec></Actions></Task>")]
+    [Arguments("<Task><Actions><Exec><Command>notepad.exe</Command><Arguments>--headless cmd.exe /d /s /v:off /c &quot;&quot;C:\\x\\daemon-service-laptop.cmd&quot;&quot;</Arguments></Exec></Actions></Task>")]
+    [Arguments("not xml")]
+    public async Task A_task_kcap_did_not_write_names_no_wrapper(string xml) {
+        await Assert.That(WindowsTaskUnit.WrapperFromTaskXml(xml)).IsNull();
+    }
 }

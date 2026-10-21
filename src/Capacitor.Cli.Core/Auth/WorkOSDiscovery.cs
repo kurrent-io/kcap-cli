@@ -50,7 +50,8 @@ public static class WorkOSDiscovery {
             CancellationToken                               ct = default,
             IAuthProgress?                                  progress = null,
             TenantPickContext?                              pickContext = null,
-            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null) {
+            Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? probe = null,
+            bool confirmPick = false) {
         progress ??= ConsoleAuthProgress.Instance;
 
         if (string.IsNullOrEmpty(proxyConfig.WorkOSClientId)) {
@@ -84,7 +85,7 @@ public static class WorkOSDiscovery {
                 proxyConfig, auth, orgSwitch, orglessRefresh, provisioner, funnel, time, ct, progress);
         }
 
-        var picked = tenants.Length == 1
+        var picked = tenants.Length == 1 && !confirmPick
             ? tenants[0]
             : await picker.PickAsync(
                 tenants,
@@ -137,7 +138,7 @@ public static class WorkOSDiscovery {
         funnel.TenantNone(AuthProvider.WorkOS);
 
         if (provisioner is null) {
-            progress.Error("No Capacitor tenants are linked to your account. Ask your admin to invite you.");
+            progress.Error("No kcap tenants are linked to your account. Ask your admin to invite you.");
 
             return new WorkOSDiscoveryFlow.NoTenants();
         }
@@ -225,9 +226,7 @@ public static class WorkOSDiscovery {
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
             TimeProvider                                                time,
             CancellationToken                                           ct) {
-        var picked = ready.Picked;
-
-        if (!ServerIdentity.TryCanonicalizeForStamping(picked.Origin, out var canonical, out var identityError)) {
+        if (!ServerIdentity.TryCanonicalizeForStamping(ready.Picked.Origin, out var canonical, out var identityError)) {
             progress.Error($"Error: {identityError}");
 
             return new AuthResult.Failed(identityError);
@@ -251,21 +250,20 @@ public static class WorkOSDiscovery {
             return new AuthResult.Failed(settleError);
         }
 
-        var request = new CommitRequest(
-            [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, ready.Tenants, picked),
-            PublishTokens: async saved => {
-                var outcome = await store.SaveGuardedAsync(
-                    picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
-                if (outcome == GuardedWriteOutcome.Written) saved();
-                else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
+        var result = await CommitBoundary.CommitNamedAsync(root, ready.Tenants, ready.Picked, (tenants, picked) => new CommitRequest(
+                [new AuthIdentity(picked.ProfileName, canonical)], AuthProvider.WorkOS, picked.ProfileName, canonical,
+                ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
+                PublishTokens: async saved => {
+                    var outcome = await store.SaveGuardedAsync(
+                        picked.ProfileName, tokens, cfg => cfg.Profiles.ContainsKey(picked.ProfileName), CancellationToken.None);
+                    if (outcome == GuardedWriteOutcome.Written) saved();
+                    else progress.Error($"Error: profile '{picked.ProfileName}' was removed during sign-in; nothing saved.");
 
-                return ready.Username;
-            });
+                    return ready.Username;
+                }),
+            beforeCommit, progress, ct);
 
-        var result = await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
-
-        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {picked.Label}");
+        if (result is AuthResult.Committed { CredentialSaved: true }) progress.Notice($"Logged in as {ready.Username} → {ready.Picked.Label}");
 
         return result;
     }

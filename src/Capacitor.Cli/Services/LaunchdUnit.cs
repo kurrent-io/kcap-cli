@@ -314,6 +314,12 @@ static class LaunchdUnit {
             : ServiceState.Installed;
     }
 
+    /// <summary>launchctl's stderr without its "re-run as root" hint: the job is a per-user agent, and
+    /// running kcap as root would target root's own domain instead.</summary>
+    public static string ToolError(string stderr) =>
+        string.Join(' ', stderr.Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .Where(l => !l.StartsWith("Try re-running the command as root", StringComparison.OrdinalIgnoreCase)));
+
     public static LabelProbe ClassifyPrint(int exitCode, string stdout, string stderr) {
         if (exitCode == 0) return LabelProbe.Loaded;
         return stderr.Contains("Could not find service", StringComparison.OrdinalIgnoreCase)

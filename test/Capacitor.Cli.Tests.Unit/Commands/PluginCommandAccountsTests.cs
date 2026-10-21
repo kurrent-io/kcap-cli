@@ -222,6 +222,25 @@ public class PluginCommandAccountsTests {
         await Assert.That(File.ReadAllText(config)).Contains(server);
     }
 
+    /// A registered Codex home whose hooks file gained a byte-order mark is rewritten by the refresh
+    /// even though its marker is current: Codex refuses the file until the mark is gone.
+    [Test]
+    public async Task Codex_refresh_strips_a_byte_order_mark_from_an_account_with_a_current_marker() {
+        var env = Env();
+        Directory.CreateDirectory(Home.PathTo(".codex-b"));
+        AccountAdoption.EnsureDefault(env.Accounts!, HarnessId.Codex, Home.PathTo(".codex-b"), TimeProvider.System);
+        await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--codex", "--skip-codex-network-access"]);
+        var hooks = Home.PathTo(".codex-b", "hooks.json");
+        Home.CreateFile(".codex-b/hooks.json", "\uFEFF" + File.ReadAllText(hooks));
+        await Assert.That(CodexHooksInstaller.ReadMarker(hooks)).IsEqualTo(CapacitorVersion.Current());
+
+        var exit = await new PluginCommand(env, Workdir).HandleAsync(["plugin", "install", "--codex", "--if-installed"]);
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(CodexHooksInstaller.StartsWithByteOrderMark(hooks)).IsFalse();
+        await Assert.That(CodexHooksInstaller.ReferencesKcapHook(hooks)).IsTrue();
+    }
+
     [Test]
     public async Task User_remove_unwires_every_registered_claude_account() {
         var env = Env();

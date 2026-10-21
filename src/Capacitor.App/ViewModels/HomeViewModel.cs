@@ -74,11 +74,31 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string FinishingSignInNotice =
         "Finishing sign-in. Reconnecting to the server…";
     internal const string DaemonDownNotice     =
-        "The daemon isn't running. Press Start daemon to launch sessions.";
+        "The daemon isn't running. The app is starting its service; press Start daemon to try again now.";
     internal const string DaemonIncompatibleNotice =
         "App and daemon are incompatible. Update both to matching versions, then press Reconnect.";
     internal const string ServerLostNotice     = "Not connected to the server. Sign in again to reconnect.";
     internal const string SignInExpiredNotice  = "Your sign-in has expired. Sign in again.";
+    /// A daemon attached by name that serves another server: signing in again cannot move it.
+    internal static string DaemonOnOtherServerNotice(string daemonServer, string appServer) {
+        var (daemonLabel, appLabel) = AttachedIdentity.ServerLabels(daemonServer, appServer);
+        return $"This machine's daemon is running for {daemonLabel}, not {appLabel}, so it cannot run agents here.";
+    }
+
+    /// The daemon's server when it is known and is not the app's; null otherwise, an unknown side included.
+    internal static string? ForeignDaemonServer(string? daemonServer, string? appServer) =>
+        string.IsNullOrEmpty(daemonServer) || string.IsNullOrEmpty(appServer) || ServerIdentity.SameServer(daemonServer, appServer)
+            ? null : daemonServer;
+
+    internal const string DaemonSignedOutNotice = "This machine's daemon is signed out, so it cannot reach the server. Sign in to its profile and it reconnects.";
+
+    /// The connection word the notice reads when the daemon reports its own sign-in as the reason its
+    /// hub is down; never on the wire.
+    internal const string DaemonSignedOutWord = "signed out";
+    internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
+    internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
+
+    internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
     const string IncompatibleReason = "daemon_incompatible";
 
@@ -98,8 +118,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     public string SelectedRepoPath {
         get => _selectedRepoPath;
         set {
+            // PathComparer, not ordinal: SameLaunchTarget and the picker already treat casings as one folder.
+            var changed = !PathComparer.Equals(_selectedRepoPath, value);
             this.RaiseAndSetIfChanged(ref _selectedRepoPath, value);
             _selectedRepoPathChanges.OnNext(value);
+            // A launch refusal describes the folder that failed. A later pick is a different attempt.
+            if (changed && StartError != _intakeNotice) StartError = null;
         }
     }
 
@@ -244,6 +268,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly BehaviorSubject<bool> _awaitingServerAfterSignIn = new(false);
     /// True once a Connecting/Finishing notice has lasted CatchUpLimit — Sign in is then the remaining affordance.
     readonly BehaviorSubject<bool> _catchUpTimedOut = new(false);
+    // A local server takes no sign-in: its recovery is the Start banner.
+    readonly BehaviorSubject<bool> _localServer = new(false);
+    readonly BehaviorSubject<bool> _localServerDown = new(false);
     readonly Action? _requestSignIn;
 
     readonly ObservableAsPropertyHelper<string?> _connectionNotice;
@@ -260,6 +287,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ObservableAsPropertyHelper<bool> _connectionBannerVisible;
     /// Same connection/sign-in/daemon banner the launcher shows above the composer.
     public bool ConnectionBannerVisible => _connectionBannerVisible.Value;
+
+    /// The usage-data disclosure, shown on the launcher until it is acknowledged.
+    public UsageDataNotice? UsageNotice { get; init; }
 
     readonly ObservableAsPropertyHelper<bool> _bannerBusy;
     /// True while the banner is an in-flight connect/finish line — a loader, not Sign in.
@@ -366,7 +396,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
     /// stamps come from the same clock, so one TimeProvider governs every expiry.
-    sealed record PendingLaunch(DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt);
+    sealed record PendingLaunch(
+        DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt,
+        string RepoPath, string Machine);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -520,8 +552,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // The word is seeded with "" (no snapshot yet): AvailabilityFor only reads it once the
         // attach state is Connected, by which point DaemonClientService's snapshot-before-Connected
         // ordering guarantees a real value is there (MainWindowViewModel's identical seam comment).
-        var availability = daemon.Status.CombineLatest(
+        var foreignServer = daemon.Snapshots.Select(s => ForeignDaemonServer(s.Daemon.ServerUrl, appServerUrl))
+            .StartWith((string?)null).DistinctUntilChanged();
+        // A daemon serving another server is connected to the wrong one: it cannot launch for this app.
+        var daemonAvailability = daemon.Status.CombineLatest(
             daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""), AvailabilityFor);
+        var availability = daemonAvailability.CombineLatest(foreignServer,
+            (local, foreign) => local is LaunchAvailability.Ready && foreign is not null ? LaunchAvailability.ServerDisconnected : local);
         availability.Subscribe(a => _currentAvailability = a).DisposeWith(_disposables);
         daemon.Snapshots.Select(s => s.Daemon.SupportedVendors)
             .Subscribe(v => _currentLocalVendors = v)
@@ -611,7 +648,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 signInRequired,
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
-                (a, expired, awaiting, lane) => (Availability: a, Expired: expired, Awaiting: awaiting && lane.Applies, Lane: lane.State))
+                foreignServer.CombineLatest(_machineSelectionChanges, (foreign, sel) => foreign is not null && !sel.Remote),
+                (a, expired, awaiting, lane, foreign) => (Availability: a, Expired: expired, Awaiting: awaiting && lane.Applies, Lane: lane.State, Foreign: foreign))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         // Chained rather than one wide CombineLatest: local status/connection/signIn/awaiting
         // first, then folded against the selection-aware availability and the selection itself —
@@ -619,17 +657,23 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // may apply at all.
         var localNoticeInputs = daemon.Status
             .CombineLatest(
-                daemon.Snapshots.Select(s => s.Daemon.Connection).StartWith(""),
+                daemon.Snapshots.Select(s => s.Daemon is { Credential: not null, Connection: not "connected" }
+                    ? DaemonSignedOutWord
+                    : s.Daemon.Connection).StartWith(""),
                 signInRequired,
                 _awaitingServerAfterSignIn,
                 selectedServerLane,
-                (status, connection, expired, awaiting, lane) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State));
+                foreignServer,
+                (status, connection, expired, awaiting, lane, foreign) => (status, connection, expired, awaiting: awaiting && lane.Applies, lane: lane.State, foreign));
         var rawNotices = localNoticeInputs
             .CombineLatest(selectedAvailability, _machineSelectionChanges,
-                (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane))
+                (n, avail, sel) => NoticeFor(n.status, n.connection, n.expired, n.awaiting, sel.Remote, avail, n.lane,
+                    n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
-        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp);
+        var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
+            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
+                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -651,12 +695,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ToProperty(this, x => x.BannerBusy, initialValue: true)
             .DisposeWith(_disposables);
         _signInVisible = signInState
-            .CombineLatest(_catchUpTimedOut, (t, timedOut) => !t.Awaiting && (t.Expired || timedOut || (
-                t.Availability == LaunchAvailability.ServerDisconnected && !LaneIsCatchingUp(t.Lane))))
+            .CombineLatest(_catchUpTimedOut, _localServer, (t, timedOut, local) => !local && !t.Awaiting && (t.Expired || (timedOut && !t.Foreign) || (
+                t.Availability == LaunchAvailability.ServerDisconnected && !t.Foreign && !LaneIsCatchingUp(t.Lane))))
             .ToProperty(this, x => x.SignInVisible, initialValue: false)
             .DisposeWith(_disposables);
 
-        availability
+        // The daemon catching up ends the wait whichever server it serves.
+        daemonAvailability
             .Where(a => a is LaunchAvailability.Ready or LaunchAvailability.DaemonUnavailable)
             .Subscribe(_ => _awaitingServerAfterSignIn.OnNext(false))
             .DisposeWith(_disposables);
@@ -715,6 +760,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_daemonStartMessageFeed)
             .DisposeWith(_disposables);
+    }
+
+    /// The "local server is not running" banner, beside the daemon's own recovery.
+    public LocalServerRecoveryViewModel? LocalServer { get; private set; }
+
+    /// The local stack's upgrade banner; null unless the server is this machine's local installation.
+    public LocalStackViewModel? LocalStack { get; init; }
+
+    public void AttachLocalServerRecovery(LocalServerRecoveryViewModel recovery) {
+        LocalServer = recovery;
+        this.RaisePropertyChanged(nameof(LocalServer));
+        _localServer.OnNext(recovery.IsLocalServer);
+        recovery.WhenAnyValue(x => x.ServerDown).Subscribe(_localServerDown).DisposeWith(_disposables);
     }
 
     /// Prefer the actionable start/lifecycle line when present; otherwise the connection notice.
@@ -789,14 +847,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal static string? NoticeFor(
             AttachStatus status, string daemonConnection, bool signInExpired, bool awaitingServer,
             bool remoteSelected, LaunchAvailability selectedAvailability,
-            ServerLaneState lane = ServerLaneState.Dormant) {
+            ServerLaneState lane = ServerLaneState.Dormant, string? foreignServerNotice = null) {
         if (signInExpired) return SignInExpiredNotice;
 
         if (!remoteSelected && status.State == AttachState.Unreachable)
             return status.Reason == IncompatibleReason ? DaemonIncompatibleNotice : DaemonDownNotice;
 
+        if (!remoteSelected && status.State == AttachState.Connected && foreignServerNotice is not null) return foreignServerNotice;
+
         if (awaitingServer && selectedAvailability is LaunchAvailability.ServerDisconnected or LaunchAvailability.Pending)
             return FinishingSignInNotice;
+
+        if (!remoteSelected && status.State == AttachState.Connected && daemonConnection == DaemonSignedOutWord)
+            return DaemonSignedOutNotice;
 
         if (!remoteSelected && selectedAvailability == LaunchAvailability.ServerDisconnected && LaneIsCatchingUp(lane))
             return ConnectingNotice;
@@ -825,6 +888,20 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A Connecting/Finishing line that outlived CatchUpLimit is a lost session, not catch-up.
     internal static string? NoticeAfterCatchUp(string? notice, bool timedOut) =>
         timedOut && BusyNotice(notice) ? ServerLostNotice : notice;
+
+    /// A local server takes no sign-in, so none of its notices asks for one. With this Mac selected,
+    /// the Start banner is the whole story while the server is down, so the generic connecting and
+    /// lost lines would contradict it; the daemon's own notices still stand. A remote pick
+    /// (<paramref name="remoteMachine"/>) keeps its own notices, naming the machine when it is lost.
+    internal static string? NoticeForLocalServer(string? notice, bool localServer, bool localServerDown, string? remoteMachine) =>
+        !localServer ? notice : (notice, remoteMachine) switch {
+            (SignInExpiredNotice or DaemonSignedOutNotice, _)           => LocalServerRefusedNotice,
+            (ServerLostNotice, { } machine)                             => RemoteOfflineNotice(machine),
+            (_, not null)                                               => notice,
+            (ConnectingNotice or ServerLostNotice, _) when localServerDown => null,
+            (ServerLostNotice, _)                                       => LocalServerLostNotice,
+            _                                                           => notice,
+        };
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on.
     internal static string TipFor(string? repoPath, string? connectionNotice) =>
@@ -916,7 +993,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         var selected = SelectedRepoPath;
         var options = paths
-            .OrderBy(p => RepoLabel.Leaf(p), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(RepoLabel.Leaf, StringComparer.OrdinalIgnoreCase)
             .ThenBy(p => p, StringComparer.Ordinal)
             .Select(p => new RepositoryOption(p, Lookup(byRepo, p) ?? DefaultVendor, PathComparer.Equals(p, selected)))
             .ToList();
@@ -1031,9 +1108,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     void SetMachineSelection(string name, bool remote) {
+        var changed = !string.Equals(SelectedMachine, name, StringComparison.Ordinal)
+            || RemoteMachineSelected != remote;
         SelectedMachine = name;
         RemoteMachineSelected = remote;
         _machineSelectionChanges.OnNext((name, remote));
+        // Same path can exist on two machines; a refusal belongs to the machine that launched.
+        if (changed && StartError != _intakeNotice) StartError = null;
     }
 
     /// A daemon with the local machine id and the local daemon's own name is this same daemon's
@@ -1202,7 +1283,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             // Every finished attempt is fresh evidence, so the flag follows it both ways. An
             // unauthorized outcome renders as the sign-in notice, never as raw transport text.
             _signInRequired.OnNext(outcome.Unauthorized);
-            StartError = outcome.Unauthorized ? null : outcome.Error;
+            if (outcome.Unauthorized)
+                StartError = null;
+            else if (SameLaunchTarget(draft.RepoPath, draft.Machine, draft.Remote) && outcome.Error is { } error)
+                StartError = FriendlyLaunchFailure(error);
             return;
         }
 
@@ -1232,7 +1316,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             lock (_launchTrackingLock)
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
-        var tracked = RecordPendingLaunch(agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0, uploadedAt);
+        var tracked = RecordPendingLaunch(
+            agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0,
+            uploadedAt, draft.RepoPath, draft.Machine);
         // A remote launch's workspace is backed by the local daemon socket, which can never find
         // an agent that isn't there — auto-open and the placeholder row only ever apply to a
         // local target.
@@ -1249,7 +1335,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         .Any(d => string.Equals(d.Name, machine, StringComparison.Ordinal) && d.Connected);
 
     /// False when a row or a buffered failure has already settled the launch.
-    bool RecordPendingLaunch(string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt) {
+    bool RecordPendingLaunch(
+            string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt,
+            string repoPath, string machine) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -1263,7 +1351,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
-            _pendingLaunches[agentId] = new PendingLaunch(_time.GetUtcNow(), lane, hadAttachments, uploadedAt);
+            _pendingLaunches[agentId] = new PendingLaunch(
+                _time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath, machine);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (_time.GetUtcNow().UtcDateTime - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1276,7 +1365,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             ForgetLaunch(agentId);
             return false;
         }
-        if (bufferedReason is not null) ApplyLaunchFailure(agentId, hadAttachments, bufferedReason);
+        if (bufferedReason is not null)
+            ApplyLaunchFailure(agentId, hadAttachments, bufferedReason, repoPath, machine, lane);
         return bufferedReason is null;
     }
 
@@ -1333,7 +1423,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             _pendingLaunches.Remove(agentId);
         }
         if (pending is null) return;
-        ApplyLaunchFailure(agentId, pending.HadAttachments, failure.Reason);
+        ApplyLaunchFailure(
+            agentId, pending.HadAttachments, failure.Reason, pending.RepoPath, pending.Machine, pending.Lane);
         _directory?.RemovePlaceholder(agentId);
         _launchFailed?.Invoke(agentId);
     }
@@ -1341,10 +1432,15 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A text-only launch just renders its reason. A launch that carried files hands the draft
     /// back when the composer is still exactly as this launch left it and still aimed at the same
     /// target — otherwise it says to re-attach, because restoring would overwrite what is there.
-    void ApplyLaunchFailure(string agentId, bool hadAttachments, string reason) {
+    void ApplyLaunchFailure(
+            string agentId, bool hadAttachments, string reason, string repoPath, string machine,
+            AgentOrigin lane) {
         var friendly = FriendlyLaunchFailure(reason);
+        // A text-only refusal names the folder+machine that was launched. Files that were not
+        // handed back still need the re-attach line on whatever target is selected now — the
+        // bytes left with the failed launch and the user must re-stage them for the next send.
         if (!hadAttachments) {
-            StartError = friendly;
+            if (SameLaunchTarget(repoPath, machine, lane == AgentOrigin.Remote)) StartError = friendly;
             return;
         }
 
@@ -1364,10 +1460,17 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         StartError = friendly + " — re-attach the files to send them again";
     }
 
+    /// Local and remote can share a daemon name and path; RemoteMachineSelected separates them.
+    bool SameLaunchTarget(string repoPath, string machine, bool remote) =>
+        PathComparer.Equals(SelectedRepoPath, repoPath)
+        && string.Equals(SelectedMachine, machine, StringComparison.Ordinal)
+        && RemoteMachineSelected == remote;
+
     bool IsRestorable(RetainedDraft retained) =>
         retained.ClearedGoal && _goalEdits == retained.GoalEditsAfterClear
         && retained.ClearedTray && Tray.Generation == retained.TrayGenerationAfterClear
         && retained.Draft.Machine == SelectedMachine
+        && retained.Draft.Remote == RemoteMachineSelected
         && retained.Draft.RepoPath == SelectedRepoPath
         && retained.Draft.Vendor == SelectedVendor;
 
@@ -1388,15 +1491,63 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         }
     }
 
+    /// Shown when an older daemon still refuses an empty standalone snapshot. Current daemons
+    /// commit an empty tree instead so a greenfield folder can launch. Wording stays neutral about
+    /// whether the folder is a git repo — an initialized commitless repo takes the same path.
+    internal const string EmptyFolderStartMessage =
+        "There's nothing in this folder to start from.";
+
+    /// Shown when preparing the workspace failed for some other git reason.
+    internal const string WorkspacePrepFailed = "Couldn't prepare a workspace for this folder.";
+
     /// <see cref="WireTokens.LaunchDeniedByOwnerPrefix"/> is a consent-gate denial on the target
-    /// machine, and an attachment_unavailable reason is the files failing to reach it; every other
-    /// reason passes through verbatim (the server already truncates to 400 characters).
-    internal static string FriendlyLaunchFailure(string reason) =>
-        reason.StartsWith(WireTokens.LaunchDeniedByOwnerPrefix, StringComparison.Ordinal)
-            ? "That machine's consent policy denied the launch. Approve it there, or pre-set a rule with kcap consent."
-        : reason.StartsWith("attachment_unavailable:", StringComparison.Ordinal)
-            ? "the attached files could not be delivered to the machine"
-            : reason;
+    /// machine, and an attachment_unavailable reason is the files failing to reach it. An empty
+    /// standalone snapshot and a raw <c>git … failed:</c> line are rewritten; every other reason
+    /// passes through (the server already truncates to 400 characters).
+    internal static string FriendlyLaunchFailure(string reason) {
+        if (reason == WireTokens.LaunchCancelled)
+            return "The launch was cancelled.";
+        if (reason.StartsWith(WireTokens.LaunchDeniedByOwnerPrefix, StringComparison.Ordinal))
+            return "That machine's consent policy denied the launch. Approve it there, or pre-set a rule with kcap consent.";
+        if (reason.StartsWith("attachment_unavailable:", StringComparison.Ordinal))
+            return "the attached files could not be delivered to the machine";
+        if (reason.StartsWith("standalone_snapshot_empty", StringComparison.Ordinal))
+            return EmptyFolderStartMessage;
+        if (IsEmptySnapshotCommit(reason))
+            return EmptyFolderStartMessage;
+        if (GitFailureSentence(reason) is { } git)
+            return git;
+        return reason;
+    }
+
+    /// The snapshot commit reports "nothing to commit" on stdout. A daemon that only forwarded
+    /// stderr leaves this as a bare command, sometimes with that stdout appended.
+    static bool IsEmptySnapshotCommit(string reason) {
+        const string prefix = "git commit -m Initial snapshot failed:";
+        if (!reason.StartsWith(prefix, StringComparison.Ordinal)) return false;
+        var detail = reason[prefix.Length..];
+        return string.IsNullOrWhiteSpace(detail)
+            || detail.Contains("nothing to commit", StringComparison.Ordinal)
+            || detail.Contains("nothing added to commit", StringComparison.Ordinal);
+    }
+
+    /// A launch reason that is still a git argv line. The command is not something to show.
+    static string? GitFailureSentence(string reason) {
+        const string marker = " failed: ";
+        if (!reason.StartsWith("git ", StringComparison.Ordinal)) return null;
+        var at = reason.IndexOf(marker, StringComparison.Ordinal);
+        if (at < 0) return null;
+
+        var detail = reason[(at + marker.Length)..].Trim().ReplaceLineEndings(" ");
+        if (detail.StartsWith("fatal: ", StringComparison.OrdinalIgnoreCase))
+            detail = detail["fatal: ".Length..];
+        else if (detail.StartsWith("error: ", StringComparison.OrdinalIgnoreCase))
+            detail = detail["error: ".Length..];
+        detail = detail.Trim();
+        if (detail.Length == 0) return WorkspacePrepFailed;
+        if (char.IsLower(detail[0])) detail = char.ToUpperInvariant(detail[0]) + detail[1..];
+        return WorkspacePrepFailed + " " + detail;
+    }
 
     /// Null for Manual (the harness's own default) and for any vendor that takes no mode.
     internal static string? PermissionModeFor(string vendor, string mode) =>

@@ -182,6 +182,13 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
     /// orchestrator reads it the instant a launch returns).</summary>
     volatile string? _sessionId;
 
+    /// <summary>Path of the session file <c>get_state</c> reported; null until the handshake answers
+    /// or when Pi omits it.</summary>
+    internal volatile string? SessionFile;
+
+    /// <summary>Pi's <c>--session</c> takes the session file, not its id.</summary>
+    public string? VendorResumeToken => SessionFile;
+
     /// <summary>See <see cref="_sessionId"/> — same cross-thread reasoning. Null means the
     /// handshake's <c>get_state</c> did not carry a model (see <see cref="ExtractModelId"/>) — NEVER
     /// backfilled with <see cref="_requestedModel"/>, since <see cref="ResolvedModel"/> is read as a
@@ -503,7 +510,8 @@ internal sealed class PiRpcHostedAgentRuntime : IHostedAgentRuntime, IAcpTranscr
             return;
         }
 
-        _sessionId = sessionId;
+        _sessionId  = sessionId;
+        SessionFile = data.Value.Str("sessionFile");
 
         // NOT `?? _requestedModel`: ResolvedModel is the orchestrator's CONFIRMED-applied-model
         // signal (see the ResolvedModel property doc), so when get_state omits a model, null is the

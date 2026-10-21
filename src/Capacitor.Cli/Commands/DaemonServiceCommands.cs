@@ -2,6 +2,7 @@ using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Install;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
@@ -38,9 +39,13 @@ sealed class DaemonServiceCommands(
 
         return action switch {
             "install"   => await verbs.Install(rest, startNow: !noStart),
-            "uninstall" => await verbs.Uninstall(),
+            "uninstall" => UnderArg(rest) switch {
+                null    => await verbs.Uninstall(),
+                ""      => Usage(),
+                var dir => await verbs.UninstallUnder(dir),
+            },
             "start"     => await verbs.Start(rest),
-            "stop"      => await verbs.Stop(),
+            "stop"      => await verbs.Stop(rest),
             "ensure"    => await verbs.Ensure(rest),
             "status"    => rest.Contains("--json") ? await verbs.StatusJson() : await verbs.Status(),
             "refresh"   => await verbs.Refresh(force: rest.Contains("--force")),
@@ -52,8 +57,10 @@ sealed class DaemonServiceCommands(
     /// Runs the ensure ladder for the browser flow, or <b>null on a platform with no service
     /// manager</b> — the caller renders that as its own refusal rather than as a failed transaction.
     /// </summary>
-    internal static async Task<ServiceEnsureJson?> FlowEnsureAsync(
-            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time) {
+    /// <param name="previousName">The daemon name the profile carried before this run saved its own; its
+    /// service, when installed, is retired in the same transaction as the install.</param>
+    internal static async Task<FlowEnsure?> FlowEnsureAsync(
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time, string? previousName = null) {
         DaemonServiceCommands verbs;
 
         try {
@@ -62,17 +69,48 @@ sealed class DaemonServiceCommands(
             return null;
         }
 
-        var (result, _) = await verbs.EvaluateEnsureAsync(profiles.Resolution.ProfileName);
-
-        return result;
+        return await verbs.EvaluateFlowEnsureAsync(profiles.Resolution.ProfileName, previousName);
     }
 
-    /// <summary>The flow's own resolution of the manager and the service id, matching
-    /// <see cref="DispatchAsync"/>'s with no command-line arguments to draw a daemon name from.</summary>
+    Task<FlowEnsure> EvaluateFlowEnsureAsync(string? profileName, string? previousName) =>
+        RetiringEnsureAsync(id, previousName, manager.Query,
+            async retire => (await EvaluateEnsureAsync(profileName, retire)).Result);
+
+    /// <summary>
+    /// The ensure ladder for <paramref name="id"/>, retiring the service <paramref name="previousName"/>
+    /// left installed when the platform's verify engine can. Only an installed unit is a candidate: a
+    /// daemon started by hand has none, and the engine refuses one pinned to another profile.
+    ///
+    /// <para>A refused or contended retire changed nothing, so the ladder runs again without it: the name
+    /// setup saved still gets its daemon. The old service is reported as left installed only once the new
+    /// one is up; before that it is the only daemon the machine has.</para>
+    /// </summary>
+    internal static async Task<FlowEnsure> RetiringEnsureAsync(
+            string id, string? previousName, Func<string, ServiceQuery> query,
+            Func<string?, Task<ServiceEnsureJson>> ensure) {
+        var previous = string.IsNullOrWhiteSpace(previousName) ? null : DaemonStore.Sanitize(previousName);
+
+        if (previous is null || previous == id || !HasUnit(query(previous))) return new(await ensure(null));
+
+        var result = await ensure(previous);
+        if (result.Reason is "verify_retire_refused" or "verify_contended") result = await ensure(null);
+
+        var after = query(previous);
+
+        return HasUnit(after) ? (FlowEnsure.IsUp(result) ? new(result, LeftInstalled: previous) : new(result))
+            : after.Probe == LabelProbe.Absent ? new(result, Retired: previous)
+            : new(result);
+
+        static bool HasUnit(ServiceQuery q) => q.Probe == LabelProbe.Loaded || q.UnitPresent;
+    }
+
+    /// <summary>The flow's own resolution of the manager and the service id. The id is the name setup
+    /// just saved, ahead of <c>KCAP_DAEMON_NAME</c>: setup chose it to be free, and an environment name
+    /// it moved off would install a second service under the held one.</summary>
     static DaemonServiceCommands ForFlow(
             ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time) =>
         new(DaemonStore.FromEnvironment(), root, profiles, ServiceManagerFactory.ForCurrentOs(root, home, time),
-            DaemonStore.Sanitize(DaemonNameResolver.Resolve([], profiles.DaemonName)), home, time);
+            DaemonStore.Sanitize(profiles.DaemonName ?? DaemonNameResolver.Resolve([], null)), home, time);
 
     /// <summary>
     /// The <c>ExtraArgs</c> baked into a service unit, from the raw <c>--max-agents</c> flag value.
@@ -92,12 +130,12 @@ sealed class DaemonServiceCommands(
         return ["--max-agents", maxAgents.ToString()];
     }
 
-    /// <summary>Short of the npm refresh wrapper's 60s kill, so the last reload it starts can finish.</summary>
-    static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(55);
+    /// <summary>Above <see cref="LaunchdServiceManager.ReloadBudget"/> and short of the refresh step's own
+    /// timeout, so the last reload it starts can finish.</summary>
+    static readonly TimeSpan RefreshDeadline = TimeSpan.FromSeconds(85);
 
-    /// <summary>Asks a running daemon for a restart in <c>mode</c> and reports whether it accepted. Test seam;
-    /// production uses the control socket.</summary>
-    internal Func<string, string, bool>? RestartRequester { get; init; }
+    /// <summary>Stops a running daemon for a reload. Test seam; production uses the control socket.</summary>
+    internal Func<string, ReloadStop>? ReloadStopper { get; init; }
 
     static readonly TimeSpan ForcedLockWait = TimeSpan.FromSeconds(10);
 
@@ -117,13 +155,13 @@ sealed class DaemonServiceCommands(
     internal static int ForcedExitCode(UnitRefresh outcome) => outcome is UnitRefresh.Reloaded or UnitRefresh.Current ? 0 : 1;
 
     static string ForceHint(string serviceId) =>
-        $"To apply it now, run `kcap daemon service refresh --name {serviceId} --force` (ends this daemon's hosted agents).";
+        $"To apply it now, run `kcap daemon service refresh --name {serviceId} --force`.";
 
     /// <summary>
     /// Brings every installed unit up to the one this version writes, and moves a unit pinned to a script
-    /// install's version directory onto its stable <c>current</c> path so the daemon follows updates. It
-    /// runs after each update, unattended, so a daemon hosting agents is never restarted: a launchd reload
-    /// is left for a later run (unless <c>--force</c> targets one daemon), and a systemd daemon picks the new path up on its next start.
+    /// install's version directory onto its stable <c>current</c> path so the daemon follows updates. A
+    /// launchd reload stops the daemon with its agents kept for the reloaded one to resume, and is left for
+    /// a later run when the daemon does not accept the stop; a systemd daemon picks the new path up on its next start.
     /// </summary>
     internal async Task<int> Refresh(bool force = false, Func<string, string>? stabilize = null) {
         stabilize ??= ScriptInstallLayout.Stabilize;
@@ -154,7 +192,7 @@ sealed class DaemonServiceCommands(
         return force ? await RefreshForcedAsync(launchd, stabilize) : await RefreshAllAsync(launchd, stabilize);
     }
 
-    /// <summary>The unattended post-update pass: every installed unit, never a restart the daemon did not accept.</summary>
+    /// <summary>The unattended post-update pass: every installed unit, never a reload of a daemon that did not accept the stop.</summary>
     async Task<int> RefreshAllAsync(LaunchdServiceManager launchd, Func<string, string> stabilize) {
         var failed  = 0;
         var started = time.GetTimestamp();
@@ -172,15 +210,17 @@ sealed class DaemonServiceCommands(
                 continue;
             }
 
-            var outcome = launchd.RefreshUnit(serviceId, () => RequestRestart(serviceId, "now"), TimeLeft, out var error, stabilize);
+            ReloadStop? stop = null;
+            var outcome = launchd.RefreshUnit(
+                serviceId, () => Proceeds((stop = StopForReload(serviceId, "now", whenIdle: true)).Value), TimeLeft, out var error, stabilize);
 
             switch (outcome) {
                 case UnitRefresh.Reloaded:
-                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded with its updated service unit.");
+                    await Console.Out.WriteLineAsync($"Daemon '{serviceId}': reloaded with its updated service unit.{OverrunNote(stop)}");
                     break;
                 case UnitRefresh.Deferred:
                     await Console.Out.WriteLineAsync(
-                        $"Daemon '{serviceId}': busy, so its service unit change waits for the next update. {ForceHint(serviceId)}");
+                        $"Daemon '{serviceId}': {DeferralReason(stop)}, so its service unit change waits for the next update. {ForceHint(serviceId)}");
                     break;
                 case UnitRefresh.Unverified:
                     await Console.Out.WriteLineAsync(
@@ -196,10 +236,11 @@ sealed class DaemonServiceCommands(
         return failed == 0 ? 0 : 1;
     }
 
-    /// <summary>One daemon, a forced restart, and one <c>refresh_outcome=</c> line for machine callers.</summary>
+    /// <summary>One daemon, a reload, and one <c>refresh_outcome=</c> line for machine callers.</summary>
     async Task<int> RefreshForcedAsync(LaunchdServiceManager launchd, Func<string, string> stabilize) {
         UnitRefresh outcome;
         string?     error = null;
+        ReloadStop? stop  = null;
         try {
             using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
             if (txn is null) {
@@ -207,7 +248,7 @@ sealed class DaemonServiceCommands(
             } else {
                 var started = time.GetTimestamp(); // the lock wait is not charged to the reload budget
                 outcome = launchd.RefreshUnit(
-                    id, () => RequestRestart(id, "force"), () => RefreshDeadline - time.GetElapsedTime(started),
+                    id, () => Proceeds((stop = StopForReload(id, "force", whenIdle: false)).Value), () => RefreshDeadline - time.GetElapsedTime(started),
                     out error, stabilize, requirePositiveSpawnType: true);
             }
         } catch (Exception ex) {
@@ -218,10 +259,10 @@ sealed class DaemonServiceCommands(
         await Console.Error.WriteLineAsync($"refresh_outcome={RefreshToken(outcome)}");
         if (error is not null) await Console.Error.WriteLineAsync($"Daemon '{id}': {error}");
         await Console.Out.WriteLineAsync(outcome switch {
-            UnitRefresh.Reloaded        => $"Daemon '{id}': reloaded at standard priority.",
+            UnitRefresh.Reloaded        => $"Daemon '{id}': reloaded at standard priority.{OverrunNote(stop)}",
             UnitRefresh.Current         => $"Daemon '{id}': already runs at standard priority.",
             UnitRefresh.NotLoaded       => $"Daemon '{id}': its service is not loaded; run `kcap daemon service start --name {id}`.",
-            UnitRefresh.Deferred        => $"Daemon '{id}': the daemon did not accept the restart.",
+            UnitRefresh.Deferred        => $"Daemon '{id}': the daemon {DeferralReason(stop)}.",
             UnitRefresh.Contended       => $"Daemon '{id}': another service operation is in progress. Try again shortly.",
             UnitRefresh.Unverified      => $"Daemon '{id}': launchd's state could not be verified.",
             UnitRefresh.UnitMissing     => $"Daemon '{id}': no service unit is installed.",
@@ -232,14 +273,49 @@ sealed class DaemonServiceCommands(
         return ForcedExitCode(outcome);
     }
 
-    /// <summary>True only when the daemon accepted a restart in <paramref name="mode"/>: <c>now</c> is applied only
-    /// while idle, <c>force</c> ends whatever it hosts. A <c>queued</c> answer is not an acceptance.</summary>
-    bool RequestRestart(string serviceId, string mode) {
-        if (RestartRequester is { } requester) return requester(serviceId, mode);
+    static bool Proceeds(ReloadStop stop) => stop is ReloadStop.Exited or ReloadStop.Overran or ReloadStop.Restarting;
+
+    static string OverrunNote(ReloadStop? stop) =>
+        stop == ReloadStop.Overran ? " It was still stopping at the end of the wait and was ended by the reload; the reloaded daemon resumes its agents." : "";
+
+    static string DeferralReason(ReloadStop? stop) => stop switch {
+        ReloadStop.NoAnswer       => "did not answer the stop request",
+        ReloadStop.RestartRefused => "is busy",
+        _                         => "did not stop for the reload",
+    };
+
+    /// <summary>
+    /// Asks the daemon to exit with its agents kept for the reloaded daemon to resume. Once it has accepted,
+    /// the reload goes ahead even when it is still exiting at the end of the wait: it marked its agents for
+    /// resume when it began stopping, and the bootout ends what is left. A daemon that predates the shutdown
+    /// frame closes the connection unanswered; it is asked for a restart in <paramref name="legacyMode"/>
+    /// instead, and keeps no resume ledger to lose. <paramref name="whenIdle"/> leaves a daemon running an
+    /// eval or admitting a launch alone.
+    /// </summary>
+    ReloadStop StopForReload(string serviceId, string legacyMode, bool whenIdle) {
+        if (ReloadStopper is { } stopper) return stopper(serviceId);
+
+        var outcome = DaemonShutdownClient.StopAsync(
+                store, serviceId, new ShutdownRequestDto("keep", "final", whenIdle), LaunchdServiceManager.ReloadExitWait, time,
+                CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        return outcome switch {
+            ShutdownOutcome.Exited  => ReloadStop.Exited,
+            ShutdownOutcome.Overran => ReloadStop.Overran,
+            ShutdownOutcome.Busy    => ReloadStop.RestartRefused,
+            ShutdownOutcome.Refused => RequestLegacyRestart(serviceId, legacyMode) ? ReloadStop.Restarting : ReloadStop.RestartRefused,
+            _                       => ReloadStop.NoAnswer,
+        };
+    }
+
+    /// <summary><c>now</c> is applied only while idle, <c>force</c> ends whatever the daemon hosts. A
+    /// <c>queued</c> answer is not an acceptance.</summary>
+    bool RequestLegacyRestart(string serviceId, string mode) {
         try {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
             var reply = DaemonRestartClient.RequestAsync(store, serviceId, mode, cts.Token).GetAwaiter().GetResult();
-            return reply is { Type: Core.LocalIpc.FrameType.RestartAck, Text: "restarting" };
+            return reply is { Type: FrameType.RestartAck, Text: "restarting" };
         } catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException) {
             return false;
         }
@@ -293,14 +369,6 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        // --verify needs a manager whose Query reports the job's own pid. launchd runs the full
-        // transaction engine; a Windows Scheduled Task runs WindowsServiceVerify below. systemd has
-        // neither yet, so it is refused here rather than failing deep inside a transaction.
-        if (verify && manager is not (LaunchdServiceManager or WindowsScheduledTaskServiceManager)) {
-            await Console.Error.WriteLineAsync("install --verify is only supported on macOS (launchd) and Windows in this release.");
-            return 1;
-        }
-
         var daemonPath = UnitIdentity.ResolveDaemonBinary();
         if (daemonPath is null) { await Console.Error.WriteLineAsync(DaemonCommands.DaemonNotFoundMessage()); return 1; }
 
@@ -326,12 +394,12 @@ sealed class DaemonServiceCommands(
             // to a valid server URL here too, so the transaction never destroys a working unit only to
             // install one whose daemon would exit config-invalid and never satisfy readiness.
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
-            var exit = manager is WindowsScheduledTaskServiceManager
-                ? await NewWindowsVerify(() => profileUrlValid)
-                    .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId)
-                : await new ServiceVerify(store, root, (LaunchdServiceManager)manager,
+            var exit = manager is LaunchdServiceManager launchd
+                ? await new ServiceVerify(store, root, launchd,
                         n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
                         time, profileViable: () => profileUrlValid, gateEnv: Environment.GetEnvironmentVariable)
+                    .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId)
+                : await NewPollingVerify(() => profileUrlValid)
                     .InstallVerifiedAsync(spec, replace: replace, CapacitorVersion.Current(), retireServiceId: retireId);
             if (exit != VerifyExit.Ok) return exit;
         } else {
@@ -401,11 +469,51 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
-        manager.Install(spec, startNow);
-        return 0;
+        var before = TryQuery(spec.ServiceId);
+        if (manager.Install(spec, startNow, out var error)) return 0;
+
+        await Console.Error.WriteLineAsync(InstallFailure(spec, manager.Describe(), error, before, TryQuery(spec.ServiceId)));
+        return 1;
     }
 
-    async Task<int> Uninstall() {
+    ServiceQuery? TryQuery(string serviceId) {
+        try {
+            return manager.Query(serviceId);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+            return null;
+        }
+    }
+
+    /// <summary>Why a plain install failed. When the unit was already loaded: whether it still is, which
+    /// daemon its unit names, and the command that reinstalls it. <paramref name="after"/> is read after
+    /// the failure, because the install may already have stopped the old job.</summary>
+    internal static string InstallFailure(
+            ServiceSpec spec, string describe, string? error, ServiceQuery? before, ServiceQuery? after) {
+        var id      = spec.ServiceId;
+        var message = $"Could not install service '{id}' ({describe}): {error}";
+        if (before is not { Probe: LabelProbe.Loaded }) return message;
+
+        var reinstall = $"`kcap daemon service install --replace --verify --name {id}`";
+
+        var unit = after?.UnitPresent == true ? after : before;
+        var ours = UnitIdentity.SameDaemon(unit.BinaryPath, spec.DaemonBinaryPath);
+        var runs = ours
+            ? $"this install's daemon ({spec.DaemonBinaryPath})"
+            : $"{unit.BinaryPath ?? "a daemon binary kcap could not read"}, not this install's daemon ({spec.DaemonBinaryPath})";
+
+        var detail = after?.Probe switch {
+            LabelProbe.Loaded => $"The service is still loaded, and its unit names {runs}.",
+            LabelProbe.Absent => $"The service was loaded and is now stopped; its unit names {runs}.",
+            _ => $"The service was loaded; kcap could not tell whether it still is (see `kcap daemon service status --name {id}`). Its unit names {runs}.",
+        };
+        var fix = ours && after?.Probe == LabelProbe.Loaded
+            ? $"To reinstall it in place, run {reinstall}."
+            : ours ? $"To install it again, run {reinstall}." : $"To point it at this install, run {reinstall}.";
+
+        return $"{message}{Environment.NewLine}  {detail} {fix}";
+    }
+
+    internal async Task<int> Uninstall() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
@@ -413,47 +521,112 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
+        var ended = await EndAgentsBeforeRemovalAsync(id);
+
         if (!manager.Uninstall(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not uninstall service '{id}': {error}");
             return 1;
         }
 
+        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, id, time);
+
         await Console.Out.WriteLineAsync($"Service '{id}' uninstalled ({manager.Describe()}).");
         return 0;
     }
 
+    /// <summary>Asks a running daemon whose unit is being removed for good to end its agents and exit: the
+    /// bootout alone reaches it as SIGTERM, which keeps them for a successor that never starts. One that
+    /// does not answer is left to the bootout. False when the daemon was running and did not exit: its
+    /// ledger still names agents a later start would resume.</summary>
+    async Task<bool> EndAgentsBeforeRemovalAsync(string serviceId) {
+        if (DaemonPidProbe.ValidatedPid(store, serviceId) is null) return true;
+
+        return await DaemonShutdownClient.StopAndWaitAsync(
+                store, serviceId, new ShutdownRequestDto("end", "final"), DaemonCommands.StopExitWait, time, CancellationToken.None)
+            || DaemonPidProbe.ValidatedPid(store, serviceId) is null;
+    }
+
     /// <summary>
-    /// Routes plain vs <c>--verify</c> starts. <c>--verify</c> needs a manager whose Query reports the
-    /// job's own pid: launchd, or a Windows Scheduled Task through <see cref="WindowsServiceVerify"/>.
+    /// Removes every installed unit whose daemon binary lies under <paramref name="dir"/>, and no
+    /// other: a desktop app's uninstaller owns only the services that run its own copy, never one an
+    /// npm or standalone install wrote.
     /// </summary>
-    internal async Task<int> Start(string[] args) {
-        if (!args.Contains("--verify")) return await StartPlain();
-
-        if (manager is WindowsScheduledTaskServiceManager) {
-            var exit = await NewWindowsVerify().StartVerifiedAsync(id);
-            if (exit == VerifyExit.Ok) {
-                try { await Console.Out.WriteLineAsync($"Service '{id}' started (verified)."); } catch (IOException) { }
-            }
-            return exit;
-        }
-
-        if (manager is not LaunchdServiceManager) {
-            await Console.Error.WriteLineAsync("start --verify is only supported on macOS (launchd) and Windows in this release.");
+    internal async Task<int> UninstallUnder(string dir) {
+        if (manager.TryListInstalled() is not { } units) {
+            await Console.Error.WriteLineAsync($"Could not list the installed services ({manager.Describe()}); nothing was uninstalled.");
             return 1;
         }
 
-        return await StartVerified();
+        var failed = false;
+
+        foreach (var unit in units) {
+            try {
+                if (!Owned(unit)) continue;
+
+                using var txn = await ServiceTxnLock.TryAcquireAsync(store, unit, TimeSpan.FromSeconds(5), time);
+                if (txn is null) {
+                    await Console.Error.WriteLineAsync($"Another service operation is in progress for '{unit}'. Try again shortly.");
+                    failed = true;
+                } else if (!Owned(unit)) {
+                    // An install holding the lock may have repointed the unit at another copy of kcap.
+                    continue;
+                } else {
+                    var ended = await EndAgentsBeforeRemovalAsync(unit);
+
+                    if (!manager.Uninstall(unit, out var error)) {
+                        await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {error}");
+                        failed = true;
+                    } else {
+                        if (!ended) DaemonCommands.MarkLedgerInterrupted(store, unit, time);
+                        await Console.Out.WriteLineAsync($"Service '{unit}' uninstalled ({manager.Describe()}).");
+                    }
+                }
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                await Console.Error.WriteLineAsync($"Could not uninstall service '{unit}': {ex.Message}");
+                failed = true;
+            }
+        }
+
+        return failed ? 1 : 0;
+
+        bool Owned(string unit) =>
+            manager.Status(unit).BinaryPath is { } binary && IsUnder(binary, dir, OperatingSystem.IsWindows());
     }
 
-    WindowsServiceVerify NewWindowsVerify(Func<bool>? profileViable = null) =>
+    /// <summary>
+    /// The folder <c>--under</c> names: null without the flag, empty when its value is missing,
+    /// blank or another flag.
+    /// </summary>
+    internal static string? UnderArg(string[] rest) {
+        var at = Array.IndexOf(rest, "--under");
+        if (at < 0) return null;
+        var value = at + 1 < rest.Length ? rest[at + 1] : "";
+        return string.IsNullOrWhiteSpace(value) || value.StartsWith("--", StringComparison.Ordinal) ? "" : value;
+    }
+
+    internal static bool IsUnder(string path, string dir, bool ignoreCase) {
+        // A filesystem root keeps its separator through the trim.
+        var trimmed = Path.TrimEndingDirectorySeparator(Path.GetFullPath(dir));
+        var root = Path.EndsInDirectorySeparator(trimmed) ? trimmed : trimmed + Path.DirectorySeparatorChar;
+        return Path.GetFullPath(path).StartsWith(root, ignoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
+
+    /// <summary>Routes plain vs <c>--verify</c> starts: launchd through its transaction engine, every
+    /// other manager through <see cref="PollingServiceVerify"/>.</summary>
+    internal async Task<int> Start(string[] args) {
+        if (!args.Contains("--verify")) return await StartPlain();
+        if (manager is LaunchdServiceManager) return await StartVerified();
+
+        var exit = await NewPollingVerify().StartVerifiedAsync(id);
+        if (exit == VerifyExit.Ok) {
+            try { await Console.Out.WriteLineAsync($"Service '{id}' started (verified)."); } catch (IOException) { }
+        }
+        return exit;
+    }
+
+    PollingServiceVerify NewPollingVerify(Func<bool>? profileViable = null) =>
         new(store, manager, n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t), time,
-            profileViable, unitEnv: RetiredUnitEnv);
-
-    // The retired unit's baked environment, or null when it has no wrapper to read.
-    IReadOnlyDictionary<string, string>? RetiredUnitEnv(string serviceId) {
-        var wrapper = WindowsTaskUnit.WrapperPath(root, serviceId);
-        return File.Exists(wrapper) ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(wrapper)) : null;
-    }
+            profileViable);
 
     async Task<int> StartPlain() {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
@@ -492,7 +665,7 @@ sealed class DaemonServiceCommands(
         return exit;
     }
 
-    async Task<int> Stop() {
+    internal async Task<int> Stop(string[] args) {
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, TimeSpan.FromSeconds(10), time);
 
         if (txn is null) {
@@ -500,10 +673,18 @@ sealed class DaemonServiceCommands(
             return 1;
         }
 
+        var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
+        var outcome = DaemonPidProbe.ValidatedPid(store, id) is null
+            ? ShutdownOutcome.Exited
+            : await DaemonShutdownClient.StopAsync(store, id, request, DaemonCommands.StopExitWait, time, CancellationToken.None);
+        var exited  = outcome == ShutdownOutcome.Exited || DaemonPidProbe.ValidatedPid(store, id) is null;
+
         if (!manager.Stop(id, out var error)) {
             await Console.Error.WriteLineAsync($"Could not stop service '{id}': {error}");
             return 1;
         }
+
+        if (!exited) DaemonCommands.MarkLedgerInterrupted(store, id, time, DaemonCommands.KeepsSavedResumes(request, outcome));
 
         await Console.Out.WriteLineAsync($"Service '{id}' stopped (still installed).");
         return 0;
@@ -571,7 +752,9 @@ sealed class DaemonServiceCommands(
     /// tokens to stderr; what this method drops is the verb's own reporting, not the transaction's
     /// diagnostics. A caller that owns the terminal has to stop competing for it first.</para>
     /// </summary>
-    internal async Task<(ServiceEnsureJson Result, int Exit)> EvaluateEnsureAsync(string? profileName) {
+    /// <param name="retireServiceId">Retired by the install arm's transaction; the start arms never retire.</param>
+    internal async Task<(ServiceEnsureJson Result, int Exit)> EvaluateEnsureAsync(
+            string? profileName, string? retireServiceId = null) {
         var query     = manager.Query(id);
         var daemonPid = DaemonPidProbe.ValidatedPid(store, id);
         var txnActive = ServiceTxnLock.IsHeld(store, id);
@@ -601,7 +784,7 @@ sealed class DaemonServiceCommands(
             case EnsureAction.Attention:
                 return (new ServiceEnsureJson(id, state, "none", "attention", null, decision.Reason), 1);
             case EnsureAction.Install:
-                return await EnsureInstall(profileName, state);
+                return await EnsureInstall(profileName, state, retireServiceId);
             case EnsureAction.Start:
                 return await EnsureStart(profileName, state);
             default:
@@ -674,8 +857,9 @@ sealed class DaemonServiceCommands(
 
     /// <summary>Install arm of <see cref="Ensure"/>: force-bake the born-<c>prompt</c> directive (and the
     /// expected-server pin the identity half of the start gate re-reads), then run the verified
-    /// transaction on launchd or a plain install elsewhere.</summary>
-    async Task<(ServiceEnsureJson, int)> EnsureInstall(string? profileName, string state) {
+    /// transaction on launchd (or on Windows when retiring a renamed service) or a plain install
+    /// elsewhere.</summary>
+    async Task<(ServiceEnsureJson, int)> EnsureInstall(string? profileName, string state, string? retireServiceId) {
         var serverUrl = await ResolveServerUrlAsync(profileName);
         if (serverUrl is null)
             return (new ServiceEnsureJson(id, state, "install", "refused", null, "no_server_configured"), 1);
@@ -694,24 +878,31 @@ sealed class DaemonServiceCommands(
         StartGateReason? gateReason = null;
         string? viabilityReason = null;
         string? bootRefusalToken = null;
+        var verified = manager is LaunchdServiceManager;
         int exit;
         if (manager is LaunchdServiceManager) {
             var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
             var engine = new ServiceVerify(store, root, (LaunchdServiceManager)manager,
                 n => DaemonPidProbe.ValidatedPid(store, n), (n, t) => HelloProbe.RunAsync(store, n, time, t),
                 time, profileViable: () => profileUrlValid, gateEnv: EnsureGateEnv(profileName, serverUrl));
-            exit = await engine.InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current());
+            exit = await engine.InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current(), retireServiceId);
             // InstallVerifiedAsync never returns StartGate — its gated refusals are viability/drift —
             // so gateReason stays null here and StartGate recovery never fires from the install arm.
             gateReason       = engine.LastGateReason;
             viabilityReason  = engine.LastViabilityReason;
             bootRefusalToken = engine.LastBootRefusalToken;
+        } else if (retireServiceId is not null) {
+            // Only the verified install retires, so a rename takes it over the plain one.
+            var profileUrlValid = await ServiceInstallViability.PinnedProfileServerUrlValidAsync(env, root);
+            exit = await NewPollingVerify(() => profileUrlValid)
+                .InstallVerifiedAsync(spec, replace: false, CapacitorVersion.Current(), retireServiceId);
+            verified = true;
         } else {
             exit = await InstallPlain(spec, startNow: true);
         }
 
-        if (exit != 0) return EnsureFailure(exit, gateReason, state, "install", viabilityReason, bootRefusalToken);
-        return (new ServiceEnsureJson(id, state, "install", "installed", Verified: manager is LaunchdServiceManager), 0);
+        if (exit != 0) return EnsureFailure(exit, gateReason, state, "install", viabilityReason, bootRefusalToken, verified);
+        return (new ServiceEnsureJson(id, state, "install", "installed", Verified: verified), 0);
     }
 
     /// <summary>Pure: whether a launchd ensure run must refuse for want of a profile name. The start
@@ -787,8 +978,8 @@ sealed class DaemonServiceCommands(
     /// flag matches this run's transaction (true on the launchd arms), and the exit code always
     /// passes through unchanged.</summary>
     (ServiceEnsureJson, int) EnsureFailure(int exit, StartGateReason? gateReason, string state, string action,
-            string? viabilityReason = null, string? bootRefusalToken = null) {
-        var verified = manager is LaunchdServiceManager;
+            string? viabilityReason = null, string? bootRefusalToken = null, bool? verifiedRun = null) {
+        var verified = verifiedRun ?? manager is LaunchdServiceManager;
         var (recovery, reason) = EnsureFailureMap.Map(exit, gateReason, verified, viabilityReason, bootRefusalToken);
         return (new ServiceEnsureJson(id, state, action, "refused", recovery, reason, Verified: verified), exit);
     }
@@ -805,9 +996,7 @@ sealed class DaemonServiceCommands(
         if (!unitPresent) return (null, null, null, null);
 
         try {
-            var env = manager is WindowsScheduledTaskServiceManager
-                ? WindowsTaskUnit.EnvFromWrapper(File.ReadAllText(WindowsTaskUnit.WrapperPath(root, id)))
-                : LaunchdUnit.EnvFromPlist(File.ReadAllText(LaunchdUnit.PlistPath(home, id)));
+            if (manager.UnitEnvironment(id) is not { } env) return (null, null, null, null);
             env.TryGetValue(ProfileOverrides.ProfileVar, out var profile);
             env.TryGetValue("KCAP_EXPECT_SERVER_URL", out var expectedServer);
             env.TryGetValue("KCAP_CONSENT_SEED_DEFAULT", out var consentSeed);
@@ -839,18 +1028,20 @@ sealed class DaemonServiceCommands(
         Console.Error.WriteLine("Usage: kcap daemon service <install|uninstall|start|stop|ensure|status|refresh> [--name N]");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  install [--name N] [--profile P] [--max-agents N] [--no-start] [--replace] [--verify] [--retire ID]");
-        Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/version/ownership and rolls back on failure");
+        Console.Error.WriteLine("                          --verify polls readiness/version/ownership and rolls back on failure");
         Console.Error.WriteLine("                          --replace (requires --verify) takes over an existing label/unit/live owner");
         Console.Error.WriteLine("                          --retire ID (requires --replace --verify) also removes unit ID in the same transaction");
         Console.Error.WriteLine("                          --no-start is incompatible with --verify");
         Console.Error.WriteLine("  uninstall [--name N]   Stop and remove the service unit");
+        Console.Error.WriteLine("  uninstall --under DIR  Remove every unit whose daemon binary is inside DIR");
         Console.Error.WriteLine("  start [--name N] [--verify]   Start the installed service now");
-        Console.Error.WriteLine("                          --verify (macOS/launchd and Windows) polls readiness/ownership and rolls back on failure");
-        Console.Error.WriteLine("  stop [--name N]        Stop the running service (stays installed)");
+        Console.Error.WriteLine("                          --verify polls readiness/ownership and rolls back on failure");
+        Console.Error.WriteLine("  stop [--name N] [--keep-agents]   Stop the running service (stays installed) and end its agents;");
+        Console.Error.WriteLine("                          --keep-agents keeps them for the next start to resume");
         Console.Error.WriteLine("  ensure [--name N] [--profile P] [--json]   Install-or-start from a fresh status read");
         Console.Error.WriteLine("                          (bakes the born-prompt consent seed; gate refusals emit recovery_surface=)");
         Console.Error.WriteLine("  status [--name N] [--json]   Show installed/running state (--json for machine-readable output)");
-        Console.Error.WriteLine("  refresh                Update installed units to this version's format; reloads only idle daemons");
+        Console.Error.WriteLine("  refresh                Update installed units to this version's format; a reload resumes the daemon's agents");
         return 1;
     }
 }

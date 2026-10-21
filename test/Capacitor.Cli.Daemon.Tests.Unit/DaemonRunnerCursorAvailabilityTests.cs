@@ -175,6 +175,46 @@ public class DaemonRunnerCursorAvailabilityTests {
             .Because("an advertised vendor is withholding nothing, so it must not produce a warning");
     }
 
+    /// <summary>Each vendor advertises the launcher policy its own arm names. These are wire tokens the
+    /// server and the vendor-cert manifest match on, so each spelling is pinned.</summary>
+    [Test]
+    [Arguments("claude",       false, "claude-unattended-v1")]
+    [Arguments("codex",        false, "codex-unattended-v1")]
+    [Arguments("codex",        true,  "codex-appserver-unattended-v2")]
+    [Arguments("cursor",       false, "cursor-unattended-v4")]
+    [Arguments("copilot",      false, "copilot-unattended-v1")]
+    [Arguments("gemini",       false, "gemini-unattended-v1")]
+    [Arguments("kiro",         false, "kiro-unattended-v1")]
+    [Arguments("pi",           false, "pi-unattended-v1")]
+    [Arguments("opencode",     false, "opencode-unattended-v1")]
+    [Arguments("antigravity",  false, "antigravity-unattended-v1")]
+    [Arguments("grok",         false, "grok-unattended-v1")]
+    [Arguments("muse",         false, "muse-unattended-v1")]
+    [Arguments("mistral-vibe", false, null)]
+    [Arguments("newvendor",    false, null)]
+    public async Task LauncherPolicyVersion_is_the_vendors_own_arm(string vendor, bool codexAppServer, string? expected) =>
+        await Assert.That(DaemonRunner.LauncherPolicyVersion(vendor, codexAppServer)).IsEqualTo(expected);
+
+    /// <summary>An unattended-capable vendor with no launcher policy is withheld, with a reason, and
+    /// never advertised under a token nobody wrote, even when a caller hands it in as advertised.</summary>
+    [Test]
+    public async Task A_vendor_with_no_launcher_policy_is_withheld_rather_than_advertised() {
+        IHostedAgentRuntimeFactory[] factories = [
+            new FakeRuntimeFactory("newvendor", isAvailable: true, supportsUnattended: true),
+            new FakeRuntimeFactory("claude",    isAvailable: true, supportsUnattended: true),
+        ];
+
+        var withheld = DaemonRunner.ClassifyUnattendedVendors(factories).Single(s => s.Vendor == "newvendor");
+
+        await Assert.That(withheld.Advertised).IsFalse();
+        await Assert.That(withheld.WithheldReason).IsEqualTo("no launcher policy is defined for newvendor");
+
+        var capabilities = DaemonRunner.ComputeUnattendedVendorCapabilities(
+            factories, new DaemonConfig { ClaudePath = "/definitely/missing/claude" }, ["claude", "newvendor"]);
+
+        await Assert.That(capabilities.Select(c => c.Vendor)).IsEquivalentTo(["claude"]);
+    }
+
     /// <summary>A vendor that simply does not offer unattended hosting is not "withheld" — nothing an
     /// operator can act on, and warning about it would train them to ignore the ones that are.</summary>
     [Test]
@@ -375,7 +415,7 @@ public class DaemonRunnerCursorAvailabilityTests {
     [Arguments("copilot", true)]
     [Arguments("copilot", false)]
     [Arguments("claude", true)]
-    [Arguments("newvendor", true)]
+    [Arguments("gemini", true)]
     public async Task ComputeUnattendedVendorCapabilities_BorrowedAdvertisementMirrorsTheFactoryFlag(
             string vendor, bool supportsBorrowed) {
         IHostedAgentRuntimeFactory[] factories = [

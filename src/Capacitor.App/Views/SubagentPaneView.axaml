@@ -1,0 +1,31 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
+             xmlns:views="clr-namespace:Capacitor.App.Views"
+             x:Class="Capacitor.App.Views.SubagentPaneView"
+             x:DataType="vm:SubagentPaneViewModel"
+             Background="{StaticResource KcapCanvasBrush}">
+    <DockPanel>
+        <Border DockPanel.Dock="Top" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="0,0,0,1" Padding="14,8">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+                <Button x:Name="BackToSessionButton" Classes="kcapGhost" Command="{Binding BackCommand}" Padding="6,4"
+                        Cursor="Hand" AutomationProperties.Name="Back to the session" ToolTip.Tip="Back to the session">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <views:AppIcon Kind="ChevronLeft" Size="14" VerticalAlignment="Center" />
+                        <TextBlock x:Name="ParentTitleText" Text="{Binding ParentTitle}" MaxWidth="260" FontSize="13"
+                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <TextBlock Grid.Column="1" Text="/" FontSize="13" Foreground="{StaticResource KcapFaintBrush}" VerticalAlignment="Center" />
+                <TextBlock x:Name="SubagentTitleText" Grid.Column="2" Text="{Binding Row.Name}" FontSize="13" FontWeight="SemiBold"
+                           Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                           ToolTip.Tip="{Binding Row.Description}" />
+                <TextBlock x:Name="SubagentStateText" Grid.Column="3" Text="{Binding Row.StateText}"
+                           FontSize="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+            </Grid>
+        </Border>
+        <!-- Hidden with the pane itself, so its chat is not announced as onscreen while another tab shows. -->
+        <views:ChatTabView x:Name="SubagentChat" DataContext="{Binding Chat}"
+                           IsVisible="{Binding $parent[views:SubagentPaneView].IsVisible}" />
+    </DockPanel>
+</UserControl>

@@ -47,11 +47,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Created on demand (not at startup) so a session that never calls a tool pays no
-        // network/token/stderr cost. Nullable field rather than Lazy<Task> so a transient
-        // creation failure leaves it null and the next call retries. Safe without locking:
-        // the stdio loop handles one request at a time.
-        HttpClient? client = null;
+        // Created on first use, so a session that never calls a tool stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(() => http.ForSessionAsync());
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
@@ -61,7 +58,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                client ??= await http.ForSessionAsync();
+                var client = await sessionClient.GetAsync();
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl, repository.GetHashAsync);
             } catch (Exception ex) {
                 // Unexpected: log the detail to stderr (not to the client, which could leak local
@@ -93,44 +90,13 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue; // skip malformed JSON
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = DecodeMethod(request);
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "workitems");
 
         return 0;
     }
@@ -1032,7 +998,7 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     internal static McpTool[] BuildToolsList() => [
         new("declare_work_item",
-            "Attach the CURRENT session (and its continuation chain) to a work item on the Capacitor server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
+            "Attach the CURRENT session (and its continuation chain) to a work item on the kcap server. Provide exactly one of issue_key, pr_number, work_item_id, or new_title.",
             new("object", new() {
                 ["issue_key"]    = new("string", "Attach to the work item for this issue, creating it if none exists yet. Accepts a tracker key ('PROJ-1234'), an issue number in this session's repository ('#123'), a qualified reference ('owner/repo#123'), or a GitHub issue URL."),
                 ["pr_number"]    = new("integer", "Attach to the work item for this PR number, creating it if none exists yet."),
@@ -1161,8 +1127,8 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
             new("object", new(), []), McpToolAnnotations.Read),
 
         new("list_loose_ends",
-            "List the user's loose ends with their loose_end_id — open ones by default, or closed ones — to find the id "
-          + "close_loose_end or reopen_loose_end needs. Claims are execution ownership, not closed work. "
+            "List the user's loose ends with their loose_end_id — open ones by default, or closed ones. "
+          + "Claims are execution ownership, not closed work. "
           + "Use claimed_session_id to find a worker's claims independently of the source session_id. Pass next_cursor back as cursor for the next page.",
             new("object", new() {
                 ["status"]     = new("string", "open (default) or closed."),
@@ -1191,18 +1157,21 @@ sealed class McpWorkItemsServer(ConfigRoot config, ProfileContext profiles, Toke
 
         new("close_loose_end",
             "Mark a loose end done once its work is finished, so it leaves the user's next work. Name it by the "
-          + "loose_end_id from list_loose_ends or get_next_work. For claimed work, pass the current claim_id and working session. "
+          + "loose_end_id from list_loose_ends or get_next_work, or pass the declaration_id declare_loose_end returned as loose_end_id. "
+          + "If a declaration_id is refused as loose_end_not_found, find the end by its text in list_loose_ends and retry with its loose_end_id. "
+          + "For claimed work, pass the current claim_id and working session. "
           + "Starting work is not completion: use claim_loose_end instead. A later sighting of the same work reopens it.",
             new("object", new() {
-                ["loose_end_id"] = new("string", "The end's loose_end_id."),
+                ["loose_end_id"] = new("string", "The end's loose_end_id, or the declaration_id declare_loose_end returned."),
                 ["session_id"]   = new("string", "The session that finished it. Defaults to the session this server runs in."),
                 ["claim_id"]     = new("string", "The current ownership attempt. Required for claimed work; obtain it from claim_loose_end or list_loose_ends.")
             }, ["loose_end_id"]), McpToolAnnotations.Upsert),
 
         new("reopen_loose_end",
-            "Undo close_loose_end: put a closed loose end back in the user's next work.",
+            "Undo close_loose_end: put a closed loose end back in the user's next work. If a declaration_id is refused "
+          + "as loose_end_not_found, find the end by its text in list_loose_ends (status closed) and retry with its loose_end_id.",
             new("object", new() {
-                ["loose_end_id"] = new("string", "The closed end's loose_end_id, as list_loose_ends with status closed shows it.")
+                ["loose_end_id"] = new("string", "The closed end's loose_end_id, as list_loose_ends with status closed shows it, or the declaration_id declare_loose_end returned.")
             }, ["loose_end_id"]), McpToolAnnotations.Upsert),
 
         new("list_work_item_evals",

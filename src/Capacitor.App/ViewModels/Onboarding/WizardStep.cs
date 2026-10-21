@@ -1,7 +1,7 @@
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// Declaration order is display order.
-public enum WizardStepId { Welcome, SignIn, Harnesses, Import, Daemon, Done }
+public enum WizardStepId { Edition, Install, SignIn, Harnesses, Import, Done }
 
 public enum WizardNavigation { Back, Next, Skip }
 
@@ -35,11 +35,18 @@ public interface IWizardStep {
     /// The page is showing its own filled action. The footer Next stays secondary until that action is done.
     bool ShowsOwnPrimary => false;
 
+    /// False hides the shell's Back while this step is current. A step that changes it raises
+    /// PropertyChanged for it; CanLeaveAsync still decides whether Back goes anywhere.
+    bool BackVisible => true;
+
     /// Already done with nothing left to ask: forward navigation steps over it.
     bool PassThrough => false;
 
     bool CanContinue => true;
     bool CanSkip => true;
+
+    /// The page's own action moves the wizard forward, through the same CanLeaveAsync veto as Next.
+    event Action? AdvanceRequested { add { } remove { } }
 
     Task OnEnterAsync(CancellationToken ct);
 

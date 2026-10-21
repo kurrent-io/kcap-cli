@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.Json;
 using Capacitor.Cli.Core.Eval;
 using Capacitor.Cli.Core.Eval.Contracts;
@@ -479,28 +478,6 @@ public class EvalServiceTests {
         await Assert.That(prompt).DoesNotContain("{CACHE_BOUNDARY}");
     }
 
-    // ── FormatKnownPatterns ────────────────────────────────────────────────
-
-    [Test]
-    public async Task FormatKnownPatterns_returns_explicit_empty_marker_when_no_facts() {
-        var result = EvalService.FormatKnownPatterns([]);
-
-        await Assert.That(result).Contains("no patterns retained");
-    }
-
-    [Test]
-    public async Task FormatKnownPatterns_renders_bulleted_list() {
-        var facts = new List<JudgeFact> {
-            new() { Category = "safety", Fact = "User force-pushes often.", SourceSessionId      = "s1", SourceEvalRunId = "r1", RetainedAt = DateTimeOffset.UtcNow },
-            new() { Category = "safety", Fact = "Repo has tests behind Docker.", SourceSessionId = "s2", SourceEvalRunId = "r2", RetainedAt = DateTimeOffset.UtcNow }
-        };
-
-        var result = EvalService.FormatKnownPatterns(facts);
-
-        await Assert.That(result).Contains("- User force-pushes often.");
-        await Assert.That(result).Contains("- Repo has tests behind Docker.");
-    }
-
     // ── ExtractRetainFact ──────────────────────────────────────────────────
 
     [Test]
@@ -822,87 +799,6 @@ public class EvalServiceTests {
 
         await Assert.That(v).IsNotNull();
         await Assert.That(v!.ToolsUsed).IsEqualTo(2);
-    }
-
-    // ── JudgeFact deserialization (new optional fields) ────────────────────
-
-    [Test]
-    public async Task JudgeFact_deserializes_with_new_optional_fields() {
-        const string newServerJson = """
-            [{"category":"safety","fact_hash":"h1","fact":"x","retainer_github_id":42,
-              "source_session_id":"s","source_eval_run_id":"r","retained_at":"2026-05-13T00:00:00Z"}]
-            """;
-
-        var facts = JsonSerializer.Deserialize(newServerJson, CapacitorJsonContext.Default.ListJudgeFact)!;
-
-        await Assert.That(facts.Count).IsEqualTo(1);
-        await Assert.That(facts[0].FactHash).IsEqualTo("h1");
-        await Assert.That(facts[0].RetainerGitHubId).IsEqualTo(42L);
-    }
-
-    [Test]
-    public async Task JudgeFact_deserializes_without_new_fields_from_old_server() {
-        const string oldServerJson = """
-            [{"category":"safety","fact":"x","source_session_id":"s","source_eval_run_id":"r",
-              "retained_at":"2026-05-13T00:00:00Z"}]
-            """;
-
-        var facts = JsonSerializer.Deserialize(oldServerJson, CapacitorJsonContext.Default.ListJudgeFact)!;
-
-        await Assert.That(facts.Count).IsEqualTo(1);
-        await Assert.That(facts[0].FactHash).IsNull();
-        await Assert.That(facts[0].RetainerGitHubId).IsNull();
-    }
-
-    // ── BuildFactsUsedSnapshot ─────────────────────────────────────────────
-
-    [Test]
-    public async Task BuildFactsUsedSnapshot_flattens_per_category_pool_and_filters_unattributed() {
-        var pool = new Dictionary<string, List<JudgeFact>> {
-            ["safety"] = [
-                new JudgeFact {
-                    Category         = "safety",
-                    FactHash         = "h-A",
-                    Fact             = "fact-A",
-                    RetainerGitHubId = 7,
-                    SourceSessionId  = "src",
-                    SourceEvalRunId  = "rA",
-                    RetainedAt       = DateTimeOffset.Parse("2026-05-01T00:00:00Z", CultureInfo.InvariantCulture)
-                },
-                // Old-server row — no fact_hash; must be filtered out.
-                new JudgeFact {
-                    Category         = "safety",
-                    Fact             = "fact-B-no-hash",
-                    SourceSessionId  = "src",
-                    SourceEvalRunId  = "rB",
-                    RetainedAt       = DateTimeOffset.Parse("2026-05-02T00:00:00Z", CultureInfo.InvariantCulture)
-                }
-            ],
-            ["plan_adherence"] = [
-                new JudgeFact {
-                    Category         = "plan_adherence",
-                    FactHash         = "h-C",
-                    Fact             = "fact-C",
-                    RetainerGitHubId = 8,
-                    SourceSessionId  = "src",
-                    SourceEvalRunId  = "rC",
-                    RetainedAt       = DateTimeOffset.Parse("2026-05-03T00:00:00Z", CultureInfo.InvariantCulture)
-                }
-            ]
-        };
-
-        var snapshot = EvalService.BuildFactsUsedSnapshot(pool);
-
-        await Assert.That(snapshot.Count).IsEqualTo(2);
-        await Assert.That(snapshot.Any(s => s is { FactHash: "h-A", Category: "safety" })).IsTrue();
-        await Assert.That(snapshot.Any(s => s is { FactHash: "h-C", Category: "plan_adherence" })).IsTrue();
-        await Assert.That(snapshot.All(s => s.Fact != "fact-B-no-hash")).IsTrue();
-    }
-
-    [Test]
-    public async Task BuildFactsUsedSnapshot_returns_empty_for_empty_pool() {
-        var snapshot = EvalService.BuildFactsUsedSnapshot(new Dictionary<string, List<JudgeFact>>());
-        await Assert.That(snapshot.Count).IsEqualTo(0);
     }
 
     // ── Size gate (size-gated hybrid) ──────────────────────────────────────

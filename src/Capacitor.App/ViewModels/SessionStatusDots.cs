@@ -10,16 +10,19 @@ public static class SessionStatusDots {
     public static bool WaitsOnUser(AgentStatusDto dto) =>
         dto.AwaitingInput == true && AgentActionService.AcceptsTypedInput(dto.Kind);
 
-    /// Failed, waiting on the user, or a usage-limit question. A pending permission is the other source.
+    /// Failed, waiting on the user, a usage-limit question, or a terminal dialog. A pending
+    /// permission is the other source.
     public static bool NeedsAttention(AgentStatusDto dto) =>
-        dto.Status == "Failed" || WaitsOnUser(dto) || UsageLimitNoticeDto.IsQuestion(dto.UsageLimit);
+        dto.Status is "Failed" or "Interrupted" || WaitsOnUser(dto) || UsageLimitNoticeDto.IsQuestion(dto.UsageLimit)
+     || dto.TerminalDialog is not null;
 
     /// The merged-row twins of the two rules above, for rail rows from either lane.
     public static bool WaitsOnUser(AgentRow row) =>
         row.AwaitingInput == true && AgentActionService.AcceptsTypedInput(row.Kind);
 
     public static bool NeedsAttention(AgentRow row) =>
-        row.Status == "Failed" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit);
+        row.Status is "Failed" or "Interrupted" || WaitsOnUser(row) || UsageLimitNoticeDto.IsQuestion(row.UsageLimit)
+     || row.TerminalDialog is not null;
 
     /// Running, and either mid-turn or with subagents the daemon still counts or background
     /// commands the app saw start. A parent that is also waiting still counts as working; the
@@ -30,7 +33,8 @@ public static class SessionStatusDots {
     /// The short word every session surface shows. Detail lives on <see cref="Present"/>.
     public static string Label(AgentStatusDto dto) =>
         Present(dto.Status, dto.AwaitingInput, WaitsOnUser(dto), dto.LiveSubagents,
-            pending: false, UsageLimitSummary(dto.UsageLimit), launchStage: null, elapsed: null).Label;
+            pending: false, UsageLimitSummary(dto.UsageLimit), launchStage: null, elapsed: null,
+            terminalDialog: dto.TerminalDialog is not null, interruption: dto.Interruption, agentId: dto.Id).Label;
 
     public static string Label(AgentRow row) => ForRow(row, pending: false).Label;
 
@@ -43,7 +47,8 @@ public static class SessionStatusDots {
             requester: row.RequesterDisplay, borrowedFrom: row.BorrowedFrom, answerExpected: answerExpected,
             model: row.Model is { Length: > 0 } known ? HostedHarnessCatalog.ModelLabelFor(row.Vendor, known) : null,
             harness: string.IsNullOrEmpty(row.Vendor) ? null : HostedHarnessCatalog.LabelFor(row.Vendor),
-            liveCommands: liveCommands);
+            liveCommands: liveCommands,
+            terminalDialog: row.TerminalDialog is not null, interruption: row.Interruption, agentId: row.Id);
 
     /// First match wins, so two surfaces cannot draw different marks for the same facts.
     /// <paramref name="usageLimitSummary"/> is set only for a question the user must answer.
@@ -51,25 +56,30 @@ public static class SessionStatusDots {
             string status, bool? awaitingInput, bool waitsOnUser, int? liveSubagents, bool pending,
             string? usageLimitSummary, string? launchStage, string? elapsed,
             string? requester = null, string? borrowedFrom = null, bool answerExpected = false,
-            string? model = null, string? harness = null, bool ended = false, int liveCommands = 0) {
+            string? model = null, string? harness = null, bool ended = false, int liveCommands = 0,
+            bool terminalDialog = false, string? interruption = null, string? agentId = null) {
         var kind =
             status == "Failed" ? AgentStatusKind.Failed
             : answerExpected ? AgentStatusKind.Answer
-            : pending || usageLimitSummary is not null ? AgentStatusKind.NeedsYou
+            : pending || usageLimitSummary is not null || terminalDialog ? AgentStatusKind.NeedsYou
+            : status == "Interrupted" ? AgentStatusKind.Interrupted
             : status == "Starting" ? AgentStatusKind.Starting
+            : status == "Resuming" ? AgentStatusKind.Resuming
             : IsWorking(status, awaitingInput, liveSubagents, liveCommands) ? AgentStatusKind.Working
             : waitsOnUser || status == "Idle" ? AgentStatusKind.Idle
             : status == "Completed" ? AgentStatusKind.Done
             : AgentStatusKind.Other;
         var label = kind switch {
-            AgentStatusKind.Failed   => "Failed",
-            AgentStatusKind.Answer   => "Answer",
-            AgentStatusKind.NeedsYou => "Needs you",
-            AgentStatusKind.Starting => "Starting",
-            AgentStatusKind.Working  => "Working",
-            AgentStatusKind.Idle     => "Idle",
-            AgentStatusKind.Done     => "Done",
-            _                        => status,
+            AgentStatusKind.Failed      => "Failed",
+            AgentStatusKind.Answer      => "Answer",
+            AgentStatusKind.NeedsYou    => "Needs you",
+            AgentStatusKind.Interrupted => "Interrupted",
+            AgentStatusKind.Starting    => "Starting",
+            AgentStatusKind.Resuming    => "Resuming",
+            AgentStatusKind.Working     => "Working",
+            AgentStatusKind.Idle        => "Idle",
+            AgentStatusKind.Done        => "Done",
+            _                           => status,
         };
         if (string.IsNullOrEmpty(label)) return AgentStatusPresentation.None;
 
@@ -79,11 +89,18 @@ public static class SessionStatusDots {
             kind == AgentStatusKind.Working && !string.IsNullOrEmpty(elapsed) ? elapsed
             : kind == AgentStatusKind.Starting && launchStage is { } stage && stage.StartsWith("Starting", StringComparison.Ordinal) ? stage
             : kind == AgentStatusKind.Answer ? "An answer is expected"
+            : kind == AgentStatusKind.Resuming ? "Resuming after a daemon restart"
+            : kind == AgentStatusKind.Interrupted ? "Not resumed after a daemon restart"
             : label;
         var facts = new List<AgentStatusFact> { new(sentence, "Status") };
         Add(facts, harness, "Harness");
         Add(facts, model, "Model");
         Add(facts, usageLimitSummary, "Usage limit");
+        if (kind == AgentStatusKind.Interrupted) {
+            Add(facts, interruption, "Reason");
+            Add(facts, $"Retry with `kcap agent resume{(agentId is null ? "" : " " + agentId)}`, or stop it to discard it.");
+        }
+        if (terminalDialog) Add(facts, "Waiting for you in Terminal");
         if (pending && kind != AgentStatusKind.Answer) Add(facts, "Pending response");
         if (waitsOnUser && kind is not AgentStatusKind.Idle and not AgentStatusKind.Answer)
             Add(facts, "Waiting for input.");
@@ -95,7 +112,7 @@ public static class SessionStatusDots {
         Add(facts, requester, "Requester");
         Add(facts, borrowedFrom, "Borrowed from");
         return new AgentStatusPresentation(kind, label, FormatTip(facts),
-            kind is AgentStatusKind.Working or AgentStatusKind.Starting, facts) { Ended = ended };
+            kind is AgentStatusKind.Working or AgentStatusKind.Starting or AgentStatusKind.Resuming, facts) { Ended = ended };
     }
 
     static void Add(List<AgentStatusFact> facts, string? text, string? caption = null) {
@@ -146,13 +163,15 @@ public static class SessionStatusDots {
     static string RollupName(AgentStatusKind kind, int count) {
         var sessions = count == 1 ? "session" : "sessions";
         var state = kind switch {
-            AgentStatusKind.Failed   => "failed",
-            AgentStatusKind.Answer   => count == 1 ? "needs an answer" : "need an answer",
-            AgentStatusKind.NeedsYou => count == 1 ? "needs you" : "need you",
-            AgentStatusKind.Starting => "starting",
-            AgentStatusKind.Working  => "working",
-            AgentStatusKind.Idle     => "idle",
-            _                        => "active",
+            AgentStatusKind.Failed      => "failed",
+            AgentStatusKind.Answer      => count == 1 ? "needs an answer" : "need an answer",
+            AgentStatusKind.NeedsYou    => count == 1 ? "needs you" : "need you",
+            AgentStatusKind.Interrupted => "interrupted",
+            AgentStatusKind.Starting    => "starting",
+            AgentStatusKind.Resuming    => "resuming",
+            AgentStatusKind.Working     => "working",
+            AgentStatusKind.Idle        => "idle",
+            _                           => "active",
         };
         return $"{count} {sessions} {state}";
     }

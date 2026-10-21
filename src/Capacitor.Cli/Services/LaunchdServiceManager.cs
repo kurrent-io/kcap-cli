@@ -11,6 +11,10 @@ sealed partial class LaunchdServiceManager(
     Func<string, string[], TimeSpan, (int ExitCode, string StdOut, string StdErr, bool TimedOut)>? runBounded = null
 ) : IServiceManager, IVerifyServiceManager {
     readonly UnitFileWriter _writeUnit = writeUnit ?? ((path, content, encoding) => ServiceFiles.WriteOwnerOnly(path, content, encoding));
+
+    // The writer's own ancestor checks, run before bootout so a refusal leaves the loaded job alone. An
+    // injected writer is a test's own stand-in for the filesystem, and brings no checks.
+    readonly Action<string> _requireSafeAncestors = writeUnit is null ? ServiceFiles.RequireSafeAncestors : _ => { };
     readonly Func<string, string[], (int ExitCode, string StdOut, string StdErr)> _runProcess = runProcess ?? ServiceProcess.Run;
     readonly Func<string, string[], TimeSpan, (int ExitCode, string StdOut, string StdErr, bool TimedOut)> _runBounded = runBounded ?? ServiceProcess.RunBounded;
 
@@ -24,6 +28,9 @@ sealed partial class LaunchdServiceManager(
     }
 
     public string UnitPath(string serviceId) => LaunchdUnit.PlistPath(home, serviceId);
+
+    public IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId) =>
+        File.Exists(UnitPath(serviceId)) ? LaunchdUnit.EnvFromPlist(File.ReadAllText(UnitPath(serviceId))) : null;
 
     /// <summary>The unit-writing half of <see cref="Install"/>, split out so it is testable without
     /// invoking launchctl.</summary>
@@ -39,8 +46,13 @@ sealed partial class LaunchdServiceManager(
 
     public string UnitDirectory => LaunchdUnit.AgentsDir(home);
 
-    public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) =>
-        [new GeneratedFile(LaunchdUnit.PlistPath(home, spec.ServiceId), LaunchdUnit.Plist(spec))];
+    /// <summary>Refuses an unsafe unit location here as well: a verified install generates first, before it
+    /// retires, clears or replaces anything.</summary>
+    public IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec) {
+        var path = LaunchdUnit.PlistPath(home, spec.ServiceId);
+        _requireSafeAncestors(path);
+        return [new GeneratedFile(path, LaunchdUnit.Plist(spec))];
+    }
 
     public IReadOnlyList<string> ListInstalled() {
         var dir = LaunchdUnit.AgentsDir(home);
@@ -57,6 +69,8 @@ sealed partial class LaunchdServiceManager(
         var (code, stdout, _) = _runProcess("launchctl", LaunchdUnit.PrintArgs(Uid(), serviceId));
         return new ServiceStatus(LaunchdUnit.StatusFromPrint(code, stdout), bin);
     }
+
+    public string? UnitBinary(string serviceId) => ReadBinaryPathSafe(LaunchdUnit.PlistPath(home, serviceId));
 
     public ServiceQuery Query(string serviceId)                 => QueryCore(serviceId, null);
     public ServiceQuery Query(string serviceId, TimeSpan t)     => QueryCore(serviceId, t);
@@ -89,13 +103,50 @@ sealed partial class LaunchdServiceManager(
         catch { return null; }
     }
 
-    public void Install(ServiceSpec spec, bool startNow) {
+    /// <summary>How long a plain install gives <c>bootout</c> and the job's unload together. <c>bootout</c>
+    /// returns while a running job is still exiting, and a bootstrap before it has gone fails with EIO.</summary>
+    public static readonly TimeSpan UnloadWait = TimeSpan.FromSeconds(15);
+    static readonly TimeSpan UnloadPoll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Boots out any existing job, waits for launchd to let go of the label, then rewrites the
+    /// plist and bootstraps it. A label that is not seen to unload leaves the plist untouched, so the
+    /// file on disk keeps describing the job launchd runs.</summary>
+    public bool Install(ServiceSpec spec, bool startNow, out string? error) {
         var plistPath = LaunchdUnit.PlistPath(home, spec.ServiceId);
-        // idempotent: bootout an existing job (ignore failure), then rewrite + bootstrap.
-        ServiceProcess.Run("launchctl", LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
+        _requireSafeAncestors(plistPath);
+        var started   = time.GetTimestamp();
+        RunCtl(UnloadWait, LaunchdUnit.BootoutArgs(Uid(), spec.ServiceId));
+
+        if (WaitUnloaded(spec.ServiceId, started) is { } label) {
+            error = label == LabelProbe.Loaded
+                ? $"launchd still had the job loaded {UnloadWait.TotalSeconds:0}s after bootout, so its plist was left as it was"
+                : "launchctl could not say whether the job unloaded, so its plist was left as it was";
+            return false;
+        }
+
         WriteUnitFiles(spec);
-        ServiceProcess.Check("launchctl", LaunchdUnit.BootstrapArgs(Uid(), plistPath)); // RunAtLoad starts it
-        if (!startNow) ServiceProcess.Run("launchctl", LaunchdUnit.KillArgs(Uid(), spec.ServiceId));
+        var (code, _, err, _) = RunCtl(null, LaunchdUnit.BootstrapArgs(Uid(), plistPath)); // RunAtLoad starts it
+        if (code != 0) {
+            error = $"launchctl bootstrap failed (exit {code}): {LaunchdUnit.ToolError(err)}";
+            return false;
+        }
+
+        if (!startNow) RunCtl(null, LaunchdUnit.KillArgs(Uid(), spec.ServiceId));
+        error = null;
+        return true;
+    }
+
+    /// <summary>Null once the label is absent; otherwise the last probe's answer when the deadline
+    /// <paramref name="started"/> + <see cref="UnloadWait"/> passed. Each probe gets only what is left.</summary>
+    LabelProbe? WaitUnloaded(string serviceId, long started) {
+        var label = LabelProbe.Unknown;
+        while (UnloadWait - time.GetElapsedTime(started) is var left && left > TimeSpan.Zero) {
+            var (exit, stdout, stderr, timedOut) = RunCtl(left, LaunchdUnit.PrintArgs(Uid(), serviceId));
+            label = timedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(exit, stdout, stderr);
+            if (label == LabelProbe.Absent) return null;
+            Thread.Sleep(UnloadPoll);
+        }
+        return label;
     }
 
     /// <summary>The install-verify engine's fresh-install mutation: write + bootstrap, no leading
@@ -109,32 +160,34 @@ sealed partial class LaunchdServiceManager(
         if (timedOut)
             throw new TimeoutException("launchctl bootstrap timed out and was terminated");
         if (code != 0)
-            throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {err.Trim()}");
+            throw new InvalidOperationException($"launchctl bootstrap failed (exit {code}): {LaunchdUnit.ToolError(err)}");
     }
 
     /// <summary>Per launchctl call, which normally answers in milliseconds. Refresh runs under the npm
     /// refresh wrapper's 60s kill.</summary>
     public static readonly TimeSpan RefreshCtlTimeout = TimeSpan.FromSeconds(7);
 
-    /// <summary>The longest a reload can take once the daemon is asked: the idle-restart request, then
+    /// <summary>How long a reload waits for the daemon to exit once asked to stop.</summary>
+    public static readonly TimeSpan ReloadExitWait = TimeSpan.FromSeconds(30);
+
+    /// <summary>The longest a reload can take once the daemon is asked: the stop request and its exit, then
     /// bootout, bootstrap and the rollback bootstrap, each with at most one follow-up probe. A reload is
     /// not started with less than this left, because a kill between bootout and bootstrap leaves the job
     /// unloaded.</summary>
-    public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + 6 * RefreshCtlTimeout;
+    public static readonly TimeSpan ReloadBudget = TimeSpan.FromSeconds(5) + ReloadExitWait + 6 * RefreshCtlTimeout;
 
     /// <summary>
     /// Brings an installed job up to the unit this version writes: off the Adaptive process type, and
     /// onto the stable <c>current</c> path when <paramref name="stabilize"/> maps its binary there (a
     /// script install's version directory is never updated in place). The plist is rewritten whenever
-    /// it is out of date, but launchd reads it only when the job loads, and the reload kills whatever
-    /// the daemon hosts. So a running job is reloaded only once <paramref name="requestRestart"/>
-    /// reports that the daemon accepted an idle-only restart. A busy daemon refuses that restart, and
-    /// the reload waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
+    /// it is out of date, but launchd reads it only when the job loads. So a running job is reloaded only
+    /// once <paramref name="stopForReload"/> reports that the daemon has accepted being stopped; one that
+    /// does not waits for a later refresh, as it does when <paramref name="timeLeft"/> is under
     /// <see cref="ReloadBudget"/>. A job that is not stale counts as <see cref="UnitRefresh.Current"/>
     /// whatever its spawn type unless <paramref name="requirePositiveSpawnType"/> asks for a positive one.
     /// </summary>
     public UnitRefresh RefreshUnit(
-            string serviceId, Func<bool> requestRestart, Func<TimeSpan> timeLeft, out string? error,
+            string serviceId, Func<bool> stopForReload, Func<TimeSpan> timeLeft, out string? error,
             Func<string, string>? stabilize = null, bool requirePositiveSpawnType = false) {
         error = null;
         var path = LaunchdUnit.PlistPath(home, serviceId);
@@ -148,7 +201,7 @@ sealed partial class LaunchdServiceManager(
         if (!LaunchdUnit.DeclaresStandardProcessType(upgraded ?? original!)) return UnitRefresh.UnitUnsupported;
 
         try {
-            return RefreshValidatedUnit(serviceId, path, original!, upgraded, requestRestart, timeLeft, stabilize, requirePositiveSpawnType, out error);
+            return RefreshValidatedUnit(serviceId, path, original!, upgraded, stopForReload, timeLeft, stabilize, requirePositiveSpawnType, out error);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
                                       or System.ComponentModel.Win32Exception) {
             error = ex.Message;
@@ -158,7 +211,7 @@ sealed partial class LaunchdServiceManager(
 
     UnitRefresh RefreshValidatedUnit(
             string serviceId, string path, string original, string? upgraded,
-            Func<bool> requestRestart, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType, out string? error) {
+            Func<bool> stopForReload, Func<TimeSpan> timeLeft, Func<string, string>? stabilize, bool requirePositiveSpawnType, out string? error) {
         error = null;
         var (printExit, printOut, printErr, printTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.PrintArgs(Uid(), serviceId));
         var probe = printTimedOut ? LabelProbe.Unknown : LaunchdUnit.ClassifyPrint(printExit, printOut, printErr);
@@ -183,10 +236,8 @@ sealed partial class LaunchdServiceManager(
 
         // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
         var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
-        if (running && !requestRestart()) return UnitRefresh.Deferred;
+        if (running && !stopForReload()) return UnitRefresh.Deferred;
 
-        // The accepted restart is already exiting the daemon. Booting out now unloads the job before
-        // launchd can relaunch it from the definition it cached at load.
         var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
         if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
             error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";
@@ -231,7 +282,7 @@ sealed partial class LaunchdServiceManager(
     /// </summary>
     (string? Error, LabelProbe? After) Bootstrap(string serviceId, string plistPath, bool acceptAnySpawnType) {
         var (exit, _, err, timedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootstrapArgs(Uid(), plistPath));
-        if (!timedOut && exit != 0) return ($"launchctl bootstrap failed (exit {exit}): {err.Trim()}", null);
+        if (!timedOut && exit != 0) return ($"launchctl bootstrap failed (exit {exit}): {LaunchdUnit.ToolError(err)}", null);
 
         var (label, stdout) = Probe(serviceId);
         if (label != LabelProbe.Loaded)
@@ -296,7 +347,7 @@ sealed partial class LaunchdServiceManager(
                 var (bootstrapExit, _, bootstrapErr, bootstrapTimedOut) = RunCtl(timeout, LaunchdUnit.BootstrapArgs(Uid(), LaunchdUnit.PlistPath(home, serviceId)));
                 if (bootstrapTimedOut) { error = "launchctl bootstrap timed out and was terminated"; return false; }
                 if (bootstrapExit != 0) {
-                    error = $"launchctl bootstrap failed (exit {bootstrapExit}): {bootstrapErr.Trim()}";
+                    error = $"launchctl bootstrap failed (exit {bootstrapExit}): {LaunchdUnit.ToolError(bootstrapErr)}";
                     return false;
                 }
                 break;
@@ -341,7 +392,7 @@ sealed partial class LaunchdServiceManager(
         var (bootstrapExit, _, bootstrapErr, bootstrapTimedOut) = RunCtl(remaining, LaunchdUnit.BootstrapArgs(Uid(), LaunchdUnit.PlistPath(home, serviceId)));
         if (bootstrapTimedOut) { error = "launchctl bootstrap timed out and was terminated"; return false; }
         if (bootstrapExit != 0) {
-            error = $"launchctl bootstrap failed (exit {bootstrapExit}): {bootstrapErr.Trim()}";
+            error = $"launchctl bootstrap failed (exit {bootstrapExit}): {LaunchdUnit.ToolError(bootstrapErr)}";
             return false;
         }
 

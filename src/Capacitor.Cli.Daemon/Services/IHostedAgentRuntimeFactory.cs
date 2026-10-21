@@ -117,6 +117,11 @@ internal interface IHostedAgentRuntimeFactory {
     /// </summary>
     bool SupportsModelSelection => true;
 
+    /// <summary>Whether a restart resume — <see cref="RuntimeStartContext.ResumeSessionId"/> naming the
+    /// vendor session, the prompt a nudge — continues that session here. Declared only once a live
+    /// probe has passed for the vendor and transport.</summary>
+    bool SupportsRestartResume(string? runtimeTransport) => false;
+
     /// <summary>The models this vendor can launch on this machine, or null when it publishes no
     /// catalog. Null is also every probe failure: consumers then fall through to their other sources
     /// instead of reading an empty list as "nothing usable".</summary>
@@ -277,5 +282,13 @@ internal sealed record RuntimeStartContext(
         TranscriptJournal?  Journal = null,
         // The flow role the server named for a review-flow launch, exported as the participant's
         // role marker. Null for every other launch.
-        string?             FlowRole = null
+        string?             FlowRole = null,
+        // A private agent: nothing in the child's environment may link its session to the server.
+        bool                IsPrivate = false,
+        // The vendor session id minted for a fresh interactive launch of a vendor that accepts one up
+        // front. Null for every other launch.
+        string?             PinnedSessionId = null,
+        // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
+        // more than one transport starts it on that one. Null for a fresh launch.
+        string?             RequestedTransport = null
     );

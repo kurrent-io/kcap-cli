@@ -187,6 +187,138 @@ public class WorktreeManagerTests {
         await Assert.That(Directory.Exists(Path.Combine(repo, ".capacitor", "worktrees", "invalid-ref"))).IsFalse();
     }
 
+    public enum WorktreeState { Clean, ChangedFile, UntrackedFile, UniqueCommit, CommitOnAnotherBranch, DaemonEditsOnly, LinkToOverlay, LaunchWrittenConfig, LaunchConfigEditedAfter, AgentEditBeforeRelaunch, StagedConfigChange, CommitThenSwitchedAway }
+
+    /// <summary>Removal never destroys work that exists only in the worktree: a change, an untracked
+    /// file or a commit no other ref has, on HEAD or on the worktree's own branch, keeps the worktree and
+    /// its branch. The daemon's own edits (the MCP config it deletes at creation, the config a launch
+    /// writes, a file identical to the source checkout's) are not work; that config edited after the
+    /// daemon recorded it is, as is a staged change to it, and so is a link, even to an identical file,
+    /// since the link itself would be lost.</summary>
+    [Test]
+    [Arguments(WorktreeState.Clean, false)]
+    [Arguments(WorktreeState.ChangedFile, true)]
+    [Arguments(WorktreeState.UntrackedFile, true)]
+    [Arguments(WorktreeState.UniqueCommit, true)]
+    [Arguments(WorktreeState.CommitOnAnotherBranch, false)]
+    [Arguments(WorktreeState.DaemonEditsOnly, false)]
+    [Arguments(WorktreeState.LinkToOverlay, true)]
+    [Arguments(WorktreeState.LaunchWrittenConfig, false)]
+    [Arguments(WorktreeState.LaunchConfigEditedAfter, true)]
+    [Arguments(WorktreeState.AgentEditBeforeRelaunch, true)]
+    [Arguments(WorktreeState.StagedConfigChange, true)]
+    [Arguments(WorktreeState.CommitThenSwitchedAway, true)]
+    public async Task RemoveAsync_keeps_a_worktree_holding_work_that_exists_nowhere_else(WorktreeState state, bool kept) {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+        var source = repo.Clone;
+        source.CreateFile(".mcp.json", "{}");
+        source.CommitAll("ship an mcp config");
+        source.CreateFile("notes.txt", "overlay");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(source);
+        var tree     = GitRepo.At(worktree.Path);
+
+        switch (state) {
+            case WorktreeState.ChangedFile:
+                tree.CreateFile("main.txt", "edited");
+                break;
+            case WorktreeState.UntrackedFile:
+                tree.CreateFile("new.txt", "work");
+                break;
+            case WorktreeState.UniqueCommit:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                break;
+            case WorktreeState.CommitThenSwitchedAway:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                tree.Do("checkout", "-q", "--detach", "HEAD~1");
+                break;
+            case WorktreeState.CommitOnAnotherBranch:
+                tree.CreateFile("new.txt", "work");
+                tree.Do("add", "new.txt");
+                tree.Commit("agent work");
+                source.Do("branch", "saved", tree.Head);
+                break;
+            case WorktreeState.DaemonEditsOnly:
+                tree.CreateFile("notes.txt", "overlay");
+                break;
+            case WorktreeState.LaunchWrittenConfig:
+            case WorktreeState.LaunchConfigEditedAfter:
+            case WorktreeState.AgentEditBeforeRelaunch: {
+                // As a launch's Prepare does: stamp, write the config, record.
+                var before = WorktreeManager.StampDaemonPaths(worktree.Path);
+                tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{}}}""");
+                tree.CreateFile(".claude/settings.local.json", """{"permissions":{"allow":["Bash"]}}""");
+                WorktreeManager.RecordDaemonBaseline(worktree.Path, before);
+                if (state != WorktreeState.LaunchWrittenConfig)
+                    tree.CreateFile(".mcp.json", """{"mcpServers":{"kcap":{},"mine":{}}}""");
+                if (state == WorktreeState.AgentEditBeforeRelaunch) {
+                    // A resume prepares again and keeps the agent's edit; recording must not adopt it.
+                    var again = WorktreeManager.StampDaemonPaths(worktree.Path);
+                    WorktreeManager.RecordDaemonBaseline(worktree.Path, again);
+                }
+                break;
+            }
+            case WorktreeState.StagedConfigChange:
+                tree.CreateFile(".mcp.json", """{"mcpServers":{"mine":{}}}""");
+                tree.Do("add", ".mcp.json");
+                break;
+            case WorktreeState.LinkToOverlay:
+                Skip.When(OperatingSystem.IsWindows(), "creating a symlink needs privileges Windows CI lacks");
+                File.CreateSymbolicLink(Path.Combine(worktree.Path, "notes.txt"), source.PathTo("notes.txt"));
+                break;
+        }
+
+        try {
+            var removal = await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+
+            await Assert.That(removal.Kept).IsEqualTo(kept);
+            await Assert.That(Directory.Exists(worktree.Path)).IsEqualTo(kept);
+            await Assert.That(source.Try("rev-parse", "--verify", $"refs/heads/{worktree.Branch}").ExitCode == 0).IsEqualTo(kept);
+        } finally {
+            source.Try("worktree", "remove", "--force", worktree.Path);
+            source.Try("branch", "-D", worktree.Branch);
+        }
+    }
+
+    /// <summary>The startup sweep of left-behind worktrees keeps one holding work, as teardown does, and
+    /// still clears one that holds none: a review worktree whose head only its fetched ref has, and a
+    /// standalone snapshot, are the daemon's own.</summary>
+    [Test]
+    public async Task CleanupOrphaned_keeps_a_left_behind_worktree_holding_work() {
+        using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);
+        using var worktreeRoot = new TempDir();
+        var manager = new WorktreeManager(new DaemonConfig { AllowedRepoPaths = [repo.Clone.Path], WorktreeRoot = worktreeRoot.Path },
+            NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var working = await manager.CreateAsync(repo.Clone, name: "working");
+        var clean   = await manager.CreateAsync(repo.Clone, name: "clean");
+        var review  = await manager.CreateAsync(repo.Clone, name: "review", baseRef: "refs/pull/1/head");
+        GitRepo.At(working.Path).CreateFile("new.txt", "work");
+        var standalone = Path.Combine(repo.Clone.Path, ".capacitor", "worktrees", "standalone");
+        Directory.CreateDirectory(standalone);
+        GitRepo.At(standalone).Do("init", "-q");
+        GitRepo.At(standalone).Do("config", "user.email", "test@example.com");
+        GitRepo.At(standalone).Do("config", "user.name", "Test");
+        GitRepo.At(standalone).CreateFile("a.txt", "snapshot");
+        GitRepo.At(standalone).CommitAll("Initial snapshot");
+
+        try {
+            await manager.CleanupOrphanedAsync([]);
+
+            await Assert.That(Directory.Exists(working.Path)).IsTrue();
+            await Assert.That(Directory.Exists(clean.Path)).IsFalse();
+            await Assert.That(Directory.Exists(review.Path)).IsFalse();
+            await Assert.That(Directory.Exists(standalone)).IsFalse();
+        } finally {
+            repo.Clone.Try("worktree", "remove", "--force", working.Path);
+            repo.Clone.Try("worktree", "prune");
+        }
+    }
+
     [Test]
     public async Task CreateAsync_WithoutBaseRef_StillWorks() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/1/head", out _);

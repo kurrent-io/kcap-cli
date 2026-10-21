@@ -2,7 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              x:Class="Capacitor.App.App"
-             Name="Kurrent Capacitor"
+             Name="kcap"
              RequestedThemeVariant="Dark">
     <Application.Resources>
         <!-- The app palette. Kcap-prefixed keys never shadow a FluentTheme resource. ThemeVariant
@@ -20,8 +20,12 @@
             <!-- Secondary / tertiary body text: both clear AA (≥4.5:1) on Canvas→Border. -->
             <SolidColorBrush x:Key="KcapMutedBrush" Color="#B0B7C6" />
             <SolidColorBrush x:Key="KcapFaintBrush" Color="#949BAA" />
-            <!-- Primary CTAs: near-white fill. Green is status only; a selection uses info blue. -->
+            <!-- Primary CTAs stay on the light ramp. Hover lifts toward white and press steps
+                 to a light off-white; a text grey as the fill drops the near-black label's contrast.
+                 Green is status only; a selection uses info blue. -->
             <SolidColorBrush x:Key="KcapPrimaryBrush" Color="#F1F3F7" />
+            <SolidColorBrush x:Key="KcapPrimaryHoverBrush" Color="#FFFFFF" />
+            <SolidColorBrush x:Key="KcapPrimaryPressedBrush" Color="#E4E7EE" />
             <SolidColorBrush x:Key="KcapOnPrimaryBrush" Color="#0B0D12" />
             <SolidColorBrush x:Key="KcapSuccessBrush" Color="#5BE0B3" />
             <SolidColorBrush x:Key="KcapSuccessDimBrush" Color="#173F36" />
@@ -50,18 +54,18 @@
             <SolidColorBrush x:Key="ScrollBarButtonBackgroundPressed" Color="#00000000" />
             <SolidColorBrush x:Key="ScrollViewerScrollBarsSeparatorBackground" Color="#00000000" />
             <ResourceDictionary.MergedDictionaries>
-                <ResourceInclude Source="avares://Kurrent Capacitor/Views/PendingCardTemplates.axaml" />
-                <ResourceInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingResources.axaml" />
+                <ResourceInclude Source="avares://kcap-desktop/Views/PendingCardTemplates.axaml" />
+                <ResourceInclude Source="avares://kcap-desktop/Views/Onboarding/OnboardingResources.axaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>
     <Application.Styles>
         <FluentTheme />
         <StyleInclude Source="avares://MarkView.Avalonia/Themes/MarkdownTheme.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/MarkdownStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/PullRequestStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/ChatBubbleStyles.axaml" />
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/Onboarding/OnboardingStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/MarkdownStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/PullRequestStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/ChatBubbleStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/Onboarding/OnboardingStyles.axaml" />
         <!-- Popup panels drawn on our tokens: the flyout presenter IS the panel (no inner Border
              fighting the theme's own chrome). Opted into per flyout via FlyoutPresenterClasses.
              Fluent's ControlTheme defaults ScrollViewer.HorizontalScrollBarVisibility=Auto on the
@@ -130,7 +134,7 @@
         </Style>
         <!-- Standalone fields (Settings, setup, sign-in prompts): pin the Fluent ring to our
              tokens. Fluent paints PART_BorderElement from TextControlBorderBrush, which reads as
-             a second white box on Kcap surfaces. -->
+             a second white box on kcap surfaces. -->
         <Style Selector="TextBox.kcapField">
             <Setter Property="Background" Value="{StaticResource KcapSurfaceRaisedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
@@ -457,13 +461,13 @@
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapMutedBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapMutedBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryHoverBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:pressed /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{StaticResource KcapFaintBrush}" />
-            <Setter Property="BorderBrush" Value="{StaticResource KcapFaintBrush}" />
+            <Setter Property="Background" Value="{StaticResource KcapPrimaryPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapPrimaryPressedBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
         </Style>
         <Style Selector="Button.kcapPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
@@ -519,6 +523,35 @@
             <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
         </Style>
         <Style Selector="Button.kcapGhost.kcapQuiet:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
+        </Style>
+        <!-- A destructive primary: filled like kcapPrimary so it reads as the action, never bound to
+             Enter, so the default key cannot remove or stop anything. -->
+        <Style Selector="Button.kcapDangerFill">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="16,8" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+        </Style>
+        <!-- Hover dims the fill rather than swapping it, so the button still reads as destructive. -->
+        <Style Selector="Button.kcapDangerFill:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapDangerFill:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapDangerBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource KcapOnPrimaryBrush}" />
+            <Setter Property="Opacity" Value="0.85" />
+        </Style>
+        <Style Selector="Button.kcapDangerFill:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{StaticResource KcapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
         <!-- Destructive ghost (Stop): Fluent hover paints the presenter near-white, which hides
@@ -712,6 +745,6 @@
             <Setter Property="Opacity" Value="1" />
             <Setter Property="RenderTransform" Value="scale(0.97, 0.72)" />
         </Style>
-        <StyleInclude Source="avares://Kurrent Capacitor/Views/SectionStyles.axaml" />
+        <StyleInclude Source="avares://kcap-desktop/Views/SectionStyles.axaml" />
     </Application.Styles>
 </Application>

@@ -191,16 +191,17 @@ public class FlowsLaneTests {
         await Assert.That(withFlows.Fragment).IsEqualTo(withoutFlows.Fragment);
     }
 
+    /// <summary>A harness that caps its context cuts from the tail, so the offer goes ahead of a memory index
+    /// that can run past the cap on its own; the marker stays a single copy at the head.</summary>
     [Test]
-    public async Task Memory_comes_first_then_flows() {
-        const string memoryBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
-
-        var result = await Composite(memory: (HttpStatusCode.OK, memoryBody), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.OK, Catalog))
+    public async Task Flows_come_straight_after_the_marker_ahead_of_memory() {
+        var result = await Composite(memory: (HttpStatusCode.OK, MemoryBody), guidelines: (HttpStatusCode.NoContent, ""), flows: (HttpStatusCode.OK, Catalog))
             .GetAsync(Req(memory: true, flows: true));
 
         var fragment = result.Fragment!;
-        await Assert.That(fragment.IndexOf(MemoryIndexEmitter.FragmentMarker, StringComparison.Ordinal)).IsEqualTo(0);
-        await Assert.That(fragment.IndexOf(SessionStartFlowsLane.Header, StringComparison.Ordinal)).IsGreaterThan(0);
+        await Assert.That(fragment).StartsWith(MemoryIndexEmitter.FragmentMarker + "\n" + SessionStartFlowsLane.Header);
+        await Assert.That(fragment).Contains("## Team memory");
+        await Assert.That(fragment.Split(MemoryIndexEmitter.FragmentMarker).Length).IsEqualTo(2);
     }
 
     sealed class ThrowingScope : ISessionStartMemoryScopeResolver {
@@ -321,18 +322,22 @@ public class FlowsLaneTests {
     }
 
     /// <summary>A hung server stalls memory as well as the listing: the lanes stop short of the budget, so the
-    /// cached block arrives while the caller still waits for it.</summary>
+    /// cached block arrives while the caller still waits for it. The clock stops just short of the budget, so
+    /// only a cutoff inside it can release the lanes.</summary>
     [Test]
     public async Task A_hung_server_still_delivers_the_cached_catalogue_within_the_budget() {
         await Lane(HttpStatusCode.OK, Catalog).FetchAsync(Req(), CancellationToken.None);
+        var time  = new FakeTimeProvider();
         var scope = new FixedScope("repo", "machine");
         var composite = new SessionStartCompositeContextProvider(scope,
-            new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new HangingHandler())), TimeProvider.System),
-            new SessionStartGuidelinesLane(Lazy(new HttpClient(new HangingHandler())), TimeProvider.System),
-            new SessionStartFlowsLane(Lazy(new HttpClient(new HangingHandler())), TimeProvider.System, Cache),
-            TimeProvider.System);
+            new SessionStartMemoryContextProvider(scope, Lazy(new HttpClient(new HangingHandler())), time),
+            new SessionStartGuidelinesLane(Lazy(new HttpClient(new HangingHandler())), time),
+            new SessionStartFlowsLane(Lazy(new HttpClient(new HangingHandler())), time, Cache),
+            time);
 
-        var result = await composite.GetAsync(Req(memory: true, flows: true)).WaitAsync(Req().Budget);
+        var pending = composite.GetAsync(Req(memory: true, flows: true));
+        time.Advance(Req().Budget - TimeSpan.FromTicks(1));
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(30));
 
         await Assert.That(result.Disposition).IsEqualTo(SessionStartMemoryDisposition.RetryableFailure);
         await Assert.That(result.Fragment!).Contains("- code-review: ");

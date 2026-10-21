@@ -12,8 +12,11 @@ public sealed class UpdateCoordinator {
     internal static readonly TimeSpan DefaultInitialDelay = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan DefaultInterval = TimeSpan.FromHours(4);
     internal const string CheckLabel = "Check for Updates…";
-    internal const string ReadyDisclosure =
-        "Restart Kurrent Capacitor to finish installing the update. Running agents keep running; the daemon restarts on its own once it is idle.";
+    // Velopack's updater on Windows kills every process running from the install folder, and the
+    // app's daemon runs from there; elsewhere the daemon restarts itself at a turn boundary.
+    internal static string ReadyDisclosure(bool windows) => windows
+        ? "The app will restart to finish installing the update.\n\nInstalling stops the daemon, which interrupts any running agents mid-turn; the daemon resumes them when it next starts unless auto-resume is off."
+        : "The app will restart to finish installing the update.\n\nThe daemon then restarts on its own once its agents finish their current turn, and resumes them unless auto-resume is off.";
 
     readonly IAppUpdater _updater;
     readonly ILifecycleSurface _surface;
@@ -138,7 +141,7 @@ public sealed class UpdateCoordinator {
     async Task RunCheckAsync(bool manual) {
         try {
             if (Ready is { } ready) {
-                if (manual) await ReportAsync($"Kurrent Capacitor {ready.Version} is ready to install.").ConfigureAwait(false);
+                if (manual) await ReportAsync($"kcap {ready.Version} is ready to install.").ConfigureAwait(false);
                 return;
             }
 
@@ -154,7 +157,7 @@ public sealed class UpdateCoordinator {
 
             var prompt = new LifecyclePrompt(
                 LifecyclePrompt.KindUpdateReady, candidate.Version, _updater.InstalledVersion, false,
-                ReadyDisclosure);
+                ReadyDisclosure(OperatingSystem.IsWindows()));
             var accepted = await _surface.ConfirmAsync(prompt, _lifetime).ConfigureAwait(false);
             ConsumeManual(manual);
             if (accepted) RequestRestart(candidate);

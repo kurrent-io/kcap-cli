@@ -1,4 +1,4 @@
-# Kurrent Capacitor
+# kcap
 
 > Full observability for your AI coding-agent sessions — record every session, watch agent activity in real time, and review code changes grounded in the transcripts that produced them.
 
@@ -7,17 +7,17 @@
 [![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey)](#requirements)
 [![built with](https://img.shields.io/badge/.NET%2010-NativeAOT-512bd4?logo=dotnet&logoColor=white)](#)
 
-**Kurrent Capacitor** (`kcap`) records your coding-agent sessions and forwards them to a Capacitor server, where a real-time dashboard and PR-review tools surface the context no diff can give you: *why* code changed, what alternatives were weighed, and how it was actually built. It works across twelve agents — Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity, Mistral Vibe, Grok, and Muse Code — capturing the full picture: session lifecycle, transcripts, subagent trees, tool calls, and token usage.
+**kcap** records your coding-agent sessions and forwards them to a kcap server, where a real-time dashboard and PR-review tools surface the context no diff can give you: *why* code changed, what alternatives were weighed, and how it was actually built. It works across twelve agents — Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity, Mistral Vibe, Grok, and Muse Code — capturing the full picture: session lifecycle, transcripts, subagent trees, tool calls, and token usage.
 
 ## Contents
 
-- [Why Capacitor](#why-capacitor)
+- [Why kcap](#why-kcap)
 - [Requirements](#requirements)
 - [Getting started](#getting-started) — [Install](#1-install-and-set-up) · [New session](#2-start-a-new-agent-session) · [Dashboard](#3-check-it-in-the-dashboard) · [Other ways to install](#other-ways-to-install)
 - [Desktop app](#desktop-app) — [macOS](#desktop-app-on-macos) · [Windows](#desktop-app-on-windows)
 - [What it records](#what-it-records)
 - [CLI commands](#cli-commands)
-  - Setup: [setup](#initial-setup) · [unattended](#unattended-setup) · [after setup](#after-setup) · [agent notes](#agent-specific-notes)
+  - Setup: [setup](#initial-setup) · [unattended](#unattended-setup) · [after setup](#after-setup) · [agent notes](#agent-specific-notes) · [local server](#local-server-kcap-local)
   - Approvals: [policy](#approval-policy)
   - Sessions: [recap](#session-recap) · [validate-plan](#plan-validation) · [hide](#hide-session) · [disable](#disable-recording) · [errors](#error-extraction) · [eval](#session-evaluation-llm-as-judge)
   - Reviewing: [review](#pr-review-with-full-context) · [curate](#curate-guidelines)
@@ -28,7 +28,7 @@
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
-## Why Capacitor
+## Why kcap
 
 - **Records everything, automatically.** Once set up, `kcap` runs silently in the background and captures every session — lifecycle, transcripts, subagent trees, tool calls, and token usage — with no change to how you work.
 - **Real-time visibility.** Transcript data streams live over SignalR to a dashboard that shows repositories, sessions, and agents as they happen.
@@ -38,7 +38,7 @@
 
 ## Requirements
 
-- **A Capacitor workspace.** `kcap setup` signs you in and finds yours, or offers to create one; a self-hosted server takes its URL instead.
+- **A kcap workspace.** `kcap setup` signs you in and finds yours, or offers to create one; a self-hosted server takes its URL instead.
 - **Nothing else to install.** `kcap` is a self-contained NativeAOT executable with no runtime dependency. Node.js and npm are needed only if you install it [through npm](#other-ways-to-install).
 - **At least one supported coding agent** so there's something to record: Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity, Mistral Vibe, Grok, or Muse Code.
 - **GitHub CLI (`gh`), optional** — the desktop app reads a linked pull request (description, checks, reviews, inline threads, conversation) through your own `gh` sign-in when a `gh` recent enough for `gh auth status --json` is installed and signed in, including GitHub Enterprise hosts. Without it the card says what to install; a tenant with the server-side GitHub App enabled reads without it.
@@ -68,7 +68,7 @@ Windows (PowerShell):
 irm https://www.kurrent.io/install.ps1 | iex
 ```
 
-The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). Setup signs you in, finds your workspace (or offers to create one), offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
+The installer checks the download against its published checksum, installs the native `kcap` binary for your [platform](#requirements), and, on a first install from a terminal, runs `kcap setup` unless you pass `--no-setup` (run headless with no setup options, it only installs; run `kcap setup` yourself afterward). On macOS and Windows the [desktop app](#desktop-app) is the easier way in; `kcap setup` is for the terminal, and for scripts — see [Unattended setup](#unattended-setup) for both editions' recipes. Setup asks whether you want kcap locally on this Mac or for your team in the cloud (sign-up opens in your browser), signs you in, finds your workspace, offers to install kcap into every coding agent it detects, and offers to import this machine's past sessions. On a server that offers it, you finish in the browser. [Initial setup](#initial-setup) covers every step and unattended runs.
 
 ### 2. Start a new agent session
 
@@ -85,12 +85,13 @@ kcap reports anonymous usage data by default; see [Telemetry](#telemetry) to opt
 - **Name the workspace up front:** pass setup options after a second `--`, e.g. `curl -fsSL https://www.kurrent.io/install | bash -s -- -- --server-url https://acme.kcap.ai` (on Windows, set `KCAP_SETUP_ARGS`). Without a terminal the installer adds `--no-prompt`, which needs a workspace (`<tenant>` or `--server-url`), or `--org` and `--slug` to create one; see [Unattended setup](#unattended-setup). `--no-setup` installs without running setup, and `--beta` installs the beta channel.
 - **npm:** `npm install -g @kurrent/kcap`, then `kcap setup`. This needs Node.js; see [npm installs and upgrades](#npm-installs-and-upgrades) for npm 11's install-script gate.
 - **Desktop app:** on macOS or Windows the [desktop app](#desktop-app) bundles `kcap` and the daemon.
+- **Run the server on this machine:** `kcap setup --local` installs a kcap server on a Mac instead of using a hosted workspace; `kcap local status` then says how it is doing. With [Ollama](https://ollama.com) running, it also sets up search by meaning. See [Local edition](#local-edition) and [Local server](#local-server-kcap-local).
 
 ## Desktop app
 
 ### Desktop app on macOS
 
-Download `Kurrent-Capacitor-osx-arm64.dmg` from https://www.kurrent.io/download/mac (Apple silicon, macOS 15 or later), open it and drag **Kurrent Capacitor** to **Applications**. The app bundles its own `kcap` CLI and daemon: you do not need the npm install as well, and the first run offers to link `kcap` onto your terminal PATH and to install the daemon as a background service. Sessions running on your other machines' daemons open in the app too — their chat, their prompts, and for a terminal harness a read-only view of the terminal — over the server, without a local daemon.
+Download `kcap-osx-arm64.dmg` from https://www.kurrent.io/download/mac (Apple silicon, macOS 15 or later), open it and drag **kcap** to **Applications**. The app bundles its own `kcap` CLI and daemon: you do not need the npm install as well, and the first run offers to link `kcap` onto your terminal PATH. On the first run, the cloud edition opens kcap.ai's sign-up in your browser, where the invite code, organization, workspace address and trial are handled; once the page says your workspace is ready, **Continue** in the app finds it and setup carries on. The local edition first asks how to search your sessions: by meaning, through [Ollama](https://ollama.com) with `mxbai-embed-large` or a model you name, or by keyword only; the install shows the model download and ends by saying which one search uses, and why when it is keyword. The search item beside **kcap local** in the sidebar changes it later, by running setup again. Signing in installs the daemon as a background service and starts it without asking, named after this machine (with `-1`, `-2`, … when another machine of yours already uses that name), and removes the service of the name it replaced — it asks only before replacing a daemon service that belongs to another workspace. Whenever the app finds the daemon not running, it starts the service again. Sessions running on your other machines' daemons open in the app too — their chat, their prompts, and for a terminal harness a read-only view of the terminal — over the server, without a local daemon.
 
 When a Claude Code session spawns subagents, the chat shows a strip above the composer while any of them run ("2 subagents running"), and the work-context pane lists them under **SUBAGENTS** — the agent type, a *background* tag for one launched in the background, and its state: running with its elapsed time, done, failed or stopped. The section starts collapsed, its header showing how many subagents are running, completed, failed and stopped and its list holding the ones still running; click the header to open the full list. Both are read from the transcript; a session on another machine's daemon shows the strip alone, since the work-context pane is not part of the remote session view. Rows are not links.
 
@@ -104,21 +105,39 @@ The app must run from the Applications folder — launched from the disk image o
 
 Open **Settings…** from the application menu (⌘,) or the tray to edit the daemon for the app's selected profile. **Save** applies capacity to a current running daemon immediately; lowering it leaves existing agents running and limits new launches. Set it to **0** for no limit. When the daemon is stopped or needs an update, the saved capacity applies when it next starts. **Rename and restart daemon** is available when no agents are active and the new name is free. After confirmation it replaces the old background service and relaunches the app. An unbundled development build asks you to restart the app yourself. Rename waits for startup to finish and requires a CLI that supports retiring the old service. If `KCAP_DAEMON_NAME` sets the name, remove that override and restart the app before renaming.
 
-The **Notifications** tab in Settings controls permission requests, questions, and idle-agent alerts independently; all three start enabled and apply while the app is in the background. Permission notifications offer **Allow**, **Always**, and **Decline** when the agent supports those choices. Questions open the agent in the app to respond. Idle alerts open a local agent after its turn and subagents finish; remote daemons do not yet report idle state. macOS asks for permission the first time the app window is active; choose **Allow**, because an unanswered prompt counts as a refusal. If notifications are turned off in macOS, the tab says so and links to System Settings → Notifications. These are local desktop notifications: the app must remain running, including in the tray. Clicking a notification opens that session in the app; the app registers for the macOS **Alerts** style so a notice stays on screen until you act on it. If a notice slides away after a few seconds, macOS is still using the Banners style for the app: switch it under System Settings → Notifications → Kurrent Capacitor → Alert style.
+The **Notifications** tab in Settings controls permission requests, questions, and idle-agent alerts independently; all three start enabled and apply while the app is in the background. Permission notifications offer **Allow**, **Always**, and **Decline** when the agent supports those choices. Questions open the agent in the app to respond. Idle alerts open a local agent after its turn and subagents finish; remote daemons do not yet report idle state. macOS asks for permission the first time the app window is active; choose **Allow**, because an unanswered prompt counts as a refusal. If notifications are turned off in macOS, the tab says so and links to System Settings → Notifications. These are local desktop notifications: the app must remain running, including in the tray. Clicking a notification opens that session in the app; the app registers for the macOS **Alerts** style so a notice stays on screen until you act on it. If a notice slides away after a few seconds, macOS is still using the Banners style for the app: switch it under System Settings → Notifications → kcap → Alert style.
 
 Updates arrive through the app: it checks a few times a day, downloads in the background and asks before restarting ("Check for Updates…" in the menu bar checks now). A bundled `kcap update` reports this and does nothing else. The bundled CLI follows the app's channel; the npm package stays the headless/CI channel.
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
 
+**Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. Existing installations stay in their Applications folder and migrate from `Kurrent Capacitor.app` to `kcap.app`. The migration updates owned terminal links and background-service paths, then refreshes previously installed agent integrations with the bundled CLI to repair MCP commands, git hooks, and the Claude marketplace path. A failed integration refresh is reported and retried on the next launch. It preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. An installer that finds valid installations in both Applications folders, or another app occupying the destination, asks for a destination first. Opening an installed `kcap.app` keeps that copy when its own folder needs no migration, even if a legacy copy remains in the other folder. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed migration restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
+
 ### Desktop app on Windows
 
-Download `Kurrent-Capacitor-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\KurrentCapacitor` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal, and to install the daemon as a background service (a per-user Scheduled Task that starts at sign-in).
+Download `kcap-<version>-win-x64-Setup.exe` from the [GitHub release](https://github.com/kurrent-io/kcap-cli/releases) (Windows 10 or later, x64) and run it. It installs per user into `%LocalAppData%\KurrentCapacitor` with no administrator prompt and adds a Start-menu entry. Like the macOS app it bundles its own `kcap` CLI and daemon. The first run offers to add the app's folder to your user PATH, so `kcap` works from any new terminal. Signing in installs the daemon as a background service (a per-user Scheduled Task that starts at sign-in) and starts it, as on macOS.
 
 Windows draws no application menu, so **Settings…**, **Changelog** and the app version sit in the help button in the session rail's footer, next to Documentation and the report items. Closing the window keeps the app running in the notification area — quit from the tray icon's menu. Updates arrive through the app the same way as on macOS, from the Windows feed.
 
+### Rebrand compatibility
+
+kcap keeps existing configuration filenames, data directories, worktree locations,
+and branch prefixes. Internal app and package IDs also stay unchanged, including
+`io.kurrent.capacitor` and `KurrentCapacitor`. These conventions apply to new
+installations too; no data-directory migration or manual reinstall is required
+for the rebrand.
+
+The connection skill is now `connect-kcap` (`kcap-connect-kcap` in the shared
+agent skill tree), and the Muse recording skill is `kcap-recording`. Refreshing
+agent skills replaces the former `kcap-connect-capacitor` installation. Muse
+setup replaces the old skill names and reuses existing scheduled tasks while
+keeping their data and consent in place. Existing integration matchers continue
+to recognize legacy names. Previously shared `connect-capacitor/SKILL.md` links
+remain available as redirects to `connect-kcap`.
+
 ## What it records
 
-Once set up, Capacitor runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
+Once set up, kcap runs silently in the background. Every Claude Code (and Codex CLI, if you installed those hooks) session is captured automatically:
 
 - **Session lifecycle** — start, end, interruptions, context compaction
 - **Durable lifecycle delivery** — if the server is briefly unreachable when a `SessionStart`/`SessionEnd` hook (or a per-subagent `SubagentStop` carrying an `agent_id`) fires (for example during a deploy), or rejects your credentials (HTTP 401), the event is spooled to `~/.config/kcap/spool/` and automatically re-sent on the next hook — after `kcap login`, for a rejected credential — so sessions don't get stuck "active", lose their start record, or leave subagents stuck "running". No action needed beyond logging back in; stale spool entries are reaped after 30 days.
@@ -129,7 +148,7 @@ Once set up, Capacitor runs silently in the background. Every Claude Code (and C
 - **Repository context** — git repo, branch, and PR linkage
 - **In-agent upgrade prompts** — in Claude Code sessions, when the server is running a newer kcap release than the local CLI, additional context is injected into the session so the agent can offer the user an upgrade via `kcap update`. The stderr `kcap` update hint continues to fire for direct command-line use, and every request also carries the CLI's version to the server so it can surface its own out-of-date banner/notification (see [`kcap update`](#other-commands) for the full picture, including how `update_check: false` turns all of this off).
 - **SessionStart context injection** — at every session start the server injects top evaluation-derived fact clusters for the current repo into the session's context. The injected block is split into two sections: `## Known patterns` (repo/project facts relevant to any reader) and `## Guidance from past sessions` (agent-targeted action items derived from prior eval suggestions with `audience: "agent"`). Delivered for every supported harness (Claude Code, Codex CLI, GitHub Copilot CLI, Gemini CLI, AWS Kiro CLI, Google Antigravity, Pi, OpenCode, and Cursor's `cursor-agent`): Claude reads it from its hook response, while the other eight fetch `GET /api/repositories/{hash}/guidelines` alongside the team-memory index and emit both in one combined block, through the same per-harness delivery seam as that index (see the next bullet). Opt out by setting `disable_session_guidelines: true` in `~/.config/kcap/config.json` or via `kcap config set disable_session_guidelines true`.
-- **SessionStart team-memory index** — at every session start (Claude Code, Codex CLI, GitHub Copilot CLI, Gemini CLI, AWS Kiro CLI, Google Antigravity, Pi, OpenCode, and Cursor CLI's `cursor-agent` — see the capability matrix below for the full per-harness rollout) `kcap` also fetches a compact index of durable [team memories](#memory-mcp-server-for-agents) visible for the current repo/machine and appends a `## Team memory` block to the session's injected context (`additionalContext` for Claude, Codex, Copilot, and Gemini, `additional_context` for Cursor, raw stdout for Kiro, `injectSteps`/`userMessage` for Antigravity, system-prompt append via the kcap Pi extension for Pi, and system-entry append via the kcap OpenCode plugin for OpenCode): one `slug [scope]: description` line per memory, grouped **Org / Team / Yours**, with a nudge to call `get_memory` / `search_memories` for full content. The `[scope]` tag annotates the memory's home scope — a project memory shows `[project: <slug>]`, a repo one `[repo]`, and org-scoped memories stay untagged. Above the list, a lead-in names the projects the current repo belongs to and the slug to pass on `save_memory`'s `project` argument (`This repo belongs to project "capacitor" (Kurrent Capacitor). Save learnings that span its repos with project: "capacitor".`) — one line per project, and nothing at all for a repo in no project or a server that does not report them. The lead-in is injected even when the repo has no memories yet, which is when the agent most needs the slug. Only the index is injected — never the bodies — so the cost stays roughly flat as the pool grows (mirrors a local `MEMORY.md`). Best-effort and fail-open (a slow or failed fetch injects nothing, never blocking the hook), and only ever injected once per conversation. Opt out with `disable_memory_index: true` in `~/.config/kcap/config.json` or `kcap config set disable_memory_index true`.
+- **SessionStart team-memory index** — at every session start (Claude Code, Codex CLI, GitHub Copilot CLI, Gemini CLI, AWS Kiro CLI, Google Antigravity, Pi, OpenCode, and Cursor CLI's `cursor-agent` — see the capability matrix below for the full per-harness rollout) `kcap` also fetches a compact index of durable [team memories](#memory-mcp-server-for-agents) visible for the current repo/machine and appends a `## Team memory` block to the session's injected context (`additionalContext` for Claude, Codex, Copilot, and Gemini, `additional_context` for Cursor, raw stdout for Kiro, `injectSteps`/`userMessage` for Antigravity, system-prompt append via the kcap Pi extension for Pi, and system-entry append via the kcap OpenCode plugin for OpenCode): one `slug [scope]: description` line per memory, grouped **Org / Team / Yours**, with a nudge to call `get_memory` / `search_memories` for full content. The `[scope]` tag annotates the memory's home scope — a project memory shows `[project: <slug>]`, a repo one `[repo]`, and org-scoped memories stay untagged. Above the list, a lead-in names the projects the current repo belongs to and the slug to pass on `save_memory`'s `project` argument (`This repo belongs to project "capacitor" (kcap). Save learnings that span its repos with project: "capacitor".`) — one line per project, and nothing at all for a repo in no project or a server that does not report them. The lead-in is injected even when the repo has no memories yet, which is when the agent most needs the slug. Only the index is injected — never the bodies — so the cost stays roughly flat as the pool grows (mirrors a local `MEMORY.md`). Best-effort and fail-open (a slow or failed fetch injects nothing, never blocking the hook), and only ever injected once per conversation. Opt out with `disable_memory_index: true` in `~/.config/kcap/config.json` or `kcap config set disable_memory_index true`.
 - **SessionStart work-items nudge** — at every session start (Claude Code, Codex CLI, GitHub Copilot CLI, Gemini CLI, AWS Kiro CLI, Google Antigravity, Pi, OpenCode, and Cursor CLI's `cursor-agent`) `kcap` appends a short `## Work items` block carrying the current session id and a reminder to register the session with its work item via the [`kcap-workitems` MCP tools](#work-items-mcp-server-for-agents) (`declare_work_item`) and to declare structure as it is discovered (`declare_work_breakdown` for a parent→parts split, `declare_work_relation` for a `blocks`/`blocked_by` dependency). It rides the same per-harness delivery seam as the team-memory index, is composed independently of that index (so it never affects the index's once-per-session lease), and is shown only when `kcap-workitems` is actually registered for the harness and the tenant's plan includes Work Items. The plan comes from the last `X-Kcap-Plan` response header the CLI saw from the configured server, cached per server and shared by every harness on the machine — so a Free tenant is not told to call a tool that would refuse, and a plan change costs at most one stale nudge. An unknown plan (an older server, or one never reached) nudges. Opt out with `disable_workitems_nudge: true` in `~/.config/kcap/config.json` or `kcap config set disable_workitems_nudge true`.
 - **SessionStart plans nudge** — at every session start, on the same harnesses and through the same delivery seam as the work-items nudge, `kcap` appends a two-sentence `## Plans` block telling the agent to declare the plan, spec or design document it works from and the plan's task list through the [`kcap-plans` MCP tools](#plans-mcp-server-for-agents) (`declare_plan_document`, `set_plan_tasks`, `update_plan_task`, and `get_plan` to recover the list after compaction), carrying the current session id. It is shown only when `kcap-plans` is actually registered for the harness — for Claude Code, only when the installed plugin's `.mcp.json` names it, so a plugin installed before the server existed is never nudged toward a tool it lacks. Opt out with `disable_plans_nudge: true` in `~/.config/kcap/config.json` or `kcap config set disable_plans_nudge true`.
 - **Plan-read nudge (Claude Code)** — when the agent reads a Markdown file, a synchronous `PostToolUse` hook on `Read` (`kcap hook --claude --plan-read`) asks the server whether it is a plan, spec or design document in a session that has declared no plan; if so, the agent gets a reminder to declare it, once per session and document. Only the head of the file is sent. Same gate and opt-out as the SessionStart plans nudge.
@@ -167,7 +186,8 @@ At a glance — each links to its section below:
 
 | Command | What it does |
 |---------|--------------|
-| [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon |
+| [`kcap setup`](#initial-setup) | Interactive wizard — server, auth, agent hooks, daemon (`--local` runs the server on this machine) |
+| [`kcap local`](#local-server-kcap-local) | Status, start, stop, restart, upgrade, logs, web UI and uninstall of the server `kcap setup --local` installed |
 | [`.kcap/approvals.yaml`](#approval-policy) | Auto-allow, deny, or force-ask specific tool calls |
 | [`kcap import`](#loading-historical-sessions) | Backfill past sessions from every detected agent |
 | [`kcap muse-assistant`](#muse-assistant) | Record Muse Assistant chats as private sessions, run by Muse's own cron inside its VM |
@@ -181,6 +201,7 @@ At a glance — each links to its section below:
 | [`kcap review`](#pr-review-with-full-context) | Launch a PR review with full transcript context |
 | [`kcap mcp <server>`](#sessions-mcp-server-for-agents) | Run an MCP server (sessions / flows / memory / …) for agents |
 | [`kcap curate apply`](#curate-guidelines) | Sync promoted guidelines into `CLAUDE.md` / `AGENTS.md` |
+| [`kcap memories import`](#import-local-memories) | Copy Claude Code's local memory notes into server memories |
 | [`kcap page`](#pages) | Publish a self-contained HTML page and get a link to share |
 | [`kcap skills sync`](#skills-sync) | Materialize the repo's approved skill docs into every present harness's skills tree |
 | [`kcap daemon …`](#daemon) | Run and manage the agent daemon |
@@ -204,11 +225,16 @@ At a glance — each links to its section below:
 ### Initial setup
 
 ```bash
-kcap setup                                   # interactive wizard (discovers your tenant)
+kcap setup                                   # interactive wizard (local, cloud, or a workspace you have)
 kcap setup <tenant>                          # shorthand: https://<tenant>.kcap.ai
 kcap setup --server-url <url> --no-prompt    # CI / scripted
+kcap setup --local --single-user --yes --no-prompt   # local edition, unattended
+kcap setup --server-url <url> --no-prompt --json     # …with JSON progress for a wrapper
 kcap setup --discover [--json]               # report workspaces only, configure nothing
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
+kcap setup --local                           # run a kcap server on this machine
+kcap setup --local --embedding-model <model> # …embedding with this Ollama model
+kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
 The install scripts run `kcap setup` after a first install, so this is usually how you met it; re-run it any time.
@@ -230,7 +256,7 @@ SSO discovery signs in through a `127.0.0.1` browser callback, which a browser o
 
 The setup wizard walks you through the steps below. Re-run it any time to update the configuration.
 
-1. **Server** — with no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and discovery finds no Capacitor tenant, `kcap setup` asks how to continue: create one for you (name, workspace URL and plan, with the 30-day Team trial offered first; provisioned and waited for until it's live), point at a workspace you already belong to (enter its slug or URL — the same as `kcap setup <tenant>`), or cancel. That middle choice matters because SSO discovery only lists workspaces that use org SSO: a workspace whose members sign in with the GitHub App shows up here as "no tenant", so pick **I already have a workspace**, or re-run with `--github`.
+1. **Server** — a bare `kcap setup` in a terminal first asks the desktop app's question, how you want to run kcap: **For you, locally** runs the [local edition](#local-edition) (offered on macOS only); **For your team, cloud** opens kcap-web's sign-up in your browser, where you create the workspace, and once you press Enter carries on to discovery, which finds it; **Already have a workspace?** goes straight to discovery. With no `--server-url`/`<tenant>`, kcap **discovers** your tenant: it signs you in with your organization's single sign-on (pass `--github` to use GitHub instead), then lets you choose from the tenants you belong to. A bare `<tenant>` slug expands to `https://<tenant>.kcap.ai`; a full URL is used as-is. If you sign in with your organization's single sign-on and discovery finds no kcap tenant, `kcap setup` asks how to continue: create one for you (name, workspace URL and plan, with the 30-day Team trial offered first; provisioned and waited for until it's live), point at a workspace you already belong to (enter its slug or URL — the same as `kcap setup <tenant>`), or cancel. That middle choice matters because SSO discovery only lists workspaces that use org SSO: a workspace whose members sign in with the GitHub App shows up here as "no tenant", so pick **I already have a workspace**, or re-run with `--github`.
 2. **Login** — authenticates via your tenant's configured sign-in method; discovery completes the sign-in inline
 
    **Finishing in the browser.** Once you are signed in, if that server offers browser setup, kcap creates a setup link, opens your browser on it, and waits while you work through the screens there:
@@ -259,10 +285,10 @@ The setup wizard walks you through the steps below. Re-run it any time to update
 3. **Default visibility** — choose how your sessions are visible to others. Answered on the browser's Agents screen, this step reports that choice rather than prompting
 4. **Coding-agent hooks** — detects Claude Code and Codex CLI on `PATH`, Cursor by user-dir presence (`~/.cursor/`), GitHub Copilot CLI by `~/.copilot/` or `copilot` on `PATH`, Google Gemini CLI by `~/.gemini/` or `gemini` on `PATH`, AWS Kiro CLI by `~/.kiro/` or `kiro`/`kiro-cli` on `PATH`, Pi by `~/.pi/` or `pi` on `PATH`, SST OpenCode by `~/.config/opencode/` (or `~/.local/share/opencode/`) or `opencode` on `PATH`, and Google Antigravity by `~/.gemini/antigravity/` (GUI) or `~/.gemini/antigravity-cli/` (the `agy` CLI) or `antigravity`/`agy` on `PATH`, Mistral Vibe by `~/.vibe/` or `vibe` on `PATH`, Grok by `~/.grok/` or `grok` on `PATH`, and Muse Code by `~/.config/muse/`, `~/.local/share/muse/` (honouring `XDG_CONFIG_HOME` and `XDG_DATA_HOME`) or `muse` on `PATH`, lists what it found, then asks **one** yes/no prompt to install kcap for every detected agent (hooks — or, for Pi/OpenCode/Antigravity, the live-ingest plugin — plus skills, instructions, and MCP) — plus a single shared set of agent skills under `~/.agents/skills/`, installed once when any of Codex, Cursor, Copilot, Gemini, Pi, OpenCode, Mistral Vibe, Grok, or Muse Code is detected (Claude gets its skills from the bundled plugin; AWS Kiro and Google Antigravity read their own skills dirs — `~/.kiro/skills` and `~/.gemini/skills` respectively — so each gets its own copy there instead of the shared tree) — all user-wide. For Codex it also offers to enable **sandbox network access** for kcap (see [Unattended setup](#unattended-setup)) — Codex blocks sandbox network by default, so the kcap skills can't reach the server without it. Each agent's own config-relocation environment variable is honored when set: `CLAUDE_CONFIG_DIR` (Claude), `CODEX_HOME` (Codex), `GEMINI_CLI_HOME` (Gemini — names the parent of `.gemini`), `KIRO_HOME` (Kiro), `COPILOT_HOME` (Copilot), `OPENCODE_CONFIG_DIR` (OpenCode), `PI_CODING_AGENT_DIR` (Pi), `VIBE_HOME` (Vibe — replaces `~/.vibe`), `GROK_HOME` (Grok — replaces `~/.grok`), and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` (Muse — relocate `muse/settings.json` and `muse/sessions`). Cursor's hooks path is fixed at `~/.cursor/hooks.json` and is not relocated. Setup also offers any other Claude Code or Codex config directories it finds, so each is recorded as an account (see [Accounts](#accounts)); with `--no-prompt`, or on a console that cannot prompt, it prints the `kcap accounts add` command instead.
    When it installs any agent's hooks it also adds one entry to `~/.gitconfig`, a git 2.54+ config hook named `kcap` (`kcap plugin install` does the same). After every commit git runs `kcap git-hook`, which files the commit under the session of the agent process above it, so a commit made from a subfolder, a nested repo, a script or any agent lands in the right repository and pull request. Antigravity, Cursor and OpenCode are the exception: one of their processes runs several sessions and your own terminals, so their commits are still read from the agent's shell commands. It runs beside hooks you already have (husky, pre-commit) and never replaces them. `git hook list post-commit` shows it, `git config --global hook.kcap.enabled false` switches it off, and on an older git the server keeps reading commits from the agent's shell commands — setup adds the hook entry, then checks `git --version` and warns when git is older than 2.54 (or when it cannot read the version). When it installs Codex hooks, setup also reminds you that Codex records nothing until you trust them.
-5. **Daemon** — configure the daemon name for remote agent execution. If a daemon on another machine is already connected to your account under that name, setup asks for another (suggesting one suffixed with this machine's name); under `--no-prompt` the name is `--daemon-name`, else `KCAP_DAEMON_NAME`, else your user name, and a name held elsewhere exits 1, so pass a different `--daemon-name` (the daemon verb is `kcap daemon`; `kcap agent` is a separate group that runs coding agents — see [Local agents](#local-agents-kcap-agent)). **After a browser answer this step does not prompt:** it takes `--daemon-name` if given, else `KCAP_DAEMON_NAME`, else the profile's daemon name (your user name on a first run); if another machine holds it, setup tries the machine-suffixed name and then numbered variants of it, and ends with an error naming `--daemon-name` if all are taken. The provider API key question (asked when `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set) is skipped too and the stored setting kept — change it with `kcap config set use_provider_api_key true|false`. When the browser's Done screen ran the daemon as a service, setup closes by saying so rather than suggesting `kcap daemon start -d`
+5. **Daemon** — name the daemon for remote agent execution; setup then installs it as a background service and starts it, so it runs after a restart and its service manager restarts it if it dies. The name prompt suggests `--daemon-name`, else `KCAP_DAEMON_NAME`, else the profile's daemon name, else this machine's name — and when a daemon on another machine of your account already holds that name, the first free of `name-1`, `name-2`, and so on, so accepting the suggestion never collides. A name you type that is held elsewhere is asked again. When the name differs from the one the profile had, setup removes the old name's service as it installs the new one (macOS and Windows), so the machine keeps one daemon; an old service it cannot remove — one belonging to another profile, one whose daemon is busy, any when the new name already had a service, or any on Linux — is left in place, and setup prints the `kcap daemon service uninstall --name <old>` command for it. Under `--no-prompt` the suggestion is used, except that a `--daemon-name` held elsewhere exits 1 (the daemon verb is `kcap daemon`; `kcap agent` is a separate group that runs coding agents — see [Local agents](#local-agents-kcap-agent)). **After a browser answer this step does not prompt:** it uses the suggested name. The provider API key question (asked when `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` is set) is skipped too and the stored setting kept — change it with `kcap config set use_provider_api_key true|false`.
 6. **Import past sessions** — scans every detected agent's history on this machine and prints how many repositories and sessions it found and how many sessions matched no repository, then asks (default yes) `Import past sessions from this machine?` — equivalent to `kcap import --all` under your profile's default visibility (shared only where the repository owner is your workspace's org). The most recent sessions are prioritized: about five import while you watch, and the rest continue in a detached background process that logs to `~/.config/kcap/import-<run>.log`. Setup then offers to open one of your detected coding agents with the prompt `Follow my kcap import` so you can watch the import and its evals from there (or prints the prompt to paste), and finishes when you close it. Your authentication requirements must be satisfied — which includes no-auth servers (auth provider `None`, no token needed); otherwise the step is skipped with the usual `kcap import` hint. Opt out with `--skip-import`; an import chosen on the browser's Import screen runs regardless. **Answered in the browser, this step reports rather than prompts** — the screen there chooses repositories and a history window this prompt cannot express, so re-asking would offer to redo part of what already ran. A browser flow that finished without an import answer skips this step too and names `kcap import --all` for later; handing back to the terminal with **t** keeps the prompt.
 
-- **New tenant:** when signing in via Kurrent's hosted auth and you have no tenant yet, `setup` prompts to create one (organization name + `<slug>.kcap.ai` workspace URL) and waits up to ten minutes for it to answer; if it still does not, setup stops and names the `kcap setup --server-url <url>` to run once it is up. A listed workspace whose address answers 404 — removed, though its sign-in organization remains — is left out, unless it is still being created. Pass `--org "<name>" --slug <slug>` to answer both up front, so the fork raises no prompt, and `--tier team` or `--tier free` for the plan (Free when omitted). An account that cannot have the Team trial (a personal email address, or a domain that has already had one) gets a Free workspace instead, and setup says why. Add `--no-prompt` for a script or a session with redirected input: these two flags only settle the creation questions, and the steps after it still ask. The two are both-or-neither: the slug becomes a permanent public hostname, so kcap will not derive one for you. A slug that is taken or malformed ends the run naming it, rather than asking for another. While creating a workspace is invite-only, setup asks for an invite code (three tries) and names where to request one; with `--org`/`--slug`, pass it as `--invite-code <code>` instead, since that run asks nothing. Only an account with no workspace yet can create one, so if yours already has a different one, setup signs in, stops, and tells you — it will not go on to configure that workspace as if you had asked for it. Without the flags, a non-interactive run exits with guidance.
+- **New tenant:** when signing in via Kurrent's hosted auth and you have no tenant yet, `setup` prompts to create one (organization name + `<slug>.kcap.ai` workspace URL) and waits up to ten minutes for it to answer; if it still does not, setup stops and names the `kcap setup --server-url <url>` to run once it is up. A listed workspace whose address answers 404 — removed, though its sign-in organization remains — is left out, unless it is still being created. Pass `--org "<name>" --slug <slug>` to answer both up front, so the fork raises no prompt, and `--tier team` or `--tier free` for the plan. Omitted, it is Free, or the Team trial while Free cloud workspaces are closed; a named `--tier free` is never moved. An account that cannot have the Team trial (a personal email address, or a domain that has already had one) gets a Free workspace instead, and setup says why. Add `--no-prompt` for a script or a session with redirected input: these two flags only settle the creation questions, and the steps after it still ask. The two are both-or-neither: the slug becomes a permanent public hostname, so kcap will not derive one for you. A slug that is taken or malformed ends the run naming it, rather than asking for another. While creating a workspace is invite-only, setup asks for an invite code (three tries) and names where to request one; with `--org`/`--slug`, pass it as `--invite-code <code>` instead, since that run asks nothing. Only an account with no workspace yet can create one, so if yours already has a different one, setup signs in, stops, and tells you — it will not go on to configure that workspace as if you had asked for it. Without the flags, a non-interactive run exits with guidance.
 
 The closing summary lists, under **Changed on this machine**, every agent config file and skills directory the run installed kcap into, plus the git config that carries the commit hook (`~/.gitconfig`, or `~/.config/git/config` when only that exists).
 
@@ -271,28 +297,144 @@ When setup finishes, `kcap` sends a best-effort POST to the server's `/api/users
 Setup closes with a **Next steps** box. Each item opens with a question, because neither step is for
 everyone:
 
-- **Did you create this Capacitor server?** Complete server setup — inviting teammates, and
+- **Did you create this kcap server?** Complete server setup — inviting teammates, and
   optionally Slack and your own AI keys — by following
   [Setup Server](https://capacitor.kurrent.io/docs/getting-started/setup-server/). Always listed:
   `kcap` can't tell whether you own the server, so you self-select.
-- **New to Capacitor?** Prompt **"Start kcap guided tour"** in your coding agent (or, in Claude Code,
+- **New to kcap?** Prompt **"Start kcap guided tour"** in your coding agent (or, in Claude Code,
   `/kcap:guided-tour`) for seven short cards, one per reply — welcome, capture, investigate,
   collaborate, review, use, reuse — each a few questions to ask your agent. It's a prompt rather than a slash command because
   only Claude Code has slash commands — the skill ships with the plugin and is also installed for
   Codex and the other `~/.agents/skills/` agents (plus Kiro and Antigravity) as `kcap-guided-tour`.
   This item only appears when an agent was detected and one of them carries the skill.
 
-#### Unattended setup
+#### Local edition
+
+`kcap setup --local` installs and starts a kcap server on this machine instead of using a hosted workspace, then carries on with the usual login, hooks and daemon steps against it. It is macOS on Apple silicon only for now.
+
+The first version is for a machine with one user: on a shared machine, other OS users can open the web UI and act as its admin. Setup therefore asks you to confirm that (`--single-user`) and to confirm the install itself (`--yes`); `--no-prompt` and `--json` cannot ask, so they require both for an install. Re-running `kcap setup --local` reuses the existing installation, which needs no confirmation beyond `--single-user`.
+
+**Search by meaning.** When [Ollama](https://ollama.com) is running on `http://localhost:11434`, setup offers it as the server's embedding provider, suggesting `mxbai-embed-large` (1024 dimensions, about 670 MB). It pulls the model if Ollama does not have it, checks that it embeds text, and writes the choice to `data/embedding.json` under the installation, which the server's service passes to it as `Embedding__Provider=ollama`, `Embedding__Ollama__Model` and `Embedding__Ollama__BaseUrl`. A new installation starts with it; on an existing one a changed model restarts the server. The model fixes the width of the stored vectors, so changing it later means embedding everything again, which the server does in the background.
+
+- `--embedding-model <model>` picks the model without asking. `--no-embeddings` stops setup configuring Ollama, removing a model an earlier setup configured, and is remembered: a later setup without either flag, `--json` included, leaves search by keyword. An embedding provider set in the web UI's settings still applies.
+- `--no-prompt` asks nothing: with Ollama running and nothing recorded yet, it needs one of those two flags. A recorded model or decline is kept.
+- Without Ollama, setup carries on and search works by keyword; re-run `kcap setup --local` once Ollama runs. A failed pull or a model that cannot embed is reported the same way and never fails the install.
+
+- A machine that already has a profile for another server is refused for now.
+- Every kcap that talks to the local server must be newer than 1.3.0, which does not keep to its rules. Setup asks the `kcap` on `PATH` and the desktop app's bundled one (in `/Applications` or `~/Applications`) for their versions, and stops if either is 1.3.0 or older, or does not report one: update it, or remove the one on `PATH`. The local server refuses an older kcap too, so its hooks and watcher record nothing there.
+- Builds of kcap for musl Linux are not supported.
+- `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
+
+`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model` and `--no-embeddings`, and uses a running Ollama with the configured model, or `mxbai-embed-large`, unless a flag says otherwise:
+
+```json
+{"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
+{"v":1,"event":"port_chosen","port":9473}
+{"v":1,"event":"downloading","url":"https://…","bytes":84213760}
+{"v":1,"event":"verified","sha256":"…"}
+{"v":1,"event":"embeddings_ollama_found","version":"0.12.3","url":"http://localhost:11434"}
+{"v":1,"event":"embeddings_model_pulling","model":"mxbai-embed-large"}
+{"v":1,"event":"embeddings_model_progress","received":335544320,"bytes":669603840,"model":"mxbai-embed-large"}
+{"v":1,"event":"embeddings_model_ready","model":"mxbai-embed-large","dimensions":1024}
+{"v":1,"event":"embeddings_configured","provider":"ollama","model":"mxbai-embed-large"}
+{"v":1,"event":"starting","unit":"…"}
+{"v":1,"event":"ready","server_url":"http://localhost:9473"}
+{"v":1,"event":"committed","server_url":"http://localhost:9473","installation_id":"…","port":9473,"version":"0.13.0"}
+```
+
+A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…"}`; after `rolling_back` and `rolled_back` the installation is removed, and its `logs/` directory is kept for diagnosis. The exit code is 0 for `committed` and 1 for `failed` (2 when the code is `answer_required` or `invalid_arguments`: nothing was attempted), or 130 when an interrupt (Ctrl+C or SIGTERM) was received: the last line is still `committed`, or `failed` (with code `cancelled` when the interrupt rolled the install back). The other events are `recovering`, `recovered`, `download_progress`, `unpacked`, `reused` and `committing`.
+
+The `embeddings_*` events come after `unpacked` for an install and after `preflight_passed` for a reuse, before `starting`. `embeddings_model_pulling` and `embeddings_model_progress` (one per whole percent) appear only when Ollama lacks the model, and `embeddings_configured` carries `replaced_model` when it replaced a different one. When the step does not end in `embeddings_configured`, it ends in `{"v":1,"event":"embeddings_skipped","code":"…","message":"…"}`, which never fails the install; `code` is `declined` (`--no-embeddings`, now or in an earlier setup), `ollama_not_found`, `pull_failed`, `model_unusable` (the model cannot embed text) or `write_failed`. Unless it is `declined`, a model configured earlier stays configured.
+
+For development and pre-release builds, `KCAP_LOCAL_BUNDLE_BASE_URL` points the download at another location and `KCAP_LOCAL_BUNDLE_VERSION` picks a different version. The manifest must still verify.
+
+#### Removing the local edition
 
 ```bash
+kcap local uninstall            # stop and remove the server, keep its data
+kcap local uninstall --purge    # also delete its data and retire its URL
+```
+
+`kcap local uninstall` refuses while a daemon is running agents, unless `--force` ends them with the daemon. It then stops every kcap daemon and watcher and removes the daemon service, stops the local server and verifies that nothing of it is still running, and only then removes the server's service and its `bin/` and `run/` directories. If anything cannot be stopped, nothing is removed. Its data, its identity and your profile stay, so `kcap setup --local` brings the same installation back on the same URL, downloading the version it was running.
+
+`--purge` goes on to retire the installation, then delete its `data/` and `logs/`, the pending recordings and the caches for it in the config directory, and clear the server URL of every profile there that points at it. A retired URL is never sent to again: a watcher still running, or a profile under another `KCAP_CONFIG_DIR`, is refused with an error naming the removed installation, and a later `kcap setup --local` creates a new installation on a new port. A purge that is interrupted is finished by the next `kcap local` command or `kcap setup --local`. `--yes` skips the confirmation.
+
+#### Unattended setup
+
+`kcap setup --no-prompt` is the path for a provisioning script, an agent sandbox or a fleet of developer machines; everyone else is better served by the [desktop app](#desktop-app). It never asks a question: every prompt has a flag, a question with a safe default takes it, and one without (the local edition's consents) is refused with exit code 2 before anything changes.
+
+The local edition, on a Mac:
+
+```bash
+kcap setup --local --single-user --yes --no-embeddings --no-prompt
+```
+
+The cloud edition, against a workspace that exists, with a [machine credential](#machine-credentials-headless-recording) in the environment:
+
+```bash
+export KCAP_CLIENT_ID=client_01ABC… KCAP_CLIENT_SECRET=…
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
-`--no-prompt` requires a workspace (`<tenant>` or `--server-url`), unless you are creating the workspace as part of the run — `--org "<name>" --slug <slug>` supply the two answers the creation prompts would have collected, so those replace it:
+`--no-prompt` requires a workspace (`<tenant>` or `--server-url`), `--local`, or `--org "<name>" --slug <slug>` to create the workspace as part of the run — those two supply the answers the creation prompts would have collected:
 
 ```bash
 kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public --no-prompt
 ```
+
+**Signing in with no one at the machine.** Against a server that needs a sign-in, `--no-prompt` tries, in order:
+
+1. A machine credential (`KCAP_CLIENT_ID` and `KCAP_CLIENT_SECRET`, from `kcap machine create`). Setup checks it with the server and signs in no person. If the server refuses it, or does not confirm it (no response, or any status but 2xx), the run fails (exit 1) rather than falling back to a person. A 404 is the exception: a server without the check endpoint cannot be asked, so setup carries on. A daemon service cannot carry the secret, so none is installed: start the daemon with `kcap daemon start -d` where the variables are set.
+2. A token already stored for that server, from an earlier `kcap login` on this machine (`kcap login --device` signs in from a browser elsewhere).
+3. Otherwise the sign-in as today: a device code (or the browser, on a machine that has one) that someone has to approve.
+
+**Every question and its flag.** Under `--no-prompt` each takes the default shown.
+
+| Question | Flag | `--no-prompt` |
+|---|---|---|
+| How do you want to run kcap? | `<tenant>`, `--server-url`, `--local`, `--org`/`--slug` | required |
+| Re-run setup on a configured machine? | — | yes |
+| Workspace to create (name, slug, plan, invite) | `--org`, `--slug`, `--tier`, `--invite-code` | — |
+| This machine has one user (local) | `--single-user` | required |
+| Install kcap local (local) | `--yes` | required, except to reuse an installation |
+| Ollama for search by meaning (local) | `--embedding-model <model>`, `--no-embeddings` | required while Ollama runs and nothing is recorded |
+| Default session visibility | `--default-visibility` | `org_public`; `private` with `--local` |
+| Install kcap for the detected agents? | `--skip-harnesses`, `--skip-<agent>-hooks` and friends | yes |
+| Let Codex's sandbox reach the server? | `--skip-codex-network-access` | yes |
+| Record another Claude/Codex config directory? | — (`kcap accounts add` afterwards) | no; the command is printed |
+| Keep `ANTHROPIC_API_KEY`/`OPENAI_API_KEY` in headless calls? | `--use-provider-api-key` | the profile's setting |
+| Daemon name | `--daemon-name` | the suggestion; a held `--daemon-name` fails |
+| Import past sessions? | `--skip-import` | yes |
+| Open an agent to follow the import? | — | not offered |
+
+**Exit codes.** `kcap setup` exits:
+
+| Code | Meaning |
+|---|---|
+| 0 | Done. |
+| 1 | Failed: setup did not finish. What it changed before stopping stays, and re-running it carries on. |
+| 2 | Refused: nothing was attempted — an argument was wrong, or a run that cannot ask was missing an answer. |
+| 130 | Interrupted (Ctrl+C or SIGTERM). |
+
+**Progress as JSON.** `--json` with `--no-prompt` writes one JSON object per line to stdout for the whole run, for a wrapper to render, and moves the usual narration to stderr. Each step opens with `step_started` and closes with `step_completed`, and the run ends with `done` or `failed`:
+
+```json
+{"v":1,"event":"step_started","step":"server"}
+{"v":1,"event":"step_completed","step":"server","server_url":"https://acme.kcap.ai","provider":"WorkOS"}
+{"v":1,"event":"step_started","step":"sign_in"}
+{"v":1,"event":"step_completed","step":"sign_in","provider":"WorkOS","credential":"machine"}
+{"v":1,"event":"step_started","step":"visibility"}
+{"v":1,"event":"step_completed","step":"visibility","visibility":"org_public"}
+{"v":1,"event":"step_started","step":"harnesses"}
+{"v":1,"event":"step_completed","step":"harnesses","harnesses":["claude","codex"]}
+{"v":1,"event":"step_started","step":"daemon"}
+{"v":1,"event":"step_completed","step":"daemon","name":"laptop","outcome":"skipped"}
+{"v":1,"event":"step_started","step":"import"}
+{"v":1,"event":"step_completed","step":"import","outcome":"ran"}
+{"v":1,"event":"done","server_url":"https://acme.kcap.ai"}
+```
+
+The steps are `server`, `sign_in`, `visibility`, `harnesses`, `daemon` and `import`. `credential` is `machine`, `stored`, `sign_in` or `none`; the daemon's `outcome` is `enabled`, `enabled_unverified`, `already_enabled`, `refused` or `failed` for its service, or `skipped` when none was set up; the import's is `ran` or `skipped`. With `--local`, the [install's own events](#local-edition) come inside the `server` step. A `failed` line names the step it stopped in and carries a `code`: the local install's codes, or `answer_required`, `invalid_arguments`, `server_unreachable`, `workspace_unavailable`, `sign_in_failed`, `machine_credential_rejected`, `daemon_name_held`, `cancelled`, or `setup_failed` for anything else, with the last error setup printed as its `message`. A refusal found before any step starts is a `failed` line alone; the local edition's consents are checked inside the `server` step, so their `answer_required` line follows its `step_started`.
 
 In `--no-prompt` mode, the wizard installs hooks for every detected agent by default. Opt out per agent with `--skip-claude-hooks`, `--skip-codex-hooks`, `--skip-cursor-hooks`, `--skip-copilot-hooks`, `--skip-gemini-hooks`, `--skip-kiro-hooks`, `--skip-pi-hooks`, `--skip-opencode-hooks`, `--skip-antigravity-hooks`, `--skip-mistral-vibe-hooks`, `--skip-grok-hooks`, and/or `--skip-muse-hooks` (with `--skip-muse-mcp` to leave Muse's MCP block alone). When Codex hooks are installed, the wizard also enables Codex sandbox network access for your server(s) by default; pass `--skip-codex-network-access` to leave `~/.codex/config.toml` untouched.
 
@@ -304,7 +446,7 @@ kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-cursor-hook
 kcap setup --server-url <url> --no-prompt --skip-claude-hooks --skip-codex-hooks   # only Cursor
 ```
 
-**Muse Assistant.** Muse runs kcap inside its own VM, where the only persistent place is `~` and the image ships a Codex that Muse itself never uses. `kcap setup <tenant> --muse-assistant` is the posture for that machine: it implies `--no-prompt`, `--device` and `--skip-import`, installs nothing for any harness (no Codex hooks, no `~/.codex/config.toml` MCP or network allowlist, no `~/.agents/skills`), defaults visibility to `private` (an explicit `--default-visibility` still wins), and prints — before its first network call — the hosts Muse's egress filter will ask the user to approve in the chat: the server's host and `phog.kurrent.io` first, then, once the server names its sign-in provider, `api.workos.com` and `signin.kcap.ai` (WorkOS) or `github.com` (GitHub). Choose **Always allow this site** on each card. Until a host is approved it resolves to a placeholder address, so a "cannot reach server" from this run means "not yet approved": approve the cards and run the same command again. The whole connection — install under `~/workspace`, this sign-in, the kcap MCP servers as a Muse custom connector, a `capacitor` skill and an hourly `kcap status` cron — is driven by the `connect-capacitor` skill (`kcap/skills/connect-capacitor/SKILL.md`): paste it into Muse, or ask Muse to read it from `https://raw.githubusercontent.com/kurrent-io/kcap-cli/main/kcap/skills/connect-capacitor/SKILL.md`, and say "Connect Capacitor".
+**Muse Assistant.** Muse runs kcap inside its own VM, where the only persistent place is `~` and the image ships a Codex that Muse itself never uses. `kcap setup <tenant> --muse-assistant` is the posture for that machine: it implies `--no-prompt`, `--device` and `--skip-import`, installs nothing for any harness (no Codex hooks, no `~/.codex/config.toml` MCP or network allowlist, no `~/.agents/skills`), defaults visibility to `private` (an explicit `--default-visibility` still wins), and prints — before its first network call — the hosts Muse's egress filter will ask the user to approve in the chat: the server's host and `phog.kurrent.io` first, then, once the server names its sign-in provider, `api.workos.com` and `signin.kcap.ai` (WorkOS) or `github.com` (GitHub). Choose **Always allow this site** on each card. Until a host is approved it resolves to a placeholder address, so a "cannot reach server" from this run means "not yet approved": approve the cards and run the same command again. The whole connection — install under `~/workspace`, this sign-in, the kcap MCP servers as a Muse custom connector, a `kcap` skill and an hourly `kcap status` cron — is driven by the `connect-kcap` skill (`kcap/skills/connect-kcap/SKILL.md`): paste it into Muse, or ask Muse to read it from `https://raw.githubusercontent.com/kurrent-io/kcap-cli/main/kcap/skills/connect-kcap/SKILL.md`, and say "Connect kcap".
 
 ```bash
 npm install --prefix ~/workspace/kcap @kurrent/kcap
@@ -343,6 +485,59 @@ If you run `kcap setup` outside any git working tree, it still completes — hoo
 
 > **Codex** collab subagents (Codex CLI 0.146+, the `spawn_agent` collaboration tools) are captured too. Each subagent thread writes its own rollout under `~/.codex/sessions/`; the live watcher discovers children by the parent linkage in their rollout header and streams each one nested under the parent session, and `kcap import --codex` does the same for history — a subagent rollout never imports as a separate top-level session (see [Loading historical sessions](#loading-historical-sessions)).
 
+### Local server (`kcap local`)
+
+The server `kcap setup --local` installed runs as a per-user service (a launchd LaunchAgent on macOS) and starts at login. These commands manage it:
+
+```bash
+kcap local status          # explain its state and what to do about it
+kcap local start           # start it and wait until it is ready
+kcap local stop            # stop it, and keep it stopped across logins
+kcap local restart
+kcap local logs -n 200     # the end of the server's log, which holds Postgres's and KurrentDB's too
+kcap local open            # open the web UI in a browser
+kcap local upgrade         # move it forward to this kcap's version
+kcap local uninstall       # remove it, keeping its data; --purge deletes it (see Removing the local edition)
+```
+
+`kcap local status` reports the installation's version, port and root, whether search is configured to work by meaning through Ollama (and with which model) or by keyword only, whether the service runs the server, and whether KurrentDB and Postgres are up. When the server is not ready it says why: stopped, still starting (a first start creates the database), exiting and being restarted, holding no unit, a port another process has taken, stores an earlier server left running, a unit that serves an installation under another `KCAP_LOCAL_ROOT`, or a setup or upgrade that was interrupted. It also says when the stack is older than this `kcap`, and names `kcap local upgrade`, or newer than it. It changes nothing, and exits 0 only when the server is running and ready.
+
+`start`, `stop`, `restart` and `upgrade` wait for any other `kcap` that is changing the installation, and first finish or undo an interrupted setup or upgrade. A stop persists: the server does not come back at the next login until `kcap local start`. The port is part of the installation's identity, so a server whose port another process holds cannot move to another one; stop that process instead. The logs are under `~/.config/kcap/local/logs`.
+
+#### Upgrading the local server
+
+The stack is always at least as new as every `kcap` that uses it, and it only moves forward. `kcap local upgrade` is the only command that changes its version: it moves the stack to this `kcap`'s version when that is newer, and otherwise changes nothing, so an older `kcap` on the same machine (say the desktop app's bundled one) keeps working against a newer stack and never moves it back.
+
+- **npm:** `kcap update` replaces the CLI, then runs the new binary's `kcap local upgrade`. A CLI release can reach npm before its server bundle is published; the update then still succeeds, says so, and the stack stays on its version until `kcap local upgrade` is run again.
+- **Script installs:** `kcap update` does the same once the new release is in place.
+- **Homebrew and other installs:** update the CLI the way you installed it, then run `kcap local upgrade`. `kcap local status` and the notice after other commands say when the stack is behind.
+
+An upgrade downloads and verifies the new bundle beside the running one, stops the server and checks that nothing of it is left, points `bin/current` at the new version, starts it and waits until it is ready; the first start migrates the data. A server you had stopped is started for that, then stopped again. Upgrades are forward-only: nothing is snapshotted, so nothing is rolled back. If anything fails before the switch, the old version is started again (if it was running). If the new version does not start, it stays selected and stopped, the old bundle is kept in `bin/` for diagnosis, and `kcap local start` tries again once the cause is fixed. An upgrade interrupted at any point is finished or undone by the next `kcap local start`, `stop`, `restart`, `upgrade` or `uninstall`, or by `kcap setup --local`. The update cap described under [`kcap update`](#other-commands) does not apply to the local server.
+
+`--if-installed` prints nothing when there is no installation. `--json` is for the desktop app: one JSON object per line on stdout, in the style of `kcap setup --local --json`:
+
+```json
+{"v":1,"event":"upgrade_planned","version":"0.14.0","from_version":"0.13.0"}
+{"v":1,"event":"downloading","url":"https://…","bytes":84213760}
+{"v":1,"event":"verified","sha256":"…"}
+{"v":1,"event":"stopping"}
+{"v":1,"event":"stopped"}
+{"v":1,"event":"switched","version":"0.14.0"}
+{"v":1,"event":"starting","unit":"…"}
+{"v":1,"event":"ready","server_url":"http://localhost:9473"}
+{"v":1,"event":"upgraded","server_url":"http://localhost:9473","version":"0.14.0","from_version":"0.13.0"}
+```
+
+A run that changes nothing ends with `{"v":1,"event":"nothing_to_do","version":"…","installed_version":"…","reason":"…"}`, where `reason` is `current`, `stack_newer` or `not_installed`. A failed run ends with `{"v":1,"event":"failed","code":"…","message":"…","switched":false}`; `switched` says whether the new version is selected. `code` is one of the setup codes, such as `lifecycle_busy` when another `kcap` holds the installation, `download_failed`, `verification_failed`, `start_failed` or `commit_failed`. The other events are `recovering`, `recovered`, `download_progress`, `unpacked` and `restarting`.
+
+| Exit | Meaning |
+| -- | -- |
+| 0 | Upgraded: the stack runs this `kcap`'s version |
+| 1 | Failed before the switch: the old version is selected, and running again if it was |
+| 2 | Failed after the switch: the new version is selected and stopped, or its switch is finished by the next command |
+| 3 | Nothing to do: already at this version, newer than it, or not installed |
+| 4 | No bundle is published for this version yet (`bundle_not_published`); nothing changed |
+
 ### Approval policy
 
 Cut down on prompt fatigue by telling kcap what to auto-approve, auto-deny, or still ask about. Drop rules in a **policy file** — `.kcap/approvals.yaml` at the repo root (commit it — it's PR-reviewable, like a CODEOWNERS file) and/or `~/.config/kcap/approvals.yaml` for your own machine (honors `KCAP_CONFIG_DIR`) — and every matching tool call gets one of three outcomes: **allow** (run it, no prompt — on an ACP-routed agent this only fires when it offers a single, unambiguous allow option; otherwise the normal prompt still shows), **deny** (refuse the call — only Claude's `PreToolUse` hook shows your `reason:` to the agent; every other seam answers with a bare refusal, and the reason still lands in kcap's audit trail), or **ask** (force a prompt even where the agent's own auto-mode would normally have skipped one). The same rules, with identical semantics, govern a local Claude Code session (its `PreToolUse` and `PermissionRequest` hooks), a hosted (daemon-launched) Claude session (evaluated before the request reaches the human-approval lane), and ACP-routed agents — Cursor, GitHub Copilot, Kiro, OpenCode, Gemini — (evaluated ahead of kcap's own launch presets). A **rendered** session's local checks only ever tighten: deny and ask still apply, but nothing gets auto-allowed there. Anything the rules don't decide **passes through** unchanged to the agent's native behavior, so turning the policy on never makes a session noisier, and a repo with no file behaves exactly as it does today. Unattended review-flow launches are out of scope: a reviewer runs with no human to prompt, so it stays under its own containment rather than this policy layer.
@@ -363,7 +558,7 @@ rules:
 
 `match.kind` is one of `shell`, `file_edit`, `file_read`, `network`, `mcp_tool`, `other`. An **allow** pattern must cover the whole command: `git status` allows only `git status`, and `git status *` allows anything after it purely because of that trailing bare `*` — broad auto-approval has to be visible in the file, never a silent default. **Deny**/**ask** patterns are looser and match a run of tokens anywhere in the command, so `git push --force*` also catches `git push --force origin main`. A shell command kcap can't fully analyze — redirection, expansion, globs, compound syntax like `if`/`for`, a known shell name anywhere in the line (`bash`, `sh`, `pwsh`, `busybox` and friends, wrappers included), or an `env -S`/`--split-string` form that packs a whole command line into one argument — is **never allow-eligible** no matter what it contains; it can still be denied or asked about, just never auto-approved. That list of shell names is maintained, not exhaustive, so a lesser-known interpreter is analyzed like any other program: it's auto-approved exactly when an allow rule already in the file fully covers the command — whether that rule names the interpreter outright, a glob covers its position, or a wrapper rule like `env *`/`sudo *` grants it the argv. A shell name on that maintained list, though, is never auto-approved no matter what rule covers it.
 
-**The judge.** Set `judge: { mode: unmatched, prompt: "…" }` and a call no rule decides in a Claude Code session, local or hosted, is sent to your Capacitor server's policy judge — an LLM classifier whose model and keys stay on the server — which answers allow, deny or ask. It sees your `prompt`, the action, your recent messages in this session and every call you already refused at a prompt, so "push when the tests pass" two turns ago can approve the push, and a push you said no to stays a prompt. An ACP-routed hosted agent (Cursor, Copilot, Kiro, Gemini, OpenCode) consults it too, but has no transcript the server can read, so the judge sees only the calls you refused through the daemon, not your messages. The judge has 2 seconds in a local session and 5 in a hosted one, where the agent is already waiting on a prompt; anything it does not decide in time, an `uncertain` answer, an unreachable server or one without the judge enabled all **pass through** to the agent's native behavior (in a hosted session, the permission card), and every consultation is recorded beside the rule decisions.
+**The judge.** Set `judge: { mode: unmatched, prompt: "…" }` and a call no rule decides in a Claude Code session, local or hosted, is sent to your kcap server's policy judge — an LLM classifier whose model and keys stay on the server — which answers allow, deny or ask. It stands in only where Claude would ask you: it is not consulted before a call in `auto`, `dontAsk`, `bypassPermissions` or `plan` mode (a prompt one of them does raise still reaches it), and never answers a question Claude asks you or a plan it puts to you for approval. It sees your `prompt`, the action, your recent messages in this session and every call you already refused at a prompt, so "push when the tests pass" two turns ago can approve the push, and a push you said no to stays a prompt. An ACP-routed hosted agent (Cursor, Copilot, Kiro, Gemini, OpenCode) consults it too, but has no transcript the server can read, so the judge sees only the calls you refused through the daemon, not your messages. The judge has 2 seconds in a local session and 5 in a hosted one, where the agent is already waiting on a prompt; anything it does not decide in time, an `uncertain` answer, an unreachable server or one without the judge enabled all **pass through** to the agent's native behavior (in a hosted session, the permission card), and every consultation is recorded beside the rule decisions.
 
 A file that steps outside the supported YAML subset (block/flow mappings and sequences, plain/quoted scalars, literal `|`/`|-` blocks, comments — nothing else) or that sets `caps`/`enforcement` (reserved for centrally-managed policy scopes, invalid in a local file) is never half-applied. It's dropped entirely, and kcap says so loudly at the next session start instead of silently losing your rules:
 
@@ -502,11 +697,11 @@ Accepts a GitHub PR URL (`https://github.com/owner/repo/pull/123`, any host incl
 
 Launches a Claude Code session equipped with MCP tools that query the implementation transcripts. Reviewers can ask *why* code was changed, understand design decisions, check what alternatives were considered, and verify test coverage — all grounded in what actually happened during development.
 
-The same MCP server (`kcap-review`) is also auto-registered by the Kurrent Capacitor plugin and available in any Claude Code session, not just ones launched via `kcap review`. Each PR-scoped tool (`get_pr_summary`, `list_pr_files`, `get_file_context`, `search_context`, `list_sessions`) accepts an optional `pr` argument — pass `"owner/repo#123"` or a GitHub/GitLab URL to review any PR from any branch. When omitted, the server falls back to the PR passed at startup (set by `kcap review <pr>`) or to git auto-detection against the current branch. `get_transcript` keys off `session_id` and doesn't need a `pr` argument.
+The same MCP server (`kcap-review`) is also auto-registered by the kcap plugin and available in any Claude Code session, not just ones launched via `kcap review`. Each PR-scoped tool (`get_pr_summary`, `list_pr_files`, `get_file_context`, `search_context`, `list_sessions`) accepts an optional `pr` argument — pass `"owner/repo#123"` or a GitHub/GitLab URL to review any PR from any branch. When omitted, the server falls back to the PR passed at startup (set by `kcap review <pr>`) or to git auto-detection against the current branch. `get_transcript` keys off `session_id` and doesn't need a `pr` argument.
 
 ### MCP servers for agents
 
-The `kcap mcp sessions` stdio server lets coding agents search and recall past Capacitor sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, Gemini CLI, SST OpenCode, Google Antigravity, and AWS Kiro CLI** — no manual `claude mcp add` or TOML/JSON edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`; for Cursor, `kcap setup` / `kcap plugin install --cursor` write it into `~/.cursor/mcp.json` (opt out with `--skip-cursor-mcp`); for Copilot, `kcap setup` / `kcap plugin install --copilot` write it into `~/.copilot/mcp-config.json` (opt out with `--skip-copilot-mcp`); for Gemini, `kcap setup` / `kcap plugin install --gemini` write it into the shared `~/.gemini/settings.json` (opt out with `--skip-gemini-mcp`); for OpenCode, into `~/.config/opencode/opencode.json` (opt out with `--skip-opencode-mcp`); for Antigravity, `kcap setup` / `kcap plugin install --antigravity` write it into `~/.gemini/config/mcp_config.json` (opt out with `--skip-antigravity-mcp`); for Kiro, `kcap setup` / `kcap plugin install --kiro` write it into `~/.kiro/settings/mcp.json` (opt out with `--skip-kiro-mcp`). The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
+The `kcap mcp sessions` stdio server lets coding agents search and recall past kcap sessions without leaving the chat. `kcap setup` **registers it (with `kcap-review`) for Claude Code, Codex CLI, Cursor, GitHub Copilot CLI, Gemini CLI, SST OpenCode, Google Antigravity, and AWS Kiro CLI** — no manual `claude mcp add` or TOML/JSON edit. For Claude Code it's carried by the plugin's `.mcp.json`; for Codex CLI, `kcap setup` / `kcap plugin install --codex` write it into `~/.codex/config.toml`; for Cursor, `kcap setup` / `kcap plugin install --cursor` write it into `~/.cursor/mcp.json` (opt out with `--skip-cursor-mcp`); for Copilot, `kcap setup` / `kcap plugin install --copilot` write it into `~/.copilot/mcp-config.json` (opt out with `--skip-copilot-mcp`); for Gemini, `kcap setup` / `kcap plugin install --gemini` write it into the shared `~/.gemini/settings.json` (opt out with `--skip-gemini-mcp`); for OpenCode, into `~/.config/opencode/opencode.json` (opt out with `--skip-opencode-mcp`); for Antigravity, `kcap setup` / `kcap plugin install --antigravity` write it into `~/.gemini/config/mcp_config.json` (opt out with `--skip-antigravity-mcp`); for Kiro, `kcap setup` / `kcap plugin install --kiro` write it into `~/.kiro/settings/mcp.json` (opt out with `--skip-kiro-mcp`). The server is repo-aware: `cd` into a project before spawning your agent and `search_sessions` defaults to that repo's sessions.
 
 The `kcap mcp flows` stdio server lets agents start and interact with AI-powered agent flows — any flow-definition catalog entry, not just reviews. The plugin **auto-registers it for Claude Code**, and `kcap setup` / the harness-specific plugin installers also register it for Codex, Cursor, Copilot, and Gemini. Codex registration is conservative: existing manual entries are preserved, and uninstall removes only unchanged kcap-owned entries. The Codex `kcap-flows` entry also carries `tool_timeout_sec = 600`, so Codex's own per-tool timeout never cuts a flow call short; an entry an earlier kcap wrote picks it up on the next `kcap setup` or plugin refresh, and an entry you edited is left alone. See the [Flows MCP server](#flows-mcp-server-for-agents) section for details.
 
@@ -516,7 +711,7 @@ The `kcap mcp memory` stdio server lets agents search, save, and update durable 
 
 Beyond registering the servers, `kcap setup` / `kcap plugin install` also installs a small kcap-owned **agent-instructions block** for harnesses that read a user-level instructions file (GitHub Copilot CLI's `~/.copilot/copilot-instructions.md`, and Gemini CLI's + Google Antigravity's shared `~/.gemini/GEMINI.md` today; more rolling out per harness). It's a marker-delimited, non-destructive note (preserves any instructions you've written) that steers the agent to prefer the kcap tools for "why / history / prior-work" questions over native `git`/GitHub/grep — registration alone doesn't make agents route to the tools. Opt out with `--skip-<harness>-instructions`.
 
-Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own Capacitor record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems`, `kcap-plans` and `kcap-handoff` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same servers via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory), `kcap-pages` (can widen who may open a page) and `kcap-knowledge` (can change facts and skills) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
+Where a harness exposes a per-server trust knob, registration also marks the kcap servers that only read, or that write only to the session's own kcap record, auto-approved so the agent doesn't stop to ask before every call: **Gemini** marks `kcap-review`, `kcap-sessions`, `kcap-analytics`, `kcap-workitems`, `kcap-plans` and `kcap-handoff` via `"trust": true` in `~/.gemini/settings.json`, and **Codex** marks the same servers via `default_tools_approval_mode = "approve"` in `~/.codex/config.toml`. The work-launching `kcap-flows` (starts a *paid* hosted reviewer), `kcap-memory` (a save or rescope can widen who sees a memory), `kcap-pages` (can widen who may open a page) and `kcap-knowledge` (can change facts and skills) are deliberately not pre-approved. Every kcap tool also advertises MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`), so a harness that decides approval from them — Codex's `auto` mode, for one — runs the reads and the additive writes without a prompt whatever the registration says, and asks only before a tool that removes or overwrites something. **Cursor** and **Copilot** have no per-server auto-approve field in the config we write — auto-approve kcap's read tools there through the harness's own controls instead (Cursor's Auto-run mode or `cursor-agent --approve-mcps`; Copilot's `--allow-tool` / `--allow-all-tools`).
 
 The `kcap mcp workitems` stdio server lets agents attach the current session (and its continuation chain) to a work item — by issue key, PR number, work item id, or a brand-new title — list what a session is already attached to, or record the loose ends a session leaves unfinished. `kcap setup` / `kcap plugin install` **register it for every supported harness** (Claude Code, Codex, Cursor, GitHub Copilot, Gemini, Kiro, OpenCode, Antigravity, and Pi). See the [Work items MCP server](#work-items-mcp-server-for-agents) section for details.
 
@@ -532,7 +727,7 @@ The `kcap mcp analytics` stdio server lets agents answer analytics questions abo
 kcap mcp sessions
 ```
 
-Stdio MCP server that exposes past Capacitor sessions to coding agents (Claude Code, Codex, Cursor, Copilot, Gemini, Antigravity) so they can search and recall prior work without leaving the chat. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it (alongside `kcap-review`) directly in `~/.codex/config.toml` under `[mcp_servers]`, so there's nothing extra to do — launch Codex from your repo directory so the server resolves the right repo. Enabling the kcap plugin through Codex's native plugin manager (`codex plugin add`) also provides them via the plugin's `.codex-mcp.json` descriptor. **Cursor:** `kcap setup` / `kcap plugin install --cursor` register it (alongside the other three kcap servers) in `~/.cursor/mcp.json`; opt out with `--skip-cursor-mcp`. **GitHub Copilot CLI:** `kcap setup` / `kcap plugin install --copilot` register it (alongside the other three kcap servers) in `~/.copilot/mcp-config.json`; opt out with `--skip-copilot-mcp`. **Gemini CLI:** `kcap setup` / `kcap plugin install --gemini` register it (alongside the other three kcap servers) in the shared `~/.gemini/settings.json`; opt out with `--skip-gemini-mcp`. **Google Antigravity:** `kcap setup` / `kcap plugin install --antigravity` register it (alongside the other three kcap servers) in `~/.gemini/config/mcp_config.json` — Antigravity's own MCP file, not the Gemini CLI's `settings.json`; opt out with `--skip-antigravity-mcp`.
+Stdio MCP server that exposes past kcap sessions to coding agents (Claude Code, Codex, Cursor, Copilot, Gemini, Antigravity) so they can search and recall prior work without leaving the chat. **Claude Code:** auto-registered via the plugin's `.mcp.json`. **Codex CLI:** `kcap setup` / `kcap plugin install --codex` register it (alongside `kcap-review`) directly in `~/.codex/config.toml` under `[mcp_servers]`, so there's nothing extra to do — launch Codex from your repo directory so the server resolves the right repo. Enabling the kcap plugin through Codex's native plugin manager (`codex plugin add`) also provides them via the plugin's `.codex-mcp.json` descriptor. **Cursor:** `kcap setup` / `kcap plugin install --cursor` register it (alongside the other three kcap servers) in `~/.cursor/mcp.json`; opt out with `--skip-cursor-mcp`. **GitHub Copilot CLI:** `kcap setup` / `kcap plugin install --copilot` register it (alongside the other three kcap servers) in `~/.copilot/mcp-config.json`; opt out with `--skip-copilot-mcp`. **Gemini CLI:** `kcap setup` / `kcap plugin install --gemini` register it (alongside the other three kcap servers) in the shared `~/.gemini/settings.json`; opt out with `--skip-gemini-mcp`. **Google Antigravity:** `kcap setup` / `kcap plugin install --antigravity` register it (alongside the other three kcap servers) in `~/.gemini/config/mcp_config.json` — Antigravity's own MCP file, not the Gemini CLI's `settings.json`; opt out with `--skip-antigravity-mcp`.
 
 It provides ten tools:
 
@@ -555,7 +750,7 @@ The server is repo-aware — it resolves the current working directory to a repo
 kcap mcp flows
 ```
 
-Stdio MCP server that lets coding agents start and interact with AI-powered agent flows — any entry in the server's flow-definition catalog, not just reviews — directly from within a session. The Kurrent Capacitor plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_flow` returns an error) until a daemon with the repo is available. `kcap setup` / `kcap plugin install --codex` register it for **Codex** in `~/.codex/config.toml`; existing manual/custom entries are never overwritten or claimed, and uninstall removes only unchanged kcap-owned entries. That entry carries `tool_timeout_sec = 600` — above the CLI's own bound on a flow call (see [harness tool timeouts](#harness-tool-timeouts) below), so Codex's default per-tool timeout of 300 s never aborts one; an entry an earlier kcap wrote is healed to include it on the next `kcap setup` / `kcap plugin install --codex`, and an entry you edited (your own timeout included) is preserved as is. The native Codex plugin descriptor also includes it. The corresponding installers register it for **Cursor**, **GitHub Copilot CLI**, and **Gemini CLI** in their normal MCP configuration files. For the harnesses that expose no per-process identity to a long-lived MCP server (Cursor, Copilot, Gemini, Kiro, OpenCode, Antigravity), that registration includes an internal `--driver <vendor>` argument so the flows server can tell which harness is driving and recommend a *different* reviewer; Claude Code and Codex are identified from their own environment and are left unstamped. `--driver` is written by kcap into the registration — it is not a flag you set yourself. Because `kcap-flows` launches paid work, it is deliberately not marked read-only or auto-approved on any harness.
+Stdio MCP server that lets coding agents start and interact with AI-powered agent flows — any entry in the server's flow-definition catalog, not just reviews — directly from within a session. The kcap plugin **auto-registers it for Claude Code** (via `.mcp.json`), so there's nothing to do after `kcap setup` — the flows server derives the target repo from its launch working directory, and Claude Code always runs inside the repo, so one registration works for every repo. It's registered even with no daemon connected; the tools simply stay inert (and `start_flow` returns an error) until a daemon with the repo is available. `kcap setup` / `kcap plugin install --codex` register it for **Codex** in `~/.codex/config.toml`; existing manual/custom entries are never overwritten or claimed, and uninstall removes only unchanged kcap-owned entries. That entry carries `tool_timeout_sec = 600` — above the CLI's own bound on a flow call (see [harness tool timeouts](#harness-tool-timeouts) below), so Codex's default per-tool timeout of 300 s never aborts one; an entry an earlier kcap wrote is healed to include it on the next `kcap setup` / `kcap plugin install --codex`, and an entry you edited (your own timeout included) is preserved as is. The native Codex plugin descriptor also includes it. The corresponding installers register it for **Cursor**, **GitHub Copilot CLI**, and **Gemini CLI** in their normal MCP configuration files. For the harnesses that expose no per-process identity to a long-lived MCP server (Cursor, Copilot, Gemini, Kiro, OpenCode, Antigravity), that registration includes an internal `--driver <vendor>` argument so the flows server can tell which harness is driving and recommend a *different* reviewer; Claude Code and Codex are identified from their own environment and are left unstamped. `--driver` is written by kcap into the registration — it is not a flag you set yourself. Because `kcap-flows` launches paid work, it is deliberately not marked read-only or auto-approved on any harness.
 
 It provides these generic tools:
 
@@ -627,7 +822,7 @@ Requires `kcap login` **and a running daemon with this repo checked out**. Disco
 kcap mcp flow-result   # launched by the daemon — not meant to be run manually
 ```
 
-The daemon gives every unattended reviewer this stdio MCP server as its result channel, by whatever mechanism the vendor supports. It exposes two tools: **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the participant's round result to the Capacitor server — the **only** delivery channel: the server does not read the participant's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0) — and **`send_flow_message`** (`text`), which pushes a short out-of-band note to the flow driver between rounds (a notable observation, a blocking question); the driver sees it as `pending_messages` on its next flow call, so delivery is not immediate. Messages are retry-safe (client-generated `message_id`, deduplicated server-side) and are NOT a substitute for round results. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow.
+The daemon gives every unattended reviewer this stdio MCP server as its result channel, by whatever mechanism the vendor supports. It exposes two tools: **`submit_review_result`** (`round_token`, `kind: "findings" | "clean"`, `findings`), which posts the participant's round result to the kcap server — the **only** delivery channel: the server does not read the participant's transcript, so ending a reply with `FINDINGS:`/`NO FINDINGS` markers delivers nothing (servers ≥ Flows Phase E-0) — and **`send_flow_message`** (`text`), which pushes a short out-of-band note to the flow driver between rounds (a notable observation, a blocking question); the driver sees it as `pending_messages` on its next flow call, so delivery is not immediate. Messages are retry-safe (client-generated `message_id`, deduplicated server-side) and are NOT a substitute for round results. It is deliberately separate from `kcap mcp flows` so an unattended reviewer can never start a nested flow, and it reads its identity from daemon-provided environment (`KCAP_FLOW_AGENT_ID`); run manually it just exits with an explanation. It's not necessarily the only server a reviewer gets, though: the flow definition's `mcp:` allowlist can additionally grant kcap-owned context servers (e.g. `kcap-sessions`), resolved against the same built-in registry — unknown names are skipped and any flow-starting server is always stripped regardless of listing, so a reviewer still can't start a nested flow.
 
 Cursor reviewers run only in daemon-owned worktrees and launch with Cursor's native `--force --approve-mcps --trust` controls so command, MCP-server, and workspace-trust prompts are suppressed at the source. kcap does not auto-approve or route a fallback interaction to a human: any permission, elicitation, or unknown ACP interaction frame violates the zero-prompt contract and immediately reaps the reviewer. Copilot reviewers require an authenticated Copilot CLI with access to the requested model; the daemon preloads this MCP configuration and clamps Copilot's available tools to the validated flow allowlist. That clamp is exclusive, so an owned-worktree Copilot reviewer has no ambient file or shell tool at all. A **borrowed-context** Copilot reviewer is granted read/search tools (`view`, `grep`, `glob`) so it can read the snapshot, and is confined by an OS sandbox instead of by the clamp — see below. There is nothing to register or configure.
 
@@ -714,11 +909,11 @@ It provides these tools:
 - **`dismiss_next_work`** — record that the user turned down a presented next-work suggestion (`target_key`; `repo_hash` defaults to the repository the server runs in, same as `get_next_work`), so it stops being offered. Call it only after the user has said they won't do it; the response's `page_one` is what to offer next, rendered the same sanitised way as `get_next_work`'s rows, and a `not_presented` refusal surfaces as a tool error naming that code.
 - **`restore_next_work`** — undo a dismissal so the suggestion can be offered again (`repo_hash` defaults the same way); restoring something not dismissed succeeds and changes nothing.
 - **`list_dismissed_next_work`** — list the suggestions the user has dismissed, most recent first, with when and why each was dismissed, rendered the same sanitised way.
-- **`list_loose_ends`** — list the user's loose ends with the `loose_end_id` each close or reopen needs, open ones by default or `status: "closed"`, inside the same sanitised `<next-work-data>` block. `repo_hash` defaults to the repository the server runs in; `session_id` narrows to ends that session sighted; `limit` defaults to 20, max 50; pass the returned `next_cursor` back as `cursor` for the next page. `get_next_work` also names each loose end's `loose_end_id` in its evidence. Lists include admitted claim identities, statuses and workers. `claimed_session_id` filters current ownership independently of the sighting-source `session_id`; `status` remains only open or closed.
+- **`list_loose_ends`** — list the user's loose ends with their `loose_end_id`, open ones by default or `status: "closed"`, inside the same sanitised `<next-work-data>` block. `repo_hash` defaults to the repository the server runs in; `session_id` narrows to ends that session sighted; `limit` defaults to 20, max 50; pass the returned `next_cursor` back as `cursor` for the next page. `get_next_work` also names each loose end's `loose_end_id` in its evidence. Lists include admitted claim identities, statuses and workers. `claimed_session_id` filters current ownership independently of the sighting-source `session_id`; `status` remains only open or closed.
 - **`claim_loose_end`** — claim a `loose_end_id` before working on it in the current session (or an explicit `session_id`). Work remains open and inspectable, but is withheld from suggestions while owned. Keep the returned `claim_id`; `recorded_catching_up` still means ownership was recorded. Attachment to a work item alone does not claim work.
 - **`release_loose_end`** — release the current `claim_id` without closing unfinished work. The working `session_id` defaults to the harness session; an explicit value wins. Stale predecessors cannot release successor claims.
-- **`close_loose_end`** — mark finished work done (`loose_end_id`). For claimed work, supply the current `claim_id` and working session; unclaimed completed work needs no claim. This is completion, not pickup. A later sighting can reopen the work.
-- **`reopen_loose_end`** — undo a close (`loose_end_id`), putting the end back in the user's next work.
+- **`close_loose_end`** — mark finished work done (`loose_end_id`, which also takes the `declaration_id` `declare_loose_end` returned; a server too old to resolve one answers `loose_end_not_found`, so find the end by its text in `list_loose_ends` and retry with its `loose_end_id`). For claimed work, supply the current `claim_id` and working session; unclaimed completed work needs no claim. This is completion, not pickup. A later sighting can reopen the work.
+- **`reopen_loose_end`** — undo a close (`loose_end_id`, or a `declaration_id` on the same terms as close), putting the end back in the user's next work.
 
 `declare_work_item` / `get_session_work_items` / `declare_loose_end` / `detach_work_item` default `session_id` to the session the MCP server runs in (Claude Code's `CLAUDE_CODE_SESSION_ID`, else `KCAP_SESSION_ID` or Codex's `CODEX_THREAD_ID`) when omitted. This is the manual path alongside the server's own mechanical and LLM-assisted correlation — use it when an agent already knows which issue or PR a session belongs to, and to record a breakdown/dependency structure the server can't infer (Home's blockers & dependencies and progress figures render only from declared parts and relations).
 
@@ -730,11 +925,11 @@ For hosted execution, `start_agent(work_item: "le:<id>")` reserves ownership bef
 kcap mcp plans
 ```
 
-Stdio MCP server that lets coding agents keep Capacitor's record of the plan a session executes: the plan, spec or design document it works from, the ordered task list, and each task's status. Nothing is inferred — the agent declares it, and the session view, the eval judge and `kcap validate-plan` read it back. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
+Stdio MCP server that lets coding agents keep kcap's record of the plan a session executes: the plan, spec or design document it works from, the ordered task list, and each task's status. Nothing is inferred — the agent declares it, and the session view, the eval judge and `kcap validate-plan` read it back. Registered for every supported harness by `kcap setup` / `kcap plugin install` (Claude Code reads it from the plugin's bundled `.mcp.json`).
 
 It provides four tools:
 
-- **`declare_plan_document`** — declare the document this session works from: `kind` (`plan`, `spec` or `design`) and `path`, plus optional `argues_from` (the spec a plan implements, or the design a spec refines, so both land on one plan) and `work_item_id`. The CLI reads the file, sends its SHA-256 and — at or under 256 KB — its content, and keys the path relative to the git repository root so the declared document and its discovered twin share one identity; a larger file is declared by hash only and the result says so. Returns `plan_id`, `document_key` and `created`; declaring the same file again lands on the same plan and replaces the stored copy with the file's current text, so an agent declares it again after changing it (Claude Code sessions do this automatically for `Write`/`Edit`/`MultiEdit`; see [Declared-document refresh](#what-it-records)).
+- **`declare_plan_document`** — declare the document this session works from: `kind` (`plan`, `spec` or `design`) and `path`, plus optional `argues_from` (the spec a plan implements, or the design a spec refines, so both land on one plan), `work_item_id`, `plan_id` (the plan to attach it to, when continuing one from a different checkout) and `workspace_root` (the checkout the document is in, when it is not the project directory). A document in another worktree of the session's repository is accepted by absolute path without naming it; one in another repository needs `workspace_root`. The CLI reads the file, sends its SHA-256 and — at or under 256 KB — its content, and keys the path relative to the git repository root so the declared document and its discovered twin share one identity; a larger file is declared by hash only and the result says so. Returns `plan_id`, `document_key` and `created`; declaring the same file again lands on the same plan and replaces the stored copy with the file's current text, so an agent declares it again after changing it (Claude Code sessions do this automatically for `Write`/`Edit`/`MultiEdit`; see [Declared-document refresh](#what-it-records)).
 - **`set_plan_tasks`** — declare the task list as a full ordered snapshot (`title`, optional `task_id`, `status`, `note` per entry), replacing the declared list; entries carrying a known `task_id` keep it, the rest are minted. Returns the tasks with ids and ordinals.
 - **`update_plan_task`** — record one transition, by `task_id` or 1-based `ordinal`, to `pending`, `in_progress`, `completed` or `skipped`, with an optional `note`. When no `plan_id` is given the CLI resolves the session's current plan first, so the result always names the plan it acted on, and a session with no plan gets an error naming the fix.
 - **`get_plan`** — read a plan back: documents, tasks with status and source, and progress. The recovery call after context compaction; a session with no plan gets an empty result, not an error.
@@ -766,7 +961,7 @@ This server can change knowledge, so it is not pre-approved for unattended revie
 kcap mcp pages
 ```
 
-Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the Capacitor server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. A page is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
+Stdio MCP server that lets a coding agent publish a **self-contained HTML page** to the kcap server and hand back a link — a plan for review, a comparison table, a report someone would rather read as a page than as terminal output. The page is served under a sandbox that cannot reach the network, so every style, script and image must be inlined as a data URI; an external URL renders as nothing. A page is private to its owner until `visibility` says otherwise, and re-publishing with `update_id` revises it without changing the URL, so a link you already shared stays good.
 
 It provides six tools, kept deliberately narrow — an agent's context pays for every schema it carries whether or not it ever publishes, and reading, version history and takedown all live in the web UI:
 
@@ -798,7 +993,7 @@ Requires `kcap login` and a kcap-server new enough to expose the `/api/analytics
 
 ### Pages
 
-Publish a self-contained HTML page to the Capacitor server and get back a link — the same shape as a session share link, but for a page you wrote. The page is served under a sandbox that cannot reach the network, so inline every style, script and image as a data URI; an external URL renders as nothing.
+Publish a self-contained HTML page to the kcap server and get back a link — the same shape as a session share link, but for a page you wrote. The page is served under a sandbox that cannot reach the network, so inline every style, script and image as a data URI; an external URL renders as nothing.
 
 ```bash
 kcap page publish plan.html --title "Migration plan" --visibility org
@@ -810,6 +1005,18 @@ kcap page delete art_01J9...
 ```
 
 A page is private to its owner until `--visibility` says otherwise. `--to` names one audience member (`user:<id>`, `team:<slug>`, `project:<id>`) and is only read under `scoped`; on `share` it replaces the whole audience, so a grant you leave out is one you are taking away. `--session` cites a session the page came out of and defaults to `KCAP_SESSION_ID`, so an agent's publish is attributed without ceremony. The URL is whatever the server says it is — printed on stdout; refusals go to stderr and name the limit they hit along with its value.
+
+### Import local memories
+
+Claude Code keeps its auto-memory per machine, under `~/.claude/projects/<dir>/memory/`. `kcap memories import` copies those notes into server memories once, so they follow you to another machine and can be shared. Run it on the machine that holds the files.
+
+```bash
+kcap memories import --dry-run                 # show the plan for this directory's Claude project
+kcap memories import --audience org --global   # save as org-wide memories, after confirming
+kcap memories import --from ~/notes --update   # read another folder; overwrite slugs that exist
+```
+
+Each note's `name` becomes the slug, `description` the summary and the body the content; type `user` is saved as `preference`. `MEMORY.md` is skipped. The memories land at the current checkout's repository unless `--project <slug>` or `--global` says otherwise — a Claude project folder is only imported from the checkout it was recorded in — with the `user` audience unless `--audience team|org` says otherwise. A slug that already exists is reported and left alone, or overwritten with `--update`, so a re-run is safe; a near-duplicate the server finds is reported beside the save. An `--audience org` import you may not publish directly is queued for an admin's approval; with a `--project` home, re-running it after approval queues it again.
 
 ### Curate guidelines
 
@@ -978,7 +1185,7 @@ After discovery, the import surfaces a one-shot report of any transcript working
 
 ### Muse Assistant
 
-Muse Assistant (Meta's consumer agent) runs in a Meta-hosted VM with no transcript file, no local gateway and no lifecycle hook; its chat store is reachable only by Muse itself, through `chat.list` and `chat.read_messages`. `kcap muse-assistant` records it from inside that VM with Muse as the recorder: the `capacitor-recording` skill (`kcap/muse-assistant/capacitor-recording/SKILL.md`, installed by the connect-capacitor skill when the user asks to record) states the consent scope, grants it with `kcap muse-assistant scope add` in the user's own turn, and installs a 15-minute cron that pages each granted chat into files and runs `kcap muse-assistant ingest` on them.
+Muse Assistant (Meta's consumer agent) runs in a Meta-hosted VM with no transcript file, no local gateway and no lifecycle hook; its chat store is reachable only by Muse itself, through `chat.list` and `chat.read_messages`. `kcap muse-assistant` records it from inside that VM with Muse as the recorder: the `kcap-recording` skill (`kcap/muse-assistant/kcap-recording/SKILL.md`, installed by the connect-kcap skill when the user asks to record) states the consent scope, grants it with `kcap muse-assistant scope add` in the user's own turn, and installs a 15-minute cron that pages each granted chat into files and runs `kcap muse-assistant ingest` on them.
 
 - **What is recorded.** `user`, `assistant` and `commentary` items (Muse narrating its own work, shown as thinking), verbatim, as private sessions owned by the signed-in kcap user. `developer` items — runtime instructions — are never sent. Tool calls, browser actions and files are not in `chat.read_messages` and are not recorded. No model or usage is available, so cost stays empty.
 - **Sessions.** A new session starts at every gap of two hours or more between recorded items; an idle session is closed only by an ingest whose walk was fetched at least 2 h 30 m after the last item, at that item's time. A VM clock more than 30 minutes ahead of Muse's store can close early, splitting one conversation in two; nothing is lost.
@@ -989,9 +1196,9 @@ Muse Assistant (Meta's consumer agent) runs in a Meta-hosted VM with no transcri
 
 ### Daemon
 
-The daemon connects to the Capacitor server and runs Claude Code, Codex, or Cursor agents in isolated git worktrees, controlled from the dashboard. Hosted Claude and Codex agents run on macOS, Linux, **and Windows**; hosted Cursor (`cursor` vendor) is macOS and Linux only — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path`, `daemon.codex_path`, and the Cursor CLI (`cursor-agent`, overridable via `KCAP_CURSOR_PATH` — see [Daemon config settings](#daemon-config-settings)) and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
+The daemon connects to the kcap server and runs Claude Code, Codex, or Cursor agents in isolated git worktrees, controlled from the dashboard. Hosted Claude and Codex agents run on macOS, Linux, **and Windows**; hosted Cursor (`cursor` vendor) is macOS and Linux only — choose the vendor from the dashboard's launch dialog. At startup the daemon probes `daemon.claude_path`, `daemon.codex_path`, and the Cursor CLI (`cursor-agent`, overridable via `KCAP_CURSOR_PATH` — see [Daemon config settings](#daemon-config-settings)) and advertises only the vendors it can actually spawn, so the launch dialog hides whichever agent isn't installed on the selected daemon.
 
-**Permission presets for ACP-hosted agents.** Interactive ACP-hosted agents (Cursor, Copilot, Gemini, Kiro, OpenCode, Grok) prompt for approval on every action by default. The launch dialog offers an optional **permission preset** for them — *Explore freely* (pre-approves requests the agent CLI classifies as reads and searches) or *Edit freely* (also pre-approves file edits, moves, and deletes). The classification is the **agent CLI's own**: Capacitor does not verify it or confine the action to the workspace, and a pre-approved action runs **without your review**. Requests the CLI classifies as shell or network — and any request it does not classify (e.g. Kiro, which sends no tool kind) — still ask. Each auto-approval is recorded on the session transcript, distinguishable from a human approval. Presets apply only to interactive ACP launches; reviewer/flow launches run under their own containment.
+**Permission presets for ACP-hosted agents.** Interactive ACP-hosted agents (Cursor, Copilot, Gemini, Kiro, OpenCode, Grok) prompt for approval on every action by default. The launch dialog offers an optional **permission preset** for them — *Explore freely* (pre-approves requests the agent CLI classifies as reads and searches) or *Edit freely* (also pre-approves file edits, moves, and deletes). The classification is the **agent CLI's own**: kcap does not verify it or confine the action to the workspace, and a pre-approved action runs **without your review**. Requests the CLI classifies as shell or network — and any request it does not classify (e.g. Kiro, which sends no tool kind) — still ask. Each auto-approval is recorded on the session transcript, distinguishable from a human approval. Presets apply only to interactive ACP launches; reviewer/flow launches run under their own containment.
 
 **Prompts answered in the terminal.** A hosted Claude session's permission prompt (an `AskUserQuestion` included) is offered in the dashboard and the desktop app, and can just as well be answered in the session's own terminal. The daemon cannot see that answer, so the Claude plugin's `PostToolUse`, `PostToolUseFailure`, `Stop` and `SubagentStop` hooks tell it the prompt is moot — by the finished tool's id, or by the finished turn for a deny, which runs no tool — and the request is withdrawn everywhere at once: the daemon's pending set, the dashboard, and every desktop view, with no chat tab open. The notice goes to the daemon's loopback bridge only, never to the server, and costs a session nobody hosts nothing beyond the hook's own start; an older daemon ignores it.
 
@@ -1013,13 +1220,14 @@ kcap daemon start                   # start in foreground (--name defaults to KC
 kcap daemon start -d                # start in background (daemonize)
 kcap daemon start --name laptop -d  # run multiple daemons on the same machine by giving each a unique name
 kcap daemon status                  # list all running daemons
-kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version)
-kcap daemon stop --name laptop      # stop just that one
+kcap daemon status --name laptop    # show status of a specific daemon (incl. its running version and any resuming/interrupted agents)
+kcap daemon stop --name laptop      # stop just that one, ending its hosted agents
+kcap daemon stop --name laptop --keep-agents   # stop it but keep its agents for the next start to resume
 kcap daemon stop --yes              # stop all running daemons unattended (otherwise prompts on multi)
-kcap daemon restart --name laptop              # restart now if idle; refuses while agents/evals run
-kcap daemon restart --name laptop --when-idle  # queue the restart for the next idle moment
-kcap daemon restart --name laptop --force      # restart now even if busy (tears down running agents)
-kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory
+kcap daemon restart --name laptop              # restart now, stopping its agents and resuming them on the new daemon; refuses while an eval, a launch or a flow round is in progress
+kcap daemon restart --name laptop --when-idle  # queue the restart until the daemon hosts no agents at all and no eval or launch is in progress
+kcap daemon restart --name laptop --force      # restart without waiting for a flow round (a participant mid-round is parked or ended); an eval or a launch still holds it
+kcap daemon doctor                  # diagnose lock-file state for every daemon name, and audit the path to the unit directory (on macOS/Linux: group-writable directories, and directories owned by an account other than you or root)
 kcap daemon doctor --clean          # also remove a stale entry's pid/marker files, dropping it from the list (held entries are never touched; the inert lock file is left in place)
 ```
 
@@ -1040,32 +1248,34 @@ A daemon whose process is alive but whose local control socket does not yet answ
 Daemon 'laptop': running (PID 12345, starting — not yet serving)
 ```
 
-**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself once it's **idle** (no running hosted agents and no in-flight eval) — service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart --force` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
+**Updating:** after `kcap update`, a running daemon on macOS/Linux detects the new binary and restarts itself, stopping its hosted agents and **resuming them on the new version** under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. It waits until no eval, launch or flow round is in progress and every interactive agent is waiting on input — the last for at most `KCAP_RESTART_TURN_WAIT_SECONDS` (default 300). Service-managed daemons exit so the supervisor relaunches the new binary; background (`-d`) daemons re-spawn themselves. `kcap daemon status` shows the running version (above) plus any pending restart, so you can tell the update apart from an as-yet-unrestarted daemon; `kcap daemon restart` applies it now. On **Windows**, stop the daemon (`kcap daemon stop` / `kcap daemon service stop`) before `kcap update` — a running daemon locks its binary, so the update can't replace it (the launcher detects this and aborts with instructions).
 
 #### Run it as a service (auto-restart)
 
 `kcap daemon start -d` runs only until the process dies — a crash, or an OS memory-pressure kill (macOS **jetsam** / Linux **OOM killer**) that sends an uncatchable `SIGKILL`. To have the daemon auto-restart and start at login, install it as a **per-user** OS service:
 
 ```bash
-kcap daemon service install                # launchd (macOS) / systemd --user (Linux) / Scheduled Task (Windows)
+kcap daemon service install                # launchd (macOS) / systemd --user (Linux) / Scheduled Task (Windows); on macOS/Linux, refuses a unit path through a world-writable directory or one owned by an account other than you or root
 kcap daemon service install --name laptop  # a service per daemon name
 kcap daemon service install --verify       # install, then verify version/readiness/ownership before exiting 0
 kcap daemon service install --replace --verify  # take over a foreign/loaded unit, then verify
 kcap daemon service install --replace --verify --retire OLD   # also remove the unit OLD, e.g. after a rename
 kcap daemon service status                 # installed / running state
 kcap daemon service status --json          # machine-readable status (pids, binary paths, txn-marker state)
-kcap daemon service stop                   # stop the running service (stays installed)
+kcap daemon service stop                   # stop the running service (stays installed), ending its hosted agents
+kcap daemon service stop --keep-agents     # stop it, keeping its agents for the next start to resume
 kcap daemon service start                  # start it again
 kcap daemon service start --verify         # start, then verify readiness/ownership before exiting 0
 kcap daemon service ensure                 # install-or-start from a fresh status read (flow-driven)
-kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; reloads only an idle daemon (runs after `kcap update`)
-kcap daemon service refresh --name N --force   # reload daemon N now even while busy (ends its hosted agents); prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
-kcap daemon service uninstall              # stop and remove the service
+kcap daemon service refresh                # bring installed units up to this version and onto a script install's `current` path; a reload stops the daemon with its agents kept and the reloaded daemon resumes them, and waits for the next update while an eval or a launch is in progress (runs after `kcap update`)
+kcap daemon service refresh --name N --force   # reload daemon N now, even mid-eval; prints refresh_outcome=<token> on stderr (launchd only; elsewhere `unsupported`, exit 1)
+kcap daemon service uninstall              # stop and remove the service, ending its hosted agents
+kcap daemon service uninstall --under DIR  # stop and remove every unit whose daemon binary is inside DIR, ending their hosted agents
 ```
 
-`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
+`install` pins the active profile via `KCAP_PROFILE` and captures your current `PATH` into the unit, so the supervised daemon resolves the same server URL, `claude`/`codex` binaries, and profile settings it would from your shell. Pass `--profile P` to pin a different profile, `--max-agents N` to bake an override (`0` = unlimited), or `--no-start` to register without starting (`--no-start` cannot be combined with `--verify`, whose whole job is to prove the *started* daemon is ready). The service restarts the daemon on crash/`SIGKILL` but **not** on a clean stop. Over an installed service, a plain `install` stops it and installs it again. On macOS it rewrites the plist only once launchd has unloaded the old job, waiting up to 15 seconds; on Linux and Windows a refused registration puts the previous unit file back. A failed install says whether the service is still loaded or now stopped, which daemon its unit names, and the command that reinstalls it: `install --replace --verify`. `stop` unloads it from the OS supervisor (launchd `bootout` / equivalent; the unit file is retained) rather than merely signaling the process.
 
-On **Windows** the service is a per-user Scheduled Task scoped to your account, so installing it needs no administrator rights. It runs the daemon in a windowless console (`conhost --headless`) at sign-in, and the task's wrapper restarts the daemon five seconds after any non-zero exit — a crash, or the daemon's own `kcap daemon restart` — the way systemd's `Restart=on-failure` does; an exit 0 is a deliberate stop. `service stop` and `service uninstall` end the task and then the daemon itself, since ending a task leaves its child processes running. The wrapper also carries the installing shell's `HOME` when it is an absolute path, so a Git Bash or redirected home resolves the same daemons directory for the daemon as for the CLI.
+On **Windows** the service is a per-user Scheduled Task scoped to your account, so installing it needs no administrator rights. It runs the daemon in a windowless console (`conhost --headless`) at sign-in, and the task's wrapper restarts the daemon five seconds after any non-zero exit — a crash, or the daemon's own `kcap daemon restart` — the way systemd's `Restart=on-failure` does; an exit 0 is a deliberate stop. `service stop` and `service uninstall` end the task and then the daemon itself, since ending a task leaves its child processes running. Uninstalling the desktop app runs `service uninstall --under` for the app's own folder and takes that folder back off your user PATH, so a task that would otherwise retry the deleted daemon at every sign-in goes with it; a service an npm or standalone install wrote is left alone. The wrapper also carries the installing shell's `HOME` when it is an absolute path, so a Git Bash or redirected home resolves the same daemons directory for the daemon as for the CLI.
 
 `status --json` prints a machine-readable snapshot (service/job/daemon pids, binary paths, and transaction-marker state) instead of the human summary, and exits non-zero if the underlying service state can't be determined — for scripts that need to decide whether to attach, start, or repair a service without parsing human-readable text.
 
@@ -1073,13 +1283,13 @@ On **Windows** the service is a per-user Scheduled Task scoped to your account, 
 
 `ensure` is the flow-driven ladder: from a fresh status read it installs when there is no unit (baking the born-`prompt` consent directive — the daemon is installed `prompt`, so nothing runs unattended on someone else's say-so) or starts when the unit is present but stopped, and reports "already enabled" when the daemon is running — on launchd that additionally requires the running service job to own the validated daemon pid, the same ownership the verified start polls for. On macOS/launchd both arms run the verified transaction exactly as an app-managed start does, so a gate refusal exits with the coded verify exit plus one `start_gate_reason=<token>` line, and `ensure` maps the token to a machine-readable `recovery_surface=takeover|reinstall|attention` (never guessed from prose) — the flow can then offer the right next step. A gated-install viability abort with the engine's coded `package_inconsistent` reason routes to `recovery_surface=reinstall`, and an attributed boot refusal (e.g. `consent_seed_unwritable`) routes through its own table (`storage`/`takeover`/`attention`); refused launchd transactions serialize `"verified":true`, since the verified transaction did run. On Windows/Linux the ladder degrades to plain install/start (no gates, no rollback), and `ensure --json` reports `"verified":false` so the flow's copy can say so. On macOS a resolvable profile is required: a unit baked without one could never pass the start gate's identity half, so `ensure` refuses with `no_profile_configured` rather than report a dead-end install. `ensure` never mutates into an ambiguous state: an unreadable probe, an active transaction, an orphaned label (including a running one whose unit file has disappeared) or a stale marker all fail closed to attention with a coded reason — the ambiguity checks precede even the "already enabled" arm.
 
-`start --verify` polls the started service until it answers a well-formed local-socket hello **and** the OS-reported job pid matches the daemon's own validated pid, rolling back (stopping the service again, plist retained) and exiting non-zero with a coded stderr token (e.g. `verify_readiness_timeout`) if that never happens within the poll budget — useful for scripted installs that need to know the daemon is actually up before proceeding. **`--verify` runs on macOS (launchd) and Windows (Scheduled Task) in this release** — `start --verify` is rejected on Linux, same as `install --verify` below. On Windows the job pid is the daemon the task's own wrapper started, and a `--retire` reads the retired unit's profile from its wrapper.
+`start --verify` polls the started service until it answers a well-formed local-socket hello **and** the OS-reported job pid matches the daemon's own validated pid, rolling back (stopping the service again, plist retained) and exiting non-zero with a coded stderr token (e.g. `verify_readiness_timeout`) if that never happens within the poll budget — useful for scripted installs that need to know the daemon is actually up before proceeding. On Windows the job pid is the daemon the task's own wrapper started, on Linux the unit's `MainPID`; a `--retire` reads the retired unit's profile from its wrapper or unit file.
 
-`install --verify` (fresh installs only — a service that's already installed exits with the coded `verify_contended`, since clearing an existing label is `--replace`'s job) additionally requires the started daemon's reported version, protocol version, and reported name to match the installing CLI's own expectations, and rechecks the unit file on disk against a fingerprint taken at write time — so a foreign writer replacing the file between install and the recheck is detected (`verify_restore_verification`) rather than silently accepted. On any failure it rolls back by uninstalling the unit it just wrote (never a foreign one) and exits with a coded stderr token. `install --verify` is rejected on Linux; on Windows there is no unit fingerprint recheck, since `schtasks /Create` registers the task outright rather than loading a file it may later re-read.
+`install --verify` (fresh installs only — a service that's already installed exits with the coded `verify_contended`, since clearing an existing label is `--replace`'s job) additionally requires the started daemon's reported version, protocol version, and reported name to match the installing CLI's own expectations, and rechecks the unit file on disk against a fingerprint taken at write time — so a foreign writer replacing the file between install and the recheck is detected (`verify_restore_verification`) rather than silently accepted. On any failure it rolls back by uninstalling the unit it just wrote (never a foreign one) and exits with a coded stderr token. On Linux and Windows there is no unit fingerprint recheck, since the registration is replaced outright rather than loaded from a file the supervisor may later re-read.
 
 `install --replace --verify` (requires `--verify`) takes over an existing label/unit instead of refusing on contention: it clears a foreign or already-loaded label, stops a validated live owner if one is running, then installs and verifies as above — one transaction, rolling back to a verified-safe absent state on any failure rather than leaving a half-replaced unit.
 
-`install --replace --verify --retire <id>` additionally removes the unit `<id>` inside the same transaction — the unit a daemon rename leaves behind. The retired unit must be pinned to the same profile as the one being installed (`KCAP_PROFILE` in its plist), or the command refuses with `verify_retire_refused` and touches nothing; an absent unit is a no-op. With `--retire`, a live daemon already running under the *new* name is `verify_contended` rather than taken over. A unit already installed under the new name, even a stopped one, is refused before the old unit is touched (`retire_reason=target_occupied`), as is a new name whose state cannot be read (`target_unknown`); if a unit appears under the new name while the old one is being retired, it is refused rather than cleared (`target_claimed`), and the old unit stays retired. When the old unit's daemon is running, the command first pauses its new work through the daemon's control socket and boots it out only once that pause is acknowledged: a daemon still running or starting an agent or evaluation refuses with `agents_active`, one too old to pause with `fence_unsupported` (restart it, then retry), and one that cannot be reached or confirmed — or a loaded label with no plist — with `fence_unavailable` or `unit_unreadable`. Each of these refusals happens before either unit is changed.
+`install --replace --verify --retire <id>` additionally removes the unit `<id>` inside the same transaction — the unit a daemon rename leaves behind. The retired unit must be pinned to the same profile as the one being installed (`KCAP_PROFILE` in its plist), or the command refuses with `verify_retire_refused` and touches nothing; an absent unit is a no-op. With `--retire`, a live daemon already running under the *new* name is `verify_contended` rather than taken over. A unit already installed under the new name, even a stopped one, is refused before the old unit is touched (`retire_reason=target_occupied`), as is a new name whose state cannot be read (`target_unknown`); if a unit appears under the new name while the old one is being retired, it is refused rather than cleared (`target_claimed`), and the old unit stays retired. When the old unit's daemon is running, the command first pauses its new work through the daemon's control socket and, once that pause is acknowledged, asks it to end its hosted agents and exit before booting it out: a daemon still running or starting an agent or evaluation refuses with `agents_active`, one too old to pause with `fence_unsupported` (restart it, then retry), and one that cannot be reached or confirmed — or a loaded label with no plist — with `fence_unavailable` or `unit_unreadable`. Each of these refusals happens before either unit is changed.
 
 **App-managed starts are gated; plain terminal use is not.** When the invoking launcher carries the `KCAP_CONSENT_SEED_DEFAULT` environment directive — the desktop supervisor or a self-respawn, never a bare `kcap daemon service start --verify`/`kcap daemon start -d` typed at a terminal — `start --verify` pre-mutation-checks the installed unit's baked directive, binary digest, and identity evidence before touching anything, and exits `28` (`verify_start_gate`) with one `start_gate_reason=<token>` line naming which check failed: `directive_missing`, `directive_invalid`, `identity_mismatch`, `foreign_binary`, `package_inconsistent`, or `evidence_unreadable`. A gate that passes is re-checked immediately before bootstrap; if the evidence changed in between (a foreign writer, a swapped binary), it rolls back the same way a forward-phase failure does and exits `29` (`verify_start_gate_drift`) instead of proceeding on stale authorization. No directive means no gate — this only ever fires for an app-managed start.
 
@@ -1092,11 +1302,11 @@ What it carries over from your shell is a fixed allowlist — `PATH`, `KCAP_PROF
 If your login shell cannot find `kcap` — hooks then run and record nothing, silently — the Agents screen offers to fix it for you. The fix is a CLI verb, driven by name from the flow (the server→CLI lane carries values, never paths or commands):
 
 ```bash
-kcap daemon shim ensure                    # probe; link /usr/local/bin/kcap to this CLI if absent
+kcap daemon shim ensure                    # probe; put this CLI on the terminal PATH if absent
 kcap daemon shim ensure --json             # machine-readable outcome for the flow
 ```
 
-`ensure` probes the *interactive login* shell (`$SHELL -lic`, falling back to `-lc`; `/bin/zsh` when `$SHELL` is unset) and acts on a positive finding only: kcap already resolving → `already_on_path`, exit 0. Positively absent → link `kcap` into the first login-PATH folder you can already write to, or else `/usr/local/bin/kcap` behind a one-time admin password prompt (macOS only; non-forcing symlink, then **re-probes** so success is never reported on the symlink alone). For an npm-global install the link points at the npm **launcher** (`kcap.js`) rather than the native binary, so `kcap update` keeps performing the upgrade through npm; a standalone binary is linked directly. An unknown probe (`probe_unknown`), a different filesystem entry already at the destination (`conflict` — never overwritten; re-checked after a failed install so a racing entry still gets the coded row), or a non-macOS platform (`unsupported_platform`, where the osascript-based install does not exist) all fail closed with the coded reason, exit non-zero, and mutate nothing. `--json` emits the outcome plus coded reason (and the actionable `detail`/`sudo_fallback` on `installed_not_on_path`/`failed`); the flow's copy keys off `outcome`, not the exit code. Exit 0 only when the terminal now resolves `kcap`.
+`ensure` probes the PATH a new terminal would get — on macOS and Linux the *interactive login* shell (`$SHELL -lic`, falling back to `-lc`; `/bin/zsh` when `$SHELL` is unset), on Windows the machine and user PATH as the registry holds them — and acts on a positive finding only: kcap already resolving → `already_on_path`, exit 0. Positively absent → on macOS, link `kcap` into the first login-PATH folder you can already write to, or else `/usr/local/bin/kcap` behind a one-time admin password prompt (non-forcing symlink); on Linux, the same first writable folder, or else `~/.local/bin/kcap` with no prompt; on Windows, add the CLI's folder to your user PATH (no administrator rights). Either way it then **re-probes**, so success is never reported on the change alone. For an npm-global install the target is the npm **launcher** rather than the native binary — `kcap.js` on macOS, the prefix's `kcap.cmd` on Windows — so `kcap update` keeps performing the upgrade through npm; a standalone binary is used directly. An unknown probe (`probe_unknown`), a different filesystem entry already at the destination (`conflict` — never overwritten; re-checked after a failed install so a racing entry still gets the coded row), or a platform with no installer (`unsupported_platform`) all fail closed with the coded reason, exit non-zero, and mutate nothing. `--json` emits the outcome plus coded reason (and the actionable `detail`/`sudo_fallback` on `installed_not_on_path`/`failed`); the flow's copy keys off `outcome`, not the exit code. Exit 0 only when the terminal now resolves `kcap`.
 
 #### Hosted Gemini needs its project in the *daemon's* environment
 
@@ -1118,7 +1328,7 @@ That message names the wrong cause — the same text appears for a missing proje
 
 The middle column is secret-*capable* — a credential path says where your credential lives, and a base URL can carry a token in userinfo or a query string. On macOS and Linux that is bounded by a guarantee kcap enforces: unit files are written `0600`, the mode is re-checked on the open handle, and the unit directory is created `0700`. A unit directory that already grants group or world write has those bits removed; `install` refuses only when they cannot be removed, which means the directory belongs to another account.
 
-That guarantee covers the unit and the directory holding it. It does **not** extend to the directories above them, which kcap does not own: write permission on a directory is permission to rename what is inside it, so an account that can write `~/.config` can replace the unit directory whole, whatever mode the unit carries. `install` refuses when something on that path is *world*-writable — no umask produces that and it is never deliberate — but not when it is merely group-writable, because umask 002 against a user-private group produces exactly that for a group of one, and it is the default on Debian and Ubuntu. `kcap daemon doctor` lists the group-writable directories on the path so you can judge whether that group is shared. Both walk the path with symlinks resolved, and both read **mode bits only** — a directory owned by another unprivileged account can be `0755` and still let its owner rename what it holds, so read a clean result as "no mode bit grants it", not as "no other account can". On Windows the wrapper inherits your user profile's ACL, which kcap neither sets nor verifies, so those three are excluded there — the same reason `GH_TOKEN` is never carried. If you need Vertex-with-ADC on a Windows daemon, set it in the service's own environment yourself.
+That guarantee covers the unit and the directory holding it. It does **not** extend to the directories above them, which kcap does not own: write permission on a directory is permission to rename what is inside it, so an account that can write `~/.config` can replace the unit directory whole, whatever mode the unit carries. `install` refuses when something on that path is *world*-writable — no umask produces that and it is never deliberate — but not when it is merely group-writable, because umask 002 against a user-private group produces exactly that for a group of one, and it is the default on Debian and Ubuntu. `kcap daemon doctor` lists the group-writable directories on the path so you can judge whether that group is shared. Both also refuse or report a directory on that path owned by another account other than root, since its owner can rename what it holds whatever its mode. Both walk the path with symlinks resolved. On Windows the wrapper inherits your user profile's ACL, which kcap neither sets nor verifies, so those three are excluded there — the same reason `GH_TOKEN` is never carried. If you need Vertex-with-ADC on a Windows daemon, set it in the service's own environment yourself.
 
 ⚠️ **Capture happens at install time.** Exporting the project *after* `kcap daemon service install` leaves a unit without it. Set it first, or re-run `install` afterwards — and restart the daemon.
 
@@ -1514,6 +1724,8 @@ kcap plugin install --codex --if-installed           # refresh Codex hooks and a
 kcap plugin install --if-installed                   # refresh Claude plugin registration only if previously installed (used by npm postinstall)
 ```
 
+Codex rejects a `hooks.json` that starts with a UTF-8 byte-order mark and runs none of its hooks — an editor that saves "UTF-8 with BOM" (PowerShell 5.1's `Set-Content -Encoding utf8` among them) adds one. `kcap status` then shows `Codex ✗` with a line naming the file, and `kcap plugin install --codex` (or its `--if-installed` refresh) rewrites it without the mark.
+
 Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--copilot`, `--gemini`, `--pi`, `--opencode` — writes these skills under `~/.agents/skills/` (`--skills` installs them alone; Kiro and Antigravity get their own copies, and the bare Claude install uses the plugin bundle). Opt out per vendor with `--skip-<vendor>-skills`:
 
 | Skill | Wraps | Purpose |
@@ -1527,13 +1739,14 @@ Installing any vendor that reads the shared tree — `--codex`, `--cursor`, `--c
 | `kcap-agent-flows` | `kcap mcp flows` | Drive any catalogue flow — named by you or offered from session context — following its driver guide |
 | `kcap-work-items` | `kcap mcp workitems` | Declare a work item's breakdown and its blocks / blocked-by dependencies |
 | `kcap-plans` | `kcap mcp plans` | Declare the plan document and task list a session executes |
-| `kcap-guided-tour` | analytics + sessions + flows MCP | Card-by-card onboarding tour of what Kcap does |
+| `kcap-guided-tour` | analytics + sessions + flows MCP | Card-by-card onboarding tour of what kcap does |
 | `kcap-start-agents` | `kcap mcp flows` | Hand tasks to separate hosted agents that run on their own: check this machine's daemon, ask which harness, one `start_agent` call each |
-| `kcap-connect-capacitor` | `kcap setup` / `kcap login` | Install and sign in kcap for the agent asking; on a Muse Assistant VM also registers the kcap MCP servers as a custom connector, writes the `capacitor` skill and an hourly `kcap status` cron |
+| `kcap-pages` | `kcap mcp pages` | Make the artifact, page or report the user asked for as a kcap page: publish it, put the link in the reply, open it in the harness's browser tool when it has one |
+| `kcap-connect-kcap` | `kcap setup` / `kcap login` | Install and sign in kcap for the agent asking; on a Muse Assistant VM also registers the kcap MCP servers as a custom connector, writes the `kcap` skill and an hourly `kcap status` cron |
 
 The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-validate-plan`) auto-resolve the active session from `CODEX_THREAD_ID`; pass `<sessionId>` explicitly to operate on a different session. `kcap-review-flows` and `kcap-agent-flows` work differently — they operate via flow IDs through `kcap mcp flows`; only the two status tools fall back to the session (from `CODEX_THREAD_ID`, or an explicit `session_id`) when no flow ID is passed; see [Flows MCP server (for agents)](#flows-mcp-server-for-agents) for details. `kcap-start-agents` also goes through `kcap mcp flows`; its tools take the calling session from the harness, or from an explicit `session_id`. `kcap-work-items` declares structure through `kcap mcp workitems` and needs no session id for its breakdown and relation tools. `kcap-plans` writes through `kcap mcp plans` and defaults the session the same way `kcap-work-items` does. `kcap-guided-tour` shells out to `kcap whoami` and otherwise reads through the `kcap-analytics`, `kcap-sessions` and `kcap-flows` MCP servers, so it needs those registered (setup does it) rather than a session id. On a plan without Insights its team table falls back to the user's own session count.
 
-> **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the Capacitor server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
+> **Codex sandbox network access (AI-794).** The skills shell out to `kcap …`, which talks to the kcap server — but Codex runs the agent's shell tool in a `workspace-write` sandbox that **blocks network by default**, so the skills fail (or demand escalation) until network access is allowed. Both `kcap setup` (one yes/no prompt after the Codex hooks step) and `kcap plugin install --codex` enable it for you. They write a constrained allowlist to `~/.codex/config.toml` rather than opening the network wholesale:
 >
 > ```toml
 > [sandbox_workspace_write]
@@ -1548,7 +1761,7 @@ The first five (`kcap-recap`, `kcap-errors`, `kcap-hide`, `kcap-disable`, `kcap-
 
 **Sandbox and approval posture.** By default the daemon starts Codex with `--sandbox workspace-write` and `--ask-for-approval on-request`. This lets Codex edit files in the agent's worktree but escalates sensitive operations (e.g. network calls, shell commands outside the worktree) through the daemon's permission bridge to the dashboard.
 
-The daemon also **accepts** a caller-selected posture for an **interactive** hosted launch (one that runs in a daemon-created worktree). Nothing selects one yet: the dashboard selector ships with a later Capacitor **server** release, and until then every launch uses the defaults above. The selectable values are:
+The daemon also **accepts** a caller-selected posture for an **interactive** hosted launch (one that runs in a daemon-created worktree). Nothing selects one yet: the dashboard selector ships with a later kcap **server** release, and until then every launch uses the defaults above. The selectable values are:
 
 | Flag | Selectable values |
 |---|---|
@@ -1745,7 +1958,7 @@ kcap setup --server-url <url> --no-prompt --skip-cursor-hooks
 
 #### Daemon config settings
 
-Use `kcap config set` to configure the binary paths used by the daemon. The values are stored in the active profile and take effect the next time the daemon starts.
+Use `kcap config set` to configure the daemon. The values are stored in the active profile. The binary paths take effect the next time the daemon starts; `daemon.max_agents` is also applied to the running daemon.
 
 ```bash
 kcap config set daemon.claude_path /opt/claude/bin/claude
@@ -1756,7 +1969,8 @@ kcap config set daemon.codex_path  /opt/codex/bin/codex
 |-----|---------|-------------|
 | `daemon.claude_path` | `"claude"` | Path to the Claude CLI binary. Resolved via `PATH` when not an absolute path. |
 | `daemon.codex_path`  | `"codex"`  | Path to the Codex CLI binary. Resolved via `PATH` when not an absolute path. |
-| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents`, the `KCAP_MAX_AGENTS` env var, or the desktop app's **Settings…**; a running daemon applies a change without a restart. |
+| `daemon.auto_resume` | `true`     | Resume hosted agents when the daemon starts after a restart. `false` leaves them interrupted in `kcap agent ls`, from where `kcap agent resume <id>` retries one. Read at daemon start. The desktop app's **Settings…** sets it too. |
+| `daemon.max_agents`  | `5`        | Maximum concurrent hosted coding agents. `0` means unlimited. Also settable per launch with `--max-agents` or the `KCAP_MAX_AGENTS` env var, which take precedence at startup. `kcap config set daemon.max_agents` and the desktop app's **Settings…** hand the value to the running daemon, which applies it without a restart. |
 
 You can also override these at runtime with environment variables (take precedence over the profile):
 
@@ -1908,7 +2122,7 @@ It requires:
 **Current limitations.** A hosted Cursor agent renders its transcript (messages, thinking, tool
 calls/results) but does **not** support interactive local-attach input, special keys, or terminal
 resize, and it emits no separate terminal-output stream — Cursor runs shell commands itself in the
-worktree and they surface as `execute` tool results in the transcript. Capacitor advertises **no**
+worktree and they surface as `execute` tool results in the transcript. kcap advertises **no**
 client filesystem or terminal capabilities to the agent (it performs those operations itself).
 
 **Troubleshooting.**
@@ -1925,7 +2139,7 @@ client filesystem or terminal capabilities to the agent (it performs those opera
 
 **Data handling.** A hosted Cursor agent runs as a local child process of the daemon with the daemon's
 own filesystem/process access — the same unsandboxed-in-a-worktree posture as every hosted agent — and
-its transcript (prompt text, tool arguments, tool results) is forwarded to the Capacitor server
+its transcript (prompt text, tool arguments, tool results) is forwarded to the kcap server
 verbatim, exactly like every other agent, with no Cursor/ACP-specific redaction.
 
 **Codex session-end tuning.** Because Codex has no session-end hook, the watcher owns session-end via two triggers: parent `codex` process exit, and rollout-file idle timeout. The idle trigger is particularly important for the Codex desktop app, whose shared `codex app-server` process never exits per-conversation.
@@ -1967,7 +2181,8 @@ The daemon hosts Grok Build over ACP (`grok agent --no-leader stdio`) when `grok
 - **A hosted Grok asks before it acts, even if you run Grok with always-approve.** Grok applies `permission_mode = "always-approve"` from `~/.grok/config.toml` to agent sessions too, which would let it run every tool without asking the daemon. The daemon turns that off for the sessions it hosts, so approvals and the launch dialog's permission presets apply.
 - **It runs as its own process,** never through a shared `grok leader`, so stopping the agent stops Grok.
 - **It is recorded once.** kcap's own Grok hook loads inside the hosted child and stands down there, because the daemon already records the session. A `grok` the hosted agent starts itself is still recorded.
-- **It carries no cost yet.** Grok reports a hosted turn's token usage in an extension the daemon does not forward, so a hosted Grok session shows no cost; a Grok session you run yourself does.
+- **Its usage is recorded per turn.** The daemon reads each finished turn's per-model token usage from Grok's `_x.ai/session_notification` extension, so a hosted Grok session is costed like one you run yourself. Usage on `grok-4.7-build-fast` is recorded but shows no cost, since xAI bills it at a different rate.
+- **Its subagents are recorded as subagents.** Each subagent Grok starts lands on its own sub-session of the hosted session, with its start and finish recorded on the parent.
 
 #### Grok as an unattended review-flow reviewer
 
@@ -2148,13 +2363,16 @@ kcap agent start claude --title "Fix login" -- "fix the login redirect"  # name 
 
 ```bash
 kcap agent                 # no subcommand — same as `kcap agent ls`
-kcap agent ls              # list daemon-hosted agents (id, status, kind, repo, title)
+kcap agent ls              # list daemon-hosted agents (id, status, state, kind, repo, title)
 kcap agent attach ab12     # re-attach your terminal (any unique id prefix works)
+kcap agent resume ab12     # retry an agent a daemon restart left interrupted
 kcap agent stop ab12       # graceful /exit, then terminate
 kcap agent stop --all -y   # stop the listed non-review agents, no prompt
 ```
 
-Agent ids are long, so `attach` and `stop` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+Agent ids are long, so `attach`, `stop` and `resume` accept **any unique prefix** — an ambiguous one lists the candidates instead of guessing. `stop --all` includes `--private` agents and prompts for confirmation unless you pass `--yes`/`-y`. It stops only the agents in the displayed list; agents started while you read the prompt remain running. Agents that finish before their stop request count as already stopped. The same snapshot rule applies with `--force` and `--yes`/`-y`. A stop that cannot be confirmed prints a per-agent failure line and exits non-zero.
+
+**Daemon restarts.** A daemon restart — `kcap daemon restart`, a self-update, or `kcap daemon stop --keep-agents` followed by a start — stops the hosted agents and the new daemon resumes them under the same ids where the vendor session can be resumed; where it cannot, or the resume fails, kcap continue brings the agent back as a fresh session under a new id, which `kcap agent ls` shows. Claude, Codex, Pi, Muse, Antigravity, Cursor, Copilot and OpenCode agents resume their vendor session; Gemini, Grok and Kiro agents come back through kcap continue. `kcap agent ls` shows a `STATE` column: `running`, `resuming` while the new daemon brings an agent back, or `interrupted (<reason>)` when it could not; `kcap agent resume <id>` retries an interrupted one (refused, with the reason, while its previous process could not be proven gone or a newer daemon wrote its entry), `kcap agent stop <id>` discards it, and `stop --all` leaves them out; one left alone for 30 days is discarded at the next daemon start. An attached terminal rides out the restart: it prints `daemon restarting; waiting for <id> to resume…`, re-attaches by id once the agent is back (up to `KCAP_ATTACH_RECONNECT_SECONDS`, default 90) and replays its screen, or prints why the agent was not resumed and exits 1. The desktop app does the same: its rows show **Resuming** and **Interrupted** with the reason, and an open terminal tab re-attaches once the agent is back or says why it was not. A starting daemon resumes at most `KCAP_RESUME_CONCURRENCY` agents at once (default 2), leaves one last alive more than `KCAP_RESUME_MAX_AGE_SECONDS` ago (default 86400; 0 removes the bound) `interrupted (too_old)`, and counts a resume as failed when the agent does not stay up for `KCAP_RESUME_READINESS_SECONDS` (default 10). `kcap config set daemon.auto_resume false` turns the resume off.
 
 **Agents that aren't yours.** `kcap agent ls` shows a `KIND` column: `agent` for ones you started, `review` for PR-review agents, and `review-flow` for review-flow participants (with their flow run ID and role). The daemon protects the latter two:
 
@@ -2193,7 +2411,7 @@ Requires the Team or Enterprise plan — the server 403s on Free with a message 
 
 ### Accounts
 
-If you run more than one Claude Code config directory (`CLAUDE_CONFIG_DIR`) or Codex home (`CODEX_HOME`), for example one for work and one for personal use, kcap records each one as an *account*. An account is a vendor config directory, not a Capacitor server login: it is distinct from a profile (`kcap profile`), which selects a server.
+If you run more than one Claude Code config directory (`CLAUDE_CONFIG_DIR`) or Codex home (`CODEX_HOME`), for example one for work and one for personal use, kcap records each one as an *account*. An account is a vendor config directory, not a kcap server login: it is distinct from a profile (`kcap profile`), which selects a server.
 
 ```bash
 kcap accounts                                  # list accounts, their recording state, and directories found but not added
@@ -2207,7 +2425,7 @@ kcap accounts remove <id|dir>                  # remove kcap's recording and for
 
 ### Profiles
 
-Profiles let you work with multiple Capacitor servers — for example, a company server for work repos and a separate one for open-source projects. Each profile stores its own server URL, visibility settings, and daemon configuration.
+Profiles let you work with multiple kcap servers — for example, a company server for work repos and a separate one for open-source projects. Each profile stores its own server URL, visibility settings, and daemon configuration.
 
 ```bash
 kcap profile add work --server-url https://my-other-tenant.kcap.ai
@@ -2218,6 +2436,8 @@ kcap profile remove work
 ```
 
 `kcap profile remove` also deletes the profile's saved sign-in (`~/.config/kcap/tokens/<name>.json`). The active profile cannot be removed — select another with `kcap use <name> --global` first.
+
+Discovery (`kcap setup`, `kcap login --discover`) saves each workspace under the profile that already points at its server — the active one when several do — so a profile you named yourself keeps its name. Where several workspaces share a server, only a profile named after one of them is reused, since kcap cannot tell which of the others belongs to which. A workspace no profile points at gets a profile named after its slug, with a numbered suffix if another workspace in the same sign-in already took that name.
 
 The `--remote` flag associates a profile with git remote patterns. When you open a repo whose remote matches a pattern, that profile activates automatically.
 
@@ -2258,7 +2478,7 @@ kcap machine list                        # this org's machines
 kcap machine revoke service:9e96…        # stop one authenticating
 ```
 
-**The secret is shown once and is never stored** — not by this CLI, not by Capacitor,
+**The secret is shown once and is never stored** — not by this CLI, not by kcap,
 and WorkOS will not show it again. That is deliberate: a secret nobody stores is a
 secret nobody can leak. It goes to stdout while everything else goes to stderr, so it
 can be piped straight into a secret store without touching disk:
@@ -2306,7 +2526,7 @@ kcap config show    # show current configuration
 kcap config set <key> <value>
 ```
 
-**Default session visibility** controls how your sessions appear to other users in the same Kurrent Capacitor account. Set during `kcap setup` or change at any time:
+**Default session visibility** controls how your sessions appear to other users in the same kcap account. Set during `kcap setup` or change at any time:
 
 ```bash
 kcap config set default_visibility private      # only you can see your sessions
@@ -2440,7 +2660,7 @@ kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
 
-`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), removes the `kcap` git hook from `~/.gitconfig`, and deletes `~/.config/kcap/`. Every registered vendor account (see `kcap accounts`) is unwired too, and the account registry (`~/.config/kcap/accounts/`) is deleted last, only when no step failed — neither `--keep-config` nor `--project` spares it. A registry kcap could not read or lock is kept and the uninstall reported incomplete, since it is the only record of which accounts still record; check them with `kcap accounts`, then re-run `kcap uninstall`.
+`uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), removes the `kcap` git hook from `~/.gitconfig`, and deletes `~/.config/kcap/`. Every registered vendor account (see `kcap accounts`) is unwired too, and the account registry (`~/.config/kcap/accounts/`) and the daemon state directory (`~/.config/kcap/daemons/`, which `KCAP_CONFIG_DIR` never moves; kept whole while a daemon or daemon command still holds one of its locks, and left alone when `KCAP_DAEMONS_DIR` moved it or it is a link) are deleted last, only when no step failed — neither `--keep-config` nor `--project` spares them. A registry kcap could not read or lock is kept and the uninstall reported incomplete, since it is the only record of which accounts still record; check them with `kcap accounts`, then re-run `kcap uninstall`.
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 
@@ -2467,6 +2687,10 @@ You'll see the offer on whichever surface reaches you:
   until you trust kcap's). A hook running proves the integration loaded, not that a session reached
   the server. `--json` carries the time as `last_hook_event`, and a git older than 2.54,
   which ignores the commit hook, gets its own warning line.
+- **`kcap status`** shows each running daemon's version, and warns, naming the fix, when a daemon
+  runs a different version than the CLI or its service runs a binary outside the CLI's own install
+  (one `kcap update` does not reach, such as an older npm install's). `--json` carries it as each
+  daemon's `version`.
 
 Manage the nudges with `kcap harness`:
 
@@ -2500,7 +2724,7 @@ after a `--all` dismiss is still offered once.
 ### Other commands
 
 ```bash
-kcap status         # server, auth, hooks (and when each agent last ran one), daemon
+kcap status         # server, auth, hooks (and when each agent last ran one), daemon and its version
 kcap status --json  # the same report, machine-readable
 kcap whoami         # show current identity + ask the server if it accepts your token
 kcap login          # authenticate via OAuth (browser flow by default)
@@ -2527,8 +2751,11 @@ kcap feedback --feedback                               # send feedback; prompts 
 > manager blocks install scripts. It exits early if you're already up to date,
 > and tells you what to run instead for other installs (e.g. Homebrew). On the
 > stable channel it stops at your connected server's version when the server
-> trails npm, so it never installs a CLI newer than the server it talks to. Use
-> `kcap update --check` for a machine-readable `{current, latest, newer}` probe.
+> trails npm, so it never installs a CLI newer than the server it talks to; a
+> [local server](#upgrading-the-local-server) does not cap it, and after the CLI
+> moves `kcap update` runs the new binary's `kcap local upgrade` to move the local
+> stack with it. Use `kcap update --check` for a machine-readable
+> `{current, latest, newer}` probe.
 >
 > **Script installs** (`curl -fsSL https://www.kurrent.io/install | bash`, or
 > `install.ps1` on Windows) update without npm: `kcap update` reads the

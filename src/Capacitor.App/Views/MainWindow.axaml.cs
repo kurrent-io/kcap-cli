@@ -1,8 +1,12 @@
+using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
+using Avalonia.Media;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -30,6 +34,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             OnboardingPane.DataContext = value;
             OnboardingPane.IsVisible   = value is not null;
             SessionsSurface.IsVisible  = value is null;
+            ApplyMinimumSize();
         }
     }
 
@@ -56,9 +61,70 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    UiScaleSetting? _contentScale;
+    IDisposable? _contentScaleSubscription;
+
+    /// Magnifies everything in the window. Assigned by App; left null on a plainly-constructed
+    /// window, whose zoom shortcuts then do nothing.
+    public UiScaleSetting? ContentScale {
+        get => _contentScale;
+        set {
+            _contentScale = value;
+            _contentScaleSubscription?.Dispose();
+            _contentScaleSubscription = value?.Changes
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(ApplyScale);
+        }
+    }
+
+    double _scale = UiScale.Default;
+    double _captionTop;
+
+    void ApplyScale(double scale) {
+        _scale = scale;
+        ScaleHost.LayoutTransform = scale == UiScale.Default ? null : new ScaleTransform(scale, scale);
+        ApplyMinimumSize();
+        ApplyCaptionInset();
+    }
+
+    // A closed window has no platform window to ask a screen about.
+    void RefreshMinimumSize() {
+        if (_scale != UiScale.Default && PlatformImpl is not null) ApplyMinimumSize();
+    }
+
+    // Bounded by the screen the window is on.
+    void ApplyMinimumSize() {
+        var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
+        var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
+        MinWidth  = UiScale.Minimum(Onboarding is null ? WindowSizeMemory.MinWidth : 640, _scale, available?.Width);
+        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
+    }
+
+    // The inset is in window units and the pane sits inside the scale, so it is divided back out.
+    void ApplyCaptionInset() => ContentPane.Margin = new Thickness(0, _captionTop / _scale, 0, 0);
+
     public MainWindow() {
         InitializeComponent();
+        KeyBindings.AddRange(ZoomShortcut.For(this));
+        // A move, a display scaling change and a resized work area each change what the screen offers.
+        PositionChanged += (_, _) => RefreshMinimumSize();
+        ScalingChanged += (_, _) => RefreshMinimumSize();
+        Screens? watchedScreens = null;
+        void OnScreensChanged(object? sender, EventArgs e) => RefreshMinimumSize();
+        Opened += (_, _) => {
+            if (watchedScreens is not null || Screens is not { } screens) return;
+            watchedScreens = screens;
+            screens.Changed += OnScreensChanged;
+        };
+        // Hide-to-tray never closes the window, so only a real close lets the setting and the screens go.
+        Closed += (_, _) => {
+            _contentScaleSubscription?.Dispose();
+            if (watchedScreens is not null) watchedScreens.Changed -= OnScreensChanged;
+        };
         BindRefreshShortcuts();
+        BindSettingsShortcut();
+        KeepContentClearOfCaptionButtons();
+        BindFullScreenShortcut();
         Closing += (_, e) => {
             if (CloseInterceptor?.Invoke() == true) e.Cancel = true;
         };
@@ -79,7 +145,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             activityFlyout.Closed += (_, _) => { _activityOpen = false; UpdateActivityVisibility(); };
         }
 
+        var switchCover = new WorkspaceSwitchCover(ContentPane, SwitchCover, SwitchCoverStill);
         this.WhenActivated(disposables => {
+            var coverTracking = new SerialDisposable().DisposeWith(disposables);
+            this.WhenAnyValue(x => x.ViewModel)
+                .Subscribe(vm => coverTracking.Disposable = vm is null ? null : switchCover.Track(vm))
+                .DisposeWith(disposables);
             // Switched over the ViewModel, not read once: an onboarding window activates before
             // the main surface hands it one.
             Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
@@ -87,9 +158,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                         ? Observable.Return<ISessionWorkspace?>(null)
                         : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
-                    // A popup can't meaningfully survive the pane swapping under it — opening a
-                    // workspace closes the feed; its Closed handler then turns the gate off.
                     if (workspace is not null) ActivityButton.Flyout?.Hide();
+                    else Dispatcher.UIThread.Post(LauncherView.FocusComposer, DispatcherPriority.Loaded);
                     UpdateActivityVisibility();
                 })
                 .DisposeWith(disposables);
@@ -123,11 +193,53 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         }
     }
 
+    // Windows draws its caption buttons over the top-right of the extended client area, so the
+    // content pane starts below the title bar there.
+    void KeepContentClearOfCaptionButtons() {
+        if (!OperatingSystem.IsWindows()) return;
+        this.GetObservable(WindowDecorationMarginProperty)
+            .Subscribe(margin => {
+                _captionTop = margin.Top;
+                ApplyCaptionInset();
+            });
+    }
+
+    // F11 is the Windows convention for full screen; Win+Up and Win+Down already maximize and
+    // minimize, which the macOS Window menu has to provide itself.
+    void BindFullScreenShortcut() {
+        if (!OperatingSystem.IsWindows()) return;
+        KeyBindings.Add(new KeyBinding { Gesture = new KeyGesture(Key.F11), Command = ReactiveCommand.Create(ToggleFullScreen) });
+    }
+
+    WindowState _beforeFullScreen = WindowState.Normal;
+
+    internal void ToggleFullScreen() {
+        if (WindowState == WindowState.FullScreen) {
+            WindowState = _beforeFullScreen;
+            return;
+        }
+        _beforeFullScreen = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
+        WindowState = WindowState.FullScreen;
+    }
+
+    // macOS takes ⌘, from the native app menu, which Windows does not draw.
+    void BindSettingsShortcut() {
+        if (!OperatingSystem.IsWindows()) return;
+        var binding = new KeyBinding { Gesture = new KeyGesture(Key.OemComma, KeyModifiers.Control) };
+        KeyBindings.Add(binding);
+
+        void Apply() {
+            if ((DataContext as MainWindowViewModel)?.OpenSettingsCommand is { } command) binding.Command = command;
+        }
+        Apply();
+        DataContextChanged += (_, _) => Apply();
+    }
+
     // A toast fired before Loaded, or while the window is hidden (Hide() suspends rendering
     // entirely), is invisible to the user — stderr (AppNotifier's own mirroring) is the only
     // channel that survives either case.
     void ShowToast(string message) =>
-        _notifications?.Show(new Notification("Kurrent Capacitor", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
+        _notifications?.Show(new Notification("kcap", message, NotificationType.Warning, TimeSpan.FromSeconds(4)));
 
     // The launcher header strip and the bottom-most drag strip — see WindowChrome.
     void OnChromePointerPressed(object? sender, Avalonia.Input.PointerPressedEventArgs e) =>

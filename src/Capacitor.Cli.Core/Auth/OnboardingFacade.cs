@@ -17,7 +17,9 @@ sealed record CommitRequest(
     Func<Action, Task<string?>>?        PublishTokens,
     // False for a login that must not claim the profile for this server (see LoginTarget.Foreign).
     bool                                WriteStamp = true,
-    CommitPrecondition?                 Precondition = null);
+    CommitPrecondition?                 Precondition = null,
+    // Publishes the config durably (flushed, directories synced); implies the strict read.
+    bool                                Durable = false);
 
 /// <summary>The ordered commit boundary: the before-commit hook is the last cancellable await, after which every publication is uncancellable.</summary>
 static class CommitBoundary {
@@ -26,6 +28,49 @@ static class CommitBoundary {
             CommitRequest                                               request,
             Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
             IAuthProgress                                               progress,
+            CancellationToken                                           ct) =>
+        (await CommitOnceAsync(root, request, beforeCommit, progress, stillNamed: null, ct))!;
+
+    const int NamingAttempts = 3;
+
+    /// <summary>
+    /// Commits discovered tenants under the profile names the config gives them. The names are
+    /// chosen from a read taken before the lock, so the commit re-checks them against the config it
+    /// writes and, when a profile written in between changed them, prepares the request again.
+    /// </summary>
+    internal static async Task<AuthResult> CommitNamedAsync(
+            ConfigRoot                                                  root,
+            DiscoveredTenant[]                                          tenants,
+            DiscoveredTenant                                            picked,
+            Func<DiscoveredTenant[], DiscoveredTenant, CommitRequest>   prepare,
+            Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
+            IAuthProgress                                               progress,
+            CancellationToken                                           ct) {
+        for (var attempt = 0; attempt < NamingAttempts; attempt++) {
+            var snapshot = ConfigMutator.TryLoadPure(AppConfig.GetConfigPath(root), out var current) ? current : new ProfileConfig();
+            var (named, namedPicked) = TenantDiscovery.NameProfiles(snapshot, tenants, picked);
+
+            var result = await CommitOnceAsync(
+                root, prepare(named, namedPicked), beforeCommit, progress,
+                config => TenantDiscovery.NamesHold(config, tenants, picked, named, namedPicked), ct);
+
+            if (result is not null) return result;
+        }
+
+        const string changed = "the profiles kept changing during sign-in; nothing saved.";
+        progress.Error($"Error: {changed}");
+
+        return new AuthResult.Failed(changed);
+    }
+
+    /// <summary>Null when <paramref name="stillNamed"/> refused the config under the lock: nothing
+    /// was written and the caller may prepare the request again.</summary>
+    static async Task<AuthResult?> CommitOnceAsync(
+            ConfigRoot                                                  root,
+            CommitRequest                                               request,
+            Func<IReadOnlyList<AuthIdentity>, CancellationToken, Task>? beforeCommit,
+            IAuthProgress                                               progress,
+            Func<ProfileConfig, bool>?                                  stillNamed,
             CancellationToken                                           ct) {
         if (ct.IsCancellationRequested) return new AuthResult.Cancelled();
 
@@ -43,10 +88,17 @@ static class CommitBoundary {
 
         // A token-only arm has no config commit to make the boundary durable, so what landed is tracked rather than assumed.
         var configPublished = request.ConfigMutation is not null || request.WriteStamp || request.Precondition is not null;
+        var renamed         = false;
 
         if (configPublished) {
             try {
                 ProfileConfig Mutation(ProfileConfig config) {
+                    if (stillNamed?.Invoke(config) == false) {
+                        renamed = true;
+
+                        return config;
+                    }
+
                     request.Precondition?.Check(config, request.ActiveProfile);
                     // Profile write and stamp are ONE mutation: no window where a profile exists unstamped.
                     return Stamp(request.ConfigMutation?.Invoke(config) ?? config, request);
@@ -54,7 +106,8 @@ static class CommitBoundary {
 
                 // A precondition is decided on what the file says, so an unreadable file must abort
                 // rather than be read as a fresh default and then published over.
-                if (request.Precondition is null) await ConfigMutator.MutateAsync(root, Mutation, CancellationToken.None);
+                if (request.Durable) await ConfigMutator.MutateStrictAsync(root, Mutation, durable: true, ct: CancellationToken.None);
+                else if (request.Precondition is null) await ConfigMutator.MutateAsync(root, Mutation, CancellationToken.None);
                 else await ConfigMutator.MutateStrictAsync(root, Mutation, CancellationToken.None);
             } catch (CommitPreconditionFailedException ex) {
                 progress.Error($"Error: {ex.Message}");
@@ -65,11 +118,13 @@ static class CommitBoundary {
 
                 return new AuthResult.Failed("config unreadable");
             } catch (Exception ex) {
-                // The config commit is the boundary's first durable step: if it threw, nothing was published.
+                // A durable publication's directory sync can throw after the rename, so a Failed commit may already be visible; the caller retries.
                 progress.Error($"Error: sign-in could not be saved: {ex.Message}");
 
                 return new AuthResult.Failed(ex.Message);
             }
+
+            if (renamed) return null;
         }
 
         string? username   = null;
@@ -202,8 +257,6 @@ public sealed class OnboardingFacade(
     /// <summary>Test seams for the known-server WorkOS login, whose OidcClient leg bypasses the http factory.</summary>
     internal IBrowser? WorkOSBrowser { get; init; }
 
-    internal string? WorkOSApiBaseOverride { get; init; }
-
     /// <summary>
     /// Escape-hatch keyboard. Defaults to none for the same reason <see cref="IAuthProgress"/> is
     /// injected rather than defaulted: a GUI host has no console, and only a terminal host knows it
@@ -216,7 +269,7 @@ public sealed class OnboardingFacade(
     /// Only a <see cref="WorkspaceAnswer.Gone"/> leaves one out; an outage keeps it. Unset, every listed
     /// workspace is offered.
     /// </summary>
-    internal Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
+    public Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
 
     /// <param name="adoptServer">
     /// When the profile doesn't already name this server: true writes its <c>server_url</c> and the
@@ -232,8 +285,9 @@ public sealed class OnboardingFacade(
         GuardAsync(() => LoginCoreAsync(serverUrl, forceDevice, profile, adoptServer, precondition, ct), ct);
 
     /// <param name="provider"><see cref="AuthProvider.GitHubApp"/> or <see cref="AuthProvider.WorkOS"/>.</param>
-    public Task<AuthResult> DiscoverAsync(string provider, bool forceDevice, CancellationToken ct) =>
-        GuardAsync(() => DiscoverCoreAsync(provider, forceDevice, ct), ct);
+    /// <param name="confirmPick">Hand even a single workspace to the picker rather than signing in to it.</param>
+    public Task<AuthResult> DiscoverAsync(string provider, bool forceDevice, CancellationToken ct, bool confirmPick = false) =>
+        GuardAsync(() => DiscoverCoreAsync(provider, forceDevice, confirmPick, ct), ct);
 
     async Task<AuthResult> LoginCoreAsync(
             string serverUrl, bool forceDevice, string profile, bool adoptServer, CommitPrecondition? precondition,
@@ -243,6 +297,10 @@ public sealed class OnboardingFacade(
         var config = await OAuthLoginFlow.FetchAuthConfigAsync(http, serverUrl, ct, progress);
 
         if (config is null) return Stop($"Failed to fetch auth config from {serverUrl}/auth/config", ct);
+
+        // Hooks read the provider from this cache for a day, keyed as CapacitorServer.Url trims it; a
+        // server that changed provider would otherwise be treated as the old one until it expired.
+        AuthProviderCache.Set(serverUrl.TrimEnd('/'), config.Provider, root, time);
 
         if (!ServerIdentity.TryCanonicalizeForStamping(serverUrl, out var canonical, out var identityError)) {
             return Fail($"Error: {identityError}", identityError, ct);
@@ -307,10 +365,13 @@ public sealed class OnboardingFacade(
             AuthDiscoveryResponse config, bool forceDevice, LoginTarget target, CancellationToken ct) {
         // The loopback browser is owned by OAuthLoginFlow.AcquireWorkOSAsync, which is where the join
         // collaborator is attached — see the ownership guard, which enumerates every site.
+        var apiBase = WorkOSApiBaseRule.Resolve(target.ServerUrl, config.ApiBaseUrl, out var refused);
+
+        if (refused) progress.Error(WorkOSApiBaseRule.RefusedWarning(target.ServerUrl, config.ApiBaseUrl!));
+
         var authenticated = await OAuthLoginFlow.WorkOSTokensForServerAsync(
-            workos, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
-            telemetry.Join, WorkOSBrowser, ct, progress, time,
-            WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase, KeyWatcher);
+            workos, apiBase, target.ServerUrl, config.ClientId!, config.OrganizationId, forceDevice, launcher,
+            telemetry.Join, WorkOSBrowser, ct, progress, time, KeyWatcher);
 
         if (authenticated is null) return Stop("WorkOS sign-in did not complete.", ct, AuthFailureReason.SigninDenied);
 
@@ -379,9 +440,8 @@ public sealed class OnboardingFacade(
         var auth = WorkOSOrglessLogin is not null
             ? await WorkOSOrglessLogin(ct)
             : await OAuthLoginFlow.AcquireWorkOSAsync(
-                  workos, proxyConfig.WorkOSClientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
-                  browser: null, apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
-                  ct: ct, progress: progress, keys: KeyWatcher);
+                  workos, WorkOSClient.ApiBase, proxyConfig.WorkOSClientId, organizationId: null, forceDevice,
+                  launcher, telemetry.Join, time, browser: null, ct: ct, progress: progress, keys: KeyWatcher);
 
         if (auth is null) return Halted(AuthProvider.WorkOS, "WorkOS sign-in failed.", ct);
 
@@ -424,7 +484,7 @@ public sealed class OnboardingFacade(
     static DiscoveryReport Halted(string provider, string error, CancellationToken ct) =>
         ct.IsCancellationRequested ? DiscoveryReport.Cancelled(provider) : DiscoveryReport.Failure(provider, error);
 
-    async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, CancellationToken ct) {
+    async Task<AuthResult> DiscoverCoreAsync(string provider, bool forceDevice, bool confirmPick, CancellationToken ct) {
         var proxyConfig = await proxy.GetConfigAsync(endpoints.ProxyUrl, ct);
 
         if (proxyConfig is null) {
@@ -432,14 +492,14 @@ public sealed class OnboardingFacade(
         }
 
         return provider switch {
-            AuthProvider.WorkOS    => await DiscoverWorkOSAsync(proxyConfig, forceDevice, ct),
+            AuthProvider.WorkOS    => await DiscoverWorkOSAsync(proxyConfig, forceDevice, confirmPick, ct),
             AuthProvider.GitHubApp => await DiscoverGitHubAsync(proxyConfig, forceDevice, ct),
             _                      => UnknownProvider(provider)
         };
     }
 
     async Task<AuthResult> DiscoverWorkOSAsync(
-            ProxyConfigResponse proxyConfig, bool forceDevice, CancellationToken ct) {
+            ProxyConfigResponse proxyConfig, bool forceDevice, bool confirmPick, CancellationToken ct) {
         var clientId = proxyConfig.WorkOSClientId ?? "";
 
         var flow = await WorkOSDiscovery.DiscoverAsync(
@@ -448,14 +508,12 @@ public sealed class OnboardingFacade(
                 ? WorkOSOrglessLogin(ct)
                 // Org-less: the sign-in picks the organization, and discovery reconciles it afterwards.
                 : OAuthLoginFlow.AcquireWorkOSAsync(
-                    workos, clientId, organizationId: null, forceDevice, launcher, telemetry.Join, time,
-                    browser: null,
-                    apiBase: WorkOSApiBaseOverride ?? OAuthLoginFlow.WorkOSApiBase,
-                    ct: ct, progress: progress, keys: KeyWatcher),
+                    workos, WorkOSClient.ApiBase, clientId, organizationId: null, forceDevice, launcher,
+                    telemetry.Join, time, browser: null, ct: ct, progress: progress, keys: KeyWatcher),
             orgSwitch: (refreshToken, organizationId) =>
-                workos.SwitchOrganizationAsync(clientId, refreshToken, organizationId, ct),
+                workos.SwitchOrganizationAsync(WorkOSClient.ApiBase, clientId, refreshToken, organizationId, ct),
             orglessRefresh: async (refreshToken, refreshCt) =>
-                (await workos.RefreshAsync(clientId, refreshToken, refreshCt)).Response,
+                (await workos.RefreshAsync(WorkOSClient.ApiBase, clientId, refreshToken, refreshCt)).Response,
             provisioner: provisioner,
             time: time,
             ct: ct,
@@ -466,14 +524,15 @@ public sealed class OnboardingFacade(
                 Proxy: proxy,
                 ProxyUrl: endpoints.ProxyUrl,
                 PickerVersion: proxyConfig.CliPickerVersion),
-            probe: ProbeWorkspace);
+            probe: ProbeWorkspace,
+            confirmPick: confirmPick);
 
         return flow switch {
             WorkOSDiscoveryFlow.Ready ready       => await WorkOSDiscovery.PublishAsync(
                                                         root, store, ready, progress, beforeCommit, time, ct),
             WorkOSDiscoveryFlow.Retarget retarget => new AuthResult.Retarget(retarget.ServerInput),
             WorkOSDiscoveryFlow.Failed failed     => Stop(failed.Message, ct, failed.Reason),
-            _                                     => Stop("No Capacitor tenants are linked to your account.", ct,
+            _                                     => Stop("No kcap tenants are linked to your account.", ct,
                                                           AuthFailureReason.NoTenantsFound)
         };
     }
@@ -500,28 +559,25 @@ public sealed class OnboardingFacade(
                 : Fail(outcome.ErrorMessage, ct, reason);
         }
 
-        var identities = new List<AuthIdentity>();
+        var canonicalByOrigin = new Dictionary<string, string>(StringComparer.Ordinal);
 
         foreach (var tenant in outcome.Tenants) {
             if (!ServerIdentity.TryCanonicalizeForStamping(tenant.Origin, out var canonical, out var identityError)) {
                 return Fail($"Error: {identityError}", identityError, ct);
             }
 
-            identities.Add(new(tenant.ProfileName, canonical));
+            canonicalByOrigin[tenant.Origin] = canonical;
         }
-
-        var picked = outcome.Picked!;
 
         if (await CommitBoundary.SettleLegacyCredentialAsync(root, store, ct) is { } settleError)
             return Fail(settleError, settleError, ct);
 
-        var request = new CommitRequest(
-            identities, AuthProvider.GitHubApp, picked.ProfileName,
-            identities.First(i => i.Profile == picked.ProfileName).CanonicalServer,
-            ConfigMutation: config => TenantDiscovery.MergeProfiles(config, outcome.Tenants, picked),
-            PublishTokens: saved => ExchangeEveryTenantAsync(outcome.Tenants, picked, accessToken, saved));
-
-        return await CommitBoundary.CommitAsync(root, request, beforeCommit, progress, ct);
+        return await CommitBoundary.CommitNamedAsync(root, outcome.Tenants, outcome.Picked!, (tenants, picked) => new CommitRequest(
+                [.. tenants.Select(t => new AuthIdentity(t.ProfileName, canonicalByOrigin[t.Origin]))],
+                AuthProvider.GitHubApp, picked.ProfileName, canonicalByOrigin[picked.Origin],
+                ConfigMutation: config => TenantDiscovery.MergeProfiles(config, tenants, picked),
+                PublishTokens: saved => ExchangeEveryTenantAsync(tenants, picked, accessToken, saved)),
+            beforeCommit, progress, ct);
     }
 
     // Inside the boundary: each tenant's exchange is network-then-save, and ANY failure — mapped or

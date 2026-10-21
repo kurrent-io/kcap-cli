@@ -4,8 +4,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization.Metadata;
-using Capacitor.Cli.Continuation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Continuation;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.Core.Config;
@@ -17,11 +17,12 @@ using Capacitor.Cli.PrDetection;
 namespace Capacitor.Cli.Commands;
 
 sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, TokenStore tokens, ICapacitorHttpClient http,
-        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) {
+        TelemetryStartup startup, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time) : IDisposable {
     internal const string NotLoggedInMessage = AuthRejectionNotice.NotLoggedIn;
 
-    HttpClient?    _client;
-    CwdRepository? _repository;
+    // Both resolve on first use: kcap-sessions auto-registers, so a session that never calls a tool must stay local-only.
+    readonly OnDemand<HttpClient> _client     = new(() => http.ForSessionAsync());
+    readonly CwdRepository        _repository = new(config, workdir.Path, router, time);
 
     string BaseUrl => profiles.Resolution.ServerUrl!;
 
@@ -65,53 +66,22 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         writer.AutoFlush = true;
 
         try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue; // skip malformed JSON
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
+            await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+                "initialize" => BuildInitializeResponse(id, request),
+                "tools/list" => BuildToolsListResponse(id, tools),
+                _            => McpProtocol.TryHandleStandardMethod(method, id)
+                                ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+            }, "sessions");
         } finally {
-            if (_client is not null) {
-                try { _client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
+            Dispose();
         }
 
         return 0;
     }
 
-    /// <summary>
-    /// Never lets the stdio loop die on one bad request. The authenticated client and the cwd
-    /// repository are resolved on the first call that needs the server, not at startup:
-    /// kcap-sessions auto-registers, so a session that never calls a tool must stay local-only. A
-    /// failed client creation leaves the field null so the next call retries; the stdio loop is
-    /// serial, so no locking.
-    /// </summary>
+    public void Dispose() => _client.Dispose();
+
+    /// <summary>Never lets the stdio loop die on one bad request.</summary>
     internal async Task<string> DispatchToolCallAsync(JsonNode callId, JsonObject callRequest) {
         if (callRequest["params"] is JsonObject callParams && callParams["name"] is JsonValue name
          && name.TryGetValue(out string? toolName) && toolName == ConnectionTool.Name)
@@ -121,9 +91,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
         try {
-            _client     ??= await http.ForSessionAsync();
-            _repository ??= new CwdRepository(config, workdir.Path, router, time);
-            return await HandleToolCallAsync(callId, callRequest, _client, BaseUrl, await _repository.GetHashAsync());
+            return await HandleToolCallAsync(callId, callRequest, await _client.GetAsync(), BaseUrl, await _repository.GetHashAsync());
         } catch (Exception ex) {
             // The detail goes to stderr only: IO errors can carry local paths.
             await Console.Error.WriteLineAsync($"kcap mcp sessions: unexpected error handling tools/call: {ex}");
@@ -137,7 +105,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         "Use these tools to recall prior work — 'have we done X before', 'why did we', 'who decided Y', " +
         "'when did we work on Z'. Search here before grepping the code or git log — they search the reasoning " +
         "across past sessions, not just the code. Also use them to find an unfinished plan a session left " +
-        "behind (list_repo_plans) or to read a plan's task ledger (get_declared_plans).";
+        "behind (list_repo_plans) or to read a plan's task ledger (get_declared_plans). " +
+        "The server checks every read against the signed-in user's session permissions: a session the user " +
+        "may not see is never returned, so these tools cannot expose another user's private session.";
 
     static string BuildInitializeResponse(JsonNode id, JsonObject request) =>
         ToResponse<McpInitResult>(
@@ -263,9 +233,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                     var widenedArgs = arguments?.DeepClone().AsObject() ?? new JsonObject();
                     widenedArgs["repo"] = "all";
 
-                    // The stdio loop is serial — a stalled widen would withhold the already-ready
-                    // first body and block every subsequent MCP request, so bound it well below the
-                    // shared HttpClient's default 100s timeout.
+                    // A stalled widen would withhold the already-ready first body, so bound it well
+                    // below the shared HttpClient's default 100s timeout.
                     using var widenCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
                     var       url      = BuildSearchUrl(baseUrl, widenedArgs, cwdRepoHash);
                     using var second   = await client.GetAsync(url, widenCts.Token);
@@ -300,7 +269,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             var plansUrl = BuildSessionPlansUrl(baseUrl, sessionId);
             var itemsUrl = BuildSessionWorkItemsUrl(baseUrl, sessionId);
 
-            // The stdio loop is serial, so a stalled lookup would block every later request.
+            // A stalled lookup would hold up the whole answer.
             using var lookupsCts = new CancellationTokenSource(TimeSpan.FromSeconds(10), time);
             var       plansTask  = FetchBestEffortAsync(client, plansUrl, "declared plans", lookupsCts.Token);
             var       itemsTask  = itemsUrl is null ? Task.FromResult<string?>(null) : FetchBestEffortAsync(client, itemsUrl, "work items", lookupsCts.Token);
@@ -1006,7 +975,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
     internal static McpTool[] BuildToolsList() => [
         new(
             "search_sessions",
-            "Search past Kurrent Capacitor sessions by keywords and/or author name. query takes one to three keywords or identifiers, NEVER a sentence or a question: the literal lanes require every term to appear inside one transcript event or one turn summary, so a sentence gets zero literal hits and the page fills with embedding neighbours that look confident and are not. Identifiers are the strongest input: a ticket id (PROJ-1234, #1234), a file name (Elements.g.cs), a symbol. On a miss, retry with a single identifier before widening the query. Read hit_kind on every hit: transcript and title are literal matches on your terms; turn_prose and semantic can be nearest-neighbour hits that do not contain the query at all, so check the snippet for your term before trusting them. Searches the current repo first and AUTOMATICALLY widens to all visible repos when results are thin (response then carries widened_to_all_repos: true); every hit includes its repo, so check it before assuming a hit is from this repo. Pass repo: \"all\" to search everywhere explicitly, or repo: \"<owner>/<name>\" to pin another repo (explicit repo never widens). Returns ranked hits with session_id, title, owner, snippet, hit_kind, (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript, and (for turn_prose hits) hit_turn_index for get_turn. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
+            "Search past kcap sessions by keywords and/or author name. query takes one to three keywords or identifiers, NEVER a sentence or a question: the literal lanes require every term to appear inside one transcript event or one turn summary, so a sentence gets zero literal hits and the page fills with embedding neighbours that look confident and are not. Identifiers are the strongest input: a ticket id (PROJ-1234, #1234), a file name (Elements.g.cs), a symbol. On a miss, retry with a single identifier before widening the query. Read hit_kind on every hit: transcript and title are literal matches on your terms; turn_prose and semantic can be nearest-neighbour hits that do not contain the query at all, so check the snippet for your term before trusting them. Searches the current repo first and AUTOMATICALLY widens to all visible repos when results are thin (response then carries widened_to_all_repos: true); every hit includes its repo, so check it before assuming a hit is from this repo. Pass repo: \"all\" to search everywhere explicitly, or repo: \"<owner>/<name>\" to pin another repo (explicit repo never widens). Returns ranked hits with session_id, title, owner, snippet, hit_kind, (for transcript hits) hit_event_index + agent_id for drilling into the exact moment with get_session_transcript, and (for turn_prose hits) hit_turn_index for get_turn. For 'have we done this before / why did we / who decided X / when did we work on Y' questions, search here before grepping the code or git log — it searches the reasoning across past sessions, not just the code.",
             new(
                 "object",
                 new() {
@@ -1071,7 +1040,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_summary",
-            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Also lists `work_items` the session is attached to. To take over a session's work items and unfinished plans — continuing a session whose agent is gone — call `continue_session` in kcap-handoff, or run `kcap recap <id> --continue`. Use this to orient yourself before drilling into the full transcript.",
+            "Get a concise summary of a past session: the 'what was done' narrative (summary_text), the plan text the session captured (plan, if any), and declared_plans — one {plan_id, completed, total, total_known, finished, is_complete, is_current} per plan the session or its continuation chain declared tasks or documents for, absent when it declared none. finished is whether that plan's work is done; is_complete only says nothing was withheld from your view. Read a plan's tasks with get_declared_plans(plan_id). Also lists `work_items` the session is attached to. To take over a session's work items and unfinished plans — continuing a session whose agent is gone — call `continue_session` in kcap-handoff, or run `kcap recap <id> --continue`. Use this to orient yourself before drilling into the full transcript. The server returns only sessions the signed-in user may see; another user's private session is refused, never revealed.",
             new(
                 "object",
                 new() { ["session_id"] = new("string", "Session ID returned by search_sessions") },
@@ -1081,7 +1050,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "get_session_transcript",
-            "Get speaker-tagged transcript excerpts from a past session. Use `around_event` (paired with `agent_id` for subagent hits) returned by search_sessions to fetch the exact decision context. Default window is 50 events from the beginning; with `around_event` it's ±5/15 by default.",
+            "Get speaker-tagged transcript excerpts from a past session. Use `around_event` (paired with `agent_id` for subagent hits) returned by search_sessions to fetch the exact decision context. Default window is 50 events from the beginning; with `around_event` it's ±5/15 by default. The server returns only sessions the signed-in user may read in full; another user's private session is refused, never revealed.",
             new(
                 "object",
                 new() {

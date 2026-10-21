@@ -1,11 +1,17 @@
+using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
+using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.GitHubHtml;
 using MarkView.Avalonia;
+using MarkView.Avalonia.Rendering.Inlines;
 using MarkView.Avalonia.SyntaxHighlighting;
 
 namespace Capacitor.App.Views;
@@ -21,6 +27,11 @@ public sealed class MarkdownView : ContentControl {
     public static readonly StyledProperty<MarkdownFlavor> FlavorProperty =
         AvaloniaProperty.Register<MarkdownView, MarkdownFlavor>(nameof(Flavor));
 
+    /// The repository a GitHub-flavoured body belongs to, as its `https://host/owner/repo` URL: its
+    /// references in text link into it. Unset, they stay text.
+    public static readonly StyledProperty<string?> ReferenceBaseProperty =
+        AvaloniaProperty.Register<MarkdownView, string?>(nameof(ReferenceBase));
+
     /// Takes a code block's text. Left unset on a surface with nowhere to run it, which is what
     /// withdraws the offer from the block.
     public static readonly StyledProperty<ICommand?> RunCodeProperty =
@@ -34,6 +45,8 @@ public sealed class MarkdownView : ContentControl {
     readonly DetailsState _details = new();
     readonly DetailsExtension _detailsExtension;
     readonly CodeBlockActions _codeActions;
+    readonly ReferenceLinks _referenceLinks;
+    readonly MarkdownLinkKeys _linkKeys;
 
     static MarkdownView() {
         TextProperty.Changed.AddClassHandler<MarkdownView>((view, _) => {
@@ -42,11 +55,14 @@ public sealed class MarkdownView : ContentControl {
         });
         RunCodeProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view._codeActions.ApplyRunCode());
         FlavorProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.ApplyFlavor());
+        ReferenceBaseProperty.Changed.AddClassHandler<MarkdownView>((view, _) => view.Render());
     }
 
     public MarkdownView() {
         _detailsExtension = new(_details, OnDetailsToggled);
         _codeActions = new(this);
+        _referenceLinks = new(this);
+        _linkKeys = MarkdownLinkKeys.Attach(_viewer, () => OpenLink);
         ApplyFlavor();
         // The viewer's template owns a ScrollViewer; the list around it is what scrolls.
         ScrollViewer.SetVerticalScrollBarVisibility(_viewer, ScrollBarVisibility.Disabled);
@@ -55,23 +71,72 @@ public sealed class MarkdownView : ContentControl {
             e.Handled = true;
             if (OpenLink is { } open && open.CanExecute(e.Url)) open.Execute(e.Url);
         };
-        MarkViewSelection.Attach(this, _viewer);
+        MarkViewSelection.Attach(this, _viewer, CopySelectionAsync);
+        AddHandler(PointerMovedEvent, OnPointerMoved, RoutingStrategies.Bubble, handledEventsToo: true);
         ContextFlyout = TextContextMenu.ForMarkdown;
         Content = _viewer;
     }
 
-    public bool HasSelection => MarkViewSelection.HasSelection(_viewer);
+    internal bool IsSelecting => Content is MarkdownViewer && MarkViewSelection.IsSelecting(_viewer);
 
-    public Task CopySelectionAsync() => MarkViewSelection.CopyAsync(_viewer);
+    internal void ExtendSelection(Point pointInView) {
+        if (Content is MarkdownViewer) MarkViewSelection.Extend(_viewer, pointInView);
+    }
 
-    public void SelectAll() => _viewer.SelectAll();
+    void OnPointerMoved(object? sender, PointerEventArgs e) {
+        var tip = FindHyperlinkAt(_viewer, e.GetPosition(_viewer))?.NavigateUri?.ToString()
+            ?? ImageUnder(e.Source as Visual)?.Target;
+        if (!string.Equals(ToolTip.GetTip(_viewer) as string, tip, StringComparison.Ordinal))
+            ToolTip.SetTip(_viewer, tip);
+    }
+
+    static MarkdownImage? ImageUnder(Visual? visual) {
+        for (; visual is not null && visual is not MarkdownViewer; visual = visual.GetVisualParent())
+            if (visual is MarkdownImage image) return image;
+        return null;
+    }
+
+    [UnsafeAccessor(UnsafeAccessorKind.Method, Name = "FindHyperlinkAt")]
+    static extern MarkdownHyperlink? FindHyperlinkAt(MarkdownViewer viewer, Point point);
+
+    public bool HasSelection => Content is SelectableTextBlock plain
+        ? !string.IsNullOrEmpty(plain.SelectedText)
+        : MarkViewSelection.HasSelection(_viewer);
+
+    /// The fallback's own Copy is fire-and-forget, so its clipboard write is awaited here instead.
+    public async Task CopySelectionAsync() {
+        if (Content is not SelectableTextBlock plain) {
+            await MarkViewSelection.CopyAsync(_viewer);
+            return;
+        }
+        if (plain.SelectedText is not { Length: > 0 } text || TopLevel.GetTopLevel(plain)?.Clipboard is not { } clipboard) return;
+        await clipboard.SetTextAsync(text);
+    }
+
+    public void SelectAll() {
+        if (Content is SelectableTextBlock plain) plain.SelectAll();
+        else _viewer.SelectAll();
+    }
 
     /// Clearing first is what makes a build of the same text happen at all: the viewer renders on
     /// a change, and the markdown it already holds is not one.
+    /// Markdig throws from the parse for text nested past its depth limit, with no type of its own to
+    /// catch; that text shows as plain source, and the viewer is left holding nothing so a pipeline
+    /// change cannot re-throw.
     void Render() {
+        _linkKeys.Clear();
+        if (ToolTip.GetTip(_viewer) is not null) ToolTip.SetTip(_viewer, null);
         if (_viewer.Markdown == Text) _viewer.Markdown = null;
-        _viewer.Markdown = Text;
+        try {
+            _viewer.Markdown = Text;
+            Content = _viewer;
+        } catch (ArgumentException e) when (e.Message.Contains("too deeply nested", StringComparison.Ordinal)) {
+            _viewer.Markdown = null;
+            Content = new SelectableTextBlock { Text = Text, TextWrapping = TextWrapping.Wrap };
+        }
     }
+
+    internal string? KeyboardLinkUrl => _linkKeys.CurrentUrl;
 
     public string? Text {
         get => GetValue(TextProperty);
@@ -88,16 +153,23 @@ public sealed class MarkdownView : ContentControl {
         set => SetValue(FlavorProperty, value);
     }
 
+    public string? ReferenceBase {
+        get => GetValue(ReferenceBaseProperty);
+        set => SetValue(ReferenceBaseProperty, value);
+    }
+
     public ICommand? RunCode {
         get => GetValue(RunCodeProperty);
         set => SetValue(RunCodeProperty, value);
     }
 
     void ApplyFlavor() {
+        _linkKeys.Clear();
         _details.Clear();
         _viewer.Extensions.Clear();
         if (Flavor == MarkdownFlavor.GitHub) {
             _viewer.Extensions.Add(KcapMarkdownExtension.GitHub);
+            _viewer.Extensions.Add(_referenceLinks);
             _viewer.Extensions.Add(_detailsExtension);
         } else {
             _viewer.Extensions.Add(KcapMarkdownExtension.Chat);

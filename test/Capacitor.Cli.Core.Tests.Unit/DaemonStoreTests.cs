@@ -112,4 +112,79 @@ public class DaemonStoreTests {
 
         await Assert.That(daemons.Store.SocketPath(longestNameInUse).Length).IsLessThanOrEqualTo(103);
     }
+
+    /// <summary>Pins that cleanup takes everything a daemon leaves, including state with no daemon file
+    /// beside it, a half-written temp file and a daemon named like another's lock, then the directory.</summary>
+    [Test]
+    public async Task DeleteAll_removes_every_entry_and_the_directory() {
+        using var daemons = new TempDaemonStore();
+        daemons.CreateFile("vscode.lock", "x");
+        daemons.CreateFile("vscode.pid", "1");
+        daemons.CreateFile("vscode.service-txn.tmp", "{");
+        daemons.CreateFile("vscode/consent.json", "{}");
+        daemons.CreateFile("affirmed/reviewers.json", "{}");
+        daemons.CreateFile("old.start");
+        daemons.CreateFile("foo.lock.pid", "1");
+        daemons.CreateFile("foo.lock/consent.json", "{}");
+
+        await Assert.That(daemons.Store.DeleteAll()).IsTrue();
+        await Assert.That(Directory.Exists(daemons.Directory)).IsFalse();
+    }
+
+    /// <summary>Pins that a held lock stops the whole cleanup: unlinking it would let the next taker lock
+    /// a fresh file while the holder still runs.</summary>
+    [Test]
+    [Arguments("busy.lock")]
+    [Arguments("busy.start")]
+    [Arguments("busy.service-lock")]
+    public async Task DeleteAll_deletes_nothing_while_a_lock_is_held(string lockFile) {
+        using var daemons = new TempDaemonStore();
+        var pid   = daemons.CreateFile("busy.pid", "1");
+        var state = daemons.CreateFile("busy/consent.json", "{}");
+        var held  = daemons.CreateFile(lockFile, "x");
+
+        bool gone;
+        using (new FileStream(held, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            gone = daemons.Store.DeleteAll();
+
+        await Assert.That(gone).IsFalse();
+        await Assert.That(File.Exists(held)).IsTrue();
+        await Assert.That(File.Exists(pid)).IsTrue();
+        await Assert.That(File.Exists(state)).IsTrue();
+    }
+
+    /// <summary>Pins that a cleanup stopped by a held lock leaves every other lock file too: deleting one
+    /// would strip a stopped daemon's state of its lock.</summary>
+    [Test]
+    public async Task DeleteAll_keeps_earlier_locks_when_a_later_one_is_held() {
+        using var daemons = new TempDaemonStore();
+        var idleLock = daemons.CreateFile("aaa.lock", "x");
+        var idlePid  = daemons.CreateFile("aaa.pid", "1");
+        var busyLock = daemons.CreateFile("zzz.lock", "x");
+
+        bool gone;
+        using (new FileStream(busyLock, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            gone = daemons.Store.DeleteAll();
+
+        await Assert.That(gone).IsFalse();
+        await Assert.That(File.Exists(idleLock)).IsTrue();
+        await Assert.That(File.Exists(idlePid)).IsTrue();
+        await Assert.That(daemons.Store.DeleteAll()).IsTrue();
+    }
+
+    /// <summary>Pins that a link in the directory is removed, never followed: its target, wherever it is,
+    /// survives, and a dangling one does not stop the cleanup.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task DeleteAll_removes_links_without_touching_their_targets() {
+        using var daemons = new TempDaemonStore();
+        using var outside = new TempDir("outside");
+        var target = outside.CreateFile("keep.lock", "mine");
+        File.CreateSymbolicLink(Path.Combine(daemons.Directory, "evil.lock"), target);
+        File.CreateSymbolicLink(Path.Combine(daemons.Directory, "gone.pid"), Path.Combine(outside.Path, "missing"));
+        Directory.CreateSymbolicLink(Path.Combine(daemons.Directory, "state"), outside.Path);
+
+        await Assert.That(daemons.Store.DeleteAll()).IsTrue();
+        await Assert.That(await File.ReadAllTextAsync(target)).IsEqualTo("mine");
+        await Assert.That(Directory.Exists(daemons.Directory)).IsFalse();
+    }
 }

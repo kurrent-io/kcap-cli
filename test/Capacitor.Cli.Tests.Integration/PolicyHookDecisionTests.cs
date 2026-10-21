@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using WireMock.Logging;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -35,6 +36,8 @@ public class PolicyHookDecisionTests : IDisposable {
         _server.Given(Request.Create().UsingPost()).RespondWith(Response.Create().WithStatusCode(200));
     }
 
+    List<ILogEntry> Posted(string path) => _server.FindLogEntries(Request.Create().WithPath(path).UsingPost()).ToList();
+
     async Task<(int ExitCode, string Stdout)> RunHookAsync(string payload) {
         var psi = KcapProcess.StartInfo(Daemons.Store, Config.Root, "hook", "--claude", "--no-update-check");
         psi.WorkingDirectory = Config.Directory;
@@ -66,16 +69,23 @@ public class PolicyHookDecisionTests : IDisposable {
         var decision = JsonNode.Parse(stdout)!["hookSpecificOutput"]!["decision"]!;
         await Assert.That(decision["behavior"]!.GetValue<string>()).IsEqualTo("deny");
 
-        // Force the drain: delete the cross-process throttle stamp so a second spawn's
-        // pre-dispatch drain pass (Program.cs's centralized one) does not skip as "too recent".
-        File.Delete(Config.Root.Path("spool", ".last-drain"));
+        // A hook's drain pass is budgeted and leaves whatever it could not deliver spooled for the
+        // next hook, so on a loaded runner one Stop may deliver only part of the backlog.
         var stopPayload = $$"""{"hook_event_name":"Stop","session_id":"{{Sid}}","cwd":"{{Config.Directory}}"}""";
-        var (stopExit, _) = await RunHookAsync(stopPayload);
-        await Assert.That(stopExit).IsEqualTo(0);
+        var events      = Posted("/hooks/policy-decision");
+        var snapshots   = Posted("/hooks/policy-snapshot");
+        for (var stop = 0; stop < 5 && (events.Count == 0 || snapshots.Count == 0); stop++) {
+            // Force the drain: delete the cross-process throttle stamp so a second spawn's
+            // pre-dispatch drain pass (Program.cs's centralized one) does not skip as "too recent".
+            File.Delete(Config.Root.Path("spool", ".last-drain"));
+            var (stopExit, _) = await RunHookAsync(stopPayload);
+            await Assert.That(stopExit).IsEqualTo(0);
 
-        var events = _server.FindLogEntries(Request.Create().WithPath("/hooks/policy-decision").UsingPost());
+            events    = Posted("/hooks/policy-decision");
+            snapshots = Posted("/hooks/policy-snapshot");
+        }
+
         await Assert.That(events.Count).IsEqualTo(1);
-        var snapshots = _server.FindLogEntries(Request.Create().WithPath("/hooks/policy-snapshot").UsingPost());
         await Assert.That(snapshots.Count).IsEqualTo(1);
 
         // Route + count alone would pass for a wrong seam, a mangled session_id, or a swapped

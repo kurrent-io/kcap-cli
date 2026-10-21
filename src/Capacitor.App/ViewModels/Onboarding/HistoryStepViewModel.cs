@@ -21,6 +21,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<IReadOnlyList<HarnessId>>    _inScope;
     readonly Action<Action>                    _post;
     readonly TimeProvider                      _time;
+    readonly Func<bool>                        _onLocalPath;
 
     IReadOnlyList<HarnessId>? _discoveredFor;
     HistoryState              _state = HistoryState.Looking;
@@ -30,11 +31,13 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     CancellationTokenSource?  _discovery;
 
     public HistoryStepViewModel(
-            IKcapCli cli, Func<IReadOnlyList<HarnessId>> inScope, Action<Action> post, string machineName, TimeProvider time) {
-        _cli        = cli;
-        _inScope    = inScope;
-        _post       = post;
-        _time       = time;
+            IKcapCli cli, Func<IReadOnlyList<HarnessId>> inScope, Action<Action> post, string machineName, TimeProvider time,
+            Func<bool>? onLocalPath = null) {
+        _cli         = cli;
+        _inScope     = inScope;
+        _post        = post;
+        _time        = time;
+        _onLocalPath = onLocalPath ?? (() => false);
         MachineName = machineName;
     }
 
@@ -45,7 +48,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public string       SkipLabel  => "Not now";
 
     public string Lede =>
-        "Capacitor uploads the transcripts your harnesses have already written, so your past work is searchable " +
+        "kcap uploads the transcripts your harnesses have already written, so your past work is searchable " +
         "from day one. Nothing leaves this machine until you choose.";
 
     public string MachineName { get; }
@@ -62,6 +65,10 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(Skippable));
             this.RaisePropertyChanged(nameof(CanContinue));
             this.RaisePropertyChanged(nameof(TitlingOffered));
+            this.RaisePropertyChanged(nameof(DeclineVisible));
+            this.RaisePropertyChanged(nameof(DeclineNote));
+            this.RaisePropertyChanged(nameof(CloudDeclineVisible));
+            this.RaisePropertyChanged(nameof(LocalDeclineVisible));
             Restate();
         }
     }
@@ -70,7 +77,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool HasRepos => State == HistoryState.Repos;
 
     /// The one line an empty arm says instead of a list.
-    public string? EmptyMessage => State switch {
+    public string? EmptyMessage => _onLocalPath() ? LocalEmptyMessage : State switch {
         HistoryState.NoHarness =>
             "No harnesses were connected in this setup. Go back to connect one, or run kcap import later.",
         HistoryState.NoHistory =>
@@ -79,6 +86,18 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Run kcap remap, then kcap import.",
         HistoryState.Unreadable =>
             $"Could not read history on {MachineName}. Try kcap import --discover, then kcap import.",
+        _ => null,
+    };
+
+    string? LocalEmptyMessage => State switch {
+        HistoryState.NoHarness =>
+            "No harnesses were connected in this setup. Go back to connect one, or import later from Help and support → Set up kcap.",
+        HistoryState.NoHistory =>
+            $"No history on {MachineName} to import. New sessions will record as they happen.",
+        HistoryState.OnlyUnmatched =>
+            $"Found {SessionCount(_unmatched)} on {MachineName}, but none matched a repository. Those sessions stay on this Mac.",
+        HistoryState.Unreadable =>
+            $"Could not read history on {MachineName}. Import it later from Help and support → Set up kcap.",
         _ => null,
     };
 
@@ -92,7 +111,9 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public IReadOnlyList<HistoryWindowOption> Windows => _windows;
 
     public string? UnmatchedNote =>
-        HasRepos && _unmatched > 0 ? $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them." : null;
+        !HasRepos || _unmatched == 0 ? null
+        : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on this Mac."
+        :                              $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them.";
 
     /// Titling runs your own agent, so it is a choice only where a harness that titles is in scope.
     public bool TitlingOffered => HasRepos && FromHarnesses.Any(h => h is HarnessId.Claude or HarnessId.Codex);
@@ -115,6 +136,18 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool CanContinue => !Looking;
 
     public bool DeclineVisible => HasRepos;
+
+    public const string CloudDeclineNote =
+        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can widen the window later with kcap import.";
+
+    public const string LocalDeclineNote =
+        "Not now means kcap starts its history from today. Nothing is deleted either way, and you can import more later from Help and support → Set up kcap.";
+
+    public string? DeclineNote => !DeclineVisible ? null : _onLocalPath() ? LocalDeclineNote : CloudDeclineNote;
+
+    // The cloud note names its command in the monospace font, so the view writes that one itself.
+    public bool CloudDeclineVisible => DeclineVisible && !_onLocalPath();
+    public bool LocalDeclineVisible => DeclineVisible && _onLocalPath();
     public bool ImportStarted => Run is { State: ImportRunState.Running or ImportRunState.Finished };
 
     /// The import this page started, for the pages after it to report on.

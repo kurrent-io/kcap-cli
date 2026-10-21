@@ -57,6 +57,11 @@ static class SystemdUnit {
     public static string[] IsActiveArgs(string id)  => ["--user", "is-active", UnitName(id)];
     public static string[] IsEnabledArgs(string id) => ["--user", "is-enabled", UnitName(id)];
     public static string[] NeedDaemonReloadArgs(string id) => ["--user", "show", "--property=NeedDaemonReload", "--value", UnitName(id)];
+    public static string[] MainPidArgs(string id) => ["--user", "show", "--property=MainPID", "--value", UnitName(id)];
+
+    /// <summary>Reads <see cref="MainPidArgs"/> output: null when the unit has no main process (systemd prints 0).</summary>
+    public static int? MainPid(string output) =>
+        int.TryParse(output.Trim(), out var pid) && pid > 0 ? pid : null;
 
     /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
     public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
@@ -126,6 +131,31 @@ static class SystemdUnit {
 
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");
 
+    /// <summary>The <c>Environment=</c> assignments of a rendered unit, reversing <see cref="EnvAssignment"/>.</summary>
+    public static Dictionary<string, string> EnvFromUnit(string unitText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in unitText.Split('\n')) {
+            var line = raw.Trim();
+            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
+            var assignment = Unquote(line["Environment=".Length..]);
+            var eq = assignment.IndexOf('=');
+            if (eq <= 0) continue;
+            env[assignment[..eq]] = assignment[(eq + 1)..].Replace("%%", "%");
+        }
+        return env;
+    }
+
+    static string Unquote(string s) {
+        if (s.Length == 0 || s[0] != '"') return s;
+        var sb = new StringBuilder();
+        for (var i = 1; i < s.Length; i++) {
+            if (s[i] == '\\' && i + 1 < s.Length) { sb.Append(s[++i]); continue; }
+            if (s[i] == '"') break;
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
+
     // ── systemd value/argument quoting ──
     // systemd splits Environment= and ExecStart on unquoted whitespace, so any
     // value/path with a space must be double-quoted (with \ and " escaped).
@@ -151,7 +181,7 @@ static class SystemdUnit {
     ///
     /// <para><see cref="FirstToken"/> reverses this, so <c>daemon doctor</c> still recovers the real path.</para>
     /// </summary>
-    static string QuoteArg(string a) {
+    internal static string QuoteArg(string a) {
         // No raw control character survives here, not only the line breaks. A newline is the worst case — the
         // line ends there and systemd reads the remainder as the next directive — but quoting does not make
         // U+0001, a backspace or a vertical tab valid unit syntax either, and this writer has no encoder for
@@ -191,6 +221,6 @@ static class SystemdUnit {
     static string EscapeExpansions(string s) => s.Replace("%", "%%").Replace("$", "$$");
 
     /// <summary>An <c>Environment=</c> assignment; the whole <c>KEY=VALUE</c> is quoted when VALUE needs it.</summary>
-    static string EnvAssignment(string key, string value) =>
+    internal static string EnvAssignment(string key, string value) =>
         NeedsQuote(value) ? $"\"{key}={Esc(value)}\"" : $"{key}={value}";
 }

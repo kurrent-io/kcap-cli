@@ -1,3 +1,4 @@
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -50,6 +51,9 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) => bind().ServiceStatusAsync(ct);
 
+    public Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) =>
+        bind().ServiceStatusAsync(daemonName, ct);
+
     public Task<bool> SupportsServiceRetireAsync(CancellationToken ct) => bind().SupportsServiceRetireAsync(ct);
 
     public Task<ProcessResult> ServiceStartVerifiedAsync(CancellationToken ct) => bind().ServiceStartVerifiedAsync(ct);
@@ -70,4 +74,13 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) =>
         bind().ImportAsync(request, onLine, ct);
+
+    public Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
+        bind().SetupLocalAsync(embeddings, onLine, interrupt, ct);
+
+    public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
+        bind().LocalUpgradeAsync(onLine, interrupt, ct);
+
+    public Task<ProcessResult> LocalStartAsync(CancellationToken ct) => bind().LocalStartAsync(ct);
 }

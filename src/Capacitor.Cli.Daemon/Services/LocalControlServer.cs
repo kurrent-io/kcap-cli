@@ -14,7 +14,7 @@ internal sealed partial class LocalControlServer(
         DaemonConfig config, AgentOrchestrator orchestrator,
         RestartCoordinator restart, LaunchConsentIpc consentIpc, PermissionIpc permissionIpc, DaemonStatusIpc statusIpc,
         DaemonSettingsIpc settingsIpc, AdmissionFenceIpc fenceIpc,
-        ILogger<LocalControlServer> logger
+        DaemonShutdownIpc shutdownIpc, ILogger<LocalControlServer> logger
     ) : BackgroundService {
     protected override async Task ExecuteAsync(CancellationToken ct) {
         var path = config.Store.SocketPath(config.Name);
@@ -45,7 +45,11 @@ internal sealed partial class LocalControlServer(
             switch (first.Type) {
                 case FrameType.Spawn:  await orchestrator.HandleLocalSpawnAsync(first, stream, ct); break;
                 case FrameType.Attach: await orchestrator.HandleLocalAttachAsync(first.Text, stream, ct); break;
-                case FrameType.List:   await orchestrator.HandleLocalListAsync(first.Text == LocalFrame.ListTitleColumn, stream, ct); break;
+                case FrameType.AttachWithRuntime: await orchestrator.HandleLocalAttachAsync(first.Text, stream, ct, reportRuntime: true); break;
+                case FrameType.List:
+                    await orchestrator.HandleLocalListAsync(
+                        first.Text == LocalFrame.ListTitleColumn, first.Text == LocalFrame.ListStateColumn, stream, ct);
+                    break;
                 case FrameType.Stop:   await orchestrator.HandleLocalStopAsync(first.Text, stream, ct); break;
                 case FrameType.StopV2: {
                     (bool force, string id) stop;
@@ -78,11 +82,25 @@ internal sealed partial class LocalControlServer(
                 case FrameType.SendTextWithAttachments: await orchestrator.HandleLocalSendTextWithAttachmentsAsync(first.Text, stream, ct); break;
                 case FrameType.DaemonSettingsPut: await settingsIpc.HandlePutAsync(first.Text, stream, ct); break;
                 case FrameType.AdmissionFenceAcquire: await fenceIpc.HandleAcquireAsync(first.Text, stream, ct); break;
-                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire, got {first.Type}"), ct); break;
+                case FrameType.Shutdown: await shutdownIpc.HandleAsync(first.Text, stream, ct); break;
+                case FrameType.AgentResume: await HandleAgentResumeAsync(first.Text, stream, ct); break;
+                default: await FrameCodec.WriteAsync(stream, LocalFrame.Error($"expected Spawn/Attach/AttachWithRuntime/List/Stop/StopV2/Restart/ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut/ConsentSubscribeV2/ConsentResolveV2/ConsentRulesPutV2/PermissionSubscribe/PermissionResolve/Hello/StatusSubscribe/SendText/SendTextWithAttachments/DaemonSettingsPut/AdmissionFenceAcquire/Shutdown/AgentResume, got {first.Type}"), ct); break;
             }
         } catch (Exception ex) when (ex is not OperationCanceledException) {
             LogConnectionError(ex);
         }
+    }
+
+    async Task HandleAgentResumeAsync(string agentId, Stream stream, CancellationToken ct) {
+        LocalFrame reply;
+
+        try {
+            reply = LocalFrame.AgentResumeAck(await orchestrator.ResumeInterruptedAsync(agentId, ct));
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            reply = LocalFrame.Error($"the resume ledger could not be written: {ex.Message}");
+        }
+
+        await FrameCodec.WriteAsync(stream, reply, ct);
     }
 
     async Task HandleRestartAsync(string mode, Stream stream, CancellationToken ct) {
@@ -91,14 +109,14 @@ internal sealed partial class LocalControlServer(
         // Bare "now" refuses while busy (don't silently queue); "when-idle"/"force" accept.
         if (mode is "now" && restart.IsBusy()) {
             await FrameCodec.WriteAsync(stream,
-                LocalFrame.Error("daemon busy — agents running or eval in progress; use --when-idle or --force"), ct);
+                LocalFrame.Error("daemon busy — an eval, a launch in admission or a flow participant mid-round; use --when-idle or --force"), ct);
 
             return;
         }
 
         // RequestRestart evaluates immediately and reports what actually happened, so the
         // ack reflects reality (queued vs restarting vs failed vs manual-restart-required).
-        var reply = restart.RequestRestart(force) switch {
+        var reply = restart.RequestRestart(force, whenIdle: mode is "when-idle") switch {
             RestartRequestResult.Restarting     => LocalFrame.RestartAck("restarting"),
             RestartRequestResult.Queued         => LocalFrame.RestartAck("queued"),
             RestartRequestResult.Failed         => LocalFrame.Error("restart failed to start; the daemon will retry"),

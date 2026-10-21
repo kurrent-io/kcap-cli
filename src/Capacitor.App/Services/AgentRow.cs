@@ -22,7 +22,11 @@ public sealed record AgentRow(
         // The daemon's count of running subagents; null on a remote or pending row.
         int? LiveSubagents = null,
         // A usage-limit question or notice from the local daemon. Null on a remote or pending row.
-        UsageLimitNoticeDto? UsageLimit = null) {
+        UsageLimitNoticeDto? UsageLimit = null,
+        // The select dialog on the local agent's terminal. Null on a remote or pending row.
+        TerminalDialogDto? TerminalDialog = null,
+        // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
+        string? Interruption = null) {
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -31,7 +35,8 @@ public sealed record AgentRow(
         WorktreePath: dto.WorktreePath, WorkLocation: dto.WorkLocation, BorrowedFrom: dto.BorrowedFrom,
         MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
         CheckoutKey: ViewModels.SessionRailViewModel.WorktreeKeyFor(dto), CheckoutLabel: "",
-        AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents, UsageLimit: dto.UsageLimit);
+        AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents, UsageLimit: dto.UsageLimit,
+        TerminalDialog: dto.TerminalDialog, Interruption: dto.Interruption);
 
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";
@@ -57,7 +62,7 @@ public sealed record AgentRow(
     /// A launch the local daemon is still starting: no session, no worktree yet, and it opens as
     /// a local workspace because the daemon will publish it as one.
     public static AgentRow FromPending(PendingLaunchDto dto, RepoIdentity repo) => new(
-        Key: $"pending:{dto.Id}", Origin: AgentOrigin.Pending, Id: dto.Id, SessionId: null, Kind: "agent",
+        Key: $"pending:{dto.Id}", Origin: AgentOrigin.Pending, Id: dto.Id, SessionId: null, Kind: dto.Kind ?? "agent",
         Vendor: dto.Vendor, Status: "Starting", CreatedAt: dto.CreatedAt, RepoPath: dto.RepoPath,
         Title: dto.Title, Model: null, RequesterDisplay: null,
         WorktreePath: null, WorkLocation: null, BorrowedFrom: null,

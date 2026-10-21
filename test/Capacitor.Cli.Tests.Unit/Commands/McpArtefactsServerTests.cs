@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
+using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -325,18 +326,71 @@ public class McpArtefactsServerTests {
     }
 
     [Test]
-    public async Task A_request_with_a_duplicated_property_is_dropped_rather_than_ending_the_loop() {
-        // The duplicate surfaces when the property table is first read, not in Parse.
-        await Assert.That(McpArtefactsServer.TryParseRequest("""{"jsonrpc":"2.0","id":1,"id":2,"method":"tools/list"}""")).IsNull();
-        await Assert.That(McpArtefactsServer.TryParseRequest("""[1,2]""")).IsNull();
-        await Assert.That(McpArtefactsServer.TryParseRequest("""not json""")).IsNull();
-        await Assert.That(McpArtefactsServer.TryParseRequest("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""")).IsNotNull();
-    }
-
-    [Test]
     public async Task The_instructions_tell_an_agent_the_page_cannot_reach_the_network() {
         // The one thing that fails silently: an external URL renders as nothing under the sandbox.
         await Assert.That(McpArtefactsServer.ServerInstructions).Contains("data URI");
+    }
+
+    // ── a request for "an artifact" ───────────────────────────────────────────────────
+
+    public static IEnumerable<Func<(string Surface, string Text)>> ArtifactSteeringSurfaces() {
+        yield return () => ("server instructions", McpArtefactsServer.ServerInstructions);
+        yield return () => ("publish_page description",
+                            McpArtefactsServer.BuildToolsList().Single(t => t.Name == "publish_page").Description);
+        yield return () => ("canonical kcap-pages description",
+                            KcapMcpServers.All.Single(s => s.Name == "kcap-pages").Description!);
+        yield return () => ("bundled .mcp.json description",
+                            JsonNode.Parse(File.ReadAllText(Path.Combine(RepoTree.KcapDir(), ".mcp.json")))!
+                                ["mcpServers"]!["kcap-pages"]!["description"]!.GetValue<string>());
+        yield return () => ("pages skill description",
+                            File.ReadAllText(Path.Combine(RepoTree.SkillsSource(), "pages", "SKILL.md")));
+    }
+
+    /// <summary>Asked for "an artifact", a harness with kcap installed makes a page. Every surface
+    /// the harnesses read has to claim that word: a harness whose own artifact tool is described
+    /// at length takes the request for itself whenever kcap's tools say nothing about it.</summary>
+    [Test]
+    [MethodDataSource(nameof(ArtifactSteeringSurfaces))]
+    public async Task Every_steering_surface_claims_a_request_for_an_artifact(string surface, string text) =>
+        await Assert.That(text.Contains("artifact", StringComparison.OrdinalIgnoreCase)).IsTrue().Because(surface);
+
+    /// <summary>One JSON block, not two content items: harnesses join a result's blocks into one
+    /// string, and the desktop app's page card parses that string as a single JSON document.</summary>
+    [Test]
+    public async Task A_published_page_comes_back_as_one_json_block_carrying_the_follow_up() {
+        var response = JsonNode.Parse(McpArtefactsServer.BuildPublishResult(
+            JsonValue.Create(7)!, """{"artefact":{"artefact_id":"a1","url":"https://kcap.test/pages/a1"}}"""))!;
+
+        var content = response["result"]!["content"]!.AsArray();
+
+        await Assert.That(content.Count).IsEqualTo(1);
+
+        var result = JsonNode.Parse(content[0]!["text"]!.GetValue<string>())!.AsObject();
+
+        await Assert.That(result["page"]!["page_id"]!.GetValue<string>()).IsEqualTo("a1");
+        await Assert.That(result["follow_up"]!.GetValue<string>()).IsEqualTo(McpArtefactsServer.PublishFollowUp);
+        await Assert.That(response["result"]!["isError"]).IsNull();
+    }
+
+    /// <summary>A body that is not JSON comes back as it is, the way the renamer treats it; the
+    /// follow-up has nowhere to go and a thrown parse would fail a publish the server accepted.</summary>
+    [Test]
+    public async Task A_publish_body_that_is_not_json_comes_back_untouched() {
+        var response = JsonNode.Parse(McpArtefactsServer.BuildPublishResult(JsonValue.Create(7)!, "accepted"))!;
+
+        var content = response["result"]!["content"]!.AsArray();
+
+        await Assert.That(content.Count).IsEqualTo(1);
+        await Assert.That(content[0]!["text"]!.GetValue<string>()).IsEqualTo("accepted");
+    }
+
+    /// <summary>The link always reaches the user in the reply; the browser tool is an addition
+    /// where the harness has one, never a replacement, and never a system browser — a hosted
+    /// agent's host is not the user's machine.</summary>
+    [Test]
+    public async Task The_follow_up_asks_for_the_link_in_the_reply_and_the_harness_browser_tool() {
+        await Assert.That(McpArtefactsServer.PublishFollowUp).Contains("link");
+        await Assert.That(McpArtefactsServer.PublishFollowUp).Contains("browser tool");
     }
 
     static async Task WithoutAmbientSessionAsync(Func<Task> body) {

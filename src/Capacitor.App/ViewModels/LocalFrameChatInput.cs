@@ -63,6 +63,9 @@ internal sealed class LocalFrameChatInput : ChatInput {
         SendAvailability.Sending     => "Sending…",
         SendAvailability.Unsupported => "Update the daemon to send messages from the app",
         SendAvailability.Ended       => "This session has ended",
+        // An agent with no process: the daemon is bringing it back, or gave up.
+        _ when _presence.Dto?.Status == "Interrupted" => TerminalChatInput.InterruptedHint(_presence.Dto.Interruption),
+        _ when _presence.Dto?.Status == "Resuming" => "Waiting for the agent to resume after a daemon restart…",
         _                            => "Connecting to the agent…",
     };
 

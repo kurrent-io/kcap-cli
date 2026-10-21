@@ -26,7 +26,7 @@ public class DaemonStatusServingTests {
     [Test]
     public async Task DescribePriority_names_the_word_and_the_daemon_for_the_background_band() {
         await Assert.That(DaemonCommands.DescribePriority("alexey", "adaptive"))
-            .IsEqualTo("  priority: loaded as adaptive — background priority; run `kcap daemon service refresh --name alexey --force` to reload (ends this daemon's hosted agents)");
+            .IsEqualTo("  priority: loaded as adaptive — background priority; run `kcap daemon service refresh --name alexey --force` to reload (its agents are stopped and resumed)");
         await Assert.That(DaemonCommands.DescribePriority("alexey", "background")).IsNotNull();
     }
 

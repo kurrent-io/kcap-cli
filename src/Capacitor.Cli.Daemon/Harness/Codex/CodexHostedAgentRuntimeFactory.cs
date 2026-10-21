@@ -4,6 +4,7 @@ using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.Cli.Daemon.Harness.Codex;
 
@@ -72,6 +73,21 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
 
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) {
+        var dir = CodexModelCatalogProbe.DirectoryFor(_config.Store.StateDirectory(_config.Name));
+
+        return CodexModelCatalogProbe.RunAsync(
+            () => {
+                Directory.CreateDirectory(dir);
+                return _spawnFactory(_pty.CliPath, [], null, dir, new Dictionary<string, string>(), _config, _loggerFactory);
+            },
+            string.IsNullOrEmpty(_config.Version) ? "0.0.0" : _config.Version, _time, _logger, ct);
+    }
+
+    /// <summary>Codex rewrites its cached catalog when it refetches it, and its auth file when the
+    /// account changes; either can change the models this account may launch.</summary>
+    public IReadOnlyList<string> CatalogFingerprintPaths => [_launcher.Paths.ModelsCache, _launcher.Paths.AuthJson];
+
     // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
     // the only one whose fetch happens alongside a live, write-contained process: the store keeps
     // that write outside every cwd it could steer. Protected kinds fetch before the process exists.
@@ -87,20 +103,26 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     /// negative form would sweep PR review along with it and widen the opt-in past what it names. The
     /// interactive branch reads <see cref="CodexTransportDecision.InteractiveTransport"/>, the same
     /// function the daemon advertises to the server — which refuses a registration whose transport
-    /// differs from the advertisement.</para></summary>
+    /// differs from the advertisement.</para>
+    ///
+    /// <para>A resume names the transport its agent ran on and keeps it, whatever the interactive
+    /// setting: a local session was a terminal and must stay attachable.</para></summary>
     internal bool UsesAppServer(RuntimeStartContext ctx) =>
         _config.CodexAppServerActive
-     && (ctx.IsReviewFlow
-         || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer));
+     && ctx.RequestedTransport switch {
+            CodexTransportDecision.Pty       => false,
+            CodexTransportDecision.AppServer => true,
+            _ => ctx.IsReviewFlow
+              || (!ctx.IsReview && CodexTransportDecision.InteractiveTransport(_config) == CodexTransportDecision.AppServer)
+        };
+
+    public bool SupportsRestartResume(string? runtimeTransport) => true;
 
     public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
-        // §2.7 B4: resume is app-server-only (thread/resume). A resume request routed to the PTY path can't
-        // be honored and would silently start a FRESH session — forking the transcript, breaking the
-        // never-silently-fork invariant — so fail the launch instead. (Server-side, resume must also be
-        // capability-gated to app-server-capable daemons before B6 activates parking.)
-        if (ctx.ResumeSessionId is not null && !UsesAppServer(ctx))
-            throw new InvalidOperationException(
-                "codex: a resume (ResumeSessionId set) requires the app-server route; refusing to start a fresh PTY session.");
+        // A parked reviewer's transcript is envelope-sourced; a PTY resume would fork it.
+        if (ctx.ResumeSessionId is not null && ctx.IsReviewFlow && !UsesAppServer(ctx))
+            return Task.FromException<HostedRuntimeStart>(
+                new InvalidOperationException("codex: a reviewer resume requires the app-server route; refusing to start a PTY session."));
 
         return UsesAppServer(ctx) ? StartAppServerAsync(ctx, ct) : _pty.StartAsync(ctx, ct);
     }
@@ -110,7 +132,10 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
 
         // Fail-closed hooks preflight + TrustWorktree config, exactly as the PTY path — a missing
         // critical hook throws CodexHooksNotInstalledException for the orchestrator's cleanup path.
-        _launcher.Prepare(launcherCtx);
+        var owned  = launcherCtx.Work == Core.LocalIpc.WorkLocation.OwnedWorktree;
+        var before = owned ? WorktreeManager.StampDaemonPaths(launcherCtx.Worktree.Path) : null;
+        try { _launcher.Prepare(launcherCtx); }
+        finally { if (owned) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path, before); }
 
         var (sandbox, approval) = CodexPosturePolicy.Resolve(ctx.Work, ctx.IsReviewFlow, ctx.CodexPosture);
         var appServerArgs = _launcher.BuildAppServerLaunchArgs(launcherCtx);
@@ -234,6 +259,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             WorkingDirectory       = cwd,
         };
         ApplyChildEnv(psi.Environment, env);
+        WindowsLaunchCommand.Apply(psi, BinaryProbe.FromEnvironment());
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start '{cliPath} {string.Join(' ', argv)}'.");

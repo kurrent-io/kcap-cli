@@ -47,9 +47,18 @@ interface IServiceManager {
     string UnitDirectory { get; }
     IReadOnlyList<GeneratedFile> GenerateFiles(ServiceSpec spec);
     IReadOnlyList<string>        ListInstalled();
+    /// <summary>Null when the units could not be listed, which <see cref="ListInstalled"/> reports as none.</summary>
+    IReadOnlyList<string>?       TryListInstalled() => ListInstalled();
     ServiceStatus                Status(string serviceId);
+    /// <summary>The daemon binary the installed unit names, read without asking the OS supervisor where
+    /// the unit file says it; null when it cannot be read.</summary>
+    string?                      UnitBinary(string serviceId) => Status(serviceId).BinaryPath;
+    /// <summary>The environment baked into the installed unit, read from the file this manager wrote;
+    /// null when no unit is on disk.</summary>
+    IReadOnlyDictionary<string, string>? UnitEnvironment(string serviceId);
     ServiceQuery                 Query(string serviceId);
-    void Install(ServiceSpec spec, bool startNow);
+    /// <summary>False when the OS tool refused the registration, with its reason in <paramref name="error"/>.</summary>
+    bool Install(ServiceSpec spec, bool startNow, out string? error);
     /// <summary>Write + activate only, no leading bootout — the fresh-install half of <see cref="Install"/>
     /// for the verify engine, which classifies the label itself via <see cref="Query"/> and only calls
     /// this on a positive Absent (so there is nothing to boot out). Managers with no distinct verify path

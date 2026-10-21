@@ -88,14 +88,12 @@ sealed class McpFlowResultServer(
         var borrowed       = !string.IsNullOrWhiteSpace(capabilityBase);
         var urlOk = HttpClientExtensions.IsAcceptableUrl(borrowed ? capabilityBase! : baseUrl);
 
-        // The authenticated client is created on the first tools/call, not at startup — mirrors
-        // McpFlowsServer/McpReviewServer: keeps startup local-only (no GET /auth/config, token
-        // load, or stderr re-auth hint) for a server that only ever handles one tool call.
-        // Created on demand into a nullable field (rather than a Lazy<Task>) so a transient
-        // creation failure leaves it null and the next call retries, instead of a faulted task
-        // sticking for the rest of the session. Safe without locking: the stdio loop handles
-        // one request at a time.
-        HttpClient? client = null;
+        // Created on first use, so startup stays local-only. The borrowed path takes a lane that
+        // cannot authenticate rather than one that declines to: its token store lives under a HOME
+        // this process cannot reach.
+        using var sessionClient = new OnDemand<HttpClient>(async () => borrowed
+            ? http.Loopback()
+            : await http.ForSessionAsync());
         var apiRoot = baseUrl.TrimEnd('/');
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
@@ -136,12 +134,7 @@ sealed class McpFlowResultServer(
                 if (toolName is not ("submit_review_result" or "send_flow_message"))
                     return BuildToolResult(callId, $"Error: Unknown tool: {toolName}", isError: true);
 
-                // The borrowed path takes a lane that cannot authenticate rather than one that
-                // declines to: its token store lives under a HOME this process cannot reach, and
-                // reaching for one is what produced the original silent failure.
-                client ??= borrowed
-                    ? http.Loopback()
-                    : await http.ForSessionAsync();
+                var client = await sessionClient.GetAsync();
 
                 var (text, isError) = toolName switch {
                     "submit_review_result" => await SubmitCoreAsync(
@@ -184,43 +177,13 @@ sealed class McpFlowResultServer(
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                try {
-                    request = JsonNode.Parse(line)?.AsObject();
-                } catch {
-                    continue;
-                }
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = request["method"]?.GetValue<string>();
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        // In arrival order: a message must not reach the server after the result that closes its round.
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "flow-result", McpStdioLoop.InArrivalOrder);
 
         return 0;
     }
@@ -260,7 +223,7 @@ sealed class McpFlowResultServer(
         using var response = reply.Response;
 
         if (response is null)
-            return ($"Error: the Capacitor server is unreachable ({reply.Failure}).\n{FallbackHint}", true);
+            return ($"Error: the kcap server is unreachable ({reply.Failure}).\n{FallbackHint}", true);
 
         if (response.IsSuccessStatusCode)
             return ("Result recorded. You may end your reply now.", false);
@@ -383,7 +346,7 @@ sealed class McpFlowResultServer(
         if (response is null)
             // No retry hint: a new call mints a new message_id, so a send that landed unanswered
             // would reach the driver twice.
-            return ($"Error: the Capacitor server is unreachable ({reply.Failure}). The message may or may not have reached the flow driver; sending it again could deliver it twice.", true);
+            return ($"Error: the kcap server is unreachable ({reply.Failure}). The message may or may not have reached the flow driver; sending it again could deliver it twice.", true);
 
         if (response.IsSuccessStatusCode)
             return ("Message sent to the flow driver. It will be delivered with the driver's next flow call — you may continue.", false);

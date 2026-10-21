@@ -228,7 +228,7 @@ public sealed partial class WatcherManager(
         }
     }
 
-    bool PidAlive(string key) => PidAlive(paths, key);
+    internal bool PidAlive(string key) => PidAlive(paths, key);
 
     /// <summary>The pid file names a process that is still this watcher's incarnation, irrespective of
     /// whether it's wedged. A pid file that exists but cannot be read counts as alive: reading it as
@@ -307,11 +307,10 @@ public sealed partial class WatcherManager(
             string? sessionIdOverride = null,
             string? cwd               = null,
             bool    skipTitle         = false,
-            string  vendor            = "claude"
+            string  vendor            = "claude",
+            int?    parentPid         = null
         ) {
-        if (agentId is null && AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
-         && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
-            AgentSessions.OnThisMachine(config).Claim(agentPid, session);
+        if (agentId is null) ClaimAgentProcess(key, vendor, transcriptPath, cwd);
 
         if (IsWatcherAlive(key)) {
             return; // fast path: no lock needed to observe an already-healthy watcher.
@@ -339,8 +338,16 @@ public sealed partial class WatcherManager(
             }
 
             await spawner.SpawnAsync(
-                new WatcherSpawnRequest(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor));
+                new WatcherSpawnRequest(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor, parentPid));
         });
+    }
+
+    /// <summary>Records that the agent process this hook runs under is running <paramref name="key"/>'s
+    /// session, when the vendor's process hosts one session and the hook can see it.</summary>
+    public void ClaimAgentProcess(string key, string vendor, string? transcriptPath = null, string? cwd = null) {
+        if (AgentSessions.HostsOneSession(vendor) && SessionId.Parse(key) is { } session
+         && ProcessHelpers.GetCodingAgentPid(vendor, allowFallback: false) is { } agentPid)
+            AgentSessions.OnThisMachine(config).Claim(agentPid, session, new ClaimOrigin(vendor, Url, transcriptPath, cwd));
     }
 
     public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude") {

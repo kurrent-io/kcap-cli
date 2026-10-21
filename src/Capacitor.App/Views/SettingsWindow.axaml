@@ -4,8 +4,8 @@
         xmlns:views="clr-namespace:Capacitor.App.Views"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
-        Title="Kurrent Capacitor — Settings"
-        Icon="avares://Kurrent Capacitor/Assets/kcap-icon.png"
+        Title="kcap — Settings"
+        Icon="avares://kcap-desktop/Assets/kcap-icon.png"
         Width="540" Height="580" CanResize="False" WindowStartupLocation="CenterOwner"
         Background="{StaticResource KcapCanvasBrush}">
     <Grid Margin="28,20" RowDefinitions="*,Auto">
@@ -33,7 +33,7 @@
                                 </Border>
                             </Grid>
                             <TextBlock Classes="kcapSubtitle"
-                                       Text="Hosted agents and reviews run through this daemon. Rename and capacity each save on their own."
+                                       Text="Hosted agents and reviews run through this daemon. Rename, capacity and resume each save on their own."
                                        TextWrapping="Wrap" />
                         </StackPanel>
 
@@ -76,6 +76,26 @@
                                         HorizontalAlignment="Left" />
                             </StackPanel>
                         </Border>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                    <StackPanel Spacing="5">
+                                        <TextBlock Classes="kcapLabel" Text="Resume agents after a restart" />
+                                        <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                                   Text="A restart or update stops running agents. When this is on, the daemon resumes them as it starts; when off, they wait as interrupted until you run kcap agent resume." />
+                                    </StackPanel>
+                                    <ToggleSwitch x:Name="AutoResumeToggle" Grid.Column="1" Classes="kcapSwitch"
+                                                  IsChecked="{Binding AutoResume, Mode=TwoWay}"
+                                                  AutomationProperties.Name="Resume agents after a restart"
+                                                  VerticalAlignment="Center" />
+                                </Grid>
+                                <TextBlock x:Name="AutoResumeMessageText" Classes="kcapHint" Text="{Binding AutoResumeMessage}"
+                                           TextWrapping="Wrap"
+                                           IsVisible="{Binding AutoResumeMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
@@ -91,7 +111,7 @@
                         <StackPanel Spacing="10">
                             <TextBlock Classes="kcapTitle" Text="Notifications" LineHeight="22" />
                             <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
-                                       Text="Shown only while Kurrent Capacitor is in the background. Your operating system must also allow notifications." />
+                                       Text="Shown only while kcap is in the background. Your operating system must also allow notifications." />
                         </StackPanel>
 
                         <Border x:Name="NotificationAccessNotice"
@@ -160,6 +180,81 @@
                                    Text="{Binding NotificationMessage}" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapDangerBrush}"
                                    IsVisible="{Binding NotificationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="AppearanceTab" Classes="kcapSettingsTab" Header="Appearance"
+                     IsVisible="{Binding Appearance, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Appearance" LineHeight="22" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="Saved on this computer and applied to the main window straight away." />
+                        </StackPanel>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Classes="kcapLabel" Text="Text size" />
+                                    <TextBlock x:Name="TextSizeHint" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Appearance.ShortcutHint, FallbackValue={x:Null}}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <Button x:Name="TextSmallerButton" Classes="kcapChip"
+                                            Command="{Binding Appearance.SmallerCommand, FallbackValue={x:Null}}"
+                                            AutomationProperties.Name="Smaller text" ToolTip.Tip="Smaller text">
+                                        <views:AppIcon Kind="AArrowDown" Size="16" />
+                                    </Button>
+                                    <TextBlock x:Name="TextSizeText" Text="{Binding Appearance.ScaleLabel, FallbackValue={x:Null}}"
+                                               MinWidth="44" TextAlignment="Center" FontSize="13" FontWeight="SemiBold"
+                                               Foreground="{StaticResource KcapTextBrush}" VerticalAlignment="Center" />
+                                    <Button x:Name="TextLargerButton" Classes="kcapChip"
+                                            Command="{Binding Appearance.LargerCommand, FallbackValue={x:Null}}"
+                                            AutomationProperties.Name="Larger text" ToolTip.Tip="Larger text">
+                                        <views:AppIcon Kind="AArrowUp" Size="16" />
+                                    </Button>
+                                    <Button x:Name="TextResetButton" Classes="kcapGhost" Content="Reset"
+                                            Command="{Binding Appearance.ResetCommand, FallbackValue={x:Null}}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="PrivacyTab" Classes="kcapSettingsTab" Header="Privacy"
+                     IsVisible="{Binding Privacy, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
+                    <StackPanel Spacing="16">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Privacy" LineHeight="22" />
+                            <TextBlock Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="Shared with the kcap command line on this computer." />
+                        </StackPanel>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Classes="kcapLabel" Text="Send usage data" />
+                                    <TextBlock x:Name="UsageDataDescription" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Description, FallbackValue={x:Null}}" />
+                                    <TextBlock x:Name="UsageDataOverridden" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Overridden, FallbackValue={x:Null}}"
+                                               IsVisible="{Binding Privacy.Overridden, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                    <TextBlock x:Name="UsageDataHint" Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="{Binding Privacy.Hint, FallbackValue={x:Null}}"
+                                               IsVisible="{Binding Privacy.Hint, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}" />
+                                </StackPanel>
+                                <ToggleSwitch Grid.Column="1" x:Name="UsageDataSwitch" Classes="kcapSwitch" VerticalAlignment="Center"
+                                              AutomationProperties.Name="Send usage data"
+                                              IsEnabled="{Binding Privacy.CanChange, FallbackValue=False}"
+                                              IsChecked="{Binding Privacy.SendUsageData, FallbackValue=False}" />
+                            </Grid>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

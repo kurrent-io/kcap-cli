@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Commands;
 /// <para><b>Two hops, and the split is the security property.</b> Provisioning goes to the auth proxy
 /// with the operator's own WorkOS token; registration goes to the tenant with only the public
 /// <c>client_id</c>. So the secret travels from WorkOS to this terminal and nowhere else — it never
-/// reaches the Capacitor server, which is what makes "no secret is stored by Capacitor" structural
+/// reaches the kcap server, which is what makes "no secret is stored by kcap" structural
 /// rather than a promise. Do not "simplify" this by routing provisioning through the tenant.</para>
 ///
 /// <para><b>The secret is printed once and never persisted.</b> Not written to the config, not to the
@@ -220,7 +220,7 @@ public sealed class MachineCommand(
                 break;
 
             case MachineRegistrationResult.NotPermitted:
-                await Console.Error.WriteLineAsync("You need to be a Capacitor administrator to register a machine.");
+                await Console.Error.WriteLineAsync("You need to be a kcap administrator to register a machine.");
 
                 break;
 
@@ -256,7 +256,7 @@ public sealed class MachineCommand(
         await Console.Error.WriteLineAsync($"  Organization  {provisioned.OrganizationId}");
         await Console.Error.WriteLineAsync();
         await Console.Error.WriteLineAsync("  ── The secret below is shown ONCE. It is not stored anywhere ──");
-        await Console.Error.WriteLineAsync("     Not by this CLI, not by Capacitor. WorkOS will not show it");
+        await Console.Error.WriteLineAsync("     Not by this CLI, not by kcap. WorkOS will not show it");
         await Console.Error.WriteLineAsync("     again. If you lose it, revoke this machine and create a new one.");
         await Console.Error.WriteLineAsync();
 

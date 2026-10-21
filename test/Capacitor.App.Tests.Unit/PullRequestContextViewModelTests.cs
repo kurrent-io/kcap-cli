@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Avalonia.Threading;
+using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
@@ -13,6 +14,42 @@ namespace Capacitor.App.Tests.Unit;
 
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
+    [Test]
+    public Task Link_changes_notify_the_rail_for_initial_discovery_attachments_and_removals() => RunOnUiAsync(async () => {
+        var notifications = new List<string>();
+        var h = new Harness(linksChanged: notifications.Add);
+        try {
+            h.Source.Links = [];
+            h.Source.AccessSeconds = 300;
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Vm.HasListed && !h.Vm.IsReading, what: "initial empty list");
+            await Assert.That(notifications.Count).IsEqualTo(1);
+
+            h.Source.Links = [Link(1)];
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Vm.HasPullRequest && !h.Vm.IsReading, what: "attachment discovered by poll");
+            await Assert.That(notifications.Count).IsEqualTo(2);
+
+            h.Source.Links = [Link(1), Link(2)];
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Vm.Choices.Count == 2 && !h.Vm.IsReading, what: "second attachment");
+            await Assert.That(notifications.Count).IsEqualTo(3);
+
+            h.Source.Links = [Link(2) with { Title = "Updated title" }, Link(1)];
+            var lists = h.Source.Lists;
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Source.Lists > lists && !h.Vm.IsReading, what: "same links reordered");
+            await Assert.That(notifications.Count).IsEqualTo(3);
+
+            h.Source.Links = [];
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+            h.Vm.Refresh();
+            await WaitUntilAsync(() => !h.Vm.HasPullRequest && !h.Vm.IsReading, what: "removal discovered by manual refresh");
+            await Assert.That(notifications).IsEquivalentTo(new[] { "session", "session", "session", "session" });
+        } finally { await h.Dispose(); }
+    });
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]
@@ -42,6 +79,103 @@ public class PullRequestContextViewModelTests {
             release.Set();
             if (entered.IsSet) await Task.Run(() => finished.Wait(TimeSpan.FromSeconds(5)));
             await h.Dispose();
+        }
+    });
+
+    /// A list read before the work context named the primary repository described the session
+    /// without one; the hint arriving lists again, inside the 30-second poll.
+    [Test]
+    public Task The_primary_repository_arriving_lists_again_with_it() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+
+            h.Vm.PrimaryRepositoryChanged();
+            h.Time.Advance(TimeSpan.FromSeconds(3));
+
+            await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "the second list");
+            await Assert.That(h.Source.Descriptions.Select(d => d.Repository)).IsEquivalentTo(new[] { null, repository });
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A refresh queued behind the short gap cannot run while the pane is in the background, so
+    /// hiding the pane drops it; the return lists afresh with the current repository.
+    [Test]
+    public Task A_refresh_queued_when_the_pane_is_hidden_is_dropped_until_it_returns() => RunOnUiAsync(async () => {
+        PullRequestRepository? repository = null;
+        var h = new Harness(primary: () => repository);
+        try {
+            h.Push();
+            await h.Show();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "the first list");
+            repository = new("github", "github.com", "example", "repo", "hash");
+            h.Vm.PrimaryRepositoryChanged();
+            await Assert.That(h.Vm.IsReading).IsTrue();
+
+            h.Vm.SetForeground(false);
+            await Assert.That(h.Vm.IsReading).IsFalse();
+
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 2, what: "the list on return");
+            await Assert.That(h.Source.Descriptions[^1].Repository).IsEqualTo(repository);
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A refresh queued behind a list read that then stops retries has nothing left to run it, so
+    /// it must not keep the card reading.
+    [Test]
+    public Task A_refresh_queued_behind_a_read_that_stops_retries_is_dropped() => RunOnUiAsync(async () => {
+        var h = new Harness(primary: () => new PullRequestRepository("github", "github.com", "example", "repo", "hash"));
+        try {
+            h.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Source.ListFailure = "retries_stopped";
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists == 1, what: "the list read");
+
+            h.Vm.PrimaryRepositoryChanged();
+            h.Source.ListGate.SetResult();
+
+            await WaitUntilAsync(() => h.Vm.Notice.StartsWith("This session's pull requests are unavailable", StringComparison.Ordinal), what: "retries stopped");
+            await Assert.That(h.Vm.IsReading).IsFalse();
+        } finally {
+            await h.Dispose();
+        }
+    });
+
+    /// A card rebuilt for a session it already showed has its list and overview before any read
+    /// lands, and still lists again.
+    [Test]
+    public Task A_reopened_session_shows_its_last_card_while_it_reads_again() => RunOnUiAsync(async () => {
+        var snapshots = new LastReads<PullRequestSnapshot>();
+        var first = new Harness(snapshots: snapshots);
+        try {
+            first.Push();
+            await first.Show();
+        } finally {
+            await first.Dispose();
+        }
+
+        var second = new Harness(snapshots: snapshots);
+        try {
+            second.Source.ListGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            second.Push();
+            second.Vm.SetForeground(true);
+
+            await Assert.That(second.Vm.CanReveal).IsTrue();
+            await Assert.That(second.Vm.HasListed).IsTrue();
+            await WaitUntilAsync(() => second.Source.Lists == 1, what: "the list read again");
+            second.Source.ListGate.SetResult();
+        } finally {
+            await second.Dispose();
         }
     });
 
@@ -137,6 +271,21 @@ public class PullRequestContextViewModelTests {
             await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
             if (duringLookup) await Assert.That(h.Source.Descriptions.Single().Branch).IsEqualTo("another");
         } finally { release.Set(); h.Source.ListGate?.TrySetResult(); await h.Dispose(); }
+    });
+
+    /// A body's GitHub references link only into a github.com repository; elsewhere they stay text.
+    [Test]
+    [Arguments("github", "github.com", "https://github.com/example/repo")]
+    [Arguments("github", "ghe.example", null)]
+    [Arguments("gitlab", "gitlab.com", null)]
+    public Task References_read_against_the_selected_github_repository(string provider, string host, string? expected) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.Links = [FakePullRequestSource.Link(1) with { Provider = provider, Host = host }];
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Selected is not null, what: "a selected PR");
+        await Assert.That(h.Vm.ReferenceBase).IsEqualTo(expected);
+        await h.Dispose();
     });
 
     [Test]
@@ -253,6 +402,8 @@ public class PullRequestContextViewModelTests {
         h.Vm.SetForeground(true);
         await WaitUntilAsync(() => h.Vm.HasChoice && h.Source.Overviews == 1, what: "choice listed, overview pending");
         await Assert.That(h.Vm.ShowsOpenSource).IsFalse();
+        await Assert.That(h.Vm.IsSelectionLoading).IsTrue();
+        await Assert.That(h.Vm.HasNotice).IsFalse();
         overview.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
         await WaitUntilAsync(() => h.Vm.CanDisplay, what: "overview admitted");
         await Assert.That(h.Vm.ShowsOpenSource).IsTrue();
@@ -292,22 +443,220 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
-    public Task Transient_grace_retains_only_the_current_view_and_cannot_open_a_new_section() => RunOnUiAsync(async () => {
+    public Task Transient_grace_retains_cached_sections_and_cannot_open_an_uncached_section() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
         h.Vm.SetReaderVisible(true);
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "checks page cached");
+        await h.Vm.ShowSectionCommand.Execute("overview");
         h.Source.Failure = "transient";
         h.Time.Advance(TimeSpan.FromSeconds(21));
         await h.Vm.RefreshCommand.Execute();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "access refresh fails");
         await Assert.That(h.Vm.CanReveal).IsFalse();
+        await Assert.That(h.Vm.CanNavigate).IsTrue();
+        await Assert.That(h.Vm.HasNotice).IsFalse();
+        await Assert.That(h.Vm.FreshnessDetail).Contains("Couldn't load pull request context");
         await Assert.That(h.Vm.Description).IsEqualTo("Private description");
         await h.Vm.ShowSectionCommand.Execute("reviews");
-        await Assert.That(h.Source.Pages).IsEqualTo(0);
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "overview renewal attempted");
+        await Assert.That(h.Source.Pages).IsEqualTo(1);
+        await Assert.That(h.Vm.Section).IsEqualTo("reviews");
+        await Assert.That(h.Vm.Rows).IsEmpty();
+        await Assert.That(h.Vm.PageNote).Contains("Couldn't load pull request context");
+        h.Source.Failure = null;
+        await h.Vm.ShowSectionCommand.Execute("conversation");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1 && !h.Vm.IsReading, what: "clicking uncached tab renews access and loads section");
+        await Assert.That(h.Vm.Section).IsEqualTo("conversation");
+        await Assert.That(h.Vm.PageNote).IsEmpty();
+        h.Source.Failure = "transient";
+        h.Time.Advance(TimeSpan.FromSeconds(21));
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "access refresh fails again");
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await Assert.That(h.Source.Pages).IsEqualTo(2);
+        await Assert.That(h.Vm.Section).IsEqualTo("checks");
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
         h.Vm.SetReaderVisible(false); h.Vm.SetReaderVisible(true);
-        await Assert.That(h.Vm.Description).IsNull();
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
         h.Time.Advance(TimeSpan.FromMinutes(6)); Dispatcher.UIThread.RunJobs();
         await WaitUntilAsync(() => !h.Vm.IsReading, what: "grace expires");
         await Assert.That(h.Vm.CanDisplay).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments(6, true)]
+    [Arguments(306, false)]
+    public Task A_slow_renewal_retains_the_snapshot_only_within_the_display_grace(int seconds, bool visible) => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Source.Overviews == 2, what: "renewal started");
+        h.Time.Advance(TimeSpan.FromSeconds(seconds));
+        Dispatcher.UIThread.RunJobs();
+        await Assert.That(h.Vm.CanDisplay).IsEqualTo(visible);
+        await Assert.That(h.Vm.Description).IsEqualTo(visible ? "Private description" : null);
+        await Assert.That(h.Vm.HasStaleOverview).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsFalse();
+        renewal.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "renewal settled");
+        await Assert.That(h.Vm.CanReveal).IsTrue();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_denial_cancels_a_pending_page_so_it_cannot_restore_protected_content() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var page = new TaskCompletionSource();
+        h.Source.PageGate = page;
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Source.Pages == 1, what: "page started");
+        h.Source.Failure = "denied";
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Vm.Notice.Contains("cannot read"), what: "renewal denied");
+        await Assert.That(h.Source.OverviewTokens[^1].IsCancellationRequested).IsTrue();
+        page.SetResult();
+        await Task.Yield(); Dispatcher.UIThread.RunJobs();
+        await Assert.That(h.Vm.CanDisplay).IsFalse();
+        await Assert.That(h.Vm.Rows).IsEmpty();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_list_completion_does_not_clear_the_overviews_retry_deadline() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var list = new TaskCompletionSource();
+        h.Source.ListGate = list;
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(h.Source.Overview(subject) with {
+            Kind = PullRequestReadKind.Stale, RetryAt = h.Time.GetUtcNow().UtcDateTime.AddMinutes(2), Reason = "rate_limited"
+        }));
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Vm.HasStaleOverview, what: "overview cooldown");
+        list.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list completion");
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await Assert.That(h.Source.Pages).IsEqualTo(0);
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments("capacity_exhausted", false)]
+    [Arguments("capacity_exhausted", true)]
+    [Arguments("rate_limited", false)]
+    [Arguments("rate_limited", true)]
+    [Arguments("budget_exhausted", false)]
+    [Arguments("budget_exhausted", true)]
+    public Task List_refreshes_obey_host_cooldowns_but_not_content_retry_deadlines(string reason, bool manual) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Push(); await h.Show();
+            h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+                PullRequestReadKind.Unavailable, Subject: subject, Reason: reason, RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(2))));
+            h.Time.Advance(TimeSpan.FromSeconds(25));
+            await WaitUntilAsync(() => h.Source.Overviews == 2 && !h.Vm.IsReading, what: "overview retry received");
+            await Assert.That(h.Source.Lists).IsEqualTo(1);
+
+            h.Time.Advance(TimeSpan.FromSeconds(manual ? 4 : 5));
+            Dispatcher.UIThread.RunJobs();
+            if (manual) h.Vm.Refresh();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh settled");
+            await Assert.That(h.Source.Lists).IsEqualTo(reason == "capacity_exhausted" ? 2 : 1);
+            await Assert.That(h.Source.Overviews).IsEqualTo(2);
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
+    public Task A_transient_list_failure_respects_retry_after_and_keeps_a_fresh_overview() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Source.ListResponses.Enqueue(new(PullRequestReadKind.Unavailable, AccessFailure: "transient",
+            RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(2), Reason: "rate_limited"));
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Source.Lists == 2 && !h.Vm.IsReading, what: "list failure and overview renewal");
+        await Assert.That(h.Vm.HasStaleOverview).IsFalse();
+        h.Time.Advance(TimeSpan.FromSeconds(31)); Dispatcher.UIThread.RunJobs();
+        await Assert.That(h.Source.Lists).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    [Arguments("transient")]
+    [Arguments("denied")]
+    public Task An_unavailable_snapshot_does_not_wake_the_timer_every_second(string failure) => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Source.Failure = failure;
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "failed renewal settled");
+        var before = h.Clock.Callbacks;
+        for (var i = 0; i < 25; i++) {
+            h.Time.Advance(TimeSpan.FromSeconds(1)); Dispatcher.UIThread.RunJobs();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "poll settled");
+        }
+        await Assert.That(h.Clock.Callbacks - before).IsLessThanOrEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_new_session_does_not_inherit_the_previous_sessions_retry_deadline() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied",
+            RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(2))));
+        h.Push(); h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Notice.Contains("cannot read"), what: "first session denied");
+        h.Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "other-session", branch: "feature"));
+        await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "new session loaded");
+        await Assert.That(h.Source.Lists).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Thirty_second_background_poll_renews_overview_without_flashing_grace_or_stale() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial overview settled");
+        var sawStale = false;
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(PullRequestContextViewModel.HasStaleOverview) && h.Vm.HasStaleOverview)
+                sawStale = true;
+        };
+        var slowList = new TaskCompletionSource();
+        h.Source.ListGate = slowList;
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => h.Source.Overviews == 2, what: "overview renewed on 30s tick while list refresh is in flight");
+        await Assert.That(sawStale).IsFalse();
+        await Assert.That(h.Vm.HasStaleOverview).IsFalse();
+        await Assert.That(h.Vm.CanReveal).IsTrue();
+        slowList.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list refresh completes");
+        await Assert.That(sawStale).IsFalse();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Refreshing_on_checks_with_a_new_head_keeps_existing_rows_visible_until_replacement_arrives() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        h.Vm.SetReaderVisible(true);
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1, what: "initial checks page");
+        var emptied = false;
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(PullRequestContextViewModel.Rows) && h.Vm.Rows.Count == 0)
+                emptied = true;
+        };
+        var pageGate = new TaskCompletionSource();
+        h.Source.PageGate = pageGate;
+        h.Source.HeadSha = new string('b', 40);
+        h.Time.Advance(TimeSpan.FromSeconds(16));
+        await h.Vm.RefreshCommand.Execute();
+        await WaitUntilAsync(() => h.Source.Pages == 2, what: "replacement checks page requested");
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+        await Assert.That(emptied).IsFalse();
+        pageGate.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "replacement checks page applied");
+        await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+        await Assert.That(emptied).IsFalse();
         await h.Dispose();
     });
 
@@ -340,6 +689,136 @@ public class PullRequestContextViewModelTests {
     });
 
     [Test]
+    [Arguments("checks")]
+    [Arguments("threads")]
+    public Task A_head_restart_reloads_a_paginated_section_even_when_the_overview_head_is_unchanged(string section) => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await h.Vm.ShowSectionCommand.Execute(section);
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1 && !h.Vm.IsReading, what: "first page");
+        await h.Vm.LoadMoreCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 2 && !h.Vm.IsReading, what: "second page");
+        var replacement = new TaskCompletionSource();
+        h.Source.PageGate = replacement;
+        h.Source.RestartNextPage = "head_changed";
+        try {
+            await h.Vm.LoadMoreCommand.Execute();
+            await WaitUntilAsync(() => h.Source.Pages == 4, what: "replacement page one requested");
+            await Assert.That(h.Vm.Rows.Count).IsEqualTo(2);
+            await Assert.That(h.Vm.HasMore).IsFalse();
+            replacement.SetResult();
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "replacement applied");
+            await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+            await Assert.That(h.Vm.HasMore).IsTrue();
+            await Assert.That(h.Vm.PageNote).IsEmpty();
+        } finally { replacement.TrySetResult(); await h.Dispose(); }
+    });
+
+    [Test]
+    public Task A_head_restart_still_reloads_its_section_after_the_reader_switches_tabs() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show();
+        await h.Vm.ShowSectionCommand.Execute("threads");
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 1 && !h.Vm.IsReading, what: "first page");
+        await h.Vm.LoadMoreCommand.Execute();
+        await WaitUntilAsync(() => h.Vm.Rows.Count == 2 && !h.Vm.IsReading, what: "second page");
+        var overview = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => overview.Task);
+        h.Source.RestartNextPage = "head_changed";
+        try {
+            await h.Vm.LoadMoreCommand.Execute();
+            await WaitUntilAsync(() => h.Source.Overviews == 2, what: "recovery overview pending");
+            await h.Vm.ShowSectionCommand.Execute("conversation");
+            overview.SetResult(h.Source.Overview(h.Vm.Selected!.Subject));
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "overview settled on another tab");
+            await h.Vm.ShowSectionCommand.Execute("threads");
+            await WaitUntilAsync(() => !h.Vm.IsReading, what: "return to threads");
+            await Assert.That(h.Vm.Rows.Count).IsEqualTo(1);
+            await Assert.That(h.Vm.HasMore).IsTrue();
+        } finally { overview.TrySetResult(h.Source.Overview(h.Vm.Selected!.Subject)); await h.Dispose(); }
+    });
+
+    [Test]
+    [Arguments("rate_limited", false)]
+    [Arguments("budget_exhausted", false)]
+    [Arguments("rate_limited", true)]
+    public Task Switching_PRs_preserves_host_cooldowns_without_blocking_another_host(string reason, bool anotherHost) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        if (anotherHost) h.Source.Links[0] = h.Source.Links[0] with { Host = "ghe.example", Url = "https://ghe.example/example/repo/pull/1" };
+        h.Push(); await h.Show();
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, Reason: reason, RetryAt: h.Time.GetUtcNow().UtcDateTime.AddMinutes(1))));
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Source.Overviews == 2 && !h.Vm.IsReading, what: "rate limit received");
+        h.Vm.Selected = h.Vm.Choices.Single(choice => choice.Subject.Number == 1);
+        if (anotherHost) {
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "independent host loaded");
+        } else {
+            await Assert.That(h.Source.Overviews).IsEqualTo(2);
+            await Assert.That(h.Vm.Notice).Contains("cooldown");
+            h.Time.Advance(TimeSpan.FromSeconds(60)); Dispatcher.UIThread.RunJobs();
+            await WaitUntilAsync(() => h.Vm.CanReveal && !h.Vm.IsReading, what: "cooldown expired");
+        }
+        await Assert.That(h.Source.Overviews).IsEqualTo(3);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_failed_renewal_cannot_restart_grace_after_access_has_expired() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
+        h.Time.Advance(TimeSpan.FromSeconds(25));
+        await WaitUntilAsync(() => h.Source.Overviews == 2, what: "renewal started");
+        h.Time.Advance(TimeSpan.FromSeconds(20)); Dispatcher.UIThread.RunJobs();
+        h.Source.Failure = "transient";
+        renewal.SetResult(new(PullRequestReadKind.TransportFailure, Subject: h.Vm.Selected!.Subject, AccessFailure: "transient", Reason: "timeout"));
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "renewal timed out");
+        await Assert.That(h.Vm.CanDisplay).IsTrue();
+        h.Time.Advance(TimeSpan.FromSeconds(285)); Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "original grace expired");
+        await Assert.That(h.Vm.CanDisplay).IsFalse();
+        await Assert.That(h.Vm.Description).IsNull();
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task A_list_refresh_alone_does_not_delay_the_stale_snapshot_indicator() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        var renewal = new TaskCompletionSource<PullRequestRead<PullRequestOverviewDto>>();
+        var list = new TaskCompletionSource();
+        h.Source.ListGate = list;
+        h.Source.OverviewResponses.Enqueue((_, _) => renewal.Task);
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Source.Overviews == 2 && h.Source.Lists == 2, what: "renewal and list pending");
+        // CanReveal turns true in one UI job but is announced by the renewal's settle job, whose notify re-arms
+        // the tick: an advance made before that announcement re-arms it past the advance and fires nothing.
+        var announced = false;
+        h.Vm.PropertyChanged += (_, e) => { if (e.PropertyName == nameof(h.Vm.CanReveal) && h.Vm.CanReveal) announced = true; };
+        renewal.SetResult(h.Source.Overview(h.Vm.Selected!.Subject) with { AccessValidForSeconds = 10 });
+        await WaitUntilAsync(() => announced, what: "short access lease renewed");
+        h.Time.Advance(TimeSpan.FromSeconds(10)); Dispatcher.UIThread.RunJobs();
+        await WaitUntilAsync(() => h.Vm.HasStaleOverview, what: "list does not renew access");
+        await Assert.That(h.Vm.Description).IsEqualTo("Private description");
+        list.SetResult();
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "list settled");
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Switching_to_another_PR_clears_retry_backoff_and_notice_from_the_previous_PR() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        var retry = h.Time.GetUtcNow().UtcDateTime.AddMinutes(2);
+        h.Source.OverviewResponses.Enqueue((subject, _) => Task.FromResult(new PullRequestRead<PullRequestOverviewDto>(
+            PullRequestReadKind.Unavailable, Subject: subject, AccessFailure: "denied", Reason: "github_access_denied", RetryAt: retry)));
+        h.Push();
+        h.Vm.SetForeground(true);
+        await WaitUntilAsync(() => h.Vm.Notice.Contains("cannot read"), what: "initial PR failed with retry backoff");
+        h.Vm.Selected = h.Vm.Choices[0];
+        await Assert.That(h.Vm.HasNotice).IsFalse();
+        await WaitUntilAsync(() => h.Vm.CanReveal && h.Vm.Selected?.Subject.Number == 1, what: "second PR loaded immediately despite previous PR RetryAt");
+        await h.Dispose();
+    });
+
+    [Test]
     public Task A_section_keeps_eight_pages_and_exposes_a_reload_control_for_evicted_content() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Source.TotalPages = 12; h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
         await h.Vm.ShowSectionCommand.Execute("conversation");
@@ -361,6 +840,84 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    static Func<PullRequestSubjectDto, CancellationToken, Task<PullRequestRead<PullRequestOverviewDto>>> Outstanding(
+            Harness h, bool? mergeable, int? unresolved, string kind = "exact", string rollup = "success", string lifecycle = "open") =>
+        (subject, _) => {
+            var ready = h.Source.Overview(subject);
+            return Task.FromResult(ready with { Data = ready.Data! with {
+                Lifecycle = lifecycle, Mergeable = mergeable,
+                Checks = ready.Data.Checks! with { Rollup = rollup },
+                Threads = unresolved is null ? null : new() {
+                    Availability = new() { Status = "ready", FetchedAt = h.Time.GetUtcNow().UtcDateTime },
+                    Unresolved = new() { Value = unresolved, Kind = kind },
+                },
+            } });
+        };
+
+    /// The card counts the threads still unresolved, and offers Fix only while something keeps an open pull
+    /// request from merging; Fix hands the composer a prompt naming each of those things.
+    [Test]
+    public Task Outstanding_work_is_counted_and_fix_prompts_for_each_part() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 2, rollup: "failure"));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ThreadsStatus.Text).IsEqualTo("2 unresolved threads");
+            await Assert.That(h.Vm.ShowsFix).IsTrue();
+            await h.Vm.FixCommand.Execute();
+            await Assert.That(h.Fixes.Single()).IsEqualTo(
+                "Get pull request #2 ready to merge: resolve the merge conflicts with the base branch; address the 2 unresolved review threads; fix the failing checks.");
+        } finally { await h.Dispose(); }
+    });
+
+    /// Fix follows whether the composer can send, such as a session ending under it: the prompt would
+    /// otherwise land in a composer that is hidden or refuses it.
+    [Test]
+    public Task Fix_is_hidden_once_the_composer_cannot_send() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 1));
+            h.Push(); await h.Show();
+            await Assert.That(h.Vm.ShowsFix).IsTrue();
+            var raised = new List<string?>();
+            h.Vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            h.CanFix = false;
+            h.Vm.FixAvailabilityChanged();
+
+            await Assert.That(raised).Contains(nameof(PullRequestContextViewModel.ShowsFix));
+            await Assert.That(h.Vm.ShowsFix).IsFalse();
+            await h.Vm.FixCommand.Execute();
+            await Assert.That(h.Fixes).IsEmpty();
+        } finally { await h.Dispose(); }
+    });
+
+    [Test]
+    public async Task Fix_keeps_an_unsent_draft_ahead_of_its_prompt() {
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("  ", "Fix it.")).IsEqualTo("Fix it.");
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
+        await Assert.That(PullRequestContextViewModel.WithFixPrompt("my draft\n\nFix it.", "Fix it.")).IsEqualTo("my draft\n\nFix it.");
+    }
+
+    [Test]
+    [Arguments(true, 0, "exact", "success", "open", "No unresolved threads", false)]
+    [Arguments(null, null, "exact", "success", "open", "", false)]
+    [Arguments(true, 100, "lower_bound", "success", "open", "100+ unresolved threads", true)]
+    [Arguments(true, 0, "lower_bound", "success", "open", "", false)]
+    [Arguments(null, 1, "exact", "success", "draft", "1 unresolved thread", true)]
+    public Task Fix_shows_only_for_an_open_pull_request_with_outstanding_work(
+            bool? mergeable, int? unresolved, string kind, string rollup, string lifecycle, string threads, bool fix) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable, unresolved, kind, rollup, lifecycle));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.ThreadsStatus.Text).IsEqualTo(threads);
+            await Assert.That(h.Vm.ShowsFix).IsEqualTo(fix);
+        } finally { await h.Dispose(); }
+    });
+
     [Test]
     public Task The_title_opens_the_overview_tab_even_after_another_section() => RunOnUiAsync(async () => {
         var opened = 0;
@@ -373,6 +930,20 @@ public class PullRequestContextViewModelTests {
         await Assert.That(h.Vm.IsOverview).IsTrue();
         await Assert.That(h.Vm.SelectedTabIndex).IsEqualTo(0);
         await Assert.That(opened).IsEqualTo(2);
+        await h.Dispose();
+    });
+
+    [Test]
+    public Task Cached_checks_keep_their_verdict_while_overview_renewal_is_paused() => RunOnUiAsync(async () => {
+        var h = new Harness(); h.Source.TotalPages = 1; h.Push(); await h.Show(); h.Vm.SetReaderVisible(true);
+        await h.Vm.ShowSectionCommand.Execute("checks");
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "checks loaded");
+        await Assert.That(h.Vm.ChecksStatus.IsDanger).IsTrue();
+        h.Source.Failure = "transient";
+        h.Time.Advance(TimeSpan.FromSeconds(30));
+        await WaitUntilAsync(() => h.Source.Overviews == 2 && !h.Vm.IsReading, what: "renewal paused");
+        await Assert.That(h.Vm.HasStaleOverview).IsTrue();
+        await Assert.That(h.Vm.ChecksStatus.IsDanger).IsTrue();
         await h.Dispose();
     });
 
@@ -480,6 +1051,8 @@ public class PullRequestContextViewModelTests {
     [Test]
     public Task A_default_that_merges_while_shown_hands_over_on_its_next_overview() => RunOnUiAsync(async () => {
         var h = new Harness(); h.Push(); await h.Show();
+        // Settling the read arms its renewal timer after the overview becomes visible.
+        await WaitUntilAsync(() => !h.Vm.IsReading, what: "initial overview settled");
         await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(2);
         h.Source.Lifecycles[2] = "merged";
         h.Time.Advance(TimeSpan.FromSeconds(26)); Dispatcher.UIThread.RunJobs();
@@ -559,6 +1132,19 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// The reader draws a mailto because the policy accepts it, so the body command opens that same URL.
+    [Test]
+    public Task A_body_mailto_opens_and_a_script_link_does_not() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        h.Push();
+        await h.Show();
+        h.Vm.SetReaderVisible(true);
+        await h.Vm.OpenBodyLinkCommand.Execute("mailto:test@example.com");
+        await h.Vm.OpenBodyLinkCommand.Execute("javascript:alert(1)");
+        await Assert.That(h.Opener.Opened).IsEquivalentTo(new[] { "mailto:test@example.com" });
+        await h.Dispose();
+    });
+
     [Test]
     [Arguments("https://example.com/example/repo/pull/1", false)]
     [Arguments("https://github.com/example/repo/pull/99", false)]
@@ -602,13 +1188,34 @@ public class PullRequestContextViewModelTests {
         internal FakePullRequestSource Source { get; }
         internal RecordingOpener Opener { get; } = new();
         internal PullRequestContextViewModel Vm { get; }
+        internal TimerCountingTimeProvider Clock { get; }
         internal Subject<System.Reactive.Unit> SignIn { get; } = new();
-        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null) {
+        internal readonly List<string> Fixes = [];
+        internal bool CanFix = true;
+        internal Harness(Func<PullRequestRepository?>? primary = null, Action? onOpen = null, Func<string?, string?>? readBranch = null,
+                LastReads<PullRequestSnapshot>? snapshots = null, Action<string>? linksChanged = null) {
             Source = new(Time);
-            Vm = new(Presence, Source, Time, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch);
+            Clock = new(Time);
+            Vm = new(Presence, Source, Clock, Opener, onOpen ?? (() => { }), primaryRepo: primary, signInCompleted: SignIn, readBranch: readBranch,
+                snapshots: snapshots, linksChanged: linksChanged, requestFix: Fixes.Add, canRequestFix: () => CanFix);
         }
         internal void Push() => Presence.OnNext(Agent("agent", "claude", hasTerminal: false, sessionId: "session", branch: "feature"));
-        internal async Task Show() { Vm.SetForeground(true); await WaitUntilAsync(() => Vm.CanReveal, what: "PR overview admitted"); }
+        /// Returns once the initial reads have settled, not just once the overview is admitted: a read's settle
+        /// job re-arms the tick after the job that reveals it, and a clock advance made before that re-arm fires nothing.
+        internal async Task Show() {
+            Vm.SetForeground(true);
+            await WaitUntilAsync(() => Vm.CanReveal && !Vm.IsReading, what: "PR overview admitted and settled");
+        }
         internal async Task Dispose() { await Vm.TeardownAsync(); Presence.Dispose(); SignIn.Dispose(); }
+    }
+
+    sealed class TimerCountingTimeProvider(TimeProvider inner) : TimeProvider {
+        internal int Callbacks { get; private set; }
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
+            inner.CreateTimer(value => { Callbacks++; callback(value); }, state, dueTime, period);
     }
 }

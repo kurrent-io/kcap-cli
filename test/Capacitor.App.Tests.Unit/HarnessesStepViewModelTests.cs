@@ -24,11 +24,10 @@ public class HarnessesStepViewModelTests {
         public readonly List<HarnessId> Stamped = [];
         public IReadOnlySet<string>? ProviderKeys = new HashSet<string>();
         public int DetectCalls;
-        public int DaemonEnables;
         public readonly HarnessesStepViewModel Vm;
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
-                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null) {
+                IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -42,7 +41,7 @@ public class HarnessesStepViewModelTests {
                 config, pathFix,
                 _ => Task.FromResult<IReadOnlySet<string>?>(ProviderKeys),
                 "test-mac",
-                enableDaemon: _ => { DaemonEnables++; return Task.CompletedTask; });
+                onLocalPath: local ? () => true : null);
         }
 
         public HarnessRowViewModel Row(string label) => Vm.Rows.First(r => r.Label == label);
@@ -354,81 +353,6 @@ public class HarnessesStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Turning_harnesses_on_also_enables_the_daemon() {
-        var enables = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Config.Root);
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-            h.Vm.Visibility = "private";
-
-            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            return h.DaemonEnables;
-        });
-
-        await Assert.That(enables).IsEqualTo(1);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Tools_only_harnesses_also_enable_the_daemon() {
-        var enables = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Config.Root);
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-            h.Vm.Visibility = "private";
-            foreach (var row in h.Vm.Rows) row.Record = false;
-            h.Row("Cursor").Tools = true;
-
-            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            return h.DaemonEnables;
-        });
-
-        await Assert.That(enables).IsEqualTo(1);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task A_retried_harness_enables_the_daemon_on_continue() {
-        var (afterFailure, afterRetry, afterAgain) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Config.Root);
-            var fail = true;
-            h.Cli.PluginInstallBehavior = (_, _) => Task.FromResult(
-                fail ? new ProcessResult(1, "", "boom", false) : new ProcessResult(0, "", "", false));
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-            h.Vm.Visibility = "private";
-            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            var afterFailure = h.DaemonEnables;
-
-            fail = false;
-            await h.Row("Cursor").RetryCommand.Execute().ToTask();
-            Dispatcher.UIThread.RunJobs();
-            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            var afterRetry = h.DaemonEnables;
-
-            await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
-            return (afterFailure, afterRetry, h.DaemonEnables);
-        });
-
-        await Assert.That(afterFailure).IsEqualTo(0);
-        await Assert.That(afterRetry).IsEqualTo(1);
-        await Assert.That(afterAgain).IsEqualTo(1);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Not_now_leaves_the_daemon_to_its_own_step() {
-        var enables = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Config.Root);
-            await h.Vm.OnEnterAsync(CancellationToken.None);
-            h.Vm.Visibility = "private";
-
-            await h.Vm.CanLeaveAsync(WizardNavigation.Skip, CancellationToken.None);
-            return h.DaemonEnables;
-        });
-
-        await Assert.That(enables).IsEqualTo(0);
-    }
-
-    [Test]
-    [NotInParallel("AvaloniaSession")]
     public async Task Not_now_still_leaves_while_the_terminal_cannot_run_kcap() {
         var (left, calls) = await AvaloniaSession.DispatchAsync(async () => {
             var fix = new PathFixViewModel(
@@ -452,6 +376,44 @@ public class HarnessesStepViewModelTests {
         public Task<StreamingResult> RunStreamingAsync(
                 string fileName, string[] args, RunOptions options, Action<StreamedLine> onLine, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    [Test]
+    [Arguments(WizardNavigation.Next, true)]
+    [Arguments(WizardNavigation.Skip, true)]
+    [Arguments(WizardNavigation.Next, false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_agents_continue_skip_and_none_detected_all_pass_with_private(WizardNavigation direction, bool detectsAgents) {
+        var (left, visible, saved) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Config.Root, detectsAgents ? null : new Dictionary<HarnessId, DetectedAgent>(), local: true);
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            var canLeave = await h.Vm.CanLeaveAsync(direction, CancellationToken.None);
+
+            return (canLeave && h.Vm.CanContinue && h.Vm.CanSkip, h.Vm.VisibilityVisible,
+                ConfigMutator.LoadPure(ConfigPath).Profiles["default"].DefaultVisibility);
+        });
+
+        await Assert.That(left).IsTrue();
+        await Assert.That(visible).IsFalse();
+        await Assert.That(saved).IsEqualTo("private");
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Local_harnesses_notes_name_no_terminal_command() {
+        var (local, cloud) = await AvaloniaSession.DispatchAsync(async () => {
+            var l = new Harness(Config.Root, local: true);
+            var c = new Harness(Config.Root);
+            await l.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (new[] { l.Vm.SavedNote, l.Vm.CliMissingNote, l.Vm.ProviderKeyDetail }, c.Vm.SavedNote);
+        });
+
+        foreach (var text in local) {
+            await Assert.That(text).DoesNotContain("kcap plugin");
+            await Assert.That(text).DoesNotContain("kcap config");
+        }
+        await Assert.That(cloud).Contains("kcap plugin remove");
     }
 
     [Test]

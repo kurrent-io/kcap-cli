@@ -27,22 +27,27 @@ public sealed class RefreshCommand(IProcessRunner runner) {
         ["plugin", "install", "--kiro",        "--if-installed"],
         ["plugin", "install", "--antigravity", "--if-installed"],
         ["plugin", "install", "--grok",        "--if-installed"],
+        ["plugin", "install", "--mistral-vibe", "--if-installed"],
         ["plugin", "install", "--muse",        "--if-installed"],
         ["plugin", "install",                  "--if-installed"],
         ["daemon", "service", "refresh"],
     ];
 
-    /// <summary>Longer than the daemon step's own 55s deadline, so its last reload can finish.</summary>
     static readonly TimeSpan StepTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>Longer than the daemon step's own 85s deadline, so its last reload can finish.</summary>
+    static readonly TimeSpan DaemonStepTimeout = TimeSpan.FromSeconds(90);
+
+    static TimeSpan TimeoutFor(string[] step) => step[0] == "daemon" ? DaemonStepTimeout : StepTimeout;
+
     public Task<int> HandleAsync(string[] args) =>
-        RunAsync(Environment.ProcessPath, InstallProvenance.Kind(), () => SetupCommand.ResolvePluginPath(), Console.Out, Console.Error);
+        RunAsync(Environment.ProcessPath, InstallProvenance.Kind(), () => SetupCommand.ResolvePluginPath(), Console.Out, Console.Error, appMigration: args.Contains("--app-migration"));
 
     /// <param name="binaryPath">The kcap each step runs: this process's own binary.</param>
     /// <param name="kind">Only an npm or script install owns its plugin directory; a dev checkout's is
     /// left alone.</param>
     internal async Task<int> RunAsync(
-            string? binaryPath, InstallKind kind, Func<string?> resolvePluginDir, TextWriter stdout, TextWriter stderr) {
+            string? binaryPath, InstallKind kind, Func<string?> resolvePluginDir, TextWriter stdout, TextWriter stderr, bool appMigration = false) {
         if (string.IsNullOrEmpty(binaryPath)) {
             await stderr.WriteLineAsync("Cannot refresh: the kcap binary path is unknown.");
             return 1;
@@ -57,18 +62,19 @@ public sealed class RefreshCommand(IProcessRunner runner) {
 
         var failed = new List<string>();
 
-        foreach (var step in Steps) {
+        foreach (var step in Steps.Where(step => !appMigration || step[0] != "daemon")) {
             ProcessResult result;
             try {
-                result = await runner.RunAsync(binaryPath, [.. step],
-                    new RunOptions(Timeout: StepTimeout), CancellationToken.None);
+                var stepArgs = appMigration ? [.. step, "--strict-refresh"] : step;
+                result = await runner.RunAsync(binaryPath, stepArgs,
+                    new RunOptions(Timeout: TimeoutFor(step)), CancellationToken.None);
             } catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or InvalidOperationException) {
                 failed.Add($"kcap {string.Join(' ', step)}: {ex.Message}");
                 continue;
             }
 
             if (result.TimedOut)
-                failed.Add($"kcap {string.Join(' ', step)}: timed out after {StepTimeout.TotalSeconds:0}s");
+                failed.Add($"kcap {string.Join(' ', step)}: timed out after {TimeoutFor(step).TotalSeconds:0}s");
             else if (result.ExitCode != 0)
                 failed.Add($"kcap {string.Join(' ', step)}: exit {result.ExitCode}{LastLine(result.Stderr)}");
         }

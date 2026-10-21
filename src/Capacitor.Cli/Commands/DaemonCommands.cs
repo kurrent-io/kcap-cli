@@ -7,6 +7,7 @@ using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Services;
 
@@ -354,6 +355,9 @@ public sealed class DaemonCommands(
 
     // ── stop ────────────────────────────────────────────────────────────────
 
+    /// <summary>The daemon's own stop fits in about 18 s; past this it is killed.</summary>
+    internal static readonly TimeSpan StopExitWait = TimeSpan.FromSeconds(30);
+
     async Task<int> StopAsync(string[] args) {
         string? name;
 
@@ -365,9 +369,10 @@ public sealed class DaemonCommands(
             return 1;
         }
 
-        var yes = args.Contains("--yes") || args.Contains("-y");
+        var yes     = args.Contains("--yes") || args.Contains("-y");
+        var request = new ShutdownRequestDto(args.Contains("--keep-agents") ? "keep" : "end", "final");
 
-        if (name is not null) return StopByName(name);
+        if (name is not null) return await StopByNameAsync(name, request);
 
         // No --name: enumerate all running daemons.
         var candidates = EnumerateRunningNames();
@@ -378,7 +383,7 @@ public sealed class DaemonCommands(
 
                 return 0;
             case 1:
-                return StopByName(candidates[0]);
+                return await StopByNameAsync(candidates[0], request);
         }
 
         await Console.Out.WriteLineAsync($"Found {candidates.Count} running daemons:");
@@ -401,13 +406,13 @@ public sealed class DaemonCommands(
         var failed = 0;
 
         foreach (var n in candidates) {
-            if (StopByName(n) != 0) failed++;
+            if (await StopByNameAsync(n, request) != 0) failed++;
         }
 
         return failed == 0 ? 0 : 1;
     }
 
-    int StopByName(string name) {
+    async Task<int> StopByNameAsync(string name, ShutdownRequestDto request) {
         var manager = TryServiceManager();
         if (manager is not null && manager.Status(DaemonStore.Sanitize(name)).State != ServiceState.NotInstalled) {
             Console.Out.WriteLine(
@@ -444,6 +449,8 @@ public sealed class DaemonCommands(
             return 1;
         }
 
+        var outcome = ShutdownOutcome.NoAnswer;
+
         try {
             // entry is bound ONCE above and reused for both the ownership classification and (on
             // the live branch) the actual kill target. Re-reading the PID file here — e.g. via a
@@ -478,6 +485,17 @@ public sealed class DaemonCommands(
                   + $"Its PID file at {store.PidPath(name)} does not describe a daemon.");
 
                 return 1;
+            }
+
+            // Re-checked after the wait: a daemon that finished its stop just past the bound has left its
+            // ledger as it meant to, and its pid may already name another process.
+            outcome = await DaemonShutdownClient.StopAsync(store, name, request, StopExitWait, time, CancellationToken.None);
+
+            if (outcome == ShutdownOutcome.Exited || !DaemonPidProbe.IsOurDaemon(entry.Pid, entry.StartToken)) {
+                Console.Out.WriteLine($"Daemon '{name}' stopped (PID {entry.Pid}).");
+                TryCleanupMarkersUnderLock(name);
+
+                return 0;
             }
 
             var process = Process.GetProcessById(entry.Pid);
@@ -519,6 +537,8 @@ public sealed class DaemonCommands(
             Console.Out.WriteLine($"Daemon '{name}' was not running.");
         }
 
+        MarkLedgerInterrupted(store, name, time, KeepsSavedResumes(request, outcome));
+
         // Clean up the killed daemon's markers. The kill was a SIGKILL, so the
         // daemon's own Dispose never ran. Do it under the flock: if a `daemon
         // start` raced in after the kill and took the lock, the fresh PID belongs
@@ -528,6 +548,20 @@ public sealed class DaemonCommands(
 
         return 0;
     }
+
+    /// <summary>A killed daemon's agents are not resumed, except those <paramref name="where"/> excludes.</summary>
+    internal static void MarkLedgerInterrupted(DaemonStore store, string name, TimeProvider time, Func<ResumeLedgerEntry, bool>? where = null) {
+        try {
+            ResumeLedgerStore.For(store, name, time).MarkInterrupted("stopped_by_operator", where);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            Console.Error.WriteLine($"Daemon '{name}': could not mark its resume ledger interrupted ({ex.Message}).");
+        }
+    }
+
+    /// <summary>A keep-agents stop that overran had already stopped some agents cleanly and recorded them
+    /// resuming; only the rest are killed mid-run. Null marks every entry.</summary>
+    internal static Func<ResumeLedgerEntry, bool>? KeepsSavedResumes(ShutdownRequestDto request, ShutdownOutcome outcome) =>
+        request.Agents == "keep" && outcome == ShutdownOutcome.Overran ? e => e.State != ResumeState.Resuming : null;
 
     /// <summary>
     /// Remove the daemon-owned on-disk markers (PID file + version marker) for
@@ -614,7 +648,9 @@ public sealed class DaemonCommands(
 
         switch (reply?.Type) {
             case FrameType.RestartAck:
-                await Console.Out.WriteLineAsync($"Daemon '{name}': restart {reply.Text}.");
+                await Console.Out.WriteLineAsync(reply.Text == "restarting"
+                    ? $"Daemon '{name}': restart accepted; agents are stopped and resumed on the new daemon."
+                    : $"Daemon '{name}': restart {reply.Text}.");
 
                 return 0;
             case FrameType.Error:
@@ -653,7 +689,7 @@ public sealed class DaemonCommands(
     /// other spawn type, including none.</summary>
     internal static string? DescribePriority(string daemonName, string? loadedSpawnType) =>
         SpawnTypes.IsBackgroundBand(loadedSpawnType)
-            ? $"  priority: loaded as {loadedSpawnType} — background priority; run `kcap daemon service refresh --name {daemonName} --force` to reload (ends this daemon's hosted agents)"
+            ? $"  priority: loaded as {loadedSpawnType} — background priority; run `kcap daemon service refresh --name {daemonName} --force` to reload (its agents are stopped and resumed)"
             : null;
 
     async Task<int> Status(string[] args) {
@@ -728,9 +764,24 @@ public sealed class DaemonCommands(
                 if (DescribePriority(name, query.LoadedSpawnType) is { } priority)
                     await Console.Out.WriteLineAsync(priority);
             }
+
+            if (DescribeResumeLedger(ResumeLedgerStore.For(store, name).ReadAll()) is { } ledger)
+                await Console.Out.WriteLineAsync(ledger);
         }
 
         return 0;
+    }
+
+    /// <summary>Null when no entry is resuming or interrupted.</summary>
+    internal static string? DescribeResumeLedger(IReadOnlyList<ResumeLedgerEntry> entries) {
+        var resuming    = entries.Count(e => e.State == ResumeState.Resuming);
+        var interrupted = entries.Where(e => e.State == ResumeState.Interrupted).ToList();
+        if (resuming == 0 && interrupted.Count == 0) return null;
+
+        var reasons = interrupted.Select(e => e.LastError ?? "unknown").Distinct().Order(StringComparer.Ordinal).ToList();
+
+        return $"  resuming: {resuming}  interrupted: {interrupted.Count}"
+             + (reasons.Count > 0 ? $" ({string.Join(", ", reasons)})" : "");
     }
 
     // ── doctor ──────────────────────────────────────────────────────────────
@@ -1014,13 +1065,26 @@ public sealed class DaemonCommands(
         await ReportUnitDirectoryExposure(Console.Out, manager.UnitDirectory);
     }
 
-    /// <summary>Reports directories on the path to the unit directory that their group can write.
+    /// <summary>Reports the directories on the path to the unit directory that another account owns, and
+    /// the ones their group can write.
     ///
     /// <para>Advisory, not a failure: whether this matters depends on who else is in that group, which the
     /// bits do not say — umask 002 against a user-private group produces it for a group of one, and that is
     /// the common case on Debian and Ubuntu. Install refuses only the world-writable form, which no umask
     /// produces. Reporting is what is left for the case a program cannot judge but an operator can.</para></summary>
     internal static async Task ReportUnitDirectoryExposure(TextWriter output, string unitDirectory) {
+        if (!OperatingSystem.IsWindows() && !FileOwner.Available)
+            await output.WriteLineAsync(
+                "\n  ⚠ could not check who owns the directories on the path to the unit directory: no working `stat` found");
+        else if (DirectoryExposure.ForeignOwned(unitDirectory) is { Count: > 0 } foreign) {
+            await output.WriteLineAsync("\n  ⚠ owned by another account on the path to the unit directory:");
+
+            foreach (var (d, owner) in foreign) await output.WriteLineAsync($"      {d}  (uid {owner})");
+
+            await output.WriteLineAsync(
+                "    That account can replace the unit the daemon loads, whatever the directory's mode.");
+        }
+
         if (DirectoryExposure.GrantingWrite(unitDirectory, UnixFileMode.GroupWrite) is not { Count: > 0 } shared)
             return;
 
@@ -1040,8 +1104,9 @@ public sealed class DaemonCommands(
         Console.Error.WriteLine("Usage: kcap daemon <start|stop|restart|status|logs|doctor|service|shim|consent|reviewer>");
         Console.Error.WriteLine();
         Console.Error.WriteLine("  start [-d] [--name <n>]    Start the daemon (foreground, or -d for background)");
-        Console.Error.WriteLine("  stop [--name <n>] [--yes]  Stop a running daemon (prompts on multi unless --yes)");
-        Console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart daemon (now if idle; --when-idle queues; --force overrides)");
+        Console.Error.WriteLine("  stop [--name <n>] [--yes] [--keep-agents]  Stop a running daemon and end its agents (prompts on multi unless --yes);");
+        Console.Error.WriteLine("                             --keep-agents keeps them for the next start to resume");
+        Console.Error.WriteLine("  restart [--name <n>] [--when-idle] [--force]  Restart now, resuming its agents (--when-idle queues; --force skips the flow-round wait)");
         Console.Error.WriteLine("  status [--name <n>]        Show daemon status (lists all when --name omitted)");
         Console.Error.WriteLine("  logs                       Show recent daemon log output");
         Console.Error.WriteLine("  doctor [--clean]           Diagnose lock-file state, optionally clean stale entries");

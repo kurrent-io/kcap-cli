@@ -246,12 +246,17 @@ public class AntigravityReviewerLaunchTests {
     /// false, so the child gets the daemon's block plus our overrides). Re-stamping it here would mean
     /// a rotated ADC path resolved at daemon start rather than at spawn.</summary>
     [Test]
+    [NotInParallel]
     public async Task Google_auth_variables_are_inherited_rather_than_restamped() {
+        using var adc   = EnvScope.Exclusive("AGY_ADC_AUTH", "1");
+        using var creds = EnvScope.Exclusive("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/kcap-adc-probe.json");
+
         var psi = BuildPsi(EnabledConfig());
 
         await Assert.That(psi.UseShellExecute).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("AGY_ADC_AUTH")).IsFalse();
-        await Assert.That(psi.Environment.ContainsKey("GOOGLE_APPLICATION_CREDENTIALS")).IsFalse();
+        await Assert.That(psi.Environment.TryGetValue("AGY_ADC_AUTH", out var auth) ? auth : null).IsEqualTo("1");
+        await Assert.That(psi.Environment.TryGetValue("GOOGLE_APPLICATION_CREDENTIALS", out var path) ? path : null)
+            .IsEqualTo("/tmp/kcap-adc-probe.json");
     }
 
     // ── advertisement ─────────────────────────────────────────────────────────────────────────────
@@ -674,6 +679,12 @@ public class AntigravityReviewerLaunchTests {
 
         await Assert.That(ex!.Message).StartsWith("antigravity_reviewer_unsupported_platform");
     }
+
+    /// <summary>A launcher only offers what the daemon advertises, so a Windows host that refuses
+    /// every launch must not report the vendor available — the binary is present here.</summary>
+    [Test]
+    public async Task A_windows_host_does_not_report_the_vendor_available() =>
+        await Assert.That(Factory(EnabledConfig(), posixHost: false).IsAvailable()).IsFalse();
 
     /// <summary>Binary presence is shared too — there is nothing to launch either way.</summary>
     [Test]

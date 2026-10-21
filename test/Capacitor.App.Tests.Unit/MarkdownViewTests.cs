@@ -86,6 +86,28 @@ public class MarkdownViewTests {
         });
     }
 
+    /// Pins long-line readability in a code block: the viewer's horizontal scrollbar is off, so a
+    /// line wider than the column must wrap onto multiple visual lines instead of clipping at the
+    /// right border, while copying still hands back the single logical line.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_long_line_in_a_code_block_wraps_instead_of_clipping() {
+        await RunOnUiAsync(async () => {
+            const string line = "chat shows:    Your instructions for this session are in the file /Users/example/.config/kcap/daemons/state/prompts/prompt.md";
+            var (window, root, _, _) = ShowRunnable($"```\n{line}\n```");
+            try {
+                var border = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
+                var code = All<TextBlock>(border).Single();
+                await Assert.That(code.TextWrapping).IsEqualTo(TextWrapping.Wrap);
+                await Assert.That(code.TextLayout.TextLines.Count).IsGreaterThan(1);
+
+                Click(window, Reveal(window, Hosts(root)[0], "markdown-code-copy"));
+                var clipboard = TopLevel.GetTopLevel(root)!.Clipboard!;
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(line);
+            } finally { window.Close(); }
+        });
+    }
+
     /// Pins the link affordance: a policy-approved link is an inline hyperlink that opens through
     /// the command on a pointer click, never through a self-navigating control.
     [Test]
@@ -515,6 +537,43 @@ public class MarkdownViewTests {
                 await Assert.That(Paragraphs(root).Single()).IsSameReferenceAs(prose);
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-run")).IsEmpty();
                 await Assert.That(Actions(Hosts(root)[0], "markdown-code-copy").Count).IsEqualTo(1);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the degrade for text Markdig refuses to parse (128 nested quotes): the source as plain
+    /// text, in either flavor, and the next parseable text renders as markdown again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(MarkdownFlavor.Chat)]
+    [Arguments(MarkdownFlavor.GitHub)]
+    public async Task Text_too_deeply_nested_to_parse_shows_as_plain_text(MarkdownFlavor flavor) {
+        await RunOnUiAsync(async () => {
+            var deep = string.Concat(Enumerable.Repeat("> ", 128)) + "x";
+            var (window, root, _) = Show(deep, flavor);
+            try {
+                var view = (MarkdownView)root;
+                await Assert.That(All<MarkdownViewer>(root)).IsEmpty();
+                await Assert.That(All<TextBlock>(root).Select(Reads)).IsEquivalentTo([deep]);
+                var clipboard = TopLevel.GetTopLevel(view)!.Clipboard!;
+                All<SelectableTextBlock>(root).Single().Focus();
+                view.SelectAll();
+                await Assert.That(view.HasSelection).IsTrue();
+                await clipboard.SetTextAsync("stale");
+                var copy = Application.Current!.PlatformSettings!.HotkeyConfiguration.Copy[0];
+                window.KeyPressQwerty(PhysicalKey.C, (RawInputModifiers)copy.KeyModifiers);
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                await clipboard.SetTextAsync("stale");
+                await view.CopySelectionAsync();
+                await Assert.That(await clipboard.TryGetTextAsync()).IsEqualTo(deep);
+
+                view.Flavor = flavor == MarkdownFlavor.Chat ? MarkdownFlavor.GitHub : MarkdownFlavor.Chat;
+                view.Text = "**bold**";
+                Dispatcher.UIThread.RunJobs();
+                window.UpdateLayout();
+                await Assert.That(Spans<Bold>(Paragraphs(root).Single().Inlines!).Count()).IsEqualTo(1);
             } finally { window.Close(); }
         });
     }

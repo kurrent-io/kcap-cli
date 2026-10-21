@@ -39,6 +39,19 @@ public class TranscriptChatCanonicalTests {
         await Assert.That(result.SubmittedInputs).IsEmpty();
     }
 
+    /// The server writes it from the subagent-start hook, which names the agent but not its call.
+    [Test]
+    public async Task A_subagent_start_identifies_an_agent_with_no_call_under_any_rules() {
+        foreach (var rules in new IChatDisplayRules?[] { null, ClaudeChatRules.Instance }) {
+            var result = TranscriptChat.Project(Event(CanonicalEventTypes.SubagentStarted, new SubagentStarted { AgentId = "a1" }), rules);
+            await Assert.That(result.Envelopes).IsEmpty();
+            var identified = (RunSignal.Identified)result.Runs.Single();
+            await Assert.That(identified.CallId).IsNull();
+            await Assert.That(identified.AgentId).IsEqualTo("a1");
+        }
+        await Assert.That(TranscriptChat.Project(Event(CanonicalEventTypes.SubagentStarted, new SubagentStarted()), ClaudeChatRules.Instance).Runs).IsEmpty();
+    }
+
     /// The server writes it from the subagent-stop hook, which says the subagent ended but not how.
     [Test]
     public async Task A_subagent_completion_finishes_by_agent_id_with_no_outcome_under_any_rules() {

@@ -14,10 +14,7 @@ public static class HubMethods {
     public const string ReleaseResizeTerminal  = "ReleaseResizeTerminal";
     public const string SubscribeToChat        = "SubscribeToChat";
     public const string UnsubscribeFromChat    = "UnsubscribeFromChat";
-    public const string SubscribeToAcpEphemeral = "SubscribeToAcpEphemeral";
-    public const string SubscribeToStream      = "SubscribeToStream";
     public const string RegisterSessionAccessWatch = "RegisterSessionAccessWatch";
-    public const string ResolveAttribution     = "ResolveAttribution";
 }
 
 /// Server → UI-client pushes. Org-wide ones arrive with no join call; the rest follow the join or
@@ -55,6 +52,8 @@ public static class ApiRoutes {
     public const string ModelOptions   = "api/agents/model-options";
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
+    public static string SubagentEvents(string sessionId, string agentId, long from) =>
+        $"api/sessions/{Uri.EscapeDataString(sessionId)}/agents/{Uri.EscapeDataString(agentId)}/events?from={from}";
     public static string PermissionResponse(string sessionId, string requestId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/permission-response/{Uri.EscapeDataString(requestId)}";
 }
@@ -75,6 +74,8 @@ public static class SpecialKeys {
 public static class WireTokens {
     /// LaunchFailed reason prefix for a consent-gate denial on the target machine.
     public const string LaunchDeniedByOwnerPrefix = "launch_denied_by_owner";
+    /// LaunchFailed reason for a launch its owner stopped before the agent registered.
+    public const string LaunchCancelled = "launch_cancelled";
     /// HubException message fragment for a session the caller may not see.
     public const string SessionNotVisible = "Session not visible to caller";
     /// HubException message for a transient post-admit re-check fault; retryable, never a denial.

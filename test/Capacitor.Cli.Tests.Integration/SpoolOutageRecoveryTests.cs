@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Commands.Harness;
 using Capacitor.Cli.Core;
+using Microsoft.Extensions.Time.Testing;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
 using WireMock.Server;
@@ -66,11 +67,11 @@ public class SpoolOutageRecoveryTests : IDisposable {
         }
         """;
 
-    HookSpool MakeSpool() => new(_spoolDir, time: TimeProvider.System);
+    HookSpool MakeSpool(TimeProvider? time = null) => new(_spoolDir, time: time ?? TimeProvider.System);
 
     // HandleCore takes a pre-built HttpClient so we bypass auth entirely.
-    ClaudeHookCommand MakeCommand() =>
-        new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
+    ClaudeHookCommand MakeCommand(TimeProvider? time = null) =>
+        new(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(time ?? TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), SystemProcessStarter.Instance, router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory), accounts: TestAccounts.None);
 
     Task<int> Invoke(HttpClient client, string payload) =>
         MakeCommand().HandleCore(client, AuthStatus.Ok, MakeSpool(), new StringReader(payload));
@@ -223,7 +224,8 @@ public class SpoolOutageRecoveryTests : IDisposable {
     }
 
     /// <summary>The judge stops carrying the snapshot inline only once the server has accepted the
-    /// spooled upload; a refused delivery must leave it inline.</summary>
+    /// spooled upload; a refused delivery must leave it inline. A clock that never advances keeps the
+    /// poster's per-attempt timeout and the drain budget from firing, so only the status decides.</summary>
     [Test, NotInParallel("SpoolDir")]
     [Arguments(200, true)]
     [Arguments(503, false)]
@@ -235,8 +237,9 @@ public class SpoolOutageRecoveryTests : IDisposable {
             """;
         MakeSpool().Append(Sid, "policy-snapshot", upload);
 
+        var frozen = new FakeTimeProvider();
         using var client = new HttpClient();
-        await MakeSpool().DrainAllAsync(Sid, MakeCommand().ClaudePoster(client, TimeSpan.FromSeconds(2)),
+        await MakeSpool(frozen).DrainAllAsync(Sid, MakeCommand(frozen).ClaudePoster(client, TimeSpan.FromSeconds(2)),
             TimeSpan.FromSeconds(5), CancellationToken.None);
 
         await Assert.That(MakeSpool().IsPolicySnapshotDelivered(Sid, "abc123")).IsEqualTo(delivered);

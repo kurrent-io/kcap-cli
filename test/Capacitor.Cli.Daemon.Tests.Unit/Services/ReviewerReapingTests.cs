@@ -445,7 +445,8 @@ public class ReviewerReapingTests {
 
         await Assert.That(agent.IsReapClaimed).IsTrue();
         await Assert.That(agent.PendingEndReason).IsEqualTo("reviewer_ttl_expired");
-        await Assert.That(server.StatusChangedCalls).Contains(("ttl-reap", "Completed"));
+        // The recording PTY never exits, so the reap's stop reports it Failed rather than Completed.
+        await Assert.That(server.StatusChangedCalls).Contains(("ttl-reap", "Failed"));
     }
 
     /// <summary>The circular wait the fence would otherwise introduce, and the asymmetry that breaks it.
@@ -502,7 +503,8 @@ public class ReviewerReapingTests {
 
         await Assert.That(expired.IsReapClaimed).IsTrue();
         await Assert.That(expired.PendingEndReason).IsEqualTo("reviewer_ttl_expired");
-        await Assert.That(server.StatusChangedCalls).Contains(("parked-ttl", "Completed"));
+        // The recording PTY never exits, so the reap's stop reports it Failed rather than Completed.
+        await Assert.That(server.StatusChangedCalls).Contains(("parked-ttl", "Failed"));
 
         // ── the idle rule under an IDENTICALLY parked delivery: defers ──────────────────────
         var idleTime  = new FakeTimeProvider();
@@ -580,7 +582,8 @@ public class ReviewerReapingTests {
 
         await Assert.That(agent.IsReapClaimed).IsTrue();
         await Assert.That(pty.TerminateCount).IsGreaterThanOrEqualTo(1); // the wedge-breaking step ran
-        await Assert.That(server.StatusChangedCalls).Contains(("parked-exit", "Completed"));
+        // The recording PTY never exits, so the reap's stop reports it Failed rather than Completed.
+        await Assert.That(server.StatusChangedCalls).Contains(("parked-exit", "Failed"));
 
         pty.ReleaseFirstWrite();
         await delivery.WaitAsync(TimeSpan.FromSeconds(5));

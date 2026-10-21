@@ -40,5 +40,7 @@ public sealed record ProjectionResult(
 
     public static ProjectionResult Of(IReadOnlyList<CanonicalEvent> events) => events.Count == 0 ? Empty : new(events, []);
 
+    public static ProjectionResult Of(EventAmendment amendment) => new([], [amendment]);
+
     public static ProjectionResult Reject(string reason) => new([], [], reason);
 }

@@ -17,10 +17,13 @@ internal sealed partial class CodexLauncher(
     ) : IHostedAgentLauncher {
     readonly CodexPaths _paths = harnesses.Of<CodexHarness>().Paths;
 
+    internal CodexPaths Paths => _paths;
+
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
     public bool   SupportsUnattended => true;
     public bool   SupportsPrReview   => true;
+    public bool   SupportsResume     => true;
     public bool   SupportsBorrowedReviewFlow => true;
 
     // Approval prompts are off for review-flow launches (always `never`, any worktree) and for an
@@ -165,14 +168,22 @@ internal sealed partial class CodexLauncher(
         // pauses for approval while an interactive agent keeps the user in the loop.
         var (sandbox, approval) = CodexPosturePolicy.Resolve(ctx.Work, ctx.IsReviewFlow, ctx.CodexPosture);
 
-        var args = new List<string> {
+        var args = new List<string>();
+
+        // `codex resume` accepts every flag below, so the subcommand and id simply lead.
+        if (ctx.ResumeSessionId is { } resumeId) {
+            args.Add("resume");
+            args.Add(resumeId);
+        }
+
+        args.AddRange([
             "--cd",
             ctx.Worktree.Path,
             "--sandbox",
             sandbox,
             "--ask-for-approval",
             approval
-        };
+        ]);
 
         // codex 0.146+ parks the interactive session on a "Hooks need review" prompt for any hook
         // it hasn't persisted trust for. A hosted launch has no one to answer it, so it hangs at

@@ -35,6 +35,47 @@ public sealed class SetupFunnel(CliTelemetry telemetry) {
             ["no_prompt"]            = noPrompt,
         });
 
+    /// <summary>The edition choice came up, as the app wizard's first screen or in a bare interactive
+    /// <c>kcap setup</c>; the denominator for the edition branch.</summary>
+    public void EditionOffered() => Emit("cli_setup_edition_offered", new JsonObject());
+
+    /// <summary>
+    /// The funnel's first branch: <c>local</c>, <c>cloud</c> or <c>existing_workspace</c>. A run that
+    /// goes Back and picks again emits again, so a breakdown reads the last choice before each later step.
+    /// </summary>
+    public void EditionChosen(string edition) =>
+        Emit("cli_setup_edition_chosen", new JsonObject { ["edition"] = edition });
+
+    /// <summary>The app is about to spawn <c>kcap setup --local</c>; one per attempt, Try again included,
+    /// so an attempt whose spawn fails still counts.</summary>
+    public void LocalInstallStarted() => Emit("cli_setup_local_install_started", new JsonObject());
+
+    /// <summary>A run settled installed: <c>fresh</c>, <c>reused</c> or <c>recovered</c>.</summary>
+    public void LocalInstallCommitted(string plan) =>
+        Emit("cli_setup_local_install_committed", new JsonObject { ["plan"] = plan });
+
+    /// <summary>A run settled failed, other than by the app quitting. <paramref name="code"/> is the CLI's
+    /// failure code, else <c>cli_missing</c>, <c>spawn_failed</c> or <c>no_failure_line</c>;
+    /// <paramref name="locked"/> means the wizard can no longer go back to the edition choice.</summary>
+    public void LocalInstallFailed(string code, bool locked) =>
+        Emit("cli_setup_local_install_failed", new JsonObject { ["code"] = code, ["locked"] = locked });
+
+    public void LocalInstallRetried() => Emit("cli_setup_local_install_retried", new JsonObject());
+
+    /// <summary>The desktop wizard put a page on screen; one per entry, Back included, so a drop-off reads
+    /// as the last page shown.</summary>
+    public void StepShown(string step) => Emit("cli_setup_step_shown", new JsonObject { ["step"] = step });
+
+    /// <summary>The desktop wizard's daemon came up enabled, the first time it did in that run;
+    /// <paramref name="alreadyRunning"/> when it was enabled before the run and setup changed nothing.</summary>
+    public void DaemonEnabled(bool alreadyRunning) =>
+        Emit("cli_setup_daemon_enabled", new JsonObject { ["already_running"] = alreadyRunning });
+
+    /// <summary>The desktop wizard closed, on <paramref name="step"/>; <paramref name="finished"/> when it
+    /// closed from its last page.</summary>
+    public void WizardClosed(string step, bool finished) =>
+        Emit("cli_setup_wizard_closed", new JsonObject { ["step"] = step, ["finished"] = finished });
+
     public void SigninOpened(string mode, string provider) =>
         Emit("cli_setup_signin_opened", new JsonObject { ["mode"] = mode, ["provider"] = provider });
 

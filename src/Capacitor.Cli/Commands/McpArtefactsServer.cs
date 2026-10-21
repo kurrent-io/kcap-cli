@@ -46,11 +46,12 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         // or stderr). Used to fail gracefully instead of hard-exiting mid-request (below).
         var urlOk = HttpClientExtensions.IsAcceptableUrl(baseUrl);
 
-        // Created on demand (not at startup) so a session that never publishes pays no
-        // network/token/stderr cost. Nullable field rather than Lazy<Task> so a transient
-        // creation failure leaves it null and the next call retries. Safe without locking:
-        // the stdio loop handles one request at a time.
-        HttpClient? client = null;
+        // Created on first use, so a session that never publishes stays local-only.
+        using var sessionClient = new OnDemand<HttpClient>(async () => {
+            var created = await http.ForSessionAsync();
+            LiftClientTimeout(created);
+            return created;
+        });
 
         // Guarded tool dispatch: never let the stdio JSON-RPC loop die on one bad request. An
         // unexpected failure would otherwise bubble out of the loop and kill the server mid-protocol;
@@ -60,10 +61,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(callId, HttpClientExtensions.SchemeMissingHint, isError: true);
 
             try {
-                if (client is null) {
-                    client = await http.ForSessionAsync();
-                    LiftClientTimeout(client);
-                }
+                var client = await sessionClient.GetAsync();
 
                 return await HandleToolCallAsync(callId, callRequest, client, baseUrl);
             } catch (Exception ex) {
@@ -96,40 +94,13 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
         await using var writer = new StreamWriter(stdout, new UTF8Encoding(false));
         writer.AutoFlush = true;
 
-        try {
-            while (await reader.ReadLineAsync() is { } line) {
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                JsonObject? request;
-
-                request = TryParseRequest(line);
-
-                if (request is null) continue;
-
-                var id     = request["id"];
-                var method = McpWorkItemsServer.DecodeMethod(request);
-
-                // Notifications have no id — don't send a response
-                if (id is null) continue;
-
-                var response = method switch {
-                    null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
-                    "initialize" => BuildInitializeResponse(id, request),
-                    "tools/list" => BuildToolsListResponse(id, tools),
-                    "tools/call" => await TimedDispatchToolCallAsync(id, request),
-                    _            => McpProtocol.TryHandleStandardMethod(method, id)
-                                    ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
-                };
-
-                await writer.WriteLineAsync(response);
-            }
-        } finally {
-            if (client is not null) {
-                try { client.Dispose(); } catch {
-                    /* swallow — best-effort cleanup */
-                }
-            }
-        }
+        await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            null         => BuildErrorResponse(id, -32600, "Invalid request: method must be a string"),
+            "initialize" => BuildInitializeResponse(id, request),
+            "tools/list" => BuildToolsListResponse(id, tools),
+            _            => McpProtocol.TryHandleStandardMethod(method, id)
+                            ?? BuildErrorResponse(id, -32601, $"Method not found: {method}")
+        }, "pages");
 
         return 0;
     }
@@ -140,6 +111,10 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
     internal const string ServerInstructions =
         "Use these tools to publish a self-contained HTML page and get a shareable link back — a plan, " +
         "a report, a comparison, anything a person would rather read as a page than as terminal output. " +
+        "When the user asks for an artifact, a page, a dashboard or a report to look at or share, this is " +
+        "how it is made: publish it with publish_page rather than with your harness's own artifact tool, " +
+        "unless they name that tool. Put the link in your reply every time; when your harness has a " +
+        "browser tool, also open the link there, and never open a system browser for it. " +
         "The page is served under a sandbox that cannot reach the network: inline every style, script " +
         "and image as a data URI, because an external URL will silently render as nothing. A page " +
         "is private to its owner until you say otherwise, so pass visibility (and grants, under " +
@@ -220,7 +195,7 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            return BuildToolResult(id, PageResultKeys.Rename(body));
+            return toolName == "publish_page" ? BuildPublishResult(id, body) : BuildToolResult(id, PageResultKeys.Rename(body));
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -464,18 +439,30 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
-    /// <summary>Null for a line the loop must not act on. A JsonObject fills its property table
-    /// lazily, so a duplicated key surfaces on the first read rather than in Parse; forcing it here
-    /// keeps that inside the guard instead of ending the server.</summary>
-    internal static JsonObject? TryParseRequest(string line) {
-        try {
-            var request = JsonNode.Parse(line)?.AsObject();
-            _ = request?.Count;
+    // Travels with every publish so it reaches a harness that surfaces neither server instructions
+    // nor a skill. A system browser is ruled out because a hosted agent's host is not the user's machine.
+    internal const string PublishFollowUp =
+        "Put this link in your reply. If your harness has a browser tool, also open the link there now; "
+      + "do not open a system browser.";
 
-            return request;
-        } catch {
-            return null;
+    /// <summary>The follow-up rides inside the one JSON block rather than as a second content item:
+    /// harnesses join a result's blocks into one string, and the page card is built by parsing
+    /// that string as a single JSON document.</summary>
+    internal static string BuildPublishResult(JsonNode id, string body) {
+        var renamed = PageResultKeys.Rename(body);
+        JsonNode? root;
+
+        try {
+            root = JsonNode.Parse(renamed);
+        } catch (JsonException) {
+            return BuildToolResult(id, renamed);
         }
+
+        if (root is not JsonObject page) return BuildToolResult(id, renamed);
+
+        page["follow_up"] = PublishFollowUp;
+
+        return BuildToolResult(id, page.ToJsonString(PageResultKeys.Output));
     }
 
     static string BuildToolResult(JsonNode id, string text, bool isError = false) =>
@@ -503,7 +490,8 @@ sealed class McpArtefactsServer(ConfigRoot config, ProfileContext profiles, Toke
 
     internal static McpTool[] BuildToolsList() => [
         new("publish_page",
-            "Publish a self-contained HTML page and get back a link anyone you grant access to can open. "
+            "Make the artifact, page, report or dashboard the user asked for: publish a self-contained "
+          + "HTML page and get back a link anyone you grant access to can open. "
           + "The page runs sandboxed with no network access, so inline every style, script and image as a "
           + "data URI. Pass the page as 'html' or name a local file with 'path'. It is private to you "
           + "unless you set visibility. Use update_id to publish a revision of a page you already "

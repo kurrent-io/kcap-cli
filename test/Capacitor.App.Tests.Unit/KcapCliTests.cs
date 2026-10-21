@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using TUnit.Assertions.Enums;
 using Capacitor.Cli.Core;
 
@@ -19,9 +20,11 @@ public class KcapCliTests {
         }
 
         public IReadOnlyList<StreamedLine> ScriptedStreamLines = [];
+        public CancellationToken SeenStreamingToken;
 
         public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
                 Action<StreamedLine> onLine, CancellationToken ct) {
+            SeenStreamingToken = ct;
             SeenFileName = fileName;
             SeenArgs     = args;
             SeenOptions  = options;
@@ -631,6 +634,116 @@ public class KcapCliTests {
     }
 
     [Test]
+    public async Task SetupLocalAsync_builds_argv_env_and_interrupt_with_no_timeout() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var interrupt = new CancellationTokenSource();
+
+        await cli.SetupLocalAsync(new LocalEmbeddingChoice("nomic-embed-text"), _ => { }, interrupt.Token, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--embedding-model", "nomic-embed-text"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.EnvOverlay![KcapCli.SpawnNoTelemetryVar]).IsEqualTo("1");
+        await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        // Above the 26 min a recovery and commit can spend back to back after the interrupt.
+        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(30));
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_passes_keyword_only_as_no_embeddings() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.KeywordOnly, _ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["setup", "--local", "--json", "--single-user", "--yes", "--no-embeddings"], CollectionOrdering.Matching);
+    }
+
+    /// The caller's token bounds only the work before the spawn: a running setup stops through its
+    /// interrupt, which lets the CLI roll back, never through a tree kill.
+    [Test]
+    public async Task SetupLocalAsync_never_hands_the_callers_token_to_the_runner() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var caller = new CancellationTokenSource();
+
+        await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, caller.Token);
+
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
+    [Test]
+    public async Task SetupLocalAsync_with_null_CliPath_returns_a_synthesized_no_cli_result() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.SetupLocalAsync(LocalEmbeddingChoice.Default, _ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(-1);
+        await Assert.That(result.Tail).IsEquivalentTo(
+            [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    public async Task LocalUpgradeAsync_builds_argv_env_and_interrupt_with_no_timeout() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var interrupt = new CancellationTokenSource();
+        using var caller = new CancellationTokenSource();
+
+        await cli.LocalUpgradeAsync(_ => { }, interrupt.Token, caller.Token);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(
+            ["local", "upgrade", "--json", "--no-update-check"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Interrupt).IsEqualTo(interrupt.Token);
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        // Above the 31 min a resumed upgrade and this one can spend back to back after the interrupt.
+        await Assert.That(runner.SeenOptions!.InterruptGrace).IsEqualTo(TimeSpan.FromMinutes(35));
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
+    [Test]
+    public async Task LocalUpgradeAsync_with_null_CliPath_returns_a_synthesized_no_cli_result() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.LocalUpgradeAsync(_ => { }, CancellationToken.None, CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(-1);
+        await Assert.That(result.Tail).IsEquivalentTo(
+            [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
+    public async Task LocalStartAsync_builds_argv_env_and_the_eleven_minute_bound() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+
+        await cli.LocalStartAsync(CancellationToken.None);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(["local", "start"], CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromMinutes(11));
+    }
+
+    [Test]
+    public async Task LocalStartAsync_with_null_CliPath_returns_127_without_calling_the_runner() {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCliWithNullPath(runner);
+
+        var result = await cli.LocalStartAsync(CancellationToken.None);
+
+        await Assert.That(result.ExitCode).IsEqualTo(127);
+        await Assert.That(runner.SeenFileName).IsNull();
+    }
+
+    [Test]
     [Arguments("\"loaded_spawn_type\":\"adaptive\",", "adaptive")]
     [Arguments("\"loaded_spawn_type\":null,", null)]
     [Arguments("", null)]
@@ -654,7 +767,7 @@ public class KcapCliTests {
 
         await Assert.That(runner.SeenArgs).IsEquivalentTo(
             ["daemon", "service", "refresh", "--name", "daemon-a", "--force"], CollectionOrdering.Matching);
-        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(75));
+        await Assert.That(runner.SeenOptions!.Timeout).IsEqualTo(TimeSpan.FromSeconds(105));
         await Assert.That(runner.SeenOptions.EnvOverlay![KcapCli.ExpectServerUrlVar]).IsEqualTo(CanonicalServer);
     }
 

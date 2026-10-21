@@ -17,7 +17,9 @@ namespace Capacitor.Cli.Harness.Grok;
 /// normalizes it. A subagent is its own session directory beside its parent's and is imported through
 /// the parent, as a subagent of it, from the parent's <c>subagent_spawned</c> lines.
 /// </summary>
-internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IImportSource {
+/// <param name="detectRepository">The repository a session's cwd belongs to, without PR detection: an
+/// imported session is historical, and today's open PR is not the one it worked on.</param>
+internal sealed class GrokImportSource(GrokPaths paths, Func<string, Task<RepositoryPayload?>> detectRepository, TimeProvider time) : IImportSource {
     const string DirKey = "Dir";
 
     public HarnessId Vendor => HarnessId.Grok;
@@ -130,6 +132,11 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
         if (classification.Meta.FirstTimestamp is { } started) start["started_at"] = started.ToString("O");
         if (ctx.VisibilityStampFor(classification.Status) is { } visibility) start["default_visibility"] = visibility;
         if (!await PostAsync(ctx.HttpClient, ctx.BaseUrl, "session-start/grok", start, ct)) return ImportOutcome.Failed;
+
+        // Grok's session-start carries no repository, so it rides a transcript batch of its own. Best
+        // effort: a session the server cannot attribute is still worth importing.
+        if (classification.Meta.Cwd is { Length: > 0 } repoCwd && await detectRepository(repoCwd) is { } repo)
+            await PostAsync(ctx.HttpClient, ctx.BaseUrl, "transcript", RepositoryBatch(sid, repo), ct);
 
         var alreadyLoaded = classification.Status == ImportCommand.ClassificationStatus.AlreadyLoaded;
         var startLine     = classification.Status == ImportCommand.ClassificationStatus.Partial ? classification.ResumeFromLine : 0;
@@ -266,6 +273,23 @@ internal sealed class GrokImportSource(GrokPaths paths, TimeProvider time) : IIm
     // The server drops a model whose every token bucket is zero.
     static bool HasUsage(JsonProperty model) =>
         model.Name.Length > 0 && model.Value.IsObject && TokenBuckets.Any(k => model.Value.Num(k) > 0);
+
+    static JsonObject RepositoryBatch(string sessionId, RepositoryPayload repo) {
+        var node = new JsonObject();
+        if (repo.Owner is not null)     node["owner"]      = repo.Owner;
+        if (repo.RepoName is not null)  node["repo_name"]  = repo.RepoName;
+        if (repo.Branch is not null)    node["branch"]     = repo.Branch;
+        if (repo.RemoteUrl is not null) node["remote_url"] = repo.RemoteUrl;
+        if (repo.UserName is not null)  node["user_name"]  = repo.UserName;
+        if (repo.UserEmail is not null) node["user_email"] = repo.UserEmail;
+
+        return new JsonObject {
+            ["session_id"] = sessionId,
+            ["lines"]      = new JsonArray(),
+            ["vendor"]     = HarnessId.Grok.VendorId,
+            ["repository"] = node,
+        };
+    }
 
     async Task<bool> PostAsync(HttpClient client, string baseUrl, string route, JsonObject payload, CancellationToken ct) {
         try {

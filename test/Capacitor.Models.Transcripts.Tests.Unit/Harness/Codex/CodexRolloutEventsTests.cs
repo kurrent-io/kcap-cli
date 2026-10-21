@@ -77,7 +77,7 @@ public class CodexRolloutEventsTests {
 
     [Test]
     public async Task Injected_preludes_are_kept_here_and_developer_and_system_roles_are_skipped() {
-        var prelude = E(Item("""{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\nstuff"}]}"""));
+        var prelude = E(Item("""{"type":"message","role":"user","content":[{"type":"input_text","text":"  <environment_context>\n<cwd>/w</cwd>\n</environment_context>\n"}]}"""));
         await Assert.That(prelude).Count().IsEqualTo(1);
 
         await Assert.That(E(Item("""{"type":"message","role":"developer","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
@@ -105,8 +105,8 @@ public class CodexRolloutEventsTests {
     /// The persisted kind comes from the table the chat lane and the daemon stamp, so an import and a
     /// hosted session never disagree. A shell tool is classified by its command, which only the raw
     /// input carries; `exec` is the JavaScript sandbox and stays `execute` whatever it runs; a tool
-    /// the table does not list, or a nameless call, is a PRESENT `other` — the key being there is how
-    /// a consumer tells "none of these" from the absence a lane with no table leaves behind.
+    /// the table does not list is a PRESENT `other` — the key being there is how a consumer tells
+    /// "none of these" from the absence a lane with no table leaves behind.
     [Test]
     public async Task Tool_calls_carry_a_vendor_neutral_kind_and_an_unlisted_tool_is_a_present_other() {
         foreach (var (payload, kind) in new[] {
@@ -118,7 +118,6 @@ public class CodexRolloutEventsTests {
             ("""{"type":"function_call","name":"write_stdin","call_id":"c","arguments":"{\"chars\":\"y\\n\"}"}""",                AcpToolKind.Execute),
             ("""{"type":"custom_tool_call","name":"exec","call_id":"c","input":"await tool.read('cat a.rs')"}""",                 AcpToolKind.Execute),
             ("""{"type":"function_call","name":"get_issue","call_id":"c","arguments":"{\"id\":\"1\"}"}""",                        AcpToolKind.Other),
-            ("""{"type":"function_call","call_id":"c","arguments":"{}"}""",                                                       AcpToolKind.Other),
             ("""{"type":"tool_search_call","call_id":"c","arguments":{"query":"x"}}""",                                           AcpToolKind.Other),
         }) {
             var call = ((AssistantToolCallsGenerated)E(Item(payload))[0].Payload).ToolCalls[0];
@@ -170,13 +169,14 @@ public class CodexRolloutEventsTests {
 
     [Test]
     public async Task Every_other_envelope_and_payload_type_is_ignored_and_malformed_lines_are_rejected() {
-        foreach (var type in new[] { "event_msg", "turn_context", "session_meta", "world_state", "compacted", "inter_agent_communication_metadata" }) {
+        foreach (var type in new[] { "event_msg", "turn_context", "world_state", "inter_agent_communication_metadata", "thread_settings_applied" }) {
             var r = P($$$"""{"type":"{{{type}}}","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}}""");
             await Assert.That(r.Events).IsEmpty().Because(type);
             await Assert.That(r.Rejected).IsNull().Because(type);
         }
-        await Assert.That(E(Item("""{"type":"agent_message","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
+        await Assert.That(E(Item("""{"type":"unknown_item","content":[{"type":"input_text","text":"x"}]}"""))).IsEmpty();
         await Assert.That(E(Item("""{"type":"message","role":"user","content":"not-an-array"}"""))).IsEmpty();
+        await Assert.That(E("""{"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"x"}]}}""")).IsEmpty();
 
         foreach (var line in new[] { "", "garbage", "[1]" }) {
             await Assert.That(P(line).Rejected).IsNotNull().Because(line);

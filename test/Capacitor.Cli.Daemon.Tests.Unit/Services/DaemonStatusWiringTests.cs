@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
@@ -33,7 +34,7 @@ public class DaemonStatusWiringTests {
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
-        services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
+        services.AddSingleton<ICredentialSource>(new FixedCredentialSource());
         services.AddSingleton<DaemonStatusNotifier>();
         services.AddSingleton<ServerConnection>();
 
@@ -98,6 +99,7 @@ public class DaemonStatusWiringTests {
         services.AddSingleton(typeof(ILogger<>), typeof(NullLogger<>));
         services.AddSingleton(Config.Root);
         services.AddSingleton(AuthFixtures.NewTokenStore(Config.Root));
+        services.AddSingleton<ICredentialSource>(new FixedCredentialSource());
         services.AddSingleton<DaemonStatusNotifier>();
         services.AddSingleton(Home.Home);
         services.AddSingleton(TestHarnesses.Under(Home));

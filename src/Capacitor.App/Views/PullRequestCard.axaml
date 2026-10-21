@@ -15,7 +15,7 @@
                     </DataTemplate>
                 </ComboBox.ItemTemplate>
             </ComboBox>
-            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" IsVisible="{Binding HasChoice}">
+            <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding HasChoice}">
                 <StackPanel Spacing="4" VerticalAlignment="Top">
                     <StackPanel Orientation="Horizontal" Spacing="6" IsVisible="{Binding CanDisplay}">
                         <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}" />
@@ -27,12 +27,17 @@
                     <TextBlock Text="{Binding RepositoryLabel}" Classes="prMuted" TextTrimming="CharacterEllipsis"
                                ToolTip.Tip="{Binding RepositoryLabel}" />
                 </StackPanel>
-                <Button x:Name="OpenGitHubButton" Grid.Column="1" Command="{Binding OpenGitHubCommand}" IsEnabled="{Binding CanOpenSource}"
+                <!-- Only while something keeps the pull request from merging: it fills the composer, and sending stays the user's call. -->
+                <Button x:Name="FixPullRequestButton" Grid.Column="1" Command="{Binding FixCommand}" IsVisible="{Binding ShowsFix}"
+                        Classes="kcapGhost kcapQuiet" VerticalAlignment="Center" Content="Fix it"
+                        ToolTip.Tip="Ask the agent to fix what keeps this pull request from merging"
+                        AutomationProperties.Name="Ask the agent to fix this pull request" />
+                <Button x:Name="OpenGitHubButton" Grid.Column="2" Command="{Binding OpenGitHubCommand}" IsEnabled="{Binding CanOpenSource}"
                         IsVisible="{Binding ShowsOpenSource}" Classes="kcapGhost kcapQuiet" VerticalAlignment="Center"
                         AutomationProperties.Name="Open pull request in browser">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
-                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal prAfterLabel" />
+                        <views:AppIcon Kind="ExternalLink" Size="14" Classes="prExternal" />
                     </StackPanel>
                 </Button>
             </Grid>
@@ -46,7 +51,7 @@
             <TextBlock x:Name="SelectionLoading" Text="Loading…" IsVisible="{Binding IsSelectionLoading}" Classes="prNote" />
             <StackPanel IsVisible="{Binding CanDisplay}">
                 <Button x:Name="SidebarChecksButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="checks"
-                        IsEnabled="{Binding CanReveal}" ToolTip.Tip="{Binding ChecksStatus.Tip}"
+                        IsEnabled="{Binding CanNavigate}" ToolTip.Tip="{Binding ChecksStatus.Tip}"
                         AutomationProperties.Name="{Binding ChecksStatus.Text, StringFormat='Open checks: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ChecksStatus}" />
@@ -54,15 +59,22 @@
                     </Grid>
                 </Button>
                 <Button x:Name="SidebarReviewsButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="reviewers"
-                        IsEnabled="{Binding CanReveal}" ToolTip.Tip="{Binding ReviewStatus.Tip}"
+                        IsEnabled="{Binding CanNavigate}" ToolTip.Tip="{Binding ReviewStatus.Tip}"
                         AutomationProperties.Name="{Binding ReviewStatus.Text, StringFormat='Open reviews: {0}'}">
                     <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                         <views:PullRequestStatusLabel DataContext="{Binding ReviewStatus}" />
                         <views:AppIcon Kind="ChevronRight" Size="14" Grid.Column="1" Classes="prChevron" />
                     </Grid>
                 </Button>
+                <Button x:Name="SidebarThreadsButton" Classes="prStatusRow" Command="{Binding ShowSectionCommand}" CommandParameter="threads"
+                        IsEnabled="{Binding CanNavigate}" IsVisible="{Binding HasThreadsStatus}" ToolTip.Tip="{Binding ThreadsStatus.Tip}"
+                        AutomationProperties.Name="{Binding ThreadsStatus.Text, StringFormat='Open review threads: {0}'}">
+                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <views:PullRequestStatusLabel DataContext="{Binding ThreadsStatus}" />
+                        <views:AppIcon Kind="ChevronRight" Size="14" Grid.Column="1" Classes="prChevron" />
+                    </Grid>
+                </Button>
             </StackPanel>
-            <TextBlock x:Name="OverviewFreshness" Text="{Binding OverviewFreshnessLabel}" IsVisible="{Binding HasStaleOverview}" Classes="prNote" />
             <TextBlock Text="{Binding Notice}" IsVisible="{Binding HasNotice}" Classes="prNote" />
             <TextBlock Text="{Binding ReaderNote}" IsVisible="{Binding HasReaderNote}" Classes="prNote" />
             <WrapPanel IsVisible="{Binding HasReaderNote}">

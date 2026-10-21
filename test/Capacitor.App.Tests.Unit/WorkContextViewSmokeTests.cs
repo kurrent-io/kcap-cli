@@ -455,6 +455,39 @@ public class WorkContextViewSmokeTests {
         });
     }
 
+    /// Hover and press stay on the light primary ramp, so the near-black label keeps its contrast.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Primary_sign_in_hover_and_press_stay_light() {
+        await RunOnUiAsync(async () => {
+            await using var host = new Host();
+            await host.ShowAsync(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+
+            var signIn = host.Find<Button>("SignInButton");
+            var onPrimary = host.Window.FindResource("KcapOnPrimaryBrush");
+            var centre = signIn.TranslatePoint(new Point(signIn.Bounds.Width / 2, signIn.Bounds.Height / 2), host.Window)!.Value;
+            host.Window.MouseMove(centre);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(signIn.Classes.Contains(":pointerover")).IsTrue()
+                .Because("the hover must register for the assertion to mean anything");
+            await Assert.That(ReferenceEquals(HeaderPresenter(signIn).Background, host.Window.FindResource("KcapPrimaryHoverBrush"))).IsTrue();
+            await Assert.That(ReferenceEquals(HeaderPresenter(signIn).Foreground, onPrimary)).IsTrue();
+            await Assert.That(ReferenceEquals(SignInLabel(signIn).Foreground, onPrimary)).IsTrue();
+
+            host.Window.MouseDown(centre, MouseButton.Left);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(signIn.Classes.Contains(":pressed")).IsTrue()
+                .Because("the press must register for the assertion to mean anything");
+            await Assert.That(ReferenceEquals(HeaderPresenter(signIn).Background, host.Window.FindResource("KcapPrimaryPressedBrush"))).IsTrue();
+            await Assert.That(ReferenceEquals(HeaderPresenter(signIn).Foreground, onPrimary)).IsTrue();
+            await Assert.That(ReferenceEquals(SignInLabel(signIn).Foreground, onPrimary)).IsTrue();
+            host.Window.MouseUp(centre, MouseButton.Left);
+        });
+    }
+
+    static TextBlock SignInLabel(Button button) =>
+        HeaderPresenter(button).GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == "Sign in");
+
     static AppIcon[] MarksBeside(ItemsControl list, string title) {
         var row = list.GetVisualDescendants().OfType<TextBlock>().First(t => t.Text == title).Parent as StackPanel;
         return row!.Children.OfType<Panel>().First().Children.OfType<AppIcon>().Where(e => e.IsEffectivelyVisible).ToArray();
@@ -561,6 +594,16 @@ public class WorkContextViewSmokeTests {
             await Assert.That(VisibleTexts(section)).Contains("AGENTS & COMMANDS");
             await Assert.That(VisibleGlyphs(host.Find<ItemsControl>("RunningSubagentList"))).IsEqualTo(1);
             await Assert.That(VisibleTexts(section)).Contains("Run the full suite");
+            // Nothing opens yet, so no row is a live button; naming the subagent makes its row one.
+            await Assert.That(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Count(b => b.IsEnabled)).IsEqualTo(0);
+            host.Runs.Identify("c1", "a1");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Count(b => b.IsEnabled)).IsEqualTo(1);
+            // A screen reader hears the row's state with its name, but not its ticking duration, which would
+            // re-announce a focused row every second.
+            var row = host.Runs.Rows.Single(r => r.CanOpen);
+            await Assert.That(Avalonia.Automation.AutomationProperties.GetName(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Single(b => b.IsEnabled)))
+                .IsEqualTo($"{row.Name}, running");
 
             await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();
@@ -570,6 +613,9 @@ public class WorkContextViewSmokeTests {
 
         static int VisibleGlyphs(ItemsControl list) =>
             list.GetVisualDescendants().OfType<AppIcon>().Count(t => t.Name == "ShellGlyph" && t.IsEffectivelyVisible);
+
+        static IEnumerable<Button> RowButtons(ItemsControl list) =>
+            list.GetVisualDescendants().OfType<Button>().Where(b => b.Name == "RunRowButton");
     }
 
     /// Driven through the Claude projection: a command with no description is named by its own

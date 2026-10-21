@@ -25,11 +25,26 @@ static class MarkViewSelection {
     static readonly FieldInfo LayerField = Private(typeof(MarkdownViewer), "_selectionLayer");
     static readonly FieldInfo EntriesField = Private(LayerField.FieldType, "_entries");
 
-    public static void Attach(Control host, MarkdownViewer viewer) {
+    /// The copy shortcut runs the host's own copy, which knows whether the viewer is what it shows.
+    public static void Attach(Control host, MarkdownViewer viewer, Func<Task> copy) {
         host.AddHandler(InputElement.PointerPressedEvent, (_, e) => OnPressed(viewer, e), RoutingStrategies.Bubble, handledEventsToo: true);
         host.AddHandler(InputElement.PointerMovedEvent, (_, e) => OnMoved(viewer, e), RoutingStrategies.Bubble, handledEventsToo: true);
-        host.AddHandler(InputElement.KeyDownEvent, (_, e) => OnKeyDown(viewer, e), RoutingStrategies.Tunnel);
+        host.AddHandler(InputElement.KeyDownEvent, (_, e) => OnKeyDown(copy, e), RoutingStrategies.Tunnel);
     }
+
+    /// Continues a drag at a point in the viewer's coordinates. Used when the chat scrolls under a
+    /// pointer that is sitting on the viewport edge, so the selection grows without a new move.
+    public static void Extend(MarkdownViewer viewer, Point pointInViewer) {
+        if (LayerOf(viewer) is not Visual layer) return;
+        if (Anchor(layer) is null) return;
+        IsDragging(viewer) = true;
+        var point = viewer.TranslatePoint(pointInViewer, layer) ?? pointInViewer;
+        if (HitTestOffset(layer, point) is not null) MoveFocus(layer, point);
+        else if (Nearest(layer, point) is { } inside) MoveFocus(layer, inside);
+    }
+
+    public static bool IsSelecting(MarkdownViewer viewer) =>
+        IsDragging(viewer) && LayerOf(viewer) is { } layer && Anchor(layer) is not null;
 
     public static bool HasSelection(MarkdownViewer viewer) =>
         LayerOf(viewer) is { } layer && Anchor(layer) is { } anchor && Focus(layer) is { } focus && anchor != focus;
@@ -87,10 +102,10 @@ static class MarkViewSelection {
         if (Nearest(layer, point) is { } inside) MoveFocus(layer, inside);
     }
 
-    static void OnKeyDown(MarkdownViewer viewer, KeyEventArgs e) {
+    static void OnKeyDown(Func<Task> copy, KeyEventArgs e) {
         var hotkeys = Application.Current?.PlatformSettings?.HotkeyConfiguration;
         if (hotkeys is null || !hotkeys.Copy.Any(g => g.Matches(e))) return;
-        _ = CopyAsync(viewer);
+        _ = copy();
         e.Handled = true;
     }
 

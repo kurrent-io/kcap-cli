@@ -12,4 +12,14 @@ public static class TerminalInputEncoder {
         if (normalized.EndsWith('\n')) normalized = normalized[..^1];
         return Encoding.UTF8.GetBytes("\x1b[200~" + normalized + "\x1b[201~");
     }
+
+    /// Moves a menu's cursor from one option to another with arrow keys, then confirms. Sent as one
+    /// write, so the TUI reads each arrow whole rather than a lone Escape.
+    public static byte[] ChooseMenuOption(int from, int to) {
+        var arrow = to < from ? "\x1b[A" : "\x1b[B";
+        var builder = new StringBuilder();
+        for (var i = Math.Abs(to - from); i > 0; i--) builder.Append(arrow);
+        builder.Append('\r');
+        return Encoding.ASCII.GetBytes(builder.ToString());
+    }
 }

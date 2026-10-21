@@ -41,7 +41,13 @@ public class AcpEventEnvelopeWireCompatTests {
             ContextWindowTokens: 200_000,
             TimestampIso:      "2026-07-08T00:00:00Z",
             Ephemeral:         true,
-            ItemId:            "item-42"
+            ItemId:            "item-42",
+            RepoOwner:         "kurrent-io",
+            RepoName:          "widgets",
+            RepoRemoteUrl:     "https://github.com/kurrent-io/widgets.git",
+            RepoBranch:        "main",
+            AgentId:           "agent-7",
+            AgentType:         "general-purpose"
         );
 
         var json = JsonSerializer.Serialize(env, CapacitorJsonContext.Default.AcpEventEnvelope);
@@ -58,6 +64,12 @@ public class AcpEventEnvelopeWireCompatTests {
         await Assert.That(json).Contains(@"""tool_kind"":""execute""");
         await Assert.That(json).Contains(@"""tool_result"":""ok""");
         await Assert.That(json).Contains(@"""tool_is_error"":true");
+        await Assert.That(json).Contains(@"""repo_owner"":""kurrent-io""");
+        await Assert.That(json).Contains(@"""repo_name"":""widgets""");
+        await Assert.That(json).Contains(@"""repo_remote_url"":""https://github.com/kurrent-io/widgets.git""");
+        await Assert.That(json).Contains(@"""repo_branch"":""main""");
+        await Assert.That(json).Contains(@"""agent_id"":""agent-7""");
+        await Assert.That(json).Contains(@"""agent_type"":""general-purpose""");
         await Assert.That(json).Contains(@"""model"":""claude-opus-4-8""");
         await Assert.That(json).Contains(@"""cwd"":""/repo""");
         await Assert.That(json).Contains(@"""raw_session_id"":""raw-sess-1""");

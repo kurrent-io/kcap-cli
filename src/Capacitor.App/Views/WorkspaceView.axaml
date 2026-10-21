@@ -51,7 +51,7 @@
                         <views:AppIcon Kind="ExternalLink" Size="14" Foreground="{StaticResource KcapMutedBrush}" />
                     </Button>
                     <Button x:Name="StopButton" Content="Stop" Command="{Binding StopCommand}" Classes="kcapDanger"
-                            IsVisible="{Binding HasAgent}" Padding="10,5" FontSize="13.5" />
+                            IsVisible="{Binding ShowsStop}" Padding="10,5" FontSize="13.5" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -83,6 +83,13 @@
                         Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
                     <TextBlock Text="Connecting…" Foreground="{StaticResource KcapMutedBrush}" />
+                </Border>
+
+                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Resuming}"
+                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
+                    <TextBlock x:Name="ResumingNote" Text="The daemon is restarting. Waiting for this session to resume…"
+                               Foreground="{StaticResource KcapMutedBrush}" />
                 </Border>
 
                 <!-- The attach banner overlays the terminal, so a read-write session shows none.
@@ -127,6 +134,14 @@
                     </StackPanel>
                 </Border>
 
+                <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=Interrupted}"
+                        Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapWarningBrush}" BorderThickness="1"
+                        CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock x:Name="InterruptedNote"
+                               Text="{Binding Terminal.State, Converter={x:Static views:TerminalInterruptedMessageConverter.Instance}}"
+                               Foreground="{StaticResource KcapTextBrush}" TextWrapping="Wrap" MaxWidth="380" />
+                </Border>
+
                 <Border IsVisible="{Binding Terminal.State, Converter={x:Static views:TerminalPhaseIsConverter.Instance}, ConverterParameter=SessionEnded}"
                         Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="16,12" HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -140,6 +155,14 @@
                  DataContext. -->
             <views:ChatTabView x:Name="ChatHost" DataContext="{Binding Chat}"
                                IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsChat}" />
+            <!-- Built only while a subagent is open, so the closed pane adds no second chat to the tree. -->
+            <ContentControl x:Name="SubagentHost" Content="{Binding Subagent}" IsVisible="{Binding ShowsSubagent}">
+                <ContentControl.ContentTemplate>
+                    <DataTemplate x:DataType="vm:SubagentPaneViewModel">
+                        <views:SubagentPaneView IsVisible="{Binding $parent[views:WorkspaceView].((vm:WorkspaceViewModel)DataContext).ShowsSubagent}" />
+                    </DataTemplate>
+                </ContentControl.ContentTemplate>
+            </ContentControl>
             <ContentControl x:Name="PullRequestHost" IsVisible="{Binding IsPullRequestActive}" />
             <ContentControl x:Name="ArtefactsHost" IsVisible="{Binding IsArtefactsActive}" />
 

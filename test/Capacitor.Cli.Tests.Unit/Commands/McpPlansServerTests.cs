@@ -23,6 +23,17 @@ public class McpPlansServerTests {
         return (root, doc);
     }
 
+    /// <summary>A linked worktree of the repo <see cref="SeedRepo"/> made, the way git lays one out: a
+    /// `.git` file naming its entry under the main `.git/worktrees`, whose `commondir` leads back.</summary>
+    TempDirHandle SeedWorktree(string at) {
+        var worktree = Tmp.CreateDir(at);
+        var entry    = Tmp.CreateDir("repo", ".git", "worktrees", "wt");
+        entry.CreateFile("commondir", "../..\n");
+        worktree.CreateFile(".git", $"gitdir: {entry.Path}\n");
+        worktree.CreateDir("docs").CreateFile("plan.md", "# Plan in the worktree\n");
+        return worktree;
+    }
+
     // ── tool schema ──────────────────────────────────────────────────────────
 
     [Test]
@@ -36,7 +47,7 @@ public class McpPlansServerTests {
         // An approval reviewer reads the tool description, not the server instructions: a tool that
         // "records" a local file's content without saying where reads as an upload to nowhere.
         var declare = McpPlansServer.BuildToolsList().Single(t => t.Name == "declare_plan_document");
-        await Assert.That(declare.Description).Contains("Capacitor server");
+        await Assert.That(declare.Description).Contains("kcap server");
         await Assert.That(declare.Description).Contains("kcap login");
     }
 
@@ -164,6 +175,84 @@ public class McpPlansServerTests {
         await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(doc);
         await Assert.That(d.Body["workspace_root"]).IsNull();
         await Assert.That(d.WorkspaceRoot).IsNull();
+    }
+
+    [Test]
+    [Arguments("wt")]
+    [Arguments("repo/.claude/worktrees/wt")]
+    public async Task A_document_in_another_worktree_of_the_repo_is_keyed_off_that_worktree(string at) {
+        var (root, _) = SeedRepo();
+        var worktree  = SeedWorktree(at);
+        var doc       = Path.Combine(worktree.Path, "docs", "plan.md");
+
+        var d = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = doc }, root, root);
+
+        await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(doc);
+        await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(worktree.Path);
+        await Assert.That(d.Body["content"]!.GetValue<string>()).IsEqualTo("# Plan in the worktree\n");
+
+        var replay = McpPlansServer.BuildDeclaration(d.Document.ToArguments(d.SessionId), d.Document.Cwd, d.Document.RepoRoot);
+        await Assert.That(JsonNode.DeepEquals(replay.Body, d.Body)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_symlinked_spelling_of_the_session_checkout_is_still_the_session_checkout() {
+        // Creating a symlink needs a privilege the Windows CI runner lacks.
+        if (OperatingSystem.IsWindows()) return;
+
+        var (root, _) = SeedRepo();
+        var alias     = Tmp.PathTo("alias");
+        Directory.CreateSymbolicLink(alias, root.Path);
+        var direct    = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md"}"""), root, root);
+
+        var byPath  = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = Path.Combine(alias, "docs", "plan.md") }, root, root);
+        var byNamed = McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = "docs/plan.md", ["workspace_root"] = alias }, root, root);
+
+        foreach (var d in (PlanDocumentDeclaration[])[byPath, byNamed]) {
+            await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo("docs/plan.md");
+            await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(direct.Body["workspace_root"]!.GetValue<string>());
+        }
+    }
+
+    [Test]
+    public async Task A_checkout_of_another_repository_is_declared_only_when_named_as_the_workspace_root() {
+        var (root, _) = SeedRepo();
+        var other     = Tmp.CreateDir("other");
+        other.CreateDir(".git");
+        var doc = other.CreateDir("docs").CreateFile("plan.md", "# Other\n");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = doc }, root, root))
+            .Throws<ArgumentException>().WithMessageContaining("workspace_root");
+
+        var args = new JsonObject { ["session_id"] = "s1", ["kind"] = "plan", ["path"] = "docs/plan.md", ["workspace_root"] = other.Path };
+        var d    = McpPlansServer.BuildDeclaration(args, root, root);
+
+        await Assert.That(d.Body["path"]!.GetValue<string>()).IsEqualTo(doc);
+        await Assert.That(d.Body["workspace_root"]!.GetValue<string>()).IsEqualTo(other.Path);
+
+        var replay = McpPlansServer.BuildDeclaration(d.Document.ToArguments(d.SessionId), d.Document.Cwd, d.Document.RepoRoot);
+        await Assert.That(JsonNode.DeepEquals(replay.Body, d.Body)).IsTrue();
+    }
+
+    [Test]
+    public async Task A_named_workspace_root_outside_any_git_tree_is_refused_and_still_bounds_the_path() {
+        var (root, _) = SeedRepo();
+        var loose     = Tmp.CreateDir("loose");
+        loose.CreateFile("plan.md", "x");
+
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args($$"""{"session_id":"s1","kind":"plan","path":"plan.md","workspace_root":{{JsonValue.Create(loose.Path).ToJsonString()}}}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("not inside a git working tree");
+        await Assert.That(() => McpPlansServer.BuildDeclaration(Args($$"""{"session_id":"s1","kind":"plan","path":"../secret.txt","workspace_root":{{JsonValue.Create(root.Path).ToJsonString()}}}"""), root, root))
+            .Throws<ArgumentException>().WithMessageContaining("outside the project root");
+    }
+
+    [Test]
+    public async Task Declaration_carries_a_named_plan_id() {
+        var (root, _) = SeedRepo();
+        var d = McpPlansServer.BuildDeclaration(Args("""{"session_id":"s1","kind":"plan","path":"docs/plan.md","plan_id":"p-1"}"""), root, root);
+
+        await Assert.That(d.Body["plan_id"]!.GetValue<string>()).IsEqualTo("p-1");
+        await Assert.That(d.Document.ToArguments("s1").ContainsKey("plan_id")).IsFalse();
     }
 
     [Test]

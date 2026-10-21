@@ -35,11 +35,20 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
                 _disposables.Add(Disposable.Create(() => value.PropertyChanged -= OnPullRequestChanged));
             }
             this.RaisePropertyChanged(nameof(PullRequests));
+            this.RaisePropertyChanged(nameof(IsStale));
             RebuildLinks();
         }
     }
     public bool ShowsLegacyLinks => PullRequests is null;
-    public PullRequestRepository? PrimaryRepository { get; private set; }
+    PullRequestRepository? _primaryRepository;
+    public PullRequestRepository? PrimaryRepository {
+        get => _primaryRepository;
+        private set {
+            var changed = value is not null && value != _primaryRepository;
+            _primaryRepository = value;
+            if (changed) PullRequests?.PrimaryRepositoryChanged();
+        }
+    }
     internal static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(30);
     static readonly IReadOnlyList<HarnessOption> DefaultHarnessOptions = HostedHarnessCatalog.Build(null);
 
@@ -119,6 +128,11 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     public IReadOnlyList<RunCount> RunCounts =>
         [.. RunCountOrder.Select(state => new RunCount(state, _runs.Count(state))).Where(c => c.Count > 0)];
 
+    /// A subagent row the user chose to read; the workspace opens its transcript in place of the chat.
+    public event Action<RunRow>? RunOpened;
+
+    public ReactiveCommand<RunRow, Unit> OpenRunCommand { get; }
+
     /// The plan the session works from. Server-derived, and read on its own lease so a slow plan
     /// read never holds the work item back.
     public PlanSectionViewModel Plan { get; }
@@ -170,6 +184,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             or nameof(PullRequestContextViewModel.HasPullRequest)
             or nameof(PullRequestContextViewModel.HasListed))
             RaiseRelated();
+        if (e.PropertyName == nameof(PullRequestContextViewModel.HasStaleOverview))
+            this.RaisePropertyChanged(nameof(IsStale));
     }
 
     string? _reportedBranch;
@@ -189,7 +205,14 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     }
 
     bool _isStale;
-    public bool IsStale { get => _isStale; private set => this.RaiseAndSetIfChanged(ref _isStale, value); }
+    public bool IsStale {
+        get => _isStale || _pullRequests?.HasStaleOverview == true;
+        private set {
+            if (_isStale == value) return;
+            _isStale = value;
+            this.RaisePropertyChanged(nameof(IsStale));
+        }
+    }
     bool _isReading;
     public bool IsReading {
         get => _isReading;
@@ -265,7 +288,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ex => WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message),
             Apply,
             "work context",
-            reading => IsReading = reading);
+            reading => IsReading = reading,
+            cached: _source.Cached);
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         Artefacts = artefacts;
         _opener = opener;
@@ -274,6 +298,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
         _runs = runs;
         _runs.Changed += RefreshRuns;
         InitializeProjections();
+        OpenRunCommand = ReactiveCommand.Create<RunRow>(row => { if (row.CanOpen) RunOpened?.Invoke(row); });
+        _disposables.Add(OpenRunCommand);
         _disposables.Add(_hasSessionChanges);
         _disposables.Add(_canOpenWorkItem);
 

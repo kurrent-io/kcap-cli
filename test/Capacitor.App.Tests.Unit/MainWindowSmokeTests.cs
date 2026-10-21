@@ -296,7 +296,7 @@ public class MainWindowSmokeTests {
             return texts;
         });
 
-        await Assert.That(rendered).Contains("Kurrent Capacitor");
+        await Assert.That(rendered).Contains("kcap");
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 
@@ -490,6 +490,104 @@ public class MainWindowSmokeTests {
             await Assert.That(swap.launcherBack).IsTrue();
             await Assert.That(swap.workspacesAfter).IsEqualTo(0);
         });
+    }
+
+    /// Reopening after a close shows the view the window built first, bound to the new session:
+    /// a fresh view per open is what a macOS accessibility peer keeps alive.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Reopening_a_session_after_a_close_reuses_the_workspace_view() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var reuse = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var (actions, _) = NewActions(service);
+                var vm = new MainWindowViewModel(
+                    service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                    workspaceFactory: agentId => NewWorkspace(service, actions, agentId));
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+
+                vm.OpenSession("0123456789abcdef0123456789abcdef");
+                Dispatcher.UIThread.RunJobs();
+                var first = window.GetVisualDescendants().OfType<WorkspaceView>().Single();
+
+                vm.CloseWorkspace();
+                Dispatcher.UIThread.RunJobs();
+                var heldWhileClosed = first.DataContext;
+
+                vm.OpenSession("fedcba9876543210fedcba9876543210");
+                Dispatcher.UIThread.RunJobs();
+                var second = window.GetVisualDescendants().OfType<WorkspaceView>().Single();
+                var boundTo = (second.DataContext as WorkspaceViewModel)?.AgentId;
+
+                vm.CloseWorkspace();
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return (Same: ReferenceEquals(first, second), boundTo, heldWhileClosed);
+            });
+
+            await Assert.That(reuse.Same).IsTrue();
+            await Assert.That(reuse.boundTo).IsEqualTo("fedcba9876543210fedcba9876543210");
+            await Assert.That(reuse.heldWhileClosed).IsNull(); // the retained view lets the closed session go
+        });
+    }
+
+    /// A local session in between hands the slot to the other template; the next remote session
+    /// still gets the remote view the window built first.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_session_after_a_local_one_reuses_the_remote_view() {
+        using var host = new RemoteHost();
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var reuse = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var (actions, _) = NewActions(service);
+                var vm = new MainWindowViewModel(
+                    service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                    workspaceFactory: agentId => NewWorkspace(service, actions, agentId),
+                    remoteWorkspaceFactory: host.New);
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                Dispatcher.UIThread.RunJobs();
+
+                vm.OpenSession("remote-1", AgentOrigin.Remote);
+                Dispatcher.UIThread.RunJobs();
+                var first = window.GetVisualDescendants().OfType<RemoteSessionView>().Single();
+
+                vm.OpenSession("local-1", AgentOrigin.Local);
+                Dispatcher.UIThread.RunJobs();
+                var localShown = window.GetVisualDescendants().OfType<WorkspaceView>().Count();
+
+                vm.OpenSession("remote-2", AgentOrigin.Remote);
+                Dispatcher.UIThread.RunJobs();
+                var second = window.GetVisualDescendants().OfType<RemoteSessionView>().Single();
+                var boundTo = (second.DataContext as RemoteSessionViewModel)?.AgentId;
+
+                vm.CloseWorkspace();
+                window.Close();
+                Dispatcher.UIThread.RunJobs();
+                return (Same: ReferenceEquals(first, second), localShown, boundTo);
+            });
+
+            await Assert.That(reuse.localShown).IsEqualTo(1);
+            await Assert.That(reuse.Same).IsTrue();
+            await Assert.That(reuse.boundTo).IsEqualTo("remote-2");
+        });
+    }
+
+    /// x:DataType on a DataTemplate subclass must still narrow it, or the local template would
+    /// claim remote sessions too.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Each_workspace_template_matches_only_its_own_model() {
+        var types = await AvaloniaSession.DispatchAsync(() => {
+            var window = new MainWindow();
+            var host = window.FindControl<ContentControl>("WorkspaceHost")!;
+            return host.DataTemplates.OfType<RetainedViewTemplate>().Select(t => t.DataType!).ToList();
+        });
+
+        await Assert.That(types).IsEquivalentTo([typeof(WorkspaceViewModel), typeof(RemoteSessionViewModel)]);
     }
 
     /// A shown MainWindow whose rail holds two rows, "Fix the flaky test"
@@ -1090,6 +1188,54 @@ public class MainWindowSmokeTests {
             text ?? block.Text ?? "", CultureInfo.CurrentCulture, FlowDirection.LeftToRight,
             new Typeface(block.FontFamily, block.FontStyle, block.FontWeight), block.FontSize, null).Width;
 
+    /// Windows draws no native app menu to carry ⌘,, so the window itself binds Ctrl+, to Settings.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Settings_shortcut_is_bound_to_the_settings_command_on_Windows() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (bound, isSettings) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+                var window = new MainWindow { DataContext = vm };
+                var binding = window.KeyBindings.SingleOrDefault(
+                    k => k.Gesture is { Key: Key.OemComma, KeyModifiers: KeyModifiers.Control });
+                var result = (binding is not null, ReferenceEquals(binding?.Command, vm.OpenSettingsCommand));
+                window.Close();
+                return result;
+            });
+
+            await Assert.That(bound).IsEqualTo(OperatingSystem.IsWindows());
+            if (bound) await Assert.That(isSettings).IsTrue();
+        });
+    }
+
+    /// F11 on Windows: full screen, then back to the state it left, maximized included.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Full_screen_shortcut_toggles_and_restores_the_previous_state_on_Windows() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (bound, entered, restored) = await AvaloniaSession.DispatchAsync(() => {
+                var service = new FakeDaemonClientService();
+                var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
+                var window = new MainWindow { DataContext = vm };
+                window.Show();
+                window.WindowState = WindowState.Maximized;
+                var binding = window.KeyBindings.SingleOrDefault(k => k.Gesture is { Key: Key.F11, KeyModifiers: KeyModifiers.None });
+                binding?.Command.Execute(null);
+                var inFullScreen = window.WindowState;
+                binding?.Command.Execute(null);
+                var after = window.WindowState;
+                window.Close();
+                return (binding is not null, inFullScreen, after);
+            });
+
+            await Assert.That(bound).IsEqualTo(OperatingSystem.IsWindows());
+            if (!bound) return;
+            await Assert.That(entered).IsEqualTo(WindowState.FullScreen);
+            await Assert.That(restored).IsEqualTo(WindowState.Maximized);
+        });
+    }
+
     /// Cmd+N / Ctrl+N: the window binds the advertised New session shortcut to CloseWorkspaceCommand,
     /// which drops an open workspace back to the launcher (the new-session empty state).
     [Test]
@@ -1318,6 +1464,55 @@ public class MainWindowSmokeTests {
         }
     });
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_help_flyout_items_close_the_flyout_and_invoke_their_commands_when_clicked() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var opener = new RecordingOpener();
+        var reported = new List<Capacitor.Cli.Core.Commands.FeedbackCategory>();
+        var setupOpened = 0;
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            openFeedback: reported.Add, opener: opener, requestSetup: () => setupOpened++);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+
+            void OpenAndClick(string buttonName) {
+                flyout.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                ClickFlyoutButton(rail.FindControl<Button>(buttonName)!);
+            }
+
+            OpenAndClick("RailHelpSetupButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(setupOpened).IsEqualTo(1);
+
+            OpenAndClick("RailHelpDocsButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl]);
+
+            OpenAndClick("RailHelpBugButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(reported).IsEquivalentTo([Capacitor.Cli.Core.Commands.FeedbackCategory.Bug]);
+
+            OpenAndClick("RailHelpFeedbackButton");
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(reported).IsEquivalentTo([
+                Capacitor.Cli.Core.Commands.FeedbackCategory.Bug,
+                Capacitor.Cli.Core.Commands.FeedbackCategory.Feedback,
+            ]);
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
     /// Off macOS the help flyout carries the app menu's Settings, Changelog and version — the only
     /// in-window route to Settings where no native menu bar is drawn. Settings stays inert until the
     /// app hands it an action.
@@ -1329,9 +1524,10 @@ public class MainWindowSmokeTests {
         var service = new FakeDaemonClientService();
         service.SnapshotsSubject.OnNext(Snap());
         var settings = new System.Reactive.Subjects.BehaviorSubject<Action?>(null);
+        var opener = new RecordingOpener();
         var opened = 0;
         var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
-            settingsAction: settings, appMenuInWindow: inWindow);
+            opener: opener, settingsAction: settings, appMenuInWindow: inWindow);
         var window = new MainWindow { DataContext = vm };
         try {
             window.Show();
@@ -1345,21 +1541,108 @@ public class MainWindowSmokeTests {
 
             var items = rail.FindControl<StackPanel>("RailAppMenuItems")!;
             var settingsButton = rail.FindControl<Button>("RailHelpSettingsButton")!;
+            var changelogButton = rail.FindControl<Button>("RailHelpChangelogButton")!;
             await Assert.That(items.IsVisible).IsEqualTo(inWindow);
             await Assert.That(settingsButton.Content).IsEqualTo("Settings…");
-            await Assert.That(rail.FindControl<Button>("RailHelpChangelogButton")!.Content).IsEqualTo("Changelog");
-            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("Kurrent Capacitor ");
+            await Assert.That(changelogButton.Content).IsEqualTo("Changelog");
+            await Assert.That(rail.FindControl<TextBlock>("RailAppVersionText")!.Text).StartsWith("kcap ");
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsFalse();
 
             settings.OnNext(() => opened++);
             Dispatcher.UIThread.RunJobs();
             await Assert.That(settingsButton.IsEffectivelyEnabled).IsTrue();
-            settingsButton.Command!.Execute(null);
-            Dispatcher.UIThread.RunJobs();
-            await Assert.That(opened).IsEqualTo(1);
+            if (inWindow) {
+                ClickFlyoutButton(settingsButton);
+                await Assert.That(flyout.IsOpen).IsFalse();
+                await Assert.That(opened).IsEqualTo(1);
 
-            flyout.Hide();
+                flyout.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                ClickFlyoutButton(changelogButton);
+                await Assert.That(flyout.IsOpen).IsFalse();
+                await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.ChangelogUrl]);
+            } else {
+                flyout.Hide();
+                Dispatcher.UIThread.RunJobs();
+            }
+        } finally {
+            window.Close();
             Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /// A help item closes the flyout from its Click handler, which runs before the button's command.
+    /// The command must still run: a flyout that detached its content first would leave every item dead.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_help_items_run_their_command_when_clicked() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var opener = new RecordingOpener();
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            appMenuInWindow: true, opener: opener);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var onClick = typeof(Button).GetMethod("OnClick", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            foreach (var name in new[] { "RailHelpDocsButton", "RailHelpChangelogButton" }) {
+                help.Flyout!.ShowAt(help);
+                Dispatcher.UIThread.RunJobs();
+                onClick.Invoke(rail.FindControl<Button>(name)!, null);
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl, AppMenuBar.ChangelogUrl]);
+        } finally {
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+    });
+
+    /// Windows has no native About panel, so the rail's help flyout opens the app's own, and a
+    /// second click brings that one forward rather than stacking another.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Rail_help_opens_one_About_window_on_Windows() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.SnapshotsSubject.OnNext(Snap());
+        var opener = new RecordingOpener();
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            appMenuInWindow: true, opener: opener);
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            // Opened first: the flyout's rows only bind once they join a tree.
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            ((Flyout)help.Flyout!).ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var about = rail.FindControl<Button>("RailHelpAboutButton")!;
+            await Assert.That(about.IsVisible).IsEqualTo(OperatingSystem.IsWindows());
+            if (!OperatingSystem.IsWindows()) return;
+
+            about.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            about.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            Dispatcher.UIThread.RunJobs();
+
+            var opened = window.OwnedWindows.OfType<AboutWindow>().ToArray();
+            await Assert.That(opened.Length).IsEqualTo(1);
+            await Assert.That(opened[0].FindControl<TextBlock>("AboutVersionText")!.Text).StartsWith("Version ");
+
+            var docs = opened[0].FindControl<Button>("AboutDocsButton")!;
+            var changelog = opened[0].FindControl<Button>("AboutChangelogButton")!;
+            await Assert.That(docs.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(changelog.IsEffectivelyEnabled).IsTrue();
+            docs.Command!.Execute(null);
+            changelog.Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(opener.Opened).IsEquivalentTo([AppMenuBar.DocsUrl, AppMenuBar.ChangelogUrl]);
         } finally {
             window.Close();
             Dispatcher.UIThread.RunJobs();
@@ -1546,9 +1829,11 @@ public class MainWindowSmokeTests {
             Dispatcher.UIThread.RunJobs();
             var signIn = rail.FindControl<Button>("RailHelpSignInButton")!;
             var whileOut = signIn.IsVisible && signIn.IsEffectivelyEnabled && signIn.Classes.Contains("kcapGhost");
-            vm.SignInCommand.Execute().Subscribe();
-            Dispatcher.UIThread.RunJobs();
+            ClickFlyoutButton(signIn);
+            var closedOnClick = !flyout.IsOpen;
 
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
             lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
@@ -1557,12 +1842,25 @@ public class MainWindowSmokeTests {
             flyout.Hide();
             window.Close();
             Dispatcher.UIThread.RunJobs();
-            return (whileOut, clicks, whileIn);
+            return (whileOut && closedOnClick, clicks, whileIn);
         });
 
         await Assert.That(visibleWhileOut).IsTrue();
         await Assert.That(clicks).IsEqualTo(1);
         await Assert.That(visibleWhileIn).IsFalse();
+    }
+
+    static void ClickFlyoutButton(Button button) {
+        Dispatcher.UIThread.RunJobs();
+        var top = TopLevel.GetTopLevel(button)
+            ?? throw new InvalidOperationException("Flyout button is not attached to a TopLevel.");
+        top.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+        var point = button.TranslatePoint(new Point(button.Bounds.Width / 2, button.Bounds.Height / 2), top)
+            ?? throw new InvalidOperationException("Flyout button has no coordinates in its TopLevel.");
+        top.MouseDown(point, MouseButton.Left);
+        top.MouseUp(point, MouseButton.Left);
+        Dispatcher.UIThread.RunJobs();
     }
 
     /// 330 of rail plus 400 of pane must never squeeze the center column to nothing.

@@ -24,6 +24,15 @@ public class HtmlBlockRuleTests {
         await Assert.That(Trees.Dump(markdown)).IsEqualTo("doc(p(em*2('bold text')))");
     }
 
+    /// Only ASCII whitespace and line breaks collapse and trim; a no-break space survives, at the
+    /// paragraph's edges too.
+    [Test]
+    [Arguments("&nbsp;&nbsp;&nbsp;item&nbsp;", "\u00A0\u00A0\u00A0item\u00A0")]
+    [Arguments("a&nbsp; &nbsp;b", "a\u00A0 \u00A0b")]
+    [Arguments("a\u0085\u2028 \u2029\v\fb", "a b")]
+    public async Task Whitespace_collapses_as_html_does(string text, string expected) =>
+        await Assert.That(Trees.Dump($"<b>\n{text}\n</b>")).IsEqualTo($"doc(p(em*2('{expected}')))");
+
     [Test]
     public async Task One_unknown_tag_rejects_the_whole_block() {
         await Untouched("<b>\nbold <iframe>x</iframe>\n</b>");

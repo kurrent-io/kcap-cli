@@ -184,12 +184,12 @@ public class ChatTabViewModelTests {
 
         public Harness(IChatTranscriptProjection? projection, Action<FakePermissionService>? seed = null,
                        ChatInput? input = null, string? unavailableNote = null, IAttachmentUploader? uploader = null,
-                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null) {
+                       Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null) {
             seed?.Invoke(Permissions);
             Runs = new SessionRuns(Time);
             Terminal = new TerminalTabViewModel("a1", Daemon, Factory.Factory, () => new FakeTerminalSurface(), Time);
             Chat = new ChatTabViewModel(
-                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts);
+                "a1", Daemon, input ?? new TerminalChatInput(Terminal, "a1", Daemon, new ScriptedLocalControlOps(), Observable.Never<AgentPresence>()), uploader ?? new NoAttachmentUploader(), projection, Opener, Time, Permissions, Runs, unavailableNote, planActivity: Plan, openCard: openCard, drafts: drafts, transcripts: transcripts);
         }
 
         public async Task PushAsync(AgentStatusDto dto) {
@@ -221,6 +221,25 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.HasPendingCards).IsTrue();
             await Assert.That(CardRows(h.Chat).Select(c => c.Card.RequestId)).IsEquivalentTo(new[] { "r1" });
             await Assert.That(h.Chat.PhaseNote).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_closing_local_tab_hands_off_its_feed_whether_or_not_it_reads_through_the_shared_cache(bool shared) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"), transcripts: shared ? new LocalTranscripts() : null);
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [UserLine, AssistantLine])));
+            await WaitUntilAsync(() => h.Chat.Items.Count > 0, what: "the initial load");
+
+            var handoff = h.Chat.ReleaseFeed();
+
+            await Assert.That(handoff).IsNotNull();
+            await Assert.That(handoff!.Runs).IsSameReferenceAs(h.Runs);
+            handoff.Feed.Dispose();
             await h.TeardownAsync();
         });
     }
@@ -620,25 +639,80 @@ public class ChatTabViewModelTests {
         });
     }
 
-    /// A live turn owns the footer: the activity note is showing, and a foreground launch is
-    /// already a Task row. The note returns once the turn is over and the run is still going.
+    /// A foreground launch is already a Task row while its turn is live, so the strip leaves it
+    /// out until the turn is over.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_strip_yields_to_the_activity_note_while_a_turn_is_live() {
+    public async Task The_strip_leaves_a_foreground_run_to_the_transcript_while_a_turn_is_live() {
         await RunOnUiAsync(async () => {
             var h = Claude();
             var raised = new List<string?>();
             h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
-            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine, AgentLaunchLine]);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
             await h.PushAsync(Dto(path) with { AwaitingInput = false });
             await h.TickAsync();
             await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
             await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await Assert.That(h.Chat.RunningRow).IsNull();
 
             raised.Clear();
             await h.PushAsync(Dto(path) with { AwaitingInput = true });
             await Assert.That(h.Chat.ActivityNote).IsEmpty();
             await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Explore");
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
+            await Assert.That(raised).Contains(nameof(ChatTabViewModel.RunningRow));
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The next prompt starts a live turn; a run still going in the background stays in the strip
+    /// until it ends, as it stays in the sidebar.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_background_run_stays_in_the_strip_through_the_next_turn() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [ShellCallLine, ShellLaunchLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await h.TickAsync();
+            await Assert.That(h.Chat.ActivityNote).StartsWith("Working for");
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
+
+            File.AppendAllText(path, AgentCallLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.RunningRow!.Name).IsEqualTo("Run the full suite");
+            await Assert.That(h.Chat.RunSummary).IsEmpty();
+
+            File.AppendAllText(path, ShellFinishLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A detach changes no state count, yet it is what brings a mid-turn run into the strip.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_run_sent_to_the_background_mid_turn_joins_the_strip() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var raised = new List<string?>();
+            h.Chat.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+            var path = Tmp.CreateFile("t.jsonl", [AgentCallLine]);
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningRuns).IsFalse();
+
+            raised.Clear();
+            File.AppendAllText(path, AgentLaunchLine + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasRunningRuns).IsTrue();
+            await Assert.That(h.Chat.RunningRow!.StateText).StartsWith("running in background · ");
             await Assert.That(raised).Contains(nameof(ChatTabViewModel.HasRunningRuns));
             await h.TeardownAsync();
         });
@@ -1433,6 +1507,80 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// The session is captured as each prompt goes out, and only a prompt the channel accepted can
+    /// have answered its open questions, whether or not its tab outlived the send.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Only_an_accepted_send_reports_its_session_as_answered() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput { HonoursCancellation = false };
+            var time = new FakeTimeProvider();
+            var sending = new List<string>();
+            var answered = new List<string>();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
+                new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true }, new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                sessionId: new BehaviorSubject<string?>("s1")) {
+                InputSending = sid => { sending.Add(sid); return () => answered.Add(sid); },
+            };
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
+
+            chat.ComposerText = "refused";
+            var send = chat.SendCommand.Execute().ToTask();
+            await Assert.That(sending).IsEquivalentTo(["s1"]);
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
+            await send;
+            await Assert.That(answered).IsEmpty();
+
+            chat.ComposerText = "delivered";
+            send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(answered).IsEquivalentTo(["s1"]);
+
+            chat.ComposerText = "delivered after the tab closed";
+            send = chat.SendCommand.Execute().ToTask();
+            var pending = input.Pending!;
+            await chat.TeardownAsync();
+            pending.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(answered).IsEquivalentTo(["s1", "s1"]);
+        });
+    }
+
+    /// While the local daemon reports another server, its session ids name that server's sessions,
+    /// so a reply there answers nothing the app's tracker holds.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_send_reports_its_session_only_while_the_daemon_is_on_the_app_server() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var time = new FakeTimeProvider();
+            var onAppServer = new BehaviorSubject<bool>(false);
+            var sending = new List<string>();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Local, new BehaviorSubject<ChatSessionInfo>(Session("s1")), Observable.Return<string[]?>(null), input,
+                new NoAttachmentUploader(), _ => new EmptyFeed(), new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time),
+                sessionId: new BehaviorSubject<string?>("s1"), localDaemonOnAppServer: onAppServer) {
+                InputSending = sid => { sending.Add(sid); return () => { }; },
+            };
+
+            chat.ComposerText = "elsewhere";
+            var send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(sending).IsEmpty();
+
+            onAppServer.OnNext(true);
+            chat.ComposerText = "here";
+            send = chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(sending).IsEquivalentTo(["s1"]);
+            await chat.TeardownAsync();
+        });
+    }
+
     /// Pins that a draft outlives its tab, which navigation tears down, and that a sent one does not.
     [Test]
     [NotInParallel("AvaloniaSession")]
@@ -1527,6 +1675,548 @@ public class ChatTabViewModelTests {
             await Assert.That(h.Chat.RecallNewer()).IsTrue();
             await Assert.That(h.Chat.ComposerText).IsEqualTo("");
             await Assert.That(h.Chat.RecallNewer()).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// Enter on a recalled copy of a queued prompt leaves that one row. Send on the row, once the
+    /// agent is idle, is what delivers it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Enter_on_queued_text_does_not_add_a_second_row_and_send_delivers_it_once_idle() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            await Assert.That(queued.CanSendNow).IsTrue();
+            await Assert.That(queued.PickupNote).IsEqualTo(QueuedChatMessage.IdlePickupNote);
+
+            h.Chat.ComposerText = "";
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+            await h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(input.Pending).IsNull();
+            await Assert.That(input.Sends).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(queued);
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+
+            await h.PushAsync(Dto(path) with { AwaitingInput = false });
+            await Assert.That(queued.CanSendNow).IsFalse();
+            await Assert.That(queued.PickupNote).IsEqualTo(QueuedChatMessage.AwaitingPickupNote);
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await h.Chat.SendCommand.Execute().ToTask();
+            await Assert.That(input.Pending).IsNull();
+            await Assert.That(input.Sends).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+
+            await h.PushAsync(Dto(path) with { AwaitingInput = true });
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            await Assert.That(input.Sends).Count().IsEqualTo(2);
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsNotSameReferenceAs(queued);
+            await Assert.That(h.Chat.QueuedMessages.Single().Text).IsEqualTo("look");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// An idle row Send keeps an unrelated draft and leaves staged chips alone, including text
+    /// typed while the channel is still deciding. The replacement is text-only, and a rejected
+    /// attempt puts the original row back.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_keeps_draft_and_tray_and_restores_the_row_on_refusal() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            h.Chat.ComposerText = "unrelated draft";
+            h.Chat.Tray.AddAll([new StagedAttachment("note.txt", "text/plain", "hi"u8.ToArray())]);
+
+            var refused = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Rejected);
+            await refused;
+            await Assert.That(input.Sends.Last().Ids).IsEmpty();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("unrelated draft");
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(queued);
+            await Assert.That(queued.CanSendNow).IsTrue();
+
+            var accepted = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            await WaitUntilAsync(() => input.Pending is not null, what: "the queued send reaching the channel");
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("unrelated draft");
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            h.Chat.ComposerText = "typed while sending";
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await accepted;
+            await Assert.That(input.Sends.Last().Ids).IsEmpty();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("typed while sending");
+            await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsNotSameReferenceAs(queued);
+            await h.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [Arguments(false, false, ChatSendOutcome.Accepted, false)]
+    [Arguments(false, false, ChatSendOutcome.Unconfirmed, false)]
+    [Arguments(false, false, ChatSendOutcome.Unconfirmed, true)]
+    [Arguments(true, false, ChatSendOutcome.Accepted, false)]
+    [Arguments(true, false, ChatSendOutcome.Unconfirmed, false)]
+    [Arguments(true, false, ChatSendOutcome.Unconfirmed, true)]
+    [Arguments(true, true, ChatSendOutcome.Accepted, false)]
+    [Arguments(true, true, ChatSendOutcome.Unconfirmed, false)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_clears_only_an_unchanged_recall(bool recall, bool editBack, ChatSendOutcome outcome, bool echoFirst) {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, drafts: drafts);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var queued = h.Chat.QueuedMessages.Single();
+                if (recall) await Assert.That(h.Chat.RecallOlder()).IsTrue();
+                else h.Chat.ComposerText = "look";
+                if (editBack) {
+                    h.Chat.ComposerText = "look again";
+                    h.Chat.ComposerText = "look";
+                }
+
+                var send = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+                if (echoFirst) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                }
+                input.Pending!.SetResult(outcome);
+                await send;
+                var ownsDraft = recall && !editBack;
+                await Assert.That(h.Chat.ComposerText).IsEqualTo(ownsDraft && (echoFirst || outcome == ChatSendOutcome.Accepted) ? "" : "look");
+                if (!echoFirst) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                }
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo(ownsDraft ? "" : "look");
+                await Assert.That(drafts.Get(AgentOrigin.Local, "a1")).IsEqualTo(ownsDraft ? "" : "look");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted)]
+    [Arguments(ChatSendOutcome.Unconfirmed)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_retried_twice_is_retired_by_the_next_echo(ChatSendOutcome outcome) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.QueuedMessages.Single();
+                await SendAsync(h, input, "look");
+                var other = h.Chat.QueuedMessages[^1];
+                for (var attempt = 0; attempt < 2; attempt++) {
+                    await Assert.That(retry.CanSendNow).IsTrue();
+                    var send = h.Chat.SendQueuedCommand.Execute(retry).ToTask();
+                    input.Pending!.SetResult(outcome);
+                    await send;
+                    retry = h.Chat.QueuedMessages[^1];
+                }
+
+                await Assert.That(input.Sends).Count().IsEqualTo(4);
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(other);
+                await SendAsync(h, input, "look");
+                for (var echo = 0; echo < 3; echo++) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                    await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(other);
+                }
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted, false)]
+    [Arguments(ChatSendOutcome.Accepted, true)]
+    [Arguments(ChatSendOutcome.Unconfirmed, false)]
+    [Arguments(ChatSendOutcome.Unconfirmed, true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_retry_echoes_preserve_a_send_between_retries(ChatSendOutcome outcome, bool echoBeforeRetry) {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, drafts: drafts);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.SendQueuedCommand.Execute(h.Chat.QueuedMessages.Single()).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+                var firstRetry = h.Chat.QueuedMessages.Single();
+
+                h.Chat.ComposerText = "look";
+                var independentSend = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(outcome);
+                await independentSend;
+                var independent = h.Chat.QueuedMessages[^1];
+                if (echoBeforeRetry) File.AppendAllText(path, User("look") + "\n");
+                retry = h.Chat.SendQueuedCommand.Execute(firstRetry).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+
+                await Assert.That(input.Sends).Count().IsEqualTo(4);
+                if (echoBeforeRetry) {
+                    await h.TickAsync();
+                    await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+                }
+                for (var echo = 0; echo < (echoBeforeRetry ? 2 : 3); echo++) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                    var expectedDraft = outcome == ChatSendOutcome.Unconfirmed ? "look" : "";
+                    await Assert.That(h.Chat.ComposerText).IsEqualTo(expectedDraft);
+                    await Assert.That(drafts.Get(AgentOrigin.Local, "a1")).IsEqualTo(expectedDraft);
+                    await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                    await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(independent);
+                }
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted)]
+    [Arguments(ChatSendOutcome.Unconfirmed)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_after_reset_of_an_acknowledged_retry_is_retired_by_its_echo(ChatSendOutcome outcome) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine, AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.SendQueuedCommand.Execute(h.Chat.QueuedMessages.Single()).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+
+                File.WriteAllLines(path, [AssistantLine]);
+                await h.TickAsync();
+                h.Chat.ComposerText = "look";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(outcome);
+                await send;
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_second_retry_refusal_preserves_echo_ownership(bool echoDuringRetry) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var retry = h.Chat.SendQueuedCommand.Execute(h.Chat.QueuedMessages.Single()).ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                await retry;
+                var firstRetry = h.Chat.QueuedMessages.Single();
+
+                h.Chat.ComposerText = "look";
+                var independentSend = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+                await independentSend;
+                var independent = h.Chat.QueuedMessages[^1];
+                retry = h.Chat.SendQueuedCommand.Execute(firstRetry).ToTask();
+                if (echoDuringRetry) {
+                    File.AppendAllText(path, User("look") + "\n");
+                    await h.TickAsync();
+                }
+                input.Pending!.SetResult(ChatSendOutcome.Rejected);
+                await retry;
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(echoDuringRetry ? 1 : 2);
+                if (!echoDuringRetry) await Assert.That(h.Chat.QueuedMessages[^1]).IsSameReferenceAs(firstRetry);
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(independent);
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(ChatSendOutcome.Accepted)]
+    [Arguments(ChatSendOutcome.Rejected)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_retries_unconfirmed_text_only_when_idle(ChatSendOutcome outcome) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                h.Chat.ComposerText = "look";
+                var send = h.Chat.SendCommand.Execute().ToTask();
+                input.Pending!.SetResult(ChatSendOutcome.Unconfirmed);
+                await send;
+                var queued = h.Chat.QueuedMessages.Single();
+                await Assert.That(queued.IsUnconfirmed).IsTrue();
+                await Assert.That(queued.CanSendNow).IsTrue();
+                await h.PushAsync(Dto(path) with { Status = "Running", AwaitingInput = false });
+                await Assert.That(queued.CanSendNow).IsFalse();
+                await h.Chat.SendQueuedCommand.Execute(queued);
+                await Assert.That(input.Sends).Count().IsEqualTo(1);
+
+                await h.PushAsync(Dto(path) with { Status = "Running", AwaitingInput = true });
+                var retry = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+                input.Pending!.SetResult(outcome);
+                await retry;
+                var remaining = h.Chat.QueuedMessages.Single();
+                if (outcome == ChatSendOutcome.Rejected) await Assert.That(remaining).IsSameReferenceAs(queued);
+                else await Assert.That(remaining).IsNotSameReferenceAs(queued);
+                await Assert.That(remaining.IsUnconfirmed).IsEqualTo(outcome == ChatSendOutcome.Rejected);
+                await Assert.That(remaining.CanSendNow).IsTrue();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo(outcome == ChatSendOutcome.Accepted ? "" : "look");
+
+                File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_refusal_does_not_restore_an_echoed_prompt(bool echoedBeforeRetry) {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+                await h.PushAsync(Dto(path));
+                await SendAsync(h, input, "look");
+                var queued = h.Chat.QueuedMessages.Single();
+                h.Chat.ComposerText = "look";
+                if (echoedBeforeRetry) File.AppendAllText(path, User("look") + "\n");
+                var retry = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+                if (!echoedBeforeRetry) File.AppendAllText(path, User("look") + "\n");
+                await h.TickAsync();
+                input.Pending!.SetResult(ChatSendOutcome.Rejected);
+                await retry;
+
+                await Assert.That(input.Sends).Count().IsEqualTo(2);
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Two same-text rows plus an unedited recall must not block an explicit Send on one of them.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_bypasses_recall_dedup_when_another_same_text_row_remains() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            await SendAsync(h, input, "look");
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+            var first = h.Chat.QueuedMessages[0];
+            h.Chat.ComposerText = "";
+            await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("look");
+
+            var forced = h.Chat.SendQueuedCommand.Execute(first).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            await Assert.That(input.Sends).Count().IsEqualTo(3);
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+            await Assert.That(h.Chat.QueuedMessages.Any(q => ReferenceEquals(q, first))).IsFalse();
+            await Assert.That(h.Chat.ComposerText).IsEqualTo("");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// The resend's own echo retires the replacement. A later copy of that text is the dropped
+    /// row's, so the banner stays clear.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_resend_echo_retires_the_replacement_and_a_later_copy_is_absorbed() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsNotSameReferenceAs(queued);
+
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// Once the resend has echoed, a later copy of its text is absorbed. Another row that happens
+    /// to carry the same text stays queued.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_later_echo_of_a_resent_row_leaves_another_same_text_row_queued() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            await SendAsync(h, input, "look");
+            var first = h.Chat.QueuedMessages[0];
+            var second = h.Chat.QueuedMessages[1];
+            var forced = h.Chat.SendQueuedCommand.Execute(first).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(second);
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.QueuedMessages.Single()).IsSameReferenceAs(second);
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A send made after the resend has echoed owns that echo. The dropped row does not take it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_send_after_a_resent_row_echoed_is_retired_by_its_own_echo() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+
+            h.Chat.ComposerText = "look";
+            var again = h.Chat.SendCommand.Execute().ToTask();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await again;
+            await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+            File.AppendAllText(path, User("look") + "\n");
+            await h.TickAsync();
+            await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+            await h.TeardownAsync();
+        });
+    }
+
+    /// Teardown disposes the busy signal while the queued send is still awaiting the channel.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Teardown_during_a_queued_send_preserves_independent_drafts(bool recall) {
+        await RunOnUiAsync(async () => {
+            var drafts = new ComposerDrafts();
+            var input = new ScriptedInput { HonoursCancellation = false };
+            var h = new Harness(TranscriptChat.For("claude"), input: input, drafts: drafts);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            if (recall) await Assert.That(h.Chat.RecallOlder()).IsTrue();
+            else h.Chat.ComposerText = "look";
+            var forced = h.Chat.SendQueuedCommand.Execute(queued).ToTask();
+            await WaitUntilAsync(() => input.Pending is not null, what: "the queued send reaching the channel");
+            await h.TeardownAsync();
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await forced;
+            await Assert.That(drafts.Get(AgentOrigin.Local, "a1")).IsEqualTo(recall ? "" : "look");
+        });
+    }
+
+    /// A send still uploading keeps CanAcceptText true; the busy gate hides row Send until it ends.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Queued_send_is_hidden_while_another_send_is_uploading() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var uploader = new HoldingUploader();
+            var h = new Harness(TranscriptChat.For("claude"), input: input, uploader: uploader);
+            var path = Tmp.CreateFile("t.jsonl", [AssistantLine]);
+            await h.PushAsync(Dto(path));
+            await SendAsync(h, input, "look");
+            var queued = h.Chat.QueuedMessages.Single();
+            await Assert.That(queued.CanSendNow).IsTrue();
+
+            h.Chat.ComposerText = "with file";
+            h.Chat.Tray.AddAll([new StagedAttachment("shot.png", "image/png", new byte[] { 1 })]);
+            var send = h.Chat.SendCommand.Execute().ToTask();
+            await uploader.Started.Task;
+            await Assert.That(queued.CanSendNow).IsFalse();
+            await h.Chat.SendQueuedCommand.Execute(queued);
+            await Assert.That(input.Sends).Count().IsEqualTo(1);
+
+            uploader.Release.SetResult(new UploadOutcome(UploadKind.Uploaded, ["file-1"], null));
+            await WaitUntilAsync(() => input.Pending is not null, what: "the send reaching the channel");
+            input.Pending!.SetResult(ChatSendOutcome.Accepted);
+            await send;
+            await Assert.That(queued.CanSendNow).IsTrue();
             await h.TeardownAsync();
         });
     }
@@ -2286,24 +2976,24 @@ public class ChatTabViewModelTests {
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
                 h.Chat.ComposerText = "keep going";
 
-                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
-                await Assert.That(h.Chat.UsageLimitChoices.Select(c => c.Label).ToArray()).IsEquivalentTo(new[] {
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuChoices.Select(c => c.Label).ToArray()).IsEquivalentTo(new[] {
                     "Stop and wait for limit to reset",
                     "Wait here, then continue automatically shortly",
                     "Ask your admin for more usage",
                 }, CollectionOrdering.Matching);
                 await Assert.That(h.Chat.ComposerHint).Contains("usage limit");
                 await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
-                await h.Chat.UsageLimitChoices[2].Choose.Execute().ToTask();
+                await h.Chat.TerminalMenuChoices[2].Choose.Execute().ToTask();
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'3' }, CollectionOrdering.Matching);
-                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
 
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
-                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
                 await Assert.That(input.Keys.Count).IsEqualTo(1);
 
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
-                await Assert.That(h.Chat.HasUsageLimitQuestion).IsFalse();
+                await Assert.That(h.Chat.HasTerminalMenu).IsFalse();
                 await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
             } finally { await h.TeardownAsync(); }
         });
@@ -2325,8 +3015,8 @@ public class ChatTabViewModelTests {
             try {
                 await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice });
 
-                var running = h.Chat.UsageLimitChoices[0].Choose.Execute().ToTask();
-                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+                var running = h.Chat.TerminalMenuChoices[0].Choose.Execute().ToTask();
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
                 release.SetResult();
                 await running;
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1' }, CollectionOrdering.Matching);
@@ -2337,15 +3027,15 @@ public class ChatTabViewModelTests {
                     Status = "Running",
                     UsageLimit = new UsageLimitNoticeDto(notice.Kind, "limit still held", notice.Prompt, notice.Options),
                 });
-                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
-                await Assert.That(h.Chat.UsageLimitError).Contains("not attached");
-                await Assert.That(await h.Chat.UsageLimitChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await Assert.That(h.Chat.TerminalMenuError).Contains("not attached");
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
                 await Assert.That(input.Keys.Count).IsEqualTo(1);
 
                 input.Accept = true;
-                await h.Chat.UsageLimitChoices[1].Choose.Execute().ToTask();
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
                 await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'1', (byte)'2' }, CollectionOrdering.Matching);
-                await Assert.That(await h.Chat.UsageLimitChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -2376,7 +3066,169 @@ public class ChatTabViewModelTests {
                 await Assert.That(input.Sent).IsEmpty();
                 await Assert.That(h.Chat.ComposerText).IsEqualTo("keep going");
                 await Assert.That(h.Chat.Tray.Count).IsEqualTo(1);
-                await Assert.That(h.Chat.HasUsageLimitQuestion).IsTrue();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins that the chat header names why an agent a daemon restart could not bring back stopped.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_interrupted_agent_shows_its_reason_in_the_chat_status() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Resuming" });
+                await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Resuming);
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Interrupted", Interruption = "worktree_missing" });
+
+                await Assert.That(h.Chat.AgentStatus.Kind).IsEqualTo(AgentStatusKind.Interrupted);
+                await Assert.That(h.Chat.AgentStatus.Tip).Contains("worktree_missing");
+                await Assert.That(h.Chat.AgentStatus.Tip).Contains("kcap agent resume a1");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins a terminal select dialog as a chat question: text is held back, and a choice moves the
+    /// dialog's cursor from where the screen shows it and confirms, in one write.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_dialog_is_answered_by_moving_its_cursor() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var dialog = new TerminalDialogDto("New MCP server found in this project: avalonia-docs",
+                "MCP servers may execute code or access system resources.", [
+                    "Use this MCP server",
+                    "Use this and all future MCP servers in this project",
+                    "Continue without using this MCP server",
+                ], selected: 2, screen: "");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+                h.Chat.ComposerText = "hello";
+
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuTitle).IsEqualTo("Waiting for you in Terminal");
+                await Assert.That(h.Chat.TerminalMenuHeading).IsEqualTo(dialog.Heading);
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+
+                await h.Chat.TerminalMenuChoices[0].Choose.Execute().ToTask();
+                await Assert.That(input.Writes).IsEquivalentTo(new[] { "\x1b[A\x1b[A\r" }, CollectionOrdering.Matching);
+
+                var redrawn = new TerminalDialogDto(dialog.Heading, dialog.Body, dialog.Options, selected: 0, screen: "");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = redrawn });
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                await Assert.That(h.Chat.HasTerminalMenu).IsFalse();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins the fallback for a dialog whose choices could not be read: the card carries the
+    /// screen text and sends the user to the terminal, and no keys are offered.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_dialog_without_readable_choices_points_at_the_terminal() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            var shown = false;
+            h.Chat.ShowTerminal = () => shown = true;
+            var dialog = new TerminalDialogDto("", "", [], -1, "3 new MCP servers found in this project\n❯ [ ] docs\n  [ ] search");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+                await Assert.That(h.Chat.TerminalMenuScreen).IsEqualTo(dialog.Screen);
+                await h.Chat.ShowTerminalCommand.Execute().ToTask();
+                await Assert.That(shown).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// Pins the hook card's precedence: while a card asks the question, the screen's copy of the
+    /// same dialog is not offered, and the composer stays shut because that dialog is still on
+    /// the terminal. The card comes back once the hook card is gone and the dialog is not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pending_card_hides_the_terminal_dialog_it_raised() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"), input: new KeyRecordingInput());
+            var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+            try {
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                h.Chat.ComposerText = "hello";
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsFalse();
+                await Assert.That(h.Chat.TerminalMenuChoices).IsEmpty();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.HasTerminalMenu).IsTrue();
+                await Assert.That(await h.Chat.SendCommand.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(h.Chat.TerminalMenuChoices).Count().IsEqualTo(2);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_terminal_dialog_stays_answered_when_a_pending_card_hides_and_reveals_it() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+            var agent = Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog };
+            try {
+                await h.PushAsync(agent);
+                await h.Chat.TerminalMenuChoices[0].Choose.Execute().ToTask();
+
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                await WaitUntilAsync(() => h.Chat.HasPendingCards && !h.Chat.ShowsTerminalMenu, what: "the dialog hidden");
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards && h.Chat.ShowsTerminalMenu, what: "the dialog revealed");
+
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Writes).IsEquivalentTo(new[] { "\r" }, CollectionOrdering.Matching);
+
+                await h.PushAsync(agent with { TerminalDialog = null });
+                await h.PushAsync(agent);
+                await Assert.That(await h.Chat.TerminalMenuChoices[1].Choose.CanExecute.FirstAsync()).IsTrue();
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await Assert.That(input.Writes).IsEquivalentTo(new[] { "\r", "\x1b[B\r" }, CollectionOrdering.Matching);
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// A usage-limit menu is itself a select dialog, so the screen can report both. The dialog's
+    /// cursor moving under an answered question must not offer the question's choices again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_answered_usage_limit_stays_answered_while_its_dialog_redraws() {
+        await RunOnUiAsync(async () => {
+            var input = new KeyRecordingInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            var notice = new UsageLimitNoticeDto(UsageLimitKinds.Blocked, "You've hit your session limit · resets 3:10pm",
+                "What do you want to do?", [new(1, "Stop and wait for limit to reset"), new(2, "Ask your admin for more usage")]);
+            static TerminalDialogDto DialogAt(int selected) =>
+                new("What do you want to do?", "", ["Stop and wait for limit to reset", "Ask your admin for more usage"], selected, "");
+            try {
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice, TerminalDialog = DialogAt(0) });
+                await Assert.That(h.Chat.TerminalMenuPrompt).IsEqualTo(notice.Prompt);
+
+                await h.Chat.TerminalMenuChoices[1].Choose.Execute().ToTask();
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", UsageLimit = notice, TerminalDialog = DialogAt(1) });
+
+                await Assert.That(await h.Chat.TerminalMenuChoices[0].Choose.CanExecute.FirstAsync()).IsFalse();
+                await Assert.That(input.Keys).IsEquivalentTo(new[] { (byte)'2' }, CollectionOrdering.Matching);
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -2401,12 +3253,14 @@ public class ChatTabViewModelTests {
 
     sealed class KeyRecordingInput : AcceptingChatInput {
         public List<byte> Keys { get; } = [];
+        public List<string> Writes { get; } = [];
         public bool Accept { get; set; } = true;
         public Task? Gate { get; set; }
-        public override async Task<bool> SendKeyAsync(byte key, CancellationToken ct) {
+        public override async Task<bool> SendKeysAsync(byte[] keys, CancellationToken ct) {
             if (Gate is { } gate) await gate;
             if (!Accept) return false;
-            Keys.Add(key);
+            Keys.AddRange(keys);
+            Writes.Add(System.Text.Encoding.ASCII.GetString(keys));
             return true;
         }
     }
@@ -2494,14 +3348,16 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
             var own = chat.QueuedMessages.Single();
             await Assert.That(own.IsForeign).IsFalse();
             await Assert.That(own.IsAwaitingPickup).IsTrue();
+            await Assert.That(own.CanSendNow).IsTrue();
 
             var mine = Guid.NewGuid();
             var theirs = Guid.NewGuid();
@@ -2509,10 +3365,11 @@ public class ChatTabViewModelTests {
             await Assert.That(chat.QueuedMessages.Count).IsEqualTo(2);
             await Assert.That(own.IsUnconfirmed).IsFalse();
             await Assert.That(own.IsAwaitingPickup).IsTrue();
+            await Assert.That(own.CanSendNow).IsFalse();
             var foreign = chat.QueuedMessages.Single(q => q.IsForeign);
             await Assert.That(foreign.Text).IsEqualTo("and this");
             await Assert.That(foreign.IsAwaitingPickup).IsFalse();
-            await Assert.That(chat.QueueSummary).IsEqualTo("2 messages queued");
+            await Assert.That(chat.QueueSummary).IsEqualTo("1 message queued · 1 from others");
 
             queue.OnNext([Item("do it", mine, sender: "u1")]);
             await Assert.That(chat.QueuedMessages.Single()).IsSameReferenceAs(own);
@@ -2542,8 +3399,9 @@ public class ChatTabViewModelTests {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
             var chat = new ChatTabViewModel(
-                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new EmptyFeed(),
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => new ScriptedFeed { ResetNext = true },
                 new RecordingOpener(), new FakeTimeProvider(), new FakePermissionService(), new SessionRuns(new FakeTimeProvider()), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -2569,11 +3427,12 @@ public class ChatTabViewModelTests {
         await RunOnUiAsync(async () => {
             var queue = new Subject<IReadOnlyList<QueuedInputItem>>();
             var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
-            var feed = new ScriptedFeed();
+            var feed = new ScriptedFeed { ResetNext = true };
             var time = new FakeTimeProvider();
             var chat = new ChatTabViewModel(
                 "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
                 new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time), serverQueue: queue);
+            await WaitUntilAsync(() => chat.HasSeed, what: "the seed");
 
             chat.ComposerText = "do it";
             await chat.SendCommand.Execute();
@@ -2597,6 +3456,60 @@ public class ChatTabViewModelTests {
 
     /// A refusal with nothing on screen replaces the wait with its reason; the next read that is
     /// not one clears it.
+    /// A remote prompt sent before the transcript's seed has nothing to be acknowledged against: its
+    /// echo can land inside the replayed history. Send waits for the seed; a local pane does not.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(AgentOrigin.Remote, false)]
+    [Arguments(AgentOrigin.Local, true)]
+    public async Task Send_waits_for_the_transcript_seed_on_the_remote_lane(AgentOrigin origin, bool beforeSeed) {
+        await RunOnUiAsync(async () => {
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feed = new ScriptedFeed();
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", origin, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), _ => feed,
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            chat.ComposerText = "do it";
+
+            await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsEqualTo(beforeSeed);
+
+            feed.ResetNext = true;
+            time.Advance(ChatTabViewModel.PollInterval);
+            await (chat.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(await chat.SendCommand.CanExecute.FirstAsync()).IsTrue();
+            await chat.TeardownAsync();
+        });
+    }
+
+    /// A queued prompt's send-now waits for the new feed's seed too, after the pane moves to another session.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_queued_prompt_waits_for_a_new_feeds_seed_before_sending_now() {
+        await RunOnUiAsync(async () => {
+            var session = new BehaviorSubject<ChatSessionInfo>(Session("s1"));
+            var feeds = new Dictionary<string, ScriptedFeed> { ["s1"] = new() { ResetNext = true }, ["s2"] = new() { ResetNext = true } };
+            var time = new FakeTimeProvider();
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null), new AcceptingChatInput(), new NoAttachmentUploader(), key => feeds[key],
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            await WaitUntilAsync(() => chat.HasSeed, what: "the first feed's seed");
+            chat.ComposerText = "do it";
+            await chat.SendCommand.Execute();
+            var own = chat.QueuedMessages.Single();
+            await Assert.That(own.CanSendNow).IsTrue();
+
+            session.OnNext(Session("s2"));
+            await Assert.That(chat.HasSeed).IsFalse();
+            await Assert.That(own.CanSendNow).IsFalse();
+
+            await WaitUntilAsync(() => chat.HasSeed, what: "the new feed's seed");
+            await Assert.That(own.CanSendNow).IsTrue();
+            await chat.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_refused_read_says_why_in_place_of_the_wait_until_a_read_is_not_refused() {

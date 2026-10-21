@@ -60,7 +60,7 @@ public class CorrelatedStatusReportTests {
     public async Task An_unwired_connection_does_not_advertise_correlated_status_reports() {
         var unwired = new ServerConnection(
             new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-            UnusedTokenStore.Create(),
+            new FixedCredentialSource(),
             NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
         await Assert.That(unwired.AdvertisesCorrelatedStatusReports).IsFalse();
@@ -112,7 +112,7 @@ public class CorrelatedStatusReportTests {
 
     sealed class StatusReportCountingConnection() : ServerConnection(
         new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-        UnusedTokenStore.Create(),
+        new FixedCredentialSource(),
         NullLoggerFactory.Instance,
         NullLogger<ServerConnection>.Instance
     , TimeProvider.System) {

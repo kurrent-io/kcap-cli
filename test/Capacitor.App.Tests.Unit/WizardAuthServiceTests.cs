@@ -195,7 +195,9 @@ public class WizardAuthServiceTests {
         var service = new WizardAuthService(
             (_, ct) => ScriptedCommitAsync(WizardAuthService.ArmingHook(claims), [Acme], () => { }, ct));
 
-        var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result.WaitAsync(TimeSpan.FromSeconds(5));
+        // The arm is real disk IO with two flushes, which a loaded Windows runner has stretched
+        // past five seconds; the bound only has to catch a hang.
+        var result = await service.Begin(new ConnectIntent.Discover(ForceDevice: true)).Result.WaitAsync(TimeSpan.FromSeconds(60));
 
         await Assert.That(result).IsTypeOf<AuthResult.Committed>();
         await Assert.That(claims.Pending()).IsEquivalentTo([new ConsentFlipClaim(Acme.Profile, Acme.CanonicalServer)]);
@@ -293,7 +295,7 @@ public class ConsentFlipIdentityFailClosedTests {
     public async Task Unreadable_config_resolves_an_identity_that_matches_nothing() {
         File.WriteAllText(ConfigPath, "{not json");
 
-        await Assert.That(AppUnderTest.ResolveConsentFlipIdentity(Config.Root)).IsEqualTo(("", "", ""));
+        await Assert.That(AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root)).IsEqualTo(("", "", ""));
     }
 
     [Test]
@@ -303,7 +305,7 @@ public class ConsentFlipIdentityFailClosedTests {
         var claim  = new ConsentFlipClaim("acme", "https://acme.example:443");
         claims.Arm(claim);
 
-        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root), "acme-daemon");
+        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root), "acme-daemon");
 
         await Assert.That(consumed).IsFalse();
         await Assert.That(claims.Pending()).IsEquivalentTo([claim]);
@@ -321,7 +323,7 @@ public class ConsentFlipIdentityFailClosedTests {
         var claim  = new ConsentFlipClaim("acme", ServerIdentity.Canonicalize("https://acme.example")!);
         claims.Arm(claim);
 
-        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root), "acme-daemon");
+        var consumed = claims.TryConsume(claim, () => AppUnderTest.ResolveConsentFlipIdentity(Config.Root, NoLocalInstallation.Root), "acme-daemon");
 
         await Assert.That(consumed).IsTrue();
         await Assert.That(claims.Pending()).IsEmpty();

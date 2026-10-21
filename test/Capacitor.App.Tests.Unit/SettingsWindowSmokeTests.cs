@@ -61,7 +61,7 @@ public class SettingsWindowSmokeTests {
             service.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
             Dispatcher.UIThread.RunJobs();
             await Assert.That(rename.IsEffectivelyEnabled).IsTrue();
-            await Assert.That(window.Title).IsEqualTo("Kurrent Capacitor — Settings");
+            await Assert.That(window.Title).IsEqualTo("kcap — Settings");
             await Assert.That(window.Bounds.Width).IsEqualTo(540d);
             await Assert.That(window.Bounds.Height).IsEqualTo(580d);
             await Assert.That(capacity.Bounds.Height).IsGreaterThan(0d);
@@ -87,7 +87,7 @@ public class SettingsWindowSmokeTests {
         });
         var tokens = AuthFixtures.NewTokenStore(Config.Root);
         var profiles = new ProfilesSettingsViewModel(Config.Root, tokens,
-            new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, TimeProvider.System), "work",
+            new OnboardingGate(Config.Root, tokens, ProfileOverrides.None, NoLocalInstallation.Root, TimeProvider.System), "work",
             (_, _, _) => Task.CompletedTask, (_, _) => Task.FromResult(false));
         await profiles.RefreshAsync();
         var service = new FakeDaemonClientService();
@@ -220,7 +220,7 @@ public class SettingsWindowSmokeTests {
             var notice = window.FindControl<Border>("NotificationAccessNotice")!;
             var button = window.FindControl<Button>("NotificationAccessButton")!;
             await WaitUntilAsync(() => notice.IsEffectivelyVisible);
-            await Assert.That(button.Content).IsEqualTo("Open System Settings");
+            await Assert.That(button.Content).IsEqualTo($"Open {SettingsViewModel.SystemSettingsName}");
 
             Click(window, button);
 

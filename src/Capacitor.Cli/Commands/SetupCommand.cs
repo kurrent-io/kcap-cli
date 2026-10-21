@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
@@ -18,6 +19,7 @@ using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
 using Capacitor.Cli.Core.Instructions;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Mcp;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Core.Telemetry;
@@ -34,6 +36,7 @@ using Capacitor.Cli.Harness.MistralVibe;
 using Capacitor.Cli.Harness.Muse;
 using Capacitor.Cli.Harness.OpenCode;
 using Capacitor.Cli.Harness.Pi;
+using Capacitor.Cli.LocalEdition;
 using Spectre.Console;
 using Spectre.Console.Rendering;
 using Profile = Capacitor.Cli.Core.Config.Profile;
@@ -548,14 +551,88 @@ sealed class SetupCommand(
         AuthEndpoints endpoints, IOnboardingFacadeFactory facades, ISetupImportRunner imports,
         IBackgroundImportSpawner spawner, IHandoffAgentLauncher launcher,
         ChosenServerHttp chosenHttp, GitProviderRouter router, WorkingDirectory workdir, TimeProvider time,
-        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv) {
+        BinaryProbe binaries, AccountStore accounts, PluginEnvironment pluginEnv, LocalRoot localRoot,
+        ILocalInstallerFactory localInstallers) {
     /// <summary>Null in production — the real <see cref="SelectionPrompt{T}"/> runs — and set by a
     /// test so the handoff picker never opens a console prompt. A non-null result other than
     /// <c>"Skip"</c> must name one of the labels handed to it.</summary>
     internal Func<IReadOnlyList<string>, string?>? PickHandoffVendor { get; set; }
 
-    public async Task<int> HandleAsync(string[] args) {
+    /// <summary>Whether the edition choice offers the local edition, which runs on Apple silicon Macs only.</summary>
+    internal bool LocalEditionAvailable { get; init; } = LocalPlatform.Current().SupportsLocalEdition;
+
+    /// <summary>The whole run's JSON report, set only while a <c>--json --no-prompt</c> run is in progress.</summary>
+    SetupJsonReport? _json;
+
+    public Task<int> HandleAsync(string[] args) =>
+        args.Contains("--json") && args.Contains("--no-prompt") && !args.Contains("--discover")
+            ? RunReportedAsync(args)
+            : RunAsync(args);
+
+    /// <summary>The run with stdout given to its JSON lines: the narration it would have printed there goes to stderr,
+    /// and a run that ends without a <c>done</c> or <c>failed</c> line gets a <c>failed</c> one.</summary>
+    async Task<int> RunReportedAsync(string[] args) {
+        var stdout  = Console.Out;
+        var stderr  = Console.Error;
+        var spectre = AnsiConsole.Console;
+        var errors  = new LastLineWriter(stderr);
+        var report  = _json = new SetupJsonReport(stdout);
+
+        Console.SetOut(stderr);
+        Console.SetError(errors);
+        AnsiConsole.Console = AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(stderr) });
+
+        try {
+            var exit = await RunAsync(args);
+
+            if (exit != SetupExit.Done && !report.HasFailed)
+                report.Failed(exit switch {
+                    SetupExit.Refused     => SetupFailureCodes.InvalidArguments,
+                    SetupExit.Interrupted => SetupFailureCodes.Cancelled,
+                    _                     => SetupFailureCodes.SetupFailed,
+                }, errors.Last ?? "kcap setup did not finish.");
+
+            return exit;
+        } catch (Exception ex) when (ex is not OperationCanceledException && !report.HasFailed) {
+            report.Failed(SetupFailureCodes.SetupFailed, ex.Message);
+
+            throw;
+        } finally {
+            errors.Flush();
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            AnsiConsole.Console = spectre;
+            _json = null;
+        }
+    }
+
+    async Task<int> RunAsync(string[] args) {
+        LocalSetupArgs? local = null;
+
+        if (args.Contains("--local")) {
+            var (parsed, refusal) = LocalSetupArgs.Parse(args, Environment.GetEnvironmentVariable(ProfileOverrides.UrlVar));
+
+            if (refusal is not null) {
+                if (_json is not null) _json.Failed(SetupFailureCodes.InvalidArguments, refusal);
+                else if (args.Contains("--json")) WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.InvalidArguments, refusal));
+                else await Console.Error.WriteLineAsync($"  {refusal}");
+
+                return SetupExit.Refused;
+            }
+
+            if (parsed!.Json && !parsed.WholeRun) return await RunLocalJsonAsync(parsed);
+
+            local = parsed;
+        }
+
         if (args.Contains("--discover")) return await RunDiscoverOnlyAsync(args);
+
+        if (args.Contains("--json") && _json is null) {
+            WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.InvalidArguments,
+                "--json needs --no-prompt, which reports the whole run (or --local for the install alone, or --discover)."));
+
+            return SetupExit.Refused;
+        }
 
         var serverUrlArg     = GetArg(args, "--server-url");
 
@@ -599,6 +676,7 @@ sealed class SetupCommand(
         var skipMuseFlag     = args.Contains("--skip-muse-hooks");
         var skipMuseMcpFlag  = args.Contains("--skip-muse-mcp");
         var skipImport       = args.Contains("--skip-import") || museAssistant;
+        var skipHarnesses    = args.Contains("--skip-harnesses");
         var legacyPluginScope = GetArg(args, "--plugin-scope"); // "user" | "project" | "skip" | null
         var skipClaude       = skipClaudeFlag || legacyPluginScope == "skip";
         var legacyProjectScope = legacyPluginScope == "project";
@@ -612,14 +690,35 @@ sealed class SetupCommand(
         if (museAssistant && MuseAssistantPosture.ArgumentError(tenantGiven: serverUrlArg is not null) is { } museError) {
             await Console.Error.WriteLineAsync($"  {museError}");
 
-            return 1;
+            return SetupExit.Refused;
+        }
+
+        if (DaemonNameArgumentError(args) is { } daemonNameError) {
+            await Console.Error.WriteLineAsync($"  {daemonNameError}");
+
+            return SetupExit.Refused;
+        }
+
+        if (AnswerValueError(args) is { } answerError) {
+            await Console.Error.WriteLineAsync($"  {answerError}");
+
+            return SetupExit.Refused;
         }
 
         var (requestedWorkspace, workspaceArgError) = ParseRequestedWorkspace(args, serverUrlGiven);
 
         if (workspaceArgError is not null) {
             await Console.Error.WriteLineAsync($"  {workspaceArgError}");
-            return 1;
+            return SetupExit.Refused;
+        }
+
+        if (noPrompt && serverUrlArg is null && local is null && requestedWorkspace is null) {
+            await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
+            await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace, or --local to run one here)");
+            _json?.Failed(SetupFailureCodes.AnswerRequired,
+                "--server-url is required with --no-prompt (or --org \"<name>\" --slug <slug> to create a workspace, or --local to run one here).");
+
+            return SetupExit.Refused;
         }
 
         // The flags settle the creation questions and nothing after them, so on a session that cannot
@@ -630,7 +729,7 @@ sealed class SetupCommand(
                 "  --org/--slug answer the workspace questions only; the steps after them still prompt, and this session is non-interactive.");
             await Console.Error.WriteLineAsync("  Add --no-prompt.");
 
-            return 1;
+            return SetupExit.Refused;
         }
 
         // Plain Console.Out: an agent reads this from redirected output. Ahead of the funnel event,
@@ -663,9 +762,9 @@ sealed class SetupCommand(
                 $"--plugin-scope project requires a git working tree, but '{workdir.Path}' is not inside one.");
             await Console.Error.WriteLineAsync(
                 "Either re-run `kcap setup` from inside your repo, or drop --plugin-scope project to install user-scope hooks.");
-            return 1;
+            return SetupExit.Refused;
         }
-        AnsiConsole.Write(new Rule("[bold green]Welcome to Capacitor[/]").Centered());
+        AnsiConsole.Write(new Rule("[bold green]Welcome to kcap[/]").Centered());
 
 
         // Check if already configured
@@ -687,9 +786,32 @@ sealed class SetupCommand(
 
         // Step 1: Server
         AnsiConsole.Write(new Rule("[yellow]Step 1/6 — Server[/]").LeftJustified());
+        _json?.Started(SetupJsonReport.Server);
         string serverUrl;
         string  provider;
         bool    loginComplete = false; // Discovery authenticates inline; skip the Step-2 login.
+
+        // Only a bare run asks: a named server, --local or --org has already chosen.
+        if (serverUrlArg is null && local is null && requestedWorkspace is null && !noPrompt && AnsiConsole.Profile.Capabilities.Interactive) {
+            switch (ChooseEdition()) {
+                case SetupEdition.Choice.Local:
+                    var (parsed, refusal) = LocalSetupArgs.Parse([.. args, "--local"], Environment.GetEnvironmentVariable(ProfileOverrides.UrlVar));
+
+                    if (refusal is not null) {
+                        await Console.Error.WriteLineAsync($"  {refusal}");
+
+                        return SetupExit.Refused;
+                    }
+
+                    local = parsed;
+
+                    break;
+                case SetupEdition.Choice.Cloud:
+                    OpenSignUp();
+
+                    break;
+            }
+        }
 
         if (serverUrlArg is not null) {
             var resolved = await ResolveServerAndProviderAsync(serverUrlArg);
@@ -709,10 +831,12 @@ sealed class SetupCommand(
 
             // A named server can be one still being created, which the provisioner says to re-run setup against.
             if (!await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
-        } else if (noPrompt && requestedWorkspace is null) {
-            await Console.Error.WriteLineAsync("  --server-url is required with --no-prompt");
-            await Console.Error.WriteLineAsync("  (or --org \"<name>\" --slug <slug> to create a workspace)");
-            return 1;
+        } else if (local is not null) {
+            var (exit, committed) = await new LocalSetupTerminal(localInstallers, local, _json).RunAsync();
+
+            if (committed is null) return exit;
+
+            (serverUrl, provider, loginComplete) = (committed.ServerUrl, AuthProvider.None, true);
         } else {
             var discovered = await RunDiscoveryAsync(args, forceDevice, requestedWorkspace);
             if (discovered is null) return 1;
@@ -731,13 +855,30 @@ sealed class SetupCommand(
             if (provider == AuthProvider.WorkOS && !await WaitForWorkspaceAsync(serverUrl, NewWorkspaceWait)) return 1;
         }
 
+        _json?.Completed(serverUrl: serverUrl, provider: provider);
+
         await Console.Out.WriteLineAsync();
 
         // Step 2: Login
         AnsiConsole.Write(new Rule("[yellow]Step 2/6 — Login[/]").LeftJustified());
+        _json?.Started(SetupJsonReport.SignIn);
 
-        var loginStepResult = await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
+        var unattended = noPrompt && !loginComplete && provider != AuthProvider.None
+            ? await new UnattendedCredential(chosenHttp).ProbeAsync(serverUrl, await ContextForAsync(activeProfile, serverUrl), time)
+            : null;
+
+        var loginStepResult = await ReportUnattendedSignInAsync(unattended, activeProfile)
+                           ?? await RunLoginStepAsync(loginComplete, provider, serverUrl, forceDevice, activeProfile, museAssistant);
         if (loginStepResult != 0) return loginStepResult;
+
+        var machineSignedIn = unattended is UnattendedCredential.Outcome.Machine;
+
+        _json?.Completed(provider: provider, credential: unattended switch {
+            UnattendedCredential.Outcome.Machine => "machine",
+            UnattendedCredential.Outcome.Stored  => "stored",
+            _ when provider == AuthProvider.None => "none",
+            _                                    => "sign_in",
+        });
 
         // Ahead of the browser leg, whose import decides the eval-watch handoff from them.
         var pluginPath = ResolvePluginPath();
@@ -809,6 +950,7 @@ sealed class SetupCommand(
 
         // Step 3: Default session visibility
         AnsiConsole.Write(new Rule("[yellow]Step 3/6 — Default session visibility[/]").LeftJustified());
+        _json?.Started(SetupJsonReport.Visibility);
 
         string defaultVisibility;
 
@@ -823,13 +965,9 @@ sealed class SetupCommand(
 
         if (noPrompt) {
             defaultVisibility = (GetArg(args, "--default-visibility")
-                              ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility : "org_public")).ToLowerInvariant();
-
-            if (!AppConfig.ValidVisibilities.Contains(defaultVisibility)) {
-                await Console.Error.WriteLineAsync($"  Invalid default-visibility: {defaultVisibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}");
-
-                return 1;
-            }
+                              ?? (museAssistant ? MuseAssistantPosture.DefaultVisibility
+                                : local is not null ? LocalDefaultVisibility
+                                : "org_public")).ToLowerInvariant();
 
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         } else if (flowVisibility.Apply is { } fromFlow) {
@@ -842,7 +980,7 @@ sealed class SetupCommand(
                 : $"  [dim]· Chosen in the browser: {Markup.Escape(VisibilityLabel(fromFlow))}[/]");
         } else {
             var visibilityPrompt = new SelectionPrompt<string>()
-                .Title("Which of your sessions should be readable by other users in the same Kurrent Capacitor account by default?")
+                .Title("Which of your sessions should be readable by other users in the same kcap account by default?")
                 .AddChoices(AppConfig.ValidVisibilities)
                 .UseConverter(VisibilityLabel);
 
@@ -854,11 +992,14 @@ sealed class SetupCommand(
             await Console.Out.WriteLineAsync($"  Default visibility: {defaultVisibility}");
         }
 
+        _json?.Completed(visibility: defaultVisibility);
+
         await Console.Out.WriteLineAsync();
 
         // Step 4: Harnesses
         AnsiConsole.Write(new Rule("[yellow]Step 4/6 — Harnesses[/]").LeftJustified());
-        await Console.Out.WriteLineAsync("  Capacitor records sessions by installing hooks into your harnesses.");
+        _json?.Started(SetupJsonReport.Harnesses);
+        await Console.Out.WriteLineAsync("  kcap records sessions by installing hooks into your harnesses.");
         await Console.Out.WriteLineAsync();
 
         var detected   = new CodingAgentsStep.DetectedAgents(
@@ -885,7 +1026,11 @@ sealed class SetupCommand(
 
         bool installAgents;
 
-        if (browserAgents is { } answered) {
+        if (skipHarnesses) {
+            // The one answer to the consent question below that no per-vendor flag spells.
+            installAgents = false;
+            AnsiConsole.MarkupLine("  [dim]Skipping harnesses (--skip-harnesses).[/]");
+        } else if (browserAgents is { } answered) {
             // Asked and answered in the browser minutes ago, so this step applies rather than
             // re-asks — the flow settles its Agents step on the decision being recorded, not on the
             // install finishing, which is what leaves the work here.
@@ -941,7 +1086,7 @@ sealed class SetupCommand(
             ? MuseAssistantPosture.Apply(stepOptions)
             : SetupDecisions.WithBrowserAnswer(stepOptions, browserAgents);
 
-        // allowlist the Capacitor server(s) Codex skills need to reach. A single
+        // allowlist the kcap server(s) Codex skills need to reach. A single
         // **.kcap.ai wildcard covers every SaaS tenant (current + future) and the auth
         // proxy; self-hosted servers are added as exact hosts. Derived from the active
         // server URL plus every configured profile so switching profiles still works.
@@ -1016,6 +1161,8 @@ sealed class SetupCommand(
         new AccountSetupStep(accounts, pluginEnv, time).Run(
             stepOptions, AnsiConsole.Profile.Capabilities.Interactive, PromptYesNo, WriteLine);
 
+        _json?.Completed(harnesses: InstalledHarnesses(installResult));
+
         var installedPaths = CodingAgentsStep.InstalledPaths(installResult, stepPaths).ToList();
         var gitHook        = new GitHookInstaller(home);
 
@@ -1051,7 +1198,7 @@ sealed class SetupCommand(
         OfferedIf(detected.Grok,        skipGrokFlag,        HarnessId.Grok);
         OfferedIf(detected.Muse,        skipMuseFlag,        HarnessId.Muse);
         // The posture offers no harness, so nothing may be recorded as offered.
-        if (!museAssistant) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
+        if (!museAssistant && !skipHarnesses) new HarnessOfferStore(config, time).StampOffered(offeredNow, time.GetUtcNow());
 
         // Provider API key handling. kcap scrubs ANTHROPIC_API_KEY / OPENAI_API_KEY
         // from headless agent CLI spawns by default so subscription auth
@@ -1083,18 +1230,9 @@ sealed class SetupCommand(
             AnsiConsole.MarkupLine("  [dim]subscription login is used. Keep them if you authenticate via API key (PAYG).[/]");
 
             if (noPrompt) {
-                var flagValue = GetArg(args, "--use-provider-api-key");
-                if (flagValue is not null) {
-                    var parsed = ProviderApiKeyPolicy.TryParseBool(flagValue);
-                    if (parsed is null) {
-                        await Console.Error.WriteLineAsync(
-                            $"  Invalid value for --use-provider-api-key: '{flagValue}'. Must be true/1/yes/on or false/0/no/off.");
-                        ListChangedBeforeExit();
-
-                        return 1;
-                    }
-                    useProviderApiKey = parsed.Value;
-                }
+                // Validated before anything ran, by AnswerValueError.
+                if (GetArg(args, "--use-provider-api-key") is { } flagValue)
+                    useProviderApiKey = ProviderApiKeyPolicy.TryParseBool(flagValue)!.Value;
                 await Console.Out.WriteLineAsync($"  Use provider API key: {useProviderApiKey}");
             } else if (browserAgents is not null) {
                 // The browser has no question for this, and a terminal prompt after it has said setup
@@ -1110,70 +1248,44 @@ sealed class SetupCommand(
 
         // Step 5: Daemon name + save
         AnsiConsole.Write(new Rule("[yellow]Step 5/6 — Agent Daemon[/]").LeftJustified());
+        _json?.Started(SetupJsonReport.Daemon);
 
-        // The daemon resolves its name the same way, so the name written here is the one it runs under.
-        var    defaultName = DaemonNameResolver.Resolve([]);
+        // Built from the profile login stored the token under: discovery may have switched it after startup.
+        var held          = await HeldDaemonNamesAsync(serverUrl, await ContextForAsync(activeProfile, serverUrl));
+        var envName       = Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME");
+        var requestedName = GetArg(args, "--daemon-name");
+        // The profile's own name comes before the machine's so a re-run never renames a daemon in use.
+        var offeredName   = DaemonNameHolder.FirstFree(
+            requestedName ?? (string.IsNullOrEmpty(envName) ? null : envName)
+                          ?? selected?.Daemon?.Name ?? DaemonNameHolder.MachineDefault(),
+            held);
         string daemonName;
 
         if (noPrompt) {
-            daemonName = GetArg(args, "--daemon-name") ?? defaultName;
-            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
-        } else if (browserAgents is not null) {
-            // Not asked: the browser has no daemon-name screen, and its service request waits on this
-            // name. The profile's own name comes before the default so a re-run never renames a daemon
-            // in use.
-            daemonName = GetArg(args, "--daemon-name") ?? DaemonNameResolver.Resolve([], selected?.Daemon?.Name);
-            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
-        } else {
-            daemonName = AnsiConsole.Prompt(
-                new TextPrompt<string>("Daemon name:")
-                    .DefaultValue(defaultName)
-                    .ShowDefaultValue());
-        }
-
-        // Built from the profile login stored the token under: discovery may have switched it after startup.
-        var snapshot   = await AppConfig.LoadProfileConfig(config);
-        var loggedInto   = new ProfileContext(
-            new(serverUrl, activeProfile, snapshot.Profiles.GetValueOrDefault(activeProfile), null), snapshot);
-
-        // The browser path cannot fall back to a prompt: the user is looking at the browser, and its
-        // service request waits on this name. So it walks a bounded list instead.
-        var browserFallbacks = browserAgents is null
-            ? null
-            : new Queue<string>(BrowserDaemonNameFallbacks(daemonName, MachineSlug()));
-
-        while (await FindDaemonNameHolderAsync(serverUrl, loggedInto, daemonName) is { } holder) {
-            AnsiConsole.MarkupLine(
-                $"  [yellow]A daemon named '{Markup.Escape(daemonName)}' is already connected to this account from "
-              + $"another machine ({Markup.Escape(holder.Platform)}{(holder.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
-              + "The server refuses a second daemon with the same name.[/]");
-
-            if (noPrompt) {
-                await Console.Error.WriteLineAsync("  Choose a different name with --daemon-name.");
+            // Only the flag is a demand; every other source is a suggestion that moves to a free name.
+            if (requestedName is not null && held.TryGetValue(requestedName, out var holding)) {
+                AnsiConsole.MarkupLine(NameHeldLine(requestedName, holding));
+                await Console.Error.WriteLineAsync($"  Choose a different name with --daemon-name, such as '{offeredName}'.");
+                _json?.Failed(SetupFailureCodes.DaemonNameHeld,
+                    $"A daemon named '{requestedName}' is connected from another machine. Choose a different name with --daemon-name, such as '{offeredName}'.");
                 ListChangedBeforeExit();
 
                 return 1;
             }
 
-            if (browserFallbacks is not null) {
-                if (!browserFallbacks.TryDequeue(out var next)) {
-                    await Console.Error.WriteLineAsync(
-                        "  Every fallback daemon name is taken too. Re-run `kcap setup --daemon-name <name>`.");
-                    ListChangedBeforeExit();
+            daemonName = offeredName;
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else if (browserAgents is not null) {
+            // Not asked: the user is looking at the browser, which has no daemon-name screen.
+            daemonName = offeredName;
+            await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
+        } else {
+            daemonName = PromptDaemonName(offeredName);
 
-                    return 1;
-                }
-
-                daemonName = next;
-                await Console.Out.WriteLineAsync($"  Daemon name: {daemonName}");
-
-                continue;
+            while (held.TryGetValue(daemonName, out var holding)) {
+                AnsiConsole.MarkupLine(NameHeldLine(daemonName, holding));
+                daemonName = PromptDaemonName(DaemonNameHolder.FirstFree(daemonName, held));
             }
-
-            daemonName = AnsiConsole.Prompt(
-                new TextPrompt<string>("Daemon name:")
-                    .DefaultValue($"{daemonName}-{MachineSlug()}")
-                    .ShowDefaultValue());
         }
 
         await Console.Out.WriteLineAsync();
@@ -1181,10 +1293,12 @@ sealed class SetupCommand(
         // Save config
         var activeName     = "default";
         var defaultProfile = new Profile();
+        string? previousDaemonName = null;
 
         await ConfigMutator.MutateAsync(config, c => {
-            activeName     = c.ActiveName;
-            defaultProfile = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
+            activeName         = c.ActiveName;
+            defaultProfile     = c.Profiles.GetValueOrDefault(activeName) ?? new Profile();
+            previousDaemonName = defaultProfile.Daemon?.Name;
 
             defaultProfile = defaultProfile with {
                 ServerUrl          = serverUrl,
@@ -1202,62 +1316,23 @@ sealed class SetupCommand(
         // rather than re-resolved: CLI/env/repo precedence could land on something else than what
         // this run just wrote.
         var saved = new ProfileContext(
-            new(serverUrl, activeName, defaultProfile, null), await AppConfig.LoadProfileConfig(config));
+            new ResolvedProfile(null, activeName, defaultProfile, null).Retargeted(serverUrl, LocalEndpoints.Read(localRoot)),
+            await AppConfig.LoadProfileConfig(config));
 
         // Here rather than in the browser leg, and after the write above rather than before it: the unit
         // bakes the profile, the expected server and the daemon name, and `saved` is the only context that
         // carries what this run actually chose.
         FirstRunMachineActionResult? daemonService = null;
 
-        if (browserAnswers.FlowId is { } browserFlowId) {
-            try {
-                // Every flow route is authenticated, and a poll that 401s answers an empty body —
-                // indistinguishable from nothing having been asked — so an unusable client here
-                // enables nothing, silently.
-                await using var scoped = HttpForChosenServer(serverUrl, saved);
-
-                var (deferred, deferredAuth) =
-                    await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync();
-
-                using var _ = deferred;
-
-                // The beat holds its lane until a request finishes, so this client's timeout is how long a
-                // wedged connection can silence liveness. Left unset it is the 100s default; matched to the
-                // browser leg's so both halves of the flow answer for silence on the same scale.
-                deferred.Timeout = BrowserFlowHttpTimeout;
-
-                // The status is the point of the factory: it hands back a client either way, and an
-                // expired or missing token leaves one that cannot poll. Checked rather than assumed, or
-                // the silent path is exactly the one above with a better-looking constructor.
-                //
-                // NoAuthRequired runs it. That status means the client is usable as it stands, so
-                // skipping on it would leave the request outstanding on a server that would have
-                // answered — the browser leg skips there only because it has nothing left to do.
-                if (deferredAuth is AuthStatus.Ok or AuthStatus.NoAuthRequired) {
-                    var channel = new FirstRunFlowClient(deferred, time);
-
-                    // The browser is holding the request this leg is about to perform, and enabling a
-                    // service can outlast any staleness window — so the beat has to span it. Only for a
-                    // flow that finished: every other ending already relinquished, and beating again
-                    // would take that back.
-                    using var beat = browserAnswers.FlowStillLive
-                        ? FirstRunHeartbeat.Start(channel, serverUrl, browserFlowId, time)
-                        : null;
-
-                    daemonService = await SetupDaemonService.RunAsync(
-                        channel, serverUrl, browserFlowId, config, saved, home, time);
-                }
-                else
-                    AnsiConsole.MarkupLine(
-                        "  [dim]Did not finish the daemon service request: the stored token is not usable. "
-                      + "Run 'kcap login', then 'kcap daemon service ensure'.[/]");
-            } catch (Exception ex) when (ex is not OperationCanceledException) {
-                // Best-effort, as the rest of this leg is: the request stays outstanding and the screen
-                // goes on saying it asked, which is honest. Setup finishing matters more.
-                AnsiConsole.MarkupLine(
-                    $"  [yellow]![/] Could not finish the daemon service request: {Markup.Escape(ex.Message)}");
-            }
+        // The posture offers no harness, so there is nothing for a daemon to launch. A service unit never carries the
+        // machine credential, so its daemon could not authenticate.
+        if (!museAssistant && !machineSignedIn) {
+            AnsiConsole.MarkupLine("  Running the agent daemon as a background service, so this machine stays reachable…");
+            daemonService = await EnsureDaemonServiceAsync(
+                serverUrl, saved, previousDaemonName, browserAnswers.FlowId, browserAnswers.FlowStillLive);
         }
+
+        _json?.Completed(name: daemonName, outcome: daemonService?.Outcome ?? "skipped");
 
         var finalTokens = await store.LoadAsync(activeName);
 
@@ -1270,6 +1345,7 @@ sealed class SetupCommand(
 
         // Step 6: Import past sessions
         AnsiConsole.Write(new Rule("[yellow]Step 6/6 — Import past sessions[/]").LeftJustified());
+        _json?.Started(SetupJsonReport.Import);
 
         // detectPullRequest:false — Step 6 only needs (owner, name) to scope the repo import;
         // PR/MR detection would run extra provider probes/subprocesses for nothing here.
@@ -1290,7 +1366,7 @@ sealed class SetupCommand(
         // probe (awaited outside that boundary) must be equally non-fatal.
         // Server-scoped: the import step is only actually authorized if the token both refreshes
         // and belongs to the server we just configured.
-        var authSatisfied = await IsAuthSatisfiedAsync(
+        var authSatisfied = machineSignedIn || await IsAuthSatisfiedAsync(
             provider, async () => (await store.GetValidTokensForServerAsync(activeName, serverUrl)).Tokens is not null);
 
         var importResult = await RunImportStepAsync(new ImportStepInputs(
@@ -1310,6 +1386,8 @@ sealed class SetupCommand(
             BrowserFinished:     browserAnswers.FlowStillLive,
             BrowserHandoffPrompt: browserAnswers.HandoffPrompt,
             BrowserBackground:   browserAnswers.Background));
+
+        _json?.Completed(outcome: importResult.Ran ? "ran" : "skipped");
 
         await Console.Out.WriteLineAsync();
 
@@ -1361,11 +1439,13 @@ sealed class SetupCommand(
                 "    [dim]cd[/] into your project before recording to capture full session context.");
         }
 
-        if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
+        if (machineSignedIn) AnsiConsole.MarkupLine($"\n{MachineDaemonLine}");
+        else if (!museAssistant) AnsiConsole.MarkupLine($"\n{DaemonClosingLine(daemonService)}");
 
         WriteNextSteps(
             ShouldOfferGuidedTour(detectedSummary is not null, claudeSettingsPath, stepPaths),
-            importResult.PasteBlock);
+            importResult.PasteBlock,
+            LocalEndpoints.Read(localRoot).Classify(serverUrl) is LocalEndpointClass.Local ? serverUrl : null);
 
         // Same fields as Result.AnyHooksInstalled, counted instead of OR'd: CodingAgentsStep
         // doesn't surface a count directly, so this sums the per-vendor hook-install outcomes
@@ -1380,15 +1460,17 @@ sealed class SetupCommand(
 
         telemetry.Funnel.Succeeded(agentsConfigured);
 
-        return 0;
+        _json?.Done(serverUrl);
+
+        return SetupExit.Done;
     }
 
     /// <summary>The closing "Next steps" box: a question per item, its answer indented beneath.</summary>
-    static void WriteNextSteps(bool offerGuidedTour, string? handoffPaste) {
+    static void WriteNextSteps(bool offerGuidedTour, string? handoffPaste, string? localServerUrl) {
         var rows = new List<IRenderable>();
 
         // Padder, not a "  " prefix: these lines wrap, and a prefix indents only the first of them.
-        foreach (var (question, answer) in NextStepItems(offerGuidedTour, handoffPaste)) {
+        foreach (var (question, answer) in NextStepItems(offerGuidedTour, handoffPaste, localServerUrl)) {
             if (rows.Count > 0) rows.Add(Text.Empty);
 
             rows.Add(new Markup($"[bold]{Markup.Escape(question)}[/]"));
@@ -1404,12 +1486,17 @@ sealed class SetupCommand(
     }
 
     /// <summary>The box's (question, answer-markup) pairs, split from the write so copy is testable.
-    /// <paramref name="handoffPaste"/> lands above the guided-tour item, when offered.</summary>
+    /// <paramref name="handoffPaste"/> lands above the guided-tour item, when offered. A
+    /// <paramref name="localServerUrl"/> replaces the hosted server-setup item: the local installation
+    /// has no server setup to complete.</summary>
     internal static List<(string Question, string Answer)> NextStepItems(
-            bool offerGuidedTour, string? handoffPaste = null) {
+            bool offerGuidedTour, string? handoffPaste = null, string? localServerUrl = null) {
         var items = new List<(string, string)> {
-            (ServerSetupQuestion,
-             $"{Markup.Escape(ServerSetupAction)}\n[cyan]{Markup.Escape(ServerSetupDocsUrl)}[/]"),
+            localServerUrl is null
+                ? (ServerSetupQuestion,
+                   $"{Markup.Escape(ServerSetupAction)}\n[cyan]{Markup.Escape(ServerSetupDocsUrl)}[/]")
+                : (LocalServerQuestion,
+                   $"{Markup.Escape(LocalServerAction)}\n[cyan]{Markup.Escape(localServerUrl)}[/]"),
         };
 
         if (handoffPaste is not null) {
@@ -1468,7 +1555,7 @@ sealed class SetupCommand(
     /// <summary>Source folder name under <c>kcap/skills/</c>; <c>kcap-</c>-prefixed once installed.</summary>
     internal const string GuidedTourSkillName = "guided-tour";
 
-    internal const string GuidedTourQuestion = "New to Capacitor?";
+    internal const string GuidedTourQuestion = "New to kcap?";
 
     /// <summary>
     /// A prompt, not <c>/kcap:guided-tour</c>: this box prints for every vendor and only Claude Code
@@ -1481,7 +1568,7 @@ sealed class SetupCommand(
     internal const string GuidedTourPromptQuoted = $"\"{GuidedTourPrompt}\"";
 
     internal const string GuidedTourAction =
-        $"Prompt {GuidedTourPromptQuoted} in your coding agent to see what Capacitor can do for you";
+        $"Prompt {GuidedTourPromptQuoted} in your coding agent to see what kcap can do for you";
 
     internal const string GuidedTourCallToAction = $"{GuidedTourQuestion} {GuidedTourAction}";
 
@@ -1506,16 +1593,20 @@ sealed class SetupCommand(
         "Open a coding agent to follow the import and its evals? (setup will finish after you close the agent)";
 
     /// <summary>
-    /// Server setup lives in the dashboard, so this can only be pointed at. Always printed: who owns
-    /// the server is not knowable here, so the reader self-selects on the question. Says "server",
+    /// Server setup lives in the dashboard, so this can only be pointed at. Printed for every server but
+    /// the local installation: who owns it is not knowable here, so the reader self-selects on the question. Says "server",
     /// never "workspace" — that word means the local tree everywhere else in this CLI.
     /// </summary>
-    internal const string ServerSetupQuestion = "Did you create this Capacitor server?";
+    internal const string ServerSetupQuestion = "Did you create this kcap server?";
 
     internal const string ServerSetupAction = "Complete server setup with instructions here:";
 
     internal const string ServerSetupDocsUrl =
         "https://capacitor.kurrent.io/docs/getting-started/setup-server/";
+
+    internal const string LocalServerQuestion = "Where is your local kcap server?";
+
+    internal const string LocalServerAction = "Open it in a browser:";
 
     /// <summary>
     /// Whether Step 6's import eligibility auth requirement is met: provider <c>None</c> needs no
@@ -1585,7 +1676,7 @@ sealed class SetupCommand(
             if (inputs.BrowserHandoffPrompt is not null && HandoffVendorEligibility.Eligible(harnesses, inputs.Paths).Count == 0) {
                 AnsiConsole.MarkupLine(
                     $"  [yellow]![/] No agent has the kcap {EvalWatchSkillName} skill, so the prompt the browser showed has nothing to answer it. "
-                  + $"Follow the import in Capacitor instead: {Markup.Escape(inputs.ServerUrl.TrimEnd('/'))}/sessions?status=ended");
+                  + $"Follow the import in kcap instead: {Markup.Escape(inputs.ServerUrl.TrimEnd('/'))}/sessions?status=ended");
 
                 return new ImportStepResult(false, null, null, null);
             }
@@ -1767,7 +1858,7 @@ sealed class SetupCommand(
         if (reason is HandoffSuppressedReason.SkillNotInstalled or HandoffSuppressedReason.NoAgentDetected) {
             // Point at ended sessions: those are the ones far enough along to carry eval results.
             var sessionsUrl = Markup.Escape($"{serverUrl.TrimEnd('/')}/sessions?status=ended");
-            AnsiConsole.MarkupLine($"  Watch the import and its evals in the Capacitor UI: [cyan]{sessionsUrl}[/]");
+            AnsiConsole.MarkupLine($"  Watch the import and its evals in the kcap UI: [cyan]{sessionsUrl}[/]");
 
             if (reason == HandoffSuppressedReason.SkillNotInstalled) {
                 AnsiConsole.MarkupLine(
@@ -1815,23 +1906,74 @@ sealed class SetupCommand(
         }
     }
 
-    async Task<(string Platform, string? Version)?> FindDaemonNameHolderAsync(
-            string serverUrl, ProfileContext loggedInto, string daemonName) {
+    async Task<IReadOnlyDictionary<string, DaemonNameHolding>> HeldDaemonNamesAsync(string serverUrl, ProfileContext loggedInto) {
         try {
             await using var scoped = HttpForChosenServer(serverUrl, loggedInto);
             using var client = await scoped.GetRequiredService<ICapacitorHttpClient>().ForCommandAsync();
 
-            return await DaemonNameHolder.FindElsewhereAsync(client, serverUrl, daemonName, config);
+            return await DaemonNameHolder.HeldElsewhereAsync(client, serverUrl, config);
         } catch (Exception) {
-            return null;
+            return FrozenDictionary<string, DaemonNameHolding>.Empty;
         }
     }
 
-    static string MachineSlug() {
-        var slug = new string(Environment.MachineName.ToLowerInvariant()
-            .Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray()).Trim('-');
+    static string PromptDaemonName(string offered) =>
+        AnsiConsole.Prompt(new TextPrompt<string>("Daemon name:").DefaultValue(offered).ShowDefaultValue());
 
-        return slug.Length > 0 ? slug : "2";
+    internal static string NameHeldLine(string name, DaemonNameHolding holding) =>
+        $"  [yellow]A daemon named '{Markup.Escape(name)}' is already connected to this account from another machine "
+      + $"({Markup.Escape(holding.Platform)}{(holding.Version is { } v ? $", kcap {Markup.Escape(v)}" : "")}). "
+      + "The server refuses a second daemon with the same name.[/]";
+
+    /// <summary>Installs or starts the daemon service, and answers the browser when it asked for one. The
+    /// heartbeat spans the ensure, which can outlast the browser's staleness window.</summary>
+    async Task<FirstRunMachineActionResult> EnsureDaemonServiceAsync(
+            string serverUrl, ProfileContext saved, string? previousName, string? flowId, bool flowStillLive) {
+        if (flowId is null) return await EnsureAsync();
+
+        FirstRunMachineActionResult? result = null;
+
+        try {
+            await using var scoped = HttpForChosenServer(serverUrl, saved);
+
+            var (deferred, deferredAuth) = await scoped.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync();
+
+            using var _ = deferred;
+
+            // The beat holds its lane until a request finishes, so this timeout bounds how long a wedged
+            // connection can silence liveness.
+            deferred.Timeout = BrowserFlowHttpTimeout;
+
+            // A poll that 401s answers an empty body, indistinguishable from nothing having been asked.
+            if (deferredAuth is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) {
+                AnsiConsole.MarkupLine(
+                    "  [dim]Could not tell the browser about the daemon service: the stored token is not usable.[/]");
+
+                return await EnsureAsync();
+            }
+
+            var channel = new FirstRunFlowClient(deferred, time);
+
+            // Only for a flow that finished: every other ending already relinquished, and beating again
+            // would take that back.
+            using var beat = flowStillLive ? FirstRunHeartbeat.Start(channel, serverUrl, flowId, time) : null;
+
+            var ensured = await EnsureAsync();
+            result = ensured;
+            await SetupDaemonService.ReportAsync(channel, serverUrl, flowId, ensured);
+        } catch (Exception ex) when (ex is not OperationCanceledException) {
+            AnsiConsole.MarkupLine(
+                $"  [yellow]![/] Could not tell the browser about the daemon service: {Markup.Escape(ex.Message)}");
+        }
+
+        return result ?? await EnsureAsync();
+
+        async Task<FirstRunMachineActionResult> EnsureAsync() {
+            var (ensured, renameLine) = await SetupDaemonService.EnsureAsync(config, saved, home, time, previousName);
+            if (renameLine is not null) AnsiConsole.MarkupLine(renameLine);
+
+            return ensured;
+        }
     }
 
     /// <inheritdoc cref="ChosenServerHttp.For"/>
@@ -1868,7 +2010,10 @@ sealed class SetupCommand(
                     opencode.ImportLedgerJson, time),
             new AntigravityImportSource(harnesses.Of<AntigravityHarness>().Paths, time),
             new MistralVibeImportSource(harnesses.Of<MistralVibeHarness>().Paths, time),
-            new GrokImportSource(harnesses.Of<GrokHarness>().Paths, time),
+            new GrokImportSource(
+                harnesses.Of<GrokHarness>().Paths,
+                cwd => RepositoryDetection.DetectRepositoryAsync(router, config, cwd, time, detectPullRequest: false),
+                time),
             new MuseImportSource(harnesses.Of<MuseHarness>().Paths, WatcherPaths.FromEnvironment(config), time)
         ];
 
@@ -1907,6 +2052,7 @@ sealed class SetupCommand(
 
         if (!normalized.Reachable) {
             AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(normalized.Warning ?? serverArg)}");
+            _json?.Failed(SetupFailureCodes.ServerUnreachable, $"Cannot reach server: {normalized.Warning ?? serverArg}");
             AnsiConsole.MarkupLine("  [dim]Check the URL is correct and the server is running.[/]");
             return null;
         }
@@ -1925,6 +2071,7 @@ sealed class SetupCommand(
             return (serverUrl, provider);
         } catch (Exception ex) {
             AnsiConsole.MarkupLine($"  [red]✗[/] Cannot reach server: {Markup.Escape(ex.Message)}");
+            _json?.Failed(SetupFailureCodes.ServerUnreachable, $"Cannot reach server: {ex.Message}");
             return null;
         }
     }
@@ -1969,6 +2116,7 @@ sealed class SetupCommand(
 
         // Console rather than AnsiConsole so the command survives being copied: Spectre hard-wraps.
         await Console.Error.WriteLineAsync($"  {serverUrl} is not answering, so setup stopped before configuring anything else.");
+        _json?.Failed(SetupFailureCodes.WorkspaceUnavailable, $"{serverUrl} is not answering, so setup stopped before configuring anything else.");
         await Console.Error.WriteLineAsync(
             $"  If it was just created, run `kcap setup --server-url {serverUrl}` once it is up. If not, it may have been removed.");
 
@@ -2010,6 +2158,93 @@ sealed class SetupCommand(
         };
     }
 
+    SetupEdition.Choice ChooseEdition() {
+        telemetry.Funnel.EditionOffered();
+
+        SetupEdition.Choice[] offered = LocalEditionAvailable
+            ? [SetupEdition.Choice.Local, SetupEdition.Choice.Cloud, SetupEdition.Choice.Existing]
+            : [SetupEdition.Choice.Cloud, SetupEdition.Choice.Existing];
+
+        var choice = AnsiConsole.Prompt(new SelectionPrompt<SetupEdition.Choice>()
+            .Title("How do you want to run kcap?")
+            .AddChoices(offered)
+            .UseConverter(SetupEdition.Label));
+
+        telemetry.Funnel.EditionChosen(SetupEdition.Wire(choice));
+
+        return choice;
+    }
+
+    /// <summary>Sign-up and the workspace it creates happen on kcap-web's pages; the terminal waits, then the
+    /// discovery that follows finds the new workspace.</summary>
+    void OpenSignUp() {
+        var url = SetupEdition.SignUpUrl(endpoints);
+
+        AnsiConsole.MarkupLine("  Opening your browser to sign up and create your team's workspace.");
+        browser.TryOpen(url);
+        AnsiConsole.MarkupLine($"  [dim]If it didn't open:[/]  {Markup.Escape(url)}");
+
+        AnsiConsole.Prompt(new TextPrompt<string>("  Press Enter once your workspace is ready, to sign in to it here.").AllowEmpty());
+    }
+
+    /// <summary>The vendor ids this run installed kcap's hooks into.</summary>
+    internal static IReadOnlyList<string> InstalledHarnesses(CodingAgentsStep.Result result) {
+        (bool Installed, HarnessId Id)[] all = [
+            (result.ClaudeInstalled, HarnessId.Claude), (result.CodexHooksInstalled, HarnessId.Codex),
+            (result.CursorHooksInstalled, HarnessId.Cursor), (result.CopilotHooksInstalled, HarnessId.Copilot),
+            (result.GeminiHooksInstalled, HarnessId.Gemini), (result.KiroHooksInstalled, HarnessId.Kiro),
+            (result.PiExtensionInstalled, HarnessId.Pi), (result.OpenCodeExtensionInstalled, HarnessId.OpenCode),
+            (result.AntigravityHooksInstalled, HarnessId.Antigravity), (result.VibeHooksInstalled, HarnessId.MistralVibe),
+            (result.GrokHooksInstalled, HarnessId.Grok), (result.MuseHooksInstalled, HarnessId.Muse),
+        ];
+
+        return [.. all.Where(h => h.Installed).Select(h => h.Id.VendorId)];
+    }
+
+    /// <summary>A local installation has one user, so nobody else is there to read a shared session.</summary>
+    internal const string LocalDefaultVisibility = "private";
+
+    internal const string MachineDaemonLine =
+        "  [dim]No daemon service was set up: a service cannot carry the machine credential. Where "
+      + MachineAuth.ClientIdVar + " and " + MachineAuth.ClientSecretVar + " are set, start one with[/] [cyan]kcap daemon start -d[/]";
+
+    /// <summary>The profile <paramref name="profileName"/> retargeted at <paramref name="serverUrl"/>, read now:
+    /// discovery may have switched the active profile after startup.</summary>
+    async Task<ProfileContext> ContextForAsync(string profileName, string serverUrl) {
+        var snapshot = await AppConfig.LoadProfileConfig(config);
+
+        return new ProfileContext(
+            new ResolvedProfile(null, profileName, snapshot.Profiles.GetValueOrDefault(profileName), null)
+                .Retargeted(serverUrl, LocalEndpoints.Read(localRoot)), snapshot);
+    }
+
+    /// <summary>Step 2's report for a credential found without asking anyone, the failure for a machine
+    /// credential that does not work, or null when a person still has to sign in.</summary>
+    async Task<int?> ReportUnattendedSignInAsync(UnattendedCredential.Outcome? outcome, string profileName) {
+        switch (outcome) {
+            case UnattendedCredential.Outcome.Machine:
+                AnsiConsole.MarkupLine(
+                    $"  [green]✓[/] Signed in with the machine credential ({MachineAuth.ClientIdVar}/{MachineAuth.ClientSecretVar})");
+
+                return SetupExit.Done;
+            case UnattendedCredential.Outcome.Stored:
+                var tokens = await store.LoadAsync(profileName);
+                AnsiConsole.MarkupLine(
+                    $"  [green]✓[/] Already signed in as [cyan]{Markup.Escape(tokens?.GitHubUsername ?? "?")}[/] [dim](kcap login)[/]");
+
+                return SetupExit.Done;
+            case UnattendedCredential.Outcome.Rejected rejected:
+                await Console.Error.WriteLineAsync($"  The machine credential did not work: {rejected.Problem}");
+                _json?.Failed(SetupFailureCodes.MachineCredentialRejected, $"The machine credential did not work: {rejected.Problem}");
+                await Console.Error.WriteLineAsync(
+                    $"  Check {MachineAuth.ClientIdVar} and {MachineAuth.ClientSecretVar}, or unset both to sign in as a person.");
+
+                return SetupExit.Failed;
+            default:
+                return null;
+        }
+    }
+
     /// <summary>
     /// Step 2 (Login) as a standalone step: a discovery-completed sign-in just reports what
     /// discovery already published; everything else — including a <c>None</c> provider, which needs
@@ -2020,6 +2255,12 @@ sealed class SetupCommand(
     internal async Task<int> RunLoginStepAsync(
             bool loginComplete, string provider, string serverUrl, bool forceDevice, string activeProfile,
             bool museAssistant = false) {
+        if (loginComplete && provider == AuthProvider.None) {
+            AnsiConsole.MarkupLine("  [green]✓[/] No sign-in needed for a local installation.");
+
+            return 0;
+        }
+
         if (loginComplete) {
             // Discovery's WorkOS leg reports the sign-in itself, naming the workspace it picked. Every
             // other provider's discovery reports a tenant count and no identity, so this is its only one.
@@ -2037,6 +2278,7 @@ sealed class SetupCommand(
 
         if (result is not AuthResult.Committed { CredentialSaved: true }) {
             await Console.Error.WriteLineAsync("  Login failed.");
+            _json?.Failed(SetupFailureCodes.SignInFailed, $"Signing in to {serverUrl} did not complete.");
 
             if (museAssistant)
                 foreach (var line in MuseAssistantPosture.LoginFailedHintLines(result, provider)) await Console.Out.WriteLineAsync(line);
@@ -2103,8 +2345,8 @@ sealed class SetupCommand(
     /// for a server — on a first run it names none at all, and the one this run chose is not persisted
     /// until after this leg returns.
     /// </summary>
-    internal static ProfileContext ImportContext(ProfileContext profiles, string serverUrl) =>
-        new(profiles.Resolution with { ServerUrl = serverUrl }, profiles.Snapshot);
+    internal static ProfileContext ImportContext(ProfileContext profiles, string serverUrl, LocalEndpoints local) =>
+        new(profiles.Resolution.Retargeted(serverUrl, local), profiles.Snapshot);
 
     /// <summary>Creates the first-run flow, opens the browser on it, and polls it as itself, returning
     /// the Agents decision for Step 4 to apply. <b>Nothing is configured here</b> — what crosses is
@@ -2160,7 +2402,7 @@ sealed class SetupCommand(
                     Environment.MachineName, await LoginShellFindsCliAsync(time), time);
 
                 importing = new SetupImportLane(
-                    config, ImportContext(profiles, serverUrl), home, flowHttp, harnesses, router, time,
+                    config, ImportContext(profiles, serverUrl, LocalEndpoints.Read(localRoot)), home, flowHttp, harnesses, router, time,
                     spawner, serverUrl, profileName, defaultVisibility, workdir.Path, paths, accounts: accounts);
 
                 using var progress = new SpectreFirstRunFlowProgress(time);
@@ -2377,13 +2619,13 @@ sealed class SetupCommand(
             return (null, null);
         }
 
-        var tier = !tierGiven ? WorkspaceTier.Free : tierText?.Trim().ToLowerInvariant() switch {
+        var tier = !tierGiven ? null : tierText?.Trim().ToLowerInvariant() switch {
             "team" => WorkspaceTier.Team,
             "free" => WorkspaceTier.Free,
             _      => (WorkspaceTier?)null
         };
 
-        if (tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
+        if (tierGiven && tier is null) return (null, "--tier takes team (a 30-day Team trial) or free.");
 
         // Present-but-empty is rejected rather than read as absent: a script whose $ORG expanded to
         // nothing still asked for a workspace.
@@ -2411,7 +2653,7 @@ sealed class SetupCommand(
 
         if (!check.Ok) return (null, SpectreTenantProvisioner.SlugRejection(canonical, check.Reason, "pass a different --slug"));
 
-        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier.Value, code?.Trim()), null);
+        return (new RequestedWorkspace(orgName!.Trim(), canonical, tier, code?.Trim()), null);
     }
 
     static readonly string[] DiscoverFlags =
@@ -2438,6 +2680,41 @@ sealed class SetupCommand(
             + "  It takes --json, --github, --device and --no-prompt.";
     }
 
+    /// <summary>Only the install, as JSON lines on stdout: the wizard owns every later step. The deferral spans the
+    /// last line, so an interrupt still reports how the install ended before the process exits 130.</summary>
+    internal async Task<int> RunLocalJsonAsync(LocalSetupArgs args) {
+        using var deferral = InteractiveLifetime.Defer();
+
+        var progress = new SyncProgress<LocalInstallEvent>(e => WriteJsonLine(LocalSetupJsonLines.Line(e)));
+
+        try {
+            var installer = localInstallers.Create();
+            var plan      = installer.Preflight();
+
+            if (LocalSetupTerminal.MissingAnswer(args, plan, installer.RootDirectory) is { } missing) {
+                WriteJsonLine(LocalSetupJsonLines.Failed(LocalInstallFailureCode.AnswerRequired, missing));
+
+                return SetupExit.Refused;
+            }
+
+            // The desktop app cannot answer a question, so a running Ollama is used unless a flag says otherwise.
+            await installer.InstallAsync(new(args.SingleUser, args.Yes, args.Embeddings ?? new LocalEmbeddingAnswer.Ollama(null)), progress,
+                deferral.Token);
+
+            return 0;
+        } catch (Exception ex) {
+            var failure = LocalSetupJsonLines.Classify(ex);
+            WriteJsonLine(LocalSetupJsonLines.Failed(failure.Code, failure.Message));
+
+            return LocalSetupJsonLines.Exit(failure.Code);
+        }
+    }
+
+    static void WriteJsonLine(string line) {
+        Console.Out.WriteLine(line);
+        Console.Out.Flush();
+    }
+
     /// <summary>
     /// <c>kcap setup --discover</c>: sign in, report the workspaces this account can reach, and change
     /// nothing. Nothing is kept, the token included, so the run that follows signs in again.
@@ -2446,7 +2723,7 @@ sealed class SetupCommand(
         if (DiscoverArgumentError(args) is { } refusal) {
             await Console.Error.WriteLineAsync(refusal);
 
-            return 1;
+            return SetupExit.Refused;
         }
 
         var json   = args.Contains("--json");
@@ -2475,7 +2752,7 @@ sealed class SetupCommand(
         }
 
         if (payload.Workspaces.Count == 0) {
-            AnsiConsole.MarkupLine("  No Capacitor workspace found for this account.");
+            AnsiConsole.MarkupLine("  No kcap workspace found for this account.");
             AnsiConsole.MarkupLine(payload.CanCreate
                 ? "  [dim]Create one with `kcap setup --org \"<name>\" --slug <slug>`.[/]"
                 : "  [dim]Ask an admin to install the Kurrent GitHub App on your org, or use `kcap setup --server-url <url>`.[/]");
@@ -2617,6 +2894,10 @@ sealed class SetupCommand(
         var bundlePluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "Resources", "kcap"));
         if (Directory.Exists(bundlePluginPath)) return bundlePluginPath;
 
+        // The Windows app ships the plugin beside kcap.exe; on Unix this name is the binary itself.
+        var siblingPluginPath = Path.Combine(exeDir, "kcap");
+        if (Directory.Exists(siblingPluginPath)) return siblingPluginPath;
+
         // npm optional dependencies: <wrapper>/node_modules/@kurrent/<platform>/bin/kcap.
         var optDepsPluginPath = Path.GetFullPath(Path.Combine(exeDir, "..", "..", "..", "..", "kcap"));
 
@@ -2724,16 +3005,21 @@ sealed class SetupCommand(
         ? "  Use provider API key: yes [dim](kept; turn off with[/] [cyan]kcap config set use_provider_api_key false[/][dim])[/]"
         : "  Use provider API key: no [dim](kept; turn on with[/] [cyan]kcap config set use_provider_api_key true[/][dim])[/]";
 
-    /// <summary>
-    /// The closing daemon line. Suggesting <c>kcap daemon start -d</c> after the browser's request put
-    /// the daemon under a service would start a second one beside it.
-    /// </summary>
-    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => service?.Outcome switch {
-        FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled =>
+    /// <summary>The closing daemon line. Only a platform with no service manager is pointed at a plain
+    /// background start; anywhere else that would run a second daemon beside the service. A retry is
+    /// suggested only where one can change the answer.</summary>
+    internal static string DaemonClosingLine(FirstRunMachineActionResult? service) => (service?.Outcome, service?.Reason) switch {
+        (FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.AlreadyEnabled, _) =>
             "  [green]✓[/] The agent daemon runs as a background service.",
-        FirstRunMachineActionOutcomes.EnabledUnverified =>
+        (FirstRunMachineActionOutcomes.EnabledUnverified, _) =>
             "  [green]✓[/] The agent daemon is installed as a background service [dim](check with[/] [cyan]kcap daemon status[/][dim])[/].",
-        _ => "  [dim]Optional:[/] start the daemon with [cyan]kcap daemon start -d[/]"
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform) =>
+            "  [dim]This platform has no service manager kcap supports:[/] start the daemon with [cyan]kcap daemon start -d[/]",
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NotConfigured) =>
+            "  [yellow]![/] The agent daemon service was not set up: this profile has no usable server, or kcap has no daemon binary.",
+        (FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.NeedsAttention) =>
+            "  [yellow]![/] The existing agent daemon service needs attention, so setup left it alone: see [cyan]kcap daemon service status[/]",
+        _ => "  [yellow]![/] The agent daemon service is not running yet: retry with [cyan]kcap daemon service ensure[/]"
     };
 
     /// <summary>
@@ -2761,18 +3047,6 @@ sealed class SetupCommand(
                     + "Muse hooks may look for sessions outside this shell's XDG roots.");
 
         return installed;
-    }
-
-    /// <summary>
-    /// Names the browser path tries, in order, when the chosen daemon name is held elsewhere: the
-    /// machine-suffixed name the terminal prompt would offer, then numbered variants of it.
-    /// </summary>
-    internal static IEnumerable<string> BrowserDaemonNameFallbacks(string chosen, string machine) {
-        var suffixed = $"{chosen}-{machine}";
-
-        yield return suffixed;
-
-        for (var n = 2; n <= 4; n++) yield return $"{suffixed}-{n}";
     }
 
     /// <summary>
@@ -2828,6 +3102,31 @@ sealed class SetupCommand(
             "[yellow]![/] Live recording begins on a [bold]new[/] coding-agent session — hooks only load at session start.\n"
           + $"  {how} to begin streaming; a session that was already\n"
           + "  running when you ran setup isn't being recorded yet.";
+    }
+
+    /// <summary>Refuses a value that is only read after sign-in, so a script learns of it before anything is
+    /// changed.</summary>
+    internal static string? AnswerValueError(string[] args) {
+        foreach (var flag in (string[])["--default-visibility", "--use-provider-api-key"])
+            if (args.Contains(flag) && GetArg(args, flag) is null) return $"{flag} needs a value.";
+
+        if (GetArg(args, "--default-visibility") is { } visibility && !AppConfig.ValidVisibilities.Contains(visibility.ToLowerInvariant()))
+            return $"Invalid --default-visibility: {visibility}. Must be: {string.Join(", ", AppConfig.ValidVisibilities)}";
+
+        if (GetArg(args, "--use-provider-api-key") is { } key && ProviderApiKeyPolicy.TryParseBool(key) is null)
+            return $"Invalid value for --use-provider-api-key: '{key}'. Must be true/1/yes/on or false/0/no/off.";
+
+        return null;
+    }
+
+    /// <summary>Refuses a <c>--daemon-name</c> with no usable value before anything is written: the
+    /// next token would otherwise be saved as the name, a following flag included.</summary>
+    internal static string? DaemonNameArgumentError(string[] args) {
+        if (!args.Contains("--daemon-name")) return null;
+
+        return GetArg(args, "--daemon-name") is { } name && !string.IsNullOrWhiteSpace(name) && !name.StartsWith('-')
+            ? null
+            : "--daemon-name requires a value (e.g. --daemon-name laptop).";
     }
 
     static string? GetArg(string[] args, string name) {

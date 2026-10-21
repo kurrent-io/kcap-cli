@@ -1,4 +1,5 @@
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core;
@@ -24,11 +25,13 @@ public class RemoteSessionViewModelTests {
         public readonly SessionAccessService Access;
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
-        public readonly AgentActionService Actions = NewActions();
+        public readonly AgentActionService Actions;
         public readonly FakeTimeProvider Time = new();
         public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
+            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(),
+                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm, lane: Lane);
             Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
@@ -40,9 +43,10 @@ public class RemoteSessionViewModelTests {
             });
 
         public RemoteSessionViewModel Build(AgentRow row, IPlanArtifactSource? planArtifacts = null,
-                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null) {
+                Capacitor.Cli.Core.PullRequests.IPullRequestSource? pullRequests = null, IPlanSource? plans = null,
+                BackgroundCommandActivity? commands = null, SubagentEventsReader? readSubagent = null) {
             Directory.Rows.AddOrUpdate(row);
-            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, pullRequests: pullRequests, plans: plans);
+            return new RemoteSessionViewModel(row, Directory, Access, Permissions, Actions, Lane, (_, _) => Task.FromResult(Detail), new RecordingOpener(), Time, WorkSource, () => new FakeTerminalSurface(), planArtifacts, commands, pullRequests: pullRequests, plans: plans, readSubagent: readSubagent);
         }
 
         /// One chat poll: the pane reads its feed on the timer this harness owns.
@@ -138,6 +142,55 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// A subagent row opens that subagent's own events in place of the chat, read-only, and Back returns to the chat.
+    /// A pane open when the agent moves to another session closes, since its subagent belongs to the old one.
+    [Test]
+    public async Task A_subagent_row_opens_its_own_transcript_in_place_of_the_chat_until_back() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, AgentCall),
+                Event(1, CanonicalEventTypes.ToolResultReceived, AgentLaunch)));
+            var requested = new List<(string Session, string Agent)>();
+            SubagentEventsReader read = (session, agent, _, _) => {
+                requested.Add((session, agent));
+                return Task.FromResult(new SubagentEventsFetch(new SubagentEventsDto {
+                    Events = [Event(0, CanonicalEventTypes.AssistantTextGenerated, """{"content":"Found the chat surfaces"}""")],
+                }));
+            };
+            var agentRow = Harness.Row(vendor: "claude");
+            var vm = h.Build(agentRow, readSubagent: read);
+            await h.UntilAsync(vm, () => vm.WorkContext.Runs.Any(r => r.CanOpen), "subagent row named");
+            var row = vm.WorkContext.Runs.Single();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+
+            await Assert.That(vm.ShowsSubagentPane).IsTrue();
+            await Assert.That(vm.ShowsChatPane).IsFalse();
+            var pane = vm.Subagent!;
+            await Assert.That(pane.Chat.IsReadOnlyParticipant).IsTrue();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (!pane.Chat.Items.OfType<AssistantTextItem>().Any() && DateTime.UtcNow < deadline) {
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await (pane.Chat.PendingReadForTesting ?? Task.CompletedTask);
+            }
+            await Assert.That(pane.Chat.Items.OfType<AssistantTextItem>().Single().Text).IsEqualTo("Found the chat surfaces");
+            await Assert.That(requested[0]).IsEqualTo(("s1", "a9f262478e032f427"));
+            await Assert.That(vm.WorkContext.Runs.Single()).IsSameReferenceAs(row);
+
+            pane.BackCommand.Execute().Subscribe();
+
+            await Assert.That(vm.Subagent).IsNull();
+            await Assert.That(vm.ShowsChatPane).IsTrue();
+
+            vm.WorkContext.OpenRunCommand.Execute(row).Subscribe();
+            await Assert.That(vm.Subagent).IsNotNull();
+            h.Directory.Rows.AddOrUpdate(agentRow with { SessionId = "s2" });
+            await h.UntilAsync(vm, () => vm.Subagent is null, "pane closed on the session change");
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     [Arguments(false)]
     [Arguments(true)]
@@ -170,6 +223,10 @@ public class RemoteSessionViewModelTests {
             h.WorkSource.Gate();
             vm.WorkContext.RefreshCommand.Execute().Subscribe();
             await WaitUntilAsync(() => h.WorkSource.InFlight == 1, what: "refresh pending");
+            // Under the immediate scheduler the verdict below clears the sections off the UI thread,
+            // racing a settle the refresh dispatched there; settled reads have nothing left to re-apply.
+            await (vm.WorkContext.Plan.PendingReadForTesting ?? Task.CompletedTask);
+            await (vm.Artefacts.PendingReadForTesting ?? Task.CompletedTask);
             if (denied) {
                 h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
                 h.Lane.SessionAccessChangedSubject.OnNext("s1");
@@ -359,7 +416,8 @@ public class RemoteSessionViewModelTests {
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready on the late session id");
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3"));
-            await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s3"), what: "re-acquired on the new session id");
+            await WaitUntilAsync(() => h.Lane.ChatSubscribes.Contains("s3") && vm.Access == RemoteSessionAccess.Ready,
+                what: "re-acquired on the new session id");
             await WaitUntilAsync(() => h.Lane.ChatUnsubscribes.Contains("s2"), what: "the old session released");
 
             h.Directory.Rows.AddOrUpdate(Harness.Row(sessionId: "s3", status: "Completed"));
@@ -389,6 +447,36 @@ public class RemoteSessionViewModelTests {
             await Assert.That(vm.SessionEnded).IsFalse();
             await WaitUntilAsync(() => h.Lane.ChatSubscribes.Count == 2, what: "the lease re-acquired");
             await WaitUntilAsync(() => vm.ShowsChatPane, what: "the pane back");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A transient empty snapshot also removes a live row, so only a removal after the server
+    /// accepted this workspace's stop, or a live session turning terminal, reports the end.
+    [Test]
+    [Arguments(null, "Running", false, false)]
+    [Arguments(HubCallResult.Ok, "Running", false, true)]
+    [Arguments(HubCallResult.Denied, "Running", false, false)]
+    [Arguments(null, "Running", true, true)]
+    [Arguments(null, "Completed", true, false)]
+    public async Task Only_an_accepted_stop_or_a_live_session_ending_reports_the_end(
+            HubCallResult? stop, string openStatus, bool terminal, bool ends) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            if (stop is { } result) h.Lane.StopHandler = _ => Task.FromResult(new HubCallOutcome(result));
+            var vm = h.Build(Harness.Row(status: openStatus));
+            var ended = false;
+            using var sub = vm.Ended.Subscribe(_ => ended = true);
+
+            if (stop is not null) {
+                await vm.StopCommand.Execute();
+                await WaitUntilAsync(async () => (await h.Actions.StopsInFlight.FirstAsync()).Count == 0, what: "the stop settled");
+            }
+            if (terminal) h.Directory.Rows.AddOrUpdate(Harness.Row(status: "Completed"));
+            else h.Directory.Rows.Remove("remote:a1");
+
+            if (ends) await WaitUntilAsync(() => ended, what: "the end");
+            else await Assert.That(ended).IsFalse();
             await vm.TeardownAsync();
         });
     }
@@ -539,7 +627,8 @@ public class RemoteSessionViewModelTests {
             var vm = h.Build(Harness.Row());
             await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
             await WaitUntilAsync(() => h.Lane.Tails.Count == 1, what: "the tail");
-            await h.UntilAsync(vm, () => vm.Chat.Phase == ChatTabPhase.Reading, "the empty seed");
+            // Reading alone is not the seed: a poll before the detail fetch lands reads empty and still sets it.
+            await h.UntilAsync(vm, () => vm.Chat.HasSeed, "the empty seed");
             await WaitUntilAsync(() => vm.Chat.ShowsComposer && vm.Chat.ComposerHint.StartsWith("Enter sends", StringComparison.Ordinal), what: "the composer");
 
             vm.Chat.ComposerText = "do it";
@@ -578,17 +667,18 @@ public class RemoteSessionViewModelTests {
     }
 
     [Test]
-    public async Task A_pty_harness_offers_a_terminal_tab_that_subscribes_once_access_stands_and_a_frame_harness_does_not() {
+    public async Task A_pty_harness_offers_a_terminal_tab_that_subscribes_when_first_shown_and_a_frame_harness_does_not() {
         await RunOnUiAsync(async () => {
             using var h = new Harness();
             var pty = h.Build(Harness.Row(vendor: "claude"));
             await Assert.That(pty.ShowsTerminalTab).IsTrue();
             await Assert.That(pty.IsChatActive).IsTrue();
             await WaitUntilAsync(() => pty.Access == RemoteSessionAccess.Ready, what: "ready");
-            await WaitUntilAsync(() => pty.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
-            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
+            await Assert.That(h.Lane.TerminalSubscribes).IsEmpty();
 
             await pty.ShowTerminalCommand.Execute();
+            await WaitUntilAsync(() => pty.Terminal!.Phase == RemoteTerminalPhase.Live, what: "the terminal live");
+            await Assert.That(h.Lane.TerminalSubscribes).Contains("a1");
             await Assert.That(pty.IsTerminalActive).IsTrue();
             await Assert.That(pty.ShowsTerminalPane).IsTrue();
             await Assert.That(pty.ShowsChatPane).IsFalse();
@@ -658,6 +748,117 @@ public class RemoteSessionViewModelTests {
     const string AgentLaunch = """{"call_id":"toolu_A","result":"Async agent launched successfully.","extensions":{"claude_code":{"tool_use_result":{"isAsync":true,"status":"async_launched","agentId":"a9f262478e032f427","description":"Map desktop chat UI surfaces","prompt":"go"}}}}""";
     const string AgentNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n<status>completed</status>\n<summary>Agent \"Map desktop chat UI surfaces\" finished</summary>\n</task-notification>"}""";
     const string MetaNotification = """{"content":"<task-notification>\n<task-id>a9f262478e032f427</task-id>\n<tool-use-id>toolu_A</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>","extensions":{"claude_code":{"is_meta":true}}}""";
+
+    [Test]
+    public async Task An_already_denied_background_session_releases_its_feed_before_access_returns() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Denied("Session not visible to caller"));
+            using var lease = h.Access.Acquire("s2");
+            await WaitUntilAsync(async () => await lease.State.FirstAsync() == SessionAccessState.Denied, "denied session");
+            var row = Harness.Row(sessionId: null);
+            h.Directory.Rows.AddOrUpdate(row);
+            var unexpectedRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            BackgroundCommandMonitor? monitor = null;
+            var ended = false;
+            monitor = new BackgroundCommandMonitor(row.Key, _ => { }, () => {
+                ended = true;
+                monitor!.Dispose();
+            }, new FakeDaemonClientService(), h.Directory, h.Access, (_, _) => {
+                unexpectedRead.TrySetResult();
+                return Task.FromResult(h.Detail);
+            }, h.Lane, h.Time);
+            using var lifetime = monitor;
+
+            h.Directory.Rows.AddOrUpdate(row with { SessionId = "s2" });
+            await Assert.That(ended).IsTrue();
+            h.Lane.AccessWatchHandler = _ => Task.FromResult(HubCallOutcome.Ok);
+            h.Lane.SessionAccessChangedSubject.OnNext("s2");
+            await WaitUntilAsync(async () => await lease.State.FirstAsync() == SessionAccessState.Established, "restored access");
+            var quiet = Task.Delay(TimeSpan.FromSeconds(1));
+            await Assert.That(await Task.WhenAny(unexpectedRead.Task, quiet)).IsSameReferenceAs(quiet);
+            await Assert.That(h.Lane.Tails).IsEmpty();
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_remote_background_command_remains_working_after_navigation_until_it_or_the_session_ends(bool sessionEnds) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var call = AgentCall.Replace("toolu_A", "toolu_S").Replace("\"Agent\"", "\"Bash\"");
+            const string launch = """{"call_id":"toolu_S","result":"Command running in background with ID: b1.","extensions":{"claude_code":{"tool_use_result":{"backgroundTaskId":"b1"}}}}""";
+            const string finished = """{"content":"<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_S</tool-use-id>\n<status>completed</status>\n<summary>done</summary>\n</task-notification>"}""";
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, call),
+                Event(1, CanonicalEventTypes.ToolResultReceived, launch)));
+            BackgroundCommandMonitor? monitor = null;
+            var backgroundSeed = new TaskCompletionSource<SessionDetailFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var commands = new BackgroundCommandActivity((key, report, ended, _) =>
+                monitor = new BackgroundCommandMonitor(key, report, ended, new FakeDaemonClientService(), h.Directory,
+                    h.Access, (_, ct) => backgroundSeed.Task.WaitAsync(ct), h.Lane, h.Time));
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var row = Harness.Row(vendor: "claude") with { AwaitingInput = true };
+            var vm = h.Build(row, commands: commands);
+            await h.UntilAsync(vm, () => latest.GetValueOrDefault("remote:a1") == 1, "running command");
+            await vm.TeardownAsync();
+            h.Time.Advance(ChatTabViewModel.PollInterval);
+            await Task.Yield();
+            await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(latest.GetValueOrDefault("remote:a1")).IsEqualTo(1);
+            backgroundSeed.SetResult(h.Detail);
+            await WaitUntilAsync(() => h.Lane.Tails.Count == 2, what: "background monitor tail");
+            h.Time.Advance(ChatTabViewModel.PollInterval);
+            await Task.Yield();
+            await (monitor!.PendingReadForTesting ?? Task.CompletedTask);
+            await Assert.That(latest.GetValueOrDefault("remote:a1")).IsEqualTo(1);
+
+            if (sessionEnds) h.Directory.Rows.AddOrUpdate(row with { Status = "Completed" });
+            else h.Lane.PushStreamEvent(Envelope("s1", 2, CanonicalEventTypes.UserMessageReceived, finished));
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (latest.ContainsKey("remote:a1")) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("Background command did not settle");
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await Task.Delay(10);
+            }
+            await Assert.That(latest.ContainsKey("remote:a1")).IsFalse();
+        });
+    }
+
+    /// A refused or missing seed stops the remote feed for good, so the count the workspace handed
+    /// over must not outlive it.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task A_remote_background_monitor_whose_feed_stops_withdraws_the_running_command(bool notFound) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var call = AgentCall.Replace("toolu_A", "toolu_S").Replace("\"Agent\"", "\"Bash\"");
+            const string launch = """{"call_id":"toolu_S","result":"Command running in background with ID: b1.","extensions":{"claude_code":{"tool_use_result":{"backgroundTaskId":"b1"}}}}""";
+            h.Detail = new(RemoteFixtures.Detail(
+                Event(0, CanonicalEventTypes.AssistantToolCallsGenerated, call),
+                Event(1, CanonicalEventTypes.ToolResultReceived, launch)));
+            var refusal = new SessionDetailFetch(null, NotFound: notFound, Unauthorized: !notFound);
+            using var commands = new BackgroundCommandActivity((key, report, ended, _) =>
+                new BackgroundCommandMonitor(key, report, ended, new FakeDaemonClientService(), h.Directory,
+                    h.Access, (_, _) => Task.FromResult(refusal), h.Lane, h.Time));
+            IReadOnlyDictionary<string, int> latest = new Dictionary<string, int>();
+            using var subscription = commands.Running.Subscribe(running => latest = running);
+            var vm = h.Build(Harness.Row(vendor: "claude") with { AwaitingInput = true }, commands: commands);
+            await h.UntilAsync(vm, () => latest.GetValueOrDefault("remote:a1") == 1, "running command");
+            await vm.TeardownAsync();
+
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (latest.ContainsKey("remote:a1")) {
+                if (DateTime.UtcNow > deadline) throw new TimeoutException("Stopped feed kept its running command");
+                h.Time.Advance(ChatTabViewModel.PollInterval);
+                await Task.Delay(10);
+            }
+            await Assert.That(latest.ContainsKey("remote:a1")).IsFalse();
+        });
+    }
 
     /// Events shaped as the server writes them: tool_use_result on the result, no origin_kind on
     /// the notification.

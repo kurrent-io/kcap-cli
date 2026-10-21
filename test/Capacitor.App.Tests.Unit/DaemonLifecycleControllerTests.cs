@@ -1,6 +1,8 @@
 using Capacitor.App.Services;
+using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
@@ -100,16 +102,47 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
-    public async Task Row3_orphan_label_is_attention_only() {
+    public async Task Row3_orphan_label_is_replaced_without_asking() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: false, state: "installed"));
         h.Start();
 
         h.PushUnreachable();
 
-        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the orphan-label attention");
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the orphan-label repair");
+        await h.Controller.PhaseClosed;
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Surface.AttentionMessages).IsEmpty();
+    }
+
+    [Test]
+    public async Task Row3_orphan_label_without_an_install_binary_is_status_only_no_mutation() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: false, state: "installed", installBinaryPath: null));
+        h.Start();
+
+        h.PushUnreachable();
+
+        await WaitUntilAsync(() => h.Surface.StatusMessages.Count == 1, what: "the honest no-install-binary line");
         await h.Controller.PhaseClosed;
         await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.AttentionMessages).IsEmpty();
+    }
+
+    /// A live pid on an orphaned label could be another identity's daemon, which a replace would kill.
+    [Test]
+    public async Task Row3_orphan_label_with_a_live_pid_is_attention_only() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: false, state: "installed", daemonPid: 4242));
+        h.Start();
+
+        h.PushUnreachable();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count >= 1, what: "the needs-repair attention");
+        await h.Controller.PhaseClosed;
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
     }
 
     [Test]
@@ -255,13 +288,13 @@ public class DaemonLifecycleControllerTests {
     [Test]
     public async Task AutoActionsClosed_user_clicked_StartAction_still_routes_through_the_lane() {
         await using var h = new Harness(autoActionsPermanentlyClosed: true);
-        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap()); // nothing at all — DetachedStart row
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap()); // nothing at all — the install row
         h.Start();
 
         await h.Controller.StartActionAsync(CancellationToken.None);
 
         await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
-        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.DetachedStart);
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.Install);
     }
 
     // ---- txn_active defers the startup matrix (wait and re-query, never mutate into a held flock) ----
@@ -335,8 +368,10 @@ public class DaemonLifecycleControllerTests {
 
     // ---- startup phase closes on the FIRST terminal outcome ----
 
+    // ---- recovery: a daemon that goes away after the startup arm gets the same ensure ----
+
     [Test]
-    public async Task Connected_first_then_unreachable_is_inert() {
+    public async Task A_daemon_that_goes_away_after_connecting_is_reinstalled_through_the_lane() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
         h.Start();
@@ -346,14 +381,178 @@ public class DaemonLifecycleControllerTests {
         await h.Controller.PhaseClosed;
 
         h.PushUnreachable();
-        await Task.Delay(50); // a negative: give a would-be matrix run every chance to fire
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the recovery install");
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(2);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_stopped_service_found_on_recovery_is_started_verified() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "installed"));
+        h.Start();
+
+        h.PushConnected();
+        await h.Controller.PhaseClosed;
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation query");
+
+        h.PushUnreachable();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the recovery start");
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.StartVerified);
+    }
+
+    /// One recovery per interval: a trigger inside it waits for the interval's end, and a second
+    /// trigger while one waits adds nothing.
+    [Test]
+    public async Task A_recovery_inside_the_interval_is_deferred_to_its_end_and_runs_once() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushUnreachable(); // the startup arm: the first ensure, stamping the interval
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the startup install");
+        await h.Controller.PhaseClosed;
+        h.PushConnected();
+        var timersBefore = h.Time.TimersCreated;
+
+        h.PushUnreachable();
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the deferred recovery's wait");
+        await Task.Delay(50); // a negative: give an undeferred recovery every chance to run
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
+
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 2, what: "the deferred recovery");
+        await Task.Delay(50);
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(2);
+        await Assert.That(h.Lane.Requests[1].Verb).IsEqualTo(MutationVerb.Install);
+    }
+
+    [Test]
+    public async Task A_deferred_recovery_is_skipped_when_the_daemon_came_back_meanwhile() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the startup install");
+        await h.Controller.PhaseClosed;
+        var timersBefore = h.Time.TimersCreated;
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the deferred recovery's wait");
+        var statusCalls = h.Cli.StatusCallCount;
+        h.PushConnected(); // a service manager restart brought it back
+        await WaitUntilAsync(() => h.Cli.StatusCallCount > statusCalls, what: "the passive read of the later Connected");
+        statusCalls = h.Cli.StatusCallCount;
+
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await Task.Delay(50); // a negative: give the skipped recovery every chance to run
+
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(statusCalls);
+    }
+
+    [Test]
+    public async Task A_deferred_recovery_is_skipped_when_the_daemon_came_back_incompatible() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the startup install");
+        await h.Controller.PhaseClosed;
+        var timersBefore = h.Time.TimersCreated;
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the deferred recovery's wait");
+        h.PushUnreachable(reason: "daemon_incompatible");
+        var statusCalls = h.Cli.StatusCallCount;
+
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await Task.Delay(50); // a negative: give the skipped recovery every chance to run
+
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(statusCalls);
+    }
+
+    /// Each ensure kicks a reattach whose failure is the next unreachable, so recoveries no connect
+    /// follows space out instead of repeating every interval.
+    [Test]
+    public async Task Recoveries_without_a_connect_between_them_back_off() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the startup install");
+        await h.Controller.PhaseClosed;
+
+        var timersBefore = h.Time.TimersCreated;
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the first recovery's wait");
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 2, what: "the first recovery");
+
+        timersBefore = h.Time.TimersCreated;
+        h.PushUnreachable();
+        await WaitUntilAsync(() => h.Time.TimersCreated == timersBefore + 1, what: "the second recovery's wait");
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await Task.Delay(50); // a negative: one interval is no longer enough
+        await Assert.That(h.Lane.Requests.Count).IsEqualTo(2);
+
+        h.Clock.Advance(DaemonLifecycleController.RecoveryInterval);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 3, what: "the doubled recovery");
+    }
+
+    [Test]
+    public async Task The_recovery_interval_doubles_up_to_its_cap() {
+        await Assert.That(DaemonLifecycleController.CurrentRecoveryInterval(0)).IsEqualTo(DaemonLifecycleController.RecoveryInterval);
+        await Assert.That(DaemonLifecycleController.CurrentRecoveryInterval(2)).IsEqualTo(DaemonLifecycleController.RecoveryInterval * 4);
+        await Assert.That(DaemonLifecycleController.CurrentRecoveryInterval(100)).IsEqualTo(DaemonLifecycleController.MaxRecoveryInterval);
+    }
+
+    [Test]
+    public async Task AutoActionsClosed_a_daemon_that_goes_away_after_connecting_is_not_recovered() {
+        await using var h = new Harness(autoActionsPermanentlyClosed: true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushConnected();
+        await h.Controller.PhaseClosed;
+        await WaitUntilAsync(() => h.Cli.StatusCallCount >= 1, what: "the reconciliation query");
+        var statusCalls = h.Cli.StatusCallCount;
+
+        h.PushUnreachable();
+        await Task.Delay(50); // a negative: give a would-be recovery every chance to fire
+
+        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(statusCalls);
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_later_incompatible_daemon_is_not_recovered() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Start();
+
+        h.PushConnected();
+        await h.Controller.PhaseClosed;
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation query");
+
+        h.PushUnreachable(reason: "daemon_incompatible");
+        await Task.Delay(50); // a negative: give a would-be recovery every chance to fire
 
         await Assert.That(h.Cli.StatusCallCount).IsEqualTo(1);
         await Assert.That(h.Lane.Requests).IsEmpty();
     }
 
     [Test]
-    public async Task Incompatible_first_runs_reconciliation_then_unreachable_is_inert() {
+    public async Task Incompatible_first_runs_reconciliation_and_a_later_unreachable_runs_the_ensure() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(txnMarker: true, txnActive: false));
         h.Start();
@@ -363,15 +562,15 @@ public class DaemonLifecycleControllerTests {
         await h.Controller.PhaseClosed;
         await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the stale-marker attention it found");
 
-        h.PushUnreachable(); // daemon_unreachable, a later terminal outcome — inert (arm already claimed)
-        await Task.Delay(50);
+        h.PushUnreachable();
 
-        await Assert.That(h.Cli.StatusCallCount).IsEqualTo(1);
-        await Assert.That(h.Lane.Requests).IsEmpty();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 2, what: "the recovery's own status read");
     }
 
-    // ---- once-per-run arm ----
+    // ---- the startup arm ----
 
+    /// The second trigger lands inside the recovery interval the startup arm stamped, so it waits
+    /// rather than querying again.
     [Test]
     public async Task Two_daemon_unreachable_in_a_row_consult_status_exactly_once() {
         await using var h = new Harness();
@@ -596,9 +795,9 @@ public class DaemonLifecycleControllerTests {
 
     // A Failed outcome from the lane is presented ONLY by the composition-root consumer (see AppMutationLaneWiringTests.PresentOutcomeAsync's Attention/Reinstall/
     // Takeover coverage for the actual message content) — the controller itself makes no surface
-    // call, but the once-per-run arm still holds (no retry on a second daemon_unreachable).
+    // call, and a second daemon_unreachable inside the recovery interval does not retry yet.
     [Test]
-    public async Task Failed_outcome_from_the_lane_produces_no_controller_surface_call_but_counts_the_run_once() {
+    public async Task Failed_outcome_from_the_lane_produces_no_controller_surface_call_and_no_immediate_retry() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "installed"));
         h.Lane.Behavior = (_, _) => Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(24, "gave_up_waiting", RecoverySurface.Attention));
@@ -615,7 +814,7 @@ public class DaemonLifecycleControllerTests {
         // kick is unconditional, not gated on Succeeded/SucceededAfterTimeout.
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
 
-        h.PushUnreachable(); // once-per-run: no retry
+        h.PushUnreachable(); // deferred to the interval's end, which the fake clock never reaches
         await Task.Delay(50);
         await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
         await Assert.That(h.Client.RestartCount).IsEqualTo(1); // no second lane call — no second kick
@@ -682,7 +881,7 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
-    public async Task StartAction_nothing_at_all_falls_back_to_detached_start() {
+    public async Task StartAction_nothing_at_all_installs_the_service() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
         h.Start();
@@ -690,11 +889,52 @@ public class DaemonLifecycleControllerTests {
         await h.Controller.StartActionAsync(CancellationToken.None);
 
         await Assert.That(h.Lane.Requests.Count).IsEqualTo(1);
-        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.DetachedStart);
-        // DetachedStart from Start shares the SAME success handling as every other verb.
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
         await Assert.That(h.Client.RestartCount).IsEqualTo(1);
         await Assert.That(h.Surface.StatusMessages.Count).IsEqualTo(1);
         await Assert.That(h.Surface.StatusMessages[0]).Contains("Waiting to connect");
+    }
+
+    /// A click is the user asking, so an unknown terminal PATH does not stop the install.
+    [Test]
+    public async Task StartAction_nothing_at_all_installs_even_when_terminal_PATH_is_unknown() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.Probe.TerminalPathBehavior = _ => Task.FromResult<string?>(null);
+        h.Start();
+
+        await h.Controller.StartActionAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+    }
+
+    [Test]
+    [Arguments("installed")]     // orphan label
+    [Arguments("not_installed")] // nothing at all
+    public async Task StartAction_unit_rewrite_without_an_install_binary_leaves_the_service_alone(string state) {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: state, installBinaryPath: null));
+        h.Start();
+
+        await h.Controller.StartActionAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Surface.StatusMessages.Single()).Contains("the daemon service was left as it is");
+    }
+
+    [Test]
+    public async Task StartAction_without_a_profile_does_not_install() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap());
+        h.ProfileName = null;
+        h.Start();
+
+        await h.Controller.StartActionAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.StatusMessages.Single()).Contains("the daemon service was left as it is");
     }
 
     [Test]
@@ -728,16 +968,15 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
-    public async Task StartAction_orphan_label_offers_repair() {
+    public async Task StartAction_orphan_label_is_replaced_without_asking() {
         await using var h = new Harness();
         h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: false, state: "installed"));
         h.Start();
 
         await h.Controller.StartActionAsync(CancellationToken.None);
 
-        await Assert.That(h.Surface.Prompts.Count).IsEqualTo(1);
-        await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindRepair);
-        await Assert.That(h.Lane.Requests).IsEmpty();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
     }
 
     [Test]
@@ -960,7 +1199,7 @@ public class DaemonLifecycleControllerTests {
 
         await Assert.That(h.Surface.Prompts.Count).IsEqualTo(2);
         await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindReloadService);
-        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(3));
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(3, resumes: false));
         await Assert.That(h.Lane.Requests).IsEmpty();
         await Assert.That(h.Reloading()).IsFalse();
     }
@@ -1164,10 +1403,33 @@ public class DaemonLifecycleControllerTests {
     }
 
     [Test]
-    public async Task Disclosure_names_the_count_and_what_else_ends() {
-        var text = DaemonLifecycleController.ReloadDisclosure(2);
-        await Assert.That(text).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
-        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1)).Contains("1 agent now");
+    public async Task Disclosure_names_the_count_and_says_the_agents_resume() {
+        var text = DaemonLifecycleController.ReloadDisclosure(2, resumes: true);
+        await Assert.That(text).IsEqualTo("Reloading restarts the daemon now. Its 2 running agents are stopped, mid-turn if need be, and resumed on the new daemon unless daemon.auto_resume is off. A review or evaluation still running when it exits may end.");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(1, resumes: true)).Contains("Its 1 running agent is stopped");
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(0, resumes: true)).IsEqualTo("Reloading restarts the daemon now. A review or evaluation still running when it exits may end.");
+    }
+
+    /// A daemon without the shutdown frame is restarted the old way and keeps no resume ledger.
+    [Test]
+    public async Task Disclosure_for_a_daemon_that_cannot_keep_its_agents_warns_they_end() {
+        await Assert.That(DaemonLifecycleController.ReloadDisclosure(2, resumes: false)).IsEqualTo("Reloading restarts the daemon and ends everything it hosts: 2 agents now, plus any agent, launch or evaluation running when it exits. Uncommitted work in their worktrees is lost.");
+    }
+
+    [Test]
+    public async Task Reload_prompt_promises_a_resume_only_when_the_daemon_advertises_it() {
+        await using var h = new Harness();
+        h.Start();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(false);
+        h.Client.StatusSubject.OnNext(new AttachStatus(AttachState.Connected, null, [DaemonLifecycleController.ResumeCapability]));
+        h.PushSnapshot(activeAgents: 2);
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        h.PushConnected();
+        await h.Controller.ReloadServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(2, resumes: true));
+        await Assert.That(h.Surface.Prompts[1].Disclosure).IsEqualTo(DaemonLifecycleController.ReloadDisclosure(2, resumes: false));
     }
 
     [Test]
@@ -1241,6 +1503,229 @@ public class DaemonLifecycleControllerTests {
     /// 10's controller tests drive instead of a raw IKcapCli mutation call. Defaults to an
     /// immediate Succeeded so tests that don't care about the mutation's own outcome (most of the
     /// "no mutation happens" tests never even call this) aren't forced to script one.
+    static DaemonStatusDto ForeignDaemon(string server = "https://norton.kcap.ai:443", string? profile = "norton", int active = 0) =>
+        FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: server, profile: profile, active: active);
+
+    /// A daemon attached by name that serves another server or profile is reported, and an idle one is offered
+    /// the ordinary Replace, which the lane runs for the app's own profile.
+    [Test]
+    [Arguments("https://norton.kcap.ai:443", "norton", "Daemon daemon-a is running for norton.kcap.ai, profile norton, not kcap.example.com, profile default.")]
+    [Arguments("https://kcap.example.com:443", "norton", "Daemon daemon-a is running for profile norton, not profile default.")]
+    public async Task A_daemon_serving_another_identity_is_reported_and_offered_a_replace(string server, string profile, string message) {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server, profile));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace");
+        // The report carries the command too, so a declined or failed replace still leaves a fix.
+        await Assert.That(h.Surface.AttentionMessages.Any(m => m.StartsWith(message, StringComparison.Ordinal) && m.Contains("kcap daemon service", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(h.Lane.Requests.Single().Profile).IsEqualTo("default");
+    }
+
+    /// A reconnect while the offer waits on the gate is checked afresh rather than suppressed as already reported.
+    [Test]
+    public async Task A_reconnect_while_the_offer_waits_for_the_gate_still_gets_one() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        var running = false;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: running ? "running" : "installed"));
+        var release = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        h.Lane.Behavior = (_, _) => Interlocked.Increment(ref calls) == 1
+            ? release.Task
+            : Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(24, "verify_readiness_timeout", RecoverySurface.Attention));
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+        var startTask = h.Controller.StartActionAsync(CancellationToken.None);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "a Start holding the gate");
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        h.PushConnecting();
+        h.PushConnected();
+        await Task.Delay(50);
+        running = true;
+        release.SetResult(new MutationOutcome.Failed(24, "verify_readiness_timeout", RecoverySurface.Attention));
+        await startTask;
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Any(p => p.Kind == LifecyclePrompt.KindRepair), what: "the replace offer");
+        await Assert.That(h.Surface.AttentionMessages.Count(m => m.StartsWith("Daemon daemon-a is running", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    /// Where the platform has no verified replace, a mismatch is reported with the command to run by hand.
+    [Test]
+    public async Task Without_a_verified_replace_the_mismatch_is_only_reported() {
+        if (AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single()).Contains("kcap daemon service uninstall --name daemon-a");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// A busy daemon is reported but not offered a replace, which would end its agents; once they finish,
+    /// without a reconnect, the offer follows.
+    [Test]
+    public async Task A_busy_foreign_daemon_is_offered_a_replace_once_its_agents_finish() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 2));
+        h.PushConnected();
+
+        const string held = "The app offers to replace it once its 2 running agents finish.";
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Any(m => m.EndsWith(held, StringComparison.Ordinal)), what: "the report");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 0));
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace once idle");
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+    }
+
+    /// A mismatch the daemon no longer has is taken back from wherever the report still shows, the tray included.
+    [Test]
+    public async Task A_resolved_mismatch_withdraws_its_report() {
+        await using var h = new Harness(autoActionsPermanentlyClosed: true);
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        var report = h.Surface.AttentionMessages.Single();
+
+        h.PushConnecting();
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server: "https://kcap.example.com:443", profile: "default"));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Withdrawn.Count > 0, what: "the withdrawal");
+        await Assert.That(h.Surface.Withdrawn.Single()).IsEqualTo(report);
+    }
+
+    /// A launch the daemon has admitted but not yet listed is work in progress: no replace is offered over it.
+    [Test]
+    public async Task A_daemon_still_starting_a_launch_is_not_offered_a_replace() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 0) with { Busy = true });
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Task.Delay(50);
+        await Assert.That(h.Surface.AttentionMessages.Any(m => m.Contains("The app offers to replace it once", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+    }
+
+    /// Agents that start while the prompt is open cancel the replace it was answered for.
+    [Test]
+    public async Task Agents_starting_while_the_prompt_is_open_cancel_the_replace() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Surface.ConfirmBehavior = (_, _) => {
+            h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 1));
+            return Task.FromResult(true);
+        };
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.StatusMessages.Any(m => m.StartsWith("Agents started", StringComparison.Ordinal)), what: "the cancel");
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// Under a server override the resolution names no profile, so no request can be built: the report says
+    /// how to fix it by hand. Auto actions closed after an abandoned wizard report the same way.
+    [Test]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task Without_a_profile_or_with_auto_actions_closed_the_mismatch_is_only_reported(bool urlOverride, bool closed) {
+        await using var h = new Harness(autoActionsPermanentlyClosed: closed);
+        if (urlOverride) h.ProfileName = null;
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single())
+            .Contains($"--name daemon-a --profile {(urlOverride ? "<profile>" : "default")}");
+        await Assert.That(h.Surface.AttentionMessages.Single().Contains("with <profile> replaced", StringComparison.Ordinal)).IsEqualTo(urlOverride);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// An older daemon reports no profile, and one that matches on name and server is then accepted;
+    /// a reattach to the same mismatch does not report it again.
+    [Test]
+    public async Task A_daemon_matching_what_it_reports_is_accepted_and_a_mismatch_is_reported_once() {
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server: "https://kcap.example.com:443", profile: null));
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount >= 1, what: "the reconciliation");
+        await Assert.That(h.Surface.AttentionMessages).IsEmpty();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 1));
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        h.PushConnecting();
+        h.PushConnected();
+        await Task.Delay(50);
+        await Assert.That(h.Surface.AttentionMessages.Count).IsEqualTo(1);
+    }
+
+    /// The command offered by hand names the daemon by its service id and the profile as the named shell
+    /// reads it, and asks for the verified replace only where the platform supports it. An app under a server
+    /// override has no profile, so the daemon must be given one that resolves the override's server.
+    [Test]
+    [Arguments("daemon-a", "default", false, true,
+        "`kcap daemon service install --replace --verify --name daemon-a --profile default` in a shell ")]
+    [Arguments("-My Laptop", "it's mine", false, false,
+        "`kcap daemon service uninstall --name my-laptop`, then `kcap daemon service install --name my-laptop --profile 'it'\\''s mine'` in a shell ")]
+    [Arguments("my laptop", "it's mine", true, true,
+        "`kcap daemon service install --replace --verify --name 'my laptop' --profile 'it''s mine'` in PowerShell ")]
+    [Arguments("laptop", "it\u2019s", true, false,
+        "`kcap daemon service uninstall --name laptop`, then `kcap daemon service install --name laptop --profile 'it\u2019\u2019s'` in PowerShell ")]
+    [Arguments("laptop", null, false, true,
+        "--profile <profile>`, with <profile> replaced by a profile for the server this app uses, in a shell ")]
+    public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string? profile, bool windows, bool verified, string expected) =>
+        await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).Contains(expected);
+
+    /// A configured name the socket reduces to the daemon's own is the same daemon, and two servers on one host
+    /// are told apart in full.
+    [Test]
+    public async Task Names_compare_as_the_socket_does_and_servers_on_one_host_read_in_full() {
+        var sameName = FakeDaemonClientService.Snap(daemon: "my-laptop", serverUrl: "https://kcap.example.com:443").Daemon;
+        await Assert.That(AttachedIdentity.Mismatch(sameName, "My Laptop", "https://kcap.example.com:443", null)).IsNull();
+
+        var otherPort = FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: "https://kcap.example.com:8443").Daemon;
+        await Assert.That(AttachedIdentity.Mismatch(otherPort, "daemon-a", "https://kcap.example.com:443", null))
+            .IsEqualTo("Daemon daemon-a is running for https://kcap.example.com:8443, not https://kcap.example.com:443.");
+    }
+
     sealed class FakeMutationLane {
         public readonly List<MutationRequest> Requests = [];
         public Func<MutationRequest, CancellationToken, Task<MutationOutcome>> Behavior =
@@ -1287,7 +1772,8 @@ public class DaemonLifecycleControllerTests {
             Client.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, reason, null, daemonVersion));
 
         public void PushSnapshot(int activeAgents) =>
-            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents));
+            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents,
+                serverUrl: CanonicalServer ?? "http://localhost:9999"));
 
         public bool Background() { bool? v = null; using (Controller.BackgroundPriority.Subscribe(x => v = x)) { } return v ?? false; }
         public ReloadState? Reload() { ReloadState? v = null; using (Controller.ReloadState.Subscribe(x => v = x)) { } return v; }
@@ -1319,6 +1805,13 @@ sealed class FakeKcapCli : IKcapCli {
     public Task<ServiceSnapshot?> ServiceStatusAsync(CancellationToken ct) {
         StatusCallCount++;
         return StatusBehavior(ct);
+    }
+
+    public readonly List<string> NamedStatusReads = [];
+    public Func<string, Task<ServiceSnapshot?>> NamedStatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(null);
+    public Task<ServiceSnapshot?> ServiceStatusAsync(string daemonName, CancellationToken ct) {
+        NamedStatusReads.Add(daemonName);
+        return NamedStatusBehavior(daemonName);
     }
 
     public bool SupportsRetire = true;
@@ -1389,6 +1882,28 @@ sealed class FakeKcapCli : IKcapCli {
         ImportRequests.Add(request);
         return ImportBehavior(request, onLine, ct);
     }
+
+    public int SetupLocalCallCount;
+    public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> SetupLocalBehavior =
+        (_, _, _) => Task.FromResult(new StreamingResult(0, false, []));
+    public List<LocalEmbeddingChoice> SetupLocalEmbeddings { get; } = [];
+    public Task<StreamingResult> SetupLocalAsync(
+            LocalEmbeddingChoice embeddings, Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        SetupLocalCallCount++;
+        SetupLocalEmbeddings.Add(embeddings);
+        return SetupLocalBehavior(onLine, interrupt, ct);
+    }
+
+    public int LocalUpgradeCallCount;
+    public Func<Action<StreamedLine>, CancellationToken, CancellationToken, Task<StreamingResult>> LocalUpgradeBehavior =
+        (_, _, _) => Task.FromResult(new StreamingResult(3, false, []));
+    public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) {
+        LocalUpgradeCallCount++;
+        return LocalUpgradeBehavior(onLine, interrupt, ct);
+    }
+
+    public Task<ProcessResult> LocalStartAsync(CancellationToken ct) =>
+        Task.FromResult(new ProcessResult(0, "", "", false));
 }
 
 // FakeLoginShellProbe is shared via Capacitor.Tests.Helpers (the controller only ever calls

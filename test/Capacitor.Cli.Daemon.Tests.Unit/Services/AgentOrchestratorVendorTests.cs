@@ -85,6 +85,63 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(2);
     }
 
+    /// <summary>A refusal is the server's answer rather than a transient failure: no retry, and no status that
+    /// could overwrite what the server recorded for the refused id.</summary>
+    [Test]
+    public async Task ReRegister_neither_retries_a_refusal_nor_sends_a_status_after_it() {
+        using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
+        var server = new CaptureServerConnection { RegistrationResponse = _ => new AgentRegisteredResponse(false, "recorded_failure") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        orch.RegisterAgentForTest(new AgentInstance(
+            "agent-refused", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        });
+
+        await server.ReRegisterAgentsHook!();
+        await server.ReRegisterAgentsHook!();
+        orch.ReportCommandsForTest("agent-refused", [new HostedAgentCommand("review", null, null)]);
+        var commands = orch.GetAgentForTest("agent-refused")!.Commands;
+        await orch.CleanupAgentForTest("agent-refused");
+
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
+        await Assert.That(server.StatusChangedCalls).IsEmpty();
+        await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+        await Assert.That(server.CommandReports).IsEmpty();
+        await Assert.That(commands!.Single().Name).IsEqualTo("review");
+    }
+
+    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.</summary>
+    [Test]
+    public async Task A_refused_launch_keeps_running_and_sends_nothing_more_for_its_id() {
+        using var repoPath = GitRepo.CreateWithCommit();
+        var server = new CaptureServerConnection { RegistrationResponse = _ => new AgentRegisteredResponse(false, "launch_refused") };
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), AgentOrchestratorHarness.Launcher("claude"), allowedRepoPath: repoPath);
+
+        await orch.HandleLaunchAgentForTest(new LaunchAgentCommand(
+            AgentId: "refused-launch", Prompt: "hi", Model: "opus", Effort: null,
+            RepoPath: repoPath, Tools: null, AttachmentIds: null, Vendor: "claude"));
+
+        var agent = orch.GetAgentForTest("refused-launch");
+        await Assert.That(agent).IsNotNull();
+        await Assert.That(agent!.IsServerSilent).IsTrue();
+
+        await orch.CleanupAgentForTest("refused-launch");
+
+        await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
+        await Assert.That(server.StatusChangedCalls).IsEmpty();
+        await Assert.That(server.RunEvents.Any(e => e.AgentId == "refused-launch")).IsFalse();
+        await Assert.That(server.LaunchFailedCalls).IsEmpty();
+        await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+    }
+
     // A PTY codex runtime reports "pty" on AgentRegistered — the transport rides the runtime TYPE,
     // not the vendor (a codex agent is not automatically app-server).
     [Test]
@@ -108,6 +165,37 @@ public class AgentOrchestratorVendorTests {
 
         var (_, transport) = server.AgentRegisteredTransports.Single();
         await Assert.That(transport).IsEqualTo(CodexTransportDecision.Pty);
+    }
+
+    // A reconnect re-announces each agent with no launch on the server to read its vendor from, so
+    // every registration carries it — the first one and each re-announcement alike.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Registration_reports_the_agents_vendor(bool reconnect) {
+        using var worktree = new TempDir();
+        string worktreePath = worktree.CreateDir("worktree");
+        var server = new CaptureServerConnection();
+
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        var agent = new AgentInstance(
+            "agent-claude", null, "", null, worktreePath, "claude",
+            new PtyHostedAgentRuntime("claude", new StubPtyProcess(), TimeProvider.System), new WorktreeInfo(worktreePath, "", worktreePath, IsStandalone: true), new CancellationTokenSource()
+        ) {
+            ActivityClock = new AgentActivityClock(TimeProvider.System),
+            CreatedAt     = DateTime.UtcNow,
+            LastOutputAt  = DateTime.UtcNow
+        };
+
+        if (reconnect) {
+            orch.RegisterAgentForTest(agent);
+            await server.ReRegisterAgentsHook!();
+        } else {
+            await orch.RegisterAgentForTestAsync(agent);
+        }
+
+        await Assert.That(server.AgentRegisteredVendors.Single()).IsEqualTo(("agent-claude", (string?)"claude"));
     }
 
     [Test]

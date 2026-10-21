@@ -1,6 +1,7 @@
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalEdition;
 
 namespace Capacitor.App.Services.Onboarding;
 
@@ -11,7 +12,7 @@ public abstract record GateResult {
 
 // EvaluationFailed is the degrade for an unexpected exception: from EvaluateAsync when the
 // evaluation throws (the resolution survives), from App.EvaluateGateSafelyAsync when the resolve does.
-public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBinding, TokenUnusableExpired, EvaluationFailed }
+public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBinding, TokenUnusableExpired, EvaluationFailed, LocalSetupPending }
 
 /// <summary>
 /// First-run trigger: local, side-effect-free except the shared resolution path's own
@@ -22,7 +23,7 @@ public enum GateReason { NoProfile, InvalidServerUrl, NoToken, TokenUnusableBind
 /// here mirrors a specific TokenStore rule rather than inventing its own.
 /// </summary>
 public sealed class OnboardingGate(
-        ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, TimeProvider time) {
+        ConfigRoot config, TokenStore tokenStore, ProfileOverrides env, LocalRoot local, TimeProvider time) {
     /// <summary>
     /// The ONE shared validator for "is this usable as a server identity" — also used by
     /// <c>App.ValidProfileName</c> so the gate and the lifecycle-controller precondition can
@@ -38,10 +39,14 @@ public sealed class OnboardingGate(
     /// different profiles.
     public async Task<(GateResult Result, ProfileContext Profiles)> EvaluateAsync(CancellationToken ct) {
         // Daemon-style resolution — no repo/git discovery: the gate is local.
-        var profiles = await AppConfig.ResolveActiveProfile([], config, env);
+        var profiles = await AppConfig.ResolveActiveProfile([], config, env, LocalEndpoints.Read(local));
         GateResult result;
         try {
-            result = await EvaluateResolvedAsync(profiles.Resolution.ProfileName, profiles.Resolution.Profile, ct);
+            // A setup entry outranks every profile verdict: a half-installed local edition is not set up
+            // even when its profile already carries a complete-looking stamp.
+            result = LocalSetupState.Pending(local)
+                ? new GateResult.Incomplete(GateReason.LocalSetupPending)
+                : await EvaluateResolvedAsync(profiles.Resolution.ProfileName, profiles.Resolution.Profile, ct);
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
         } catch (Exception ex) {
@@ -57,6 +62,7 @@ public sealed class OnboardingGate(
     /// Evaluates a resolution the caller already holds instead of resolving a second time — two
     /// independent resolves racing a concurrent active-profile change could otherwise evaluate the
     /// gate against a different profile than the one the daemon graph builds for.
+    /// Grades the one profile only; a pending local setup is <see cref="EvaluateAsync"/>'s verdict.
     public async Task<GateResult> EvaluateResolvedAsync(string? profileName, Profile? profile, CancellationToken ct) {
         if (profile is null || string.IsNullOrEmpty(profileName)) {
             return new GateResult.Incomplete(GateReason.NoProfile);

@@ -19,8 +19,8 @@ public class DetachedImportPlanRunnerTests {
 
     DetachedImportPlanRunner Runner(ProfileContext profiles, Func<ImportPlanLevel, SetupImportRun>? result = null) => new(
         Config.Root, profiles, Home, TestHarnesses.Under(Home),
-        new ChosenServerHttp(Config.Root, profiles, ProfileOverrides.None, MachineAuth.None),
-        new GitProviderRouter(), TimeProvider.System,
+        new ChosenServerHttp(Config.Root, profiles, ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root),
+        new GitProviderRouter(), TimeProvider.System, NoLocalInstallation.Root,
         (level, context) => {
             _seen.Add((level, context));
 

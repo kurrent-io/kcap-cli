@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 /// </summary>
 sealed class CaptureServerConnection() : ServerConnection(
     new() { Name = "test", ServerUrl = "http://127.0.0.1:1" },
-    UnusedTokenStore.Create(),
+    new FixedCredentialSource(),
     NullLoggerFactory.Instance,
     NullLogger<ServerConnection>.Instance
 , TimeProvider.System) {
@@ -90,11 +90,11 @@ sealed class CaptureServerConnection() : ServerConnection(
 
     /// <summary>Completed the instant AgentRegisteredAsync is entered — lets a test hold
     /// re-registration inside that await and publish a verdict there (finding 1 refinement).</summary>
-    public TaskCompletionSource? AgentRegisteredEntered { get; init; }
+    public TaskCompletionSource? AgentRegisteredEntered { get; set; }
 
     /// <summary>When set, AgentRegisteredAsync awaits this before returning — holding the
     /// re-registration open across the AgentRegistered await.</summary>
-    public TaskCompletionSource? AgentRegisteredGate { get; init; }
+    public TaskCompletionSource? AgentRegisteredGate { get; set; }
 
     /// <summary>When set, every non-failure AgentStatusChanged send checks this runtime's verdict
     /// AT SEND TIME (via the lock-synchronised ReadVerdict); if a launch-window verdict is already
@@ -115,26 +115,33 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>The runtime transport ("pty" | "app-server") echoed on each registration, in call
     /// order — proves initial and reconnect re-registration report the same value.</summary>
     public List<(string AgentId, string? Transport)> AgentRegisteredTransports { get; } = [];
+    public List<(string AgentId, string? Vendor)> AgentRegisteredVendors { get; } = [];
 
     /// <summary>The start title echoed on each registration, in call order.</summary>
     public List<(string AgentId, AgentStartTitle? Title)> AgentRegisteredTitles { get; } = [];
 
-    public override async Task AgentRegisteredAsync(
+    /// <summary>The server's answer per agent id; accepted when unset or null.</summary>
+    public Func<string, AgentRegisteredResponse?>? RegistrationResponse { get; set; }
+
+    public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null, AgentStartTitle? title = null) {
+        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
         AgentRegisteredCallCount++;
         lock (AgentRegisteredTitles) AgentRegisteredTitles.Add((agentId, title));
         lock (AcpCallOrder) AcpCallOrder.Add($"register:{agentId}");
         lock (AgentRegisteredCalls) AgentRegisteredCalls.Add((agentId, model));
         lock (AgentRegisteredPostures) AgentRegisteredPostures.Add((agentId, sandboxPolicy, approvalPolicy));
         lock (AgentRegisteredTransports) AgentRegisteredTransports.Add((agentId, runtimeTransport));
+        lock (AgentRegisteredVendors) AgentRegisteredVendors.Add((agentId, vendor));
 
         AgentRegisteredEntered?.TrySetResult();
         if (AgentRegisteredGate is { } gate) await gate.Task.ConfigureAwait(false);
 
         if (AgentRegisteredCallCount <= AgentRegisteredFailTimes)
             throw new InvalidOperationException("transient re-register failure");
+
+        return RegistrationResponse?.Invoke(agentId) ?? AgentRegisteredResponse.Accepted;
     }
 
     // ── Option B task 4: ACP bind/forward capture ────────────────────────────────────
@@ -237,7 +244,8 @@ sealed class CaptureServerConnection() : ServerConnection(
 
         AcpEventsCallSignal.Writer.TryWrite(callCount);
 
-        return AcpEventsAckOverride?.Invoke(envelopes) ?? new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq);
+        return AcpEventsAckOverride?.Invoke(envelopes)
+            ?? (envelopes.Length == 0 ? new AcpBatchAck(-1, -1) : new AcpBatchAck(envelopes[^1].Seq, envelopes[^1].Seq));
     }
 
     // ── §2.5 source-claim / confirm seams ───────────────────────────────────────────────
@@ -381,10 +389,13 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>Every (agentId, event) pair passed to AppendAgentRunEventAsync, in call order.</summary>
     public List<(string AgentId, object Event)> RunEvents { get; } = [];
 
+    /// <summary>When set, AppendAgentRunEventAsync records the event, then fails with this.</summary>
+    public Exception? RunEventThrow { get; set; }
+
     public override Task AppendAgentRunEventAsync(string agentId, object evt) {
         lock (RunEvents) RunEvents.Add((agentId, evt));
 
-        return Task.CompletedTask;
+        return RunEventThrow is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 
     /// <summary>Every shutdown report, with the state of the token it was handed. The token matters
@@ -397,12 +408,19 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// server a shutdown must not wait on.</summary>
     public bool ShutdownReportHangs { get; init; }
 
+    public List<(string AgentId, int? ExitCode)> ShutdownReportExitCodes { get; } = [];
+
     public override async Task ReportAgentEndedForShutdownAsync(
             string agentId, string? sessionId, string status, string reason, int? exitCode, CancellationToken ct) {
         lock (ShutdownReports) ShutdownReports.Add((agentId, status, reason, ct.IsCancellationRequested));
+        lock (ShutdownReportExitCodes) ShutdownReportExitCodes.Add((agentId, exitCode));
 
         if (ShutdownReportHangs) await Task.Delay(Timeout.Infinite, ct);
+        if (ShutdownReportGate is { } gate) await gate.Task.WaitAsync(ct);
     }
+
+    /// <summary>When set, the shutdown report is recorded and then held until the gate completes.</summary>
+    public TaskCompletionSource? ShutdownReportGate { get; set; }
 
     // ── Task 8: resolved-model report capture ──────────────────────────────────
     /// <summary>Every legacy (agentId, model) pair passed to ReportAgentResolvedModelAsync — proves
@@ -416,6 +434,13 @@ sealed class CaptureServerConnection() : ServerConnection(
     /// <summary>Signals each ExplicitReviewerModelResolvedAsync call (1-based count) so a test can
     /// await the fire-and-forget report deterministically instead of racing Task.Delay.</summary>
     public Channel<int> ExplicitReviewerModelReportSignal { get; } = Channel.CreateUnbounded<int>();
+
+    public List<string> CommandReports { get; } = [];
+
+    public override Task ReportAgentCommandsAsync(string agentId, IReadOnlyList<HostedAgentCommand> commands) {
+        lock (CommandReports) CommandReports.Add(agentId);
+        return Task.CompletedTask;
+    }
 
     public override Task ReportAgentResolvedModelAsync(string agentId, string model) {
         lock (ReportAgentResolvedModelCalls) ReportAgentResolvedModelCalls.Add((agentId, model));

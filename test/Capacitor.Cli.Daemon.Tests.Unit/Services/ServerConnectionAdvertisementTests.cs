@@ -11,7 +11,7 @@ public class ServerConnectionAdvertisementTests {
     public async Task DaemonConnect_carries_the_configured_vendor_models() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
         config.VendorModels = new(StringComparer.Ordinal) { ["pi"] = [new("p/a", "A · p")] };
-        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         var connect = conn.BuildDaemonConnect("mac", [], [], null);
@@ -22,7 +22,7 @@ public class ServerConnectionAdvertisementTests {
     [Test]
     public async Task DaemonConnect_before_any_probe_carries_null_vendor_models() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
-        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         await Assert.That(conn.BuildDaemonConnect("mac", [], [], null).VendorModels).IsNull();
@@ -31,7 +31,7 @@ public class ServerConnectionAdvertisementTests {
     [Test]
     public async Task DaemonConnect_advertises_raw_input_once_a_handler_is_wired() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
-        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
         conn.OnSendRawInput += _ => Task.CompletedTask;
 
@@ -41,7 +41,7 @@ public class ServerConnectionAdvertisementTests {
     [Test]
     public async Task DaemonConnect_without_a_raw_input_handler_does_not_advertise_it() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
-        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         await Assert.That(conn.BuildDaemonConnect("mac", [], [], null).SupportsRawInput).IsFalse();
@@ -50,7 +50,7 @@ public class ServerConnectionAdvertisementTests {
     [Test]
     public async Task DaemonConnect_advertises_branch_base_refs() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
-        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
 
         await Assert.That(conn.BuildDaemonConnect("mac", [], [], null).SupportsBranchBaseRef).IsTrue();
@@ -59,7 +59,7 @@ public class ServerConnectionAdvertisementTests {
     [Test]
     public async Task DaemonConnect_serializes_its_capability_flags_with_snake_case_names() {
         var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
-        await using var conn = new ServerConnection(config, UnusedTokenStore.Create(), NullLoggerFactory.Instance,
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
             NullLogger<ServerConnection>.Instance, TimeProvider.System);
         conn.OnSendRawInput += _ => Task.CompletedTask;
 
@@ -68,6 +68,22 @@ public class ServerConnectionAdvertisementTests {
 
         await Assert.That(json).Contains("\"supports_branch_base_ref\":true");
         await Assert.That(json).Contains("\"supports_raw_input\":true");
+    }
+
+    [Test]
+    public async Task BuildDaemonConnect_carries_resuming_claims() {
+        var config = new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root };
+        await using var conn = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance,
+            NullLogger<ServerConnection>.Instance, TimeProvider.System);
+        ResumingAgentClaim[] claims = [new("agent-1", "instance-old", "session-1")];
+        conn.GetResumingAgents = () => claims;
+
+        var connect = conn.BuildDaemonConnect("mac", [], [], null);
+        var json    = System.Text.Json.JsonSerializer.Serialize(connect, CapacitorJsonContext.Default.DaemonConnect);
+
+        await Assert.That(connect.ResumingAgents).IsEquivalentTo(claims);
+        await Assert.That(json).Contains(
+            "\"resuming_agents\":[{\"agent_id\":\"agent-1\",\"predecessor_instance_id\":\"instance-old\",\"session_id\":\"session-1\"}]");
     }
 
     [Test]

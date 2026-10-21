@@ -1,4 +1,5 @@
 using System.Net;
+using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
 using System.Text;
 using System.Text.Json;
@@ -9,6 +10,7 @@ using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Telemetry;
 using AppUnderTest = Capacitor.App.App;
 using Capacitor.Cli.Core;
 
@@ -19,7 +21,7 @@ namespace Capacitor.App.Tests.Unit;
 /// models and the REAL OnboardingViewModel — only externals (HTTP, process spawns, the daemon
 /// socket) are scripted. WizardStartupTests already pins the composition SEAMS in isolation
 /// (adoptServer:true on Paste via <c>A_pasted_server_is_adopted_and_the_arming_hook_runs_before_the_commit</c>,
-/// the provisioner armed for Create/Discover-WorkOS via <c>Create_and_workos_discovery_route_through_the_auth_proxy</c>,
+/// discovery through the auth proxy via <c>Workos_discovery_routes_through_the_auth_proxy</c>,
 /// and beforeCommit==ArmingHook via <c>The_facades_beforeCommit_hook_arms_a_durable_claim_per_identity</c>
 /// plus WizardAuthServiceTests) — those are not duplicated here.
 /// </summary>
@@ -71,6 +73,67 @@ public class WizardCompositionHappyPathTests {
     }
 
     [Test]
+    public async Task Resuming_an_authenticated_setup_enables_the_daemon_without_a_step() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
+
+        var (requests, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { AlreadyAuthenticated = true });
+            await graph.Daemon.EnsureAsync(CancellationToken.None); // waits out the ensure the build kicked
+
+            return (harness.Lane.Requests.ToList(), graph.Daemon.Satisfied);
+        });
+
+        await Assert.That(requests.Single().Verb).IsEqualTo(MutationVerb.Install);
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    [Test]
+    public async Task A_configured_name_another_machine_holds_is_saved_as_its_free_variant_before_the_install() {
+        WizardCompositionFixtures.WriteConfig(Config.Root,
+            new ProfileConfig { ActiveProfile = "default", Profiles = new() { ["default"] = new Profile() } });
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
+        var options = harness.Options() with {
+            AlreadyAuthenticated = true,
+            HeldDaemonNames = _ => Task.FromResult<IReadOnlyDictionary<string, DaemonNameHolding>>(
+                new Dictionary<string, DaemonNameHolding> { ["daemon-a"] = new("linux", "1.0.0") }),
+        };
+
+        var installs = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(options);
+            await graph.Daemon.EnsureAsync(CancellationToken.None);
+
+            return harness.Lane.Requests.Count;
+        });
+
+        var config = await AppConfig.LoadProfileConfig(Config.Root);
+        await Assert.That(config.Profiles["default"].Daemon?.Name).IsEqualTo("daemon-a-1");
+        await Assert.That(installs).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Without_a_sign_in_the_graph_never_reads_the_daemon_or_its_name() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        var nameReads = 0;
+        harness.ConfiguredDaemonName = () => {
+            nameReads++;
+            return "daemon-a";
+        };
+
+        await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+        });
+
+        await Assert.That(nameReads).IsEqualTo(0);
+        await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
+        await Assert.That(harness.Lane.Requests).IsEmpty();
+    }
+
+    [Test]
     public async Task Fresh_machine_paste_sign_in_reaches_a_correct_done_summary() {
         WizardCompositionFixtures.WriteConfig(Config.Root,
             new ProfileConfig { ActiveProfile = ProfileName, Profiles = new() { [ProfileName] = new Profile() } });
@@ -82,6 +145,7 @@ public class WizardCompositionHappyPathTests {
         harness.ShimApplicable = false;
         harness.Identity       = (ProfileName, ServerUrl, "daemon-a");
         harness.Profile        = ProfileName;
+        harness.ConfiguredDaemonName = () => null;
         using var authHandler = new WizardCompositionFixtures.NoneProviderAuthHandler();
 
         var options = harness.Options() with {
@@ -89,7 +153,7 @@ public class WizardCompositionHappyPathTests {
             Proxy       = new AuthProxyClient(new HttpClient(authHandler, disposeHandler: false), TimeProvider.System),
             Operation = spec => WizardSignInOperation.For(new OnboardingFacade(
                 spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
-                new RecordingBrowser(), spec.Picker, spec.Provisioner, spec.Telemetry, spec.Endpoints, TimeProvider.System,
+                new RecordingBrowser(), spec.Picker, null, spec.Telemetry, spec.Endpoints, TimeProvider.System,
                 spec.BeforeCommit), spec.Profile),
         };
 
@@ -102,7 +166,8 @@ public class WizardCompositionHappyPathTests {
             connect.ServerInputText = ServerUrl;
             await Assert.That(connect.Validate()).IsTrue(); // a valid intent is staged before sign-in
 
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // Welcome -> Sign-in
+            await graph.Steps.OfType<EditionStepViewModel>().Single().SignInCommand.Execute().ToTask(); // Edition -> Sign-in
+            await graph.ViewModel.PendingAdvanceForTesting;
 
             var signIn = graph.Steps.OfType<SignInStepViewModel>().Single();
             await signIn.SignInAsync().WaitAsync(TimeSpan.FromSeconds(10));
@@ -115,23 +180,22 @@ public class WizardCompositionHappyPathTests {
             await Assert.That(graph.ViewModel.CanGoNext).IsFalse();
             graph.Steps.OfType<HarnessesStepViewModel>().Single().Visibility = "private";
             await graph.ViewModel.NextCommand.Execute().ToTask(); // Harnesses -> History (persists; no CLI, nothing installable)
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Daemon (nothing to import)
+            await graph.ViewModel.NextCommand.Execute().ToTask(); // History -> Done (nothing to import)
+            await graph.Daemon.EnsureAsync(CancellationToken.None); // waits out the ensure sign-in kicked
 
-            var daemon = graph.Steps.OfType<DaemonStepViewModel>().Single();
-            await Assert.That(daemon.Row).IsEqualTo(DaemonRow.CliMissing);
-
-            await graph.ViewModel.NextCommand.Execute().ToTask(); // refused: the daemon is required
-
-            return (graph.ViewModel.Current.Id, daemon.Status);
+            return (graph.ViewModel.Current.Id, graph.Daemon.Row, graph.Daemon.Satisfied);
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
-        await Assert.That(summary.Id).IsEqualTo(WizardStepId.Daemon);
-        await Assert.That(summary.Status).IsEqualTo(DaemonStepViewModel.RequiredMessage);
+        await Assert.That(summary.Id).IsEqualTo(WizardStepId.Done);
+        await Assert.That(summary.Row).IsEqualTo(DaemonRow.CliMissing);
+        await Assert.That(summary.Satisfied).IsFalse();
 
         var config = await AppConfig.LoadProfileConfig(Config.Root);
         await Assert.That(config.Profiles[ProfileName].ServerUrl).IsEqualTo(ServerUrl);
         await Assert.That(config.Profiles[ProfileName].AuthProvider?.Provider).IsEqualTo(AuthProvider.None);
         await Assert.That(config.Profiles[ProfileName].DefaultVisibility).IsEqualTo("private");
+        // No name was ever saved, so the machine's own is.
+        await Assert.That(config.Profiles[ProfileName].Daemon?.Name).IsEqualTo(DaemonNameHolder.MachineDefault());
 
         // No daemon touchpoint reached with no CLI resolved: no lane traffic, no IPC, no CLI spawns.
         await Assert.That(harness.Lane.Requests).IsEmpty();
@@ -140,6 +204,43 @@ public class WizardCompositionHappyPathTests {
         await Assert.That(harness.Cli.StatusCallCount).IsEqualTo(0);
         await Assert.That(harness.Cli.PluginInstallCallCount).IsEqualTo(0);
         await Assert.That(harness.Cli.ImportCallCount).IsEqualTo(0);
+    }
+}
+
+/// The name the enabler saves before it installs: the configured one unless another machine holds it.
+public class WizardDaemonNamePickTests {
+    static Func<CancellationToken, Task<IReadOnlyDictionary<string, DaemonNameHolding>>> Held(params string[] names) =>
+        _ => Task.FromResult<IReadOnlyDictionary<string, DaemonNameHolding>>(
+            names.ToDictionary(n => n, _ => new DaemonNameHolding("linux", "1.0.0")));
+
+    [Test]
+    public async Task A_configured_name_nobody_else_holds_is_kept() {
+        var picked = await WizardComposition.PickDaemonNameAsync("studio", Held("laptop"), CancellationToken.None);
+
+        await Assert.That(picked).IsNull();
+    }
+
+    [Test]
+    public async Task A_configured_name_another_machine_holds_moves_to_the_first_free_variant() {
+        var picked = await WizardComposition.PickDaemonNameAsync("studio", Held("studio", "studio-1"), CancellationToken.None);
+
+        await Assert.That(picked).IsEqualTo("studio-2");
+    }
+
+    [Test]
+    public async Task Without_a_configured_name_the_machines_own_is_picked() {
+        var picked = await WizardComposition.PickDaemonNameAsync(null, heldDaemonNames: null, CancellationToken.None);
+
+        await Assert.That(picked).IsEqualTo(DaemonNameHolder.MachineDefault());
+    }
+
+    [Test]
+    public async Task Without_a_configured_name_a_held_machine_name_moves_to_its_first_free_variant() {
+        var machine = DaemonNameHolder.MachineDefault();
+
+        var picked = await WizardComposition.PickDaemonNameAsync(" ", Held(machine), CancellationToken.None);
+
+        await Assert.That(picked).IsEqualTo($"{machine}-1");
     }
 }
 
@@ -168,6 +269,33 @@ public class WizardSignInOperationPreconditionTests {
 
         await Assert.That(result).IsTypeOf<AuthResult.Failed>();
         await Assert.That(File.Exists(Config.PathTo("tokens", $"{ProfileName}.json"))).IsFalse();
+    }
+
+    /// The paste path counts sign-ins as the CLI does, so desktop and CLI funnels compare.
+    [Test]
+    [Arguments("committed", "cli_setup_signin_completed")]
+    [Arguments("committed-none", "")]
+    [Arguments("denied", "cli_setup_signin_failed")]
+    [Arguments("unreachable", "")]
+    [Arguments("other", "")]
+    [Arguments("unsaved", "")]
+    [Arguments("cancelled", "")]
+    public async Task A_paste_outcome_reaches_the_funnel_as_the_cli_counts_it(string outcome, string expected) {
+        var probe = TelemetryProbe.Start(TelemetryStartup.ForDesktopApp(null, AuthEndpoints.DefaultSignupUrl), Config.Root);
+        TelemetryTestGuards.AssertEnabled("app", Config.Root, probe.Telemetry);
+        AuthResult result = outcome switch {
+            "committed"      => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", []),
+            "committed-none" => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.None, null, []),
+            "unsaved"        => new AuthResult.Committed(ProfileName, ServerUrl, AuthProvider.GitHubApp, "ana", [], CredentialSaved: false),
+            "denied"         => new AuthResult.Failed("denied", AuthFailureReason.SigninDenied),
+            "unreachable"    => new AuthResult.Failed("unreachable", AuthFailureReason.Unreachable),
+            "other"          => new AuthResult.Failed("other"),
+            _                => new AuthResult.Cancelled(),
+        };
+
+        WizardSignInOperation.Recorded(result, probe.Funnel);
+
+        await Assert.That(string.Join(",", probe.Names.Where(n => n.StartsWith("cli_setup_signin", StringComparison.Ordinal)))).IsEqualTo(expected);
     }
 }
 
@@ -200,7 +328,7 @@ public class WizardCompositionAbandonTests {
 
             graph.ViewModel.RequestClose();
             await AppUnderTest.HandoffAfterWizardAsync(
-                    graph.Auth, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
+                    graph.Auth, graph.Install, () => Task.CompletedTask, TimeSpan.FromSeconds(5), new OutcomeChannel(), TimeProvider.System)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             await Assert.That(harness.Claims.Pending()).IsEmpty();

@@ -21,7 +21,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         new("project", "People I share a project with", "Readable by other members of your projects that hold the repository."),
         new("org_public", "Everyone in the account, for your organization's repositories",
             "Sessions in a repository your organization owns are readable account-wide. Your other repositories stay private unless a project you share covers them."),
-        new("public", "Everyone in the account", "Readable by every member of this Capacitor account."),
+        new("public", "Everyone in the account", "Readable by every member of this kcap account."),
     ];
 
     internal static readonly IReadOnlyList<string> ProviderKeys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"];
@@ -34,6 +34,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<string?>? _resolveProfileName;
     readonly Action<IEnumerable<HarnessId>> _stampOffered;
     readonly CancellationToken _shutdownToken;
+    readonly Func<bool>? _onLocalPath;
 
     bool _detected;
     bool _installed;
@@ -44,8 +45,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     string? _providerKeyNotice;
     string? _message;
     Task? _inFlight;
-    readonly Func<CancellationToken, Task>? _enableDaemon;
-    bool _daemonAttempted;
 
     public HarnessesStepViewModel(
             IKcapCli cli,
@@ -57,8 +56,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             Func<CancellationToken, Task<IReadOnlySet<string>?>> providerKeys,
             string machineName,
             Func<string?>? resolveProfileName = null, CancellationToken shutdownToken = default,
-            Func<CancellationToken, Task>? enableDaemon = null) {
-        _enableDaemon = enableDaemon;
+            Func<bool>? onLocalPath = null) {
+        _onLocalPath = onLocalPath;
         _cli = cli;
         _detect = detect;
         _declined = declined;
@@ -80,7 +79,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     const string PrivacyRequiredMessage = "Choose who can read new sessions before continuing.";
 
     public WizardStepId Id => WizardStepId.Harnesses;
-    public string Title => "Connect Capacitor to your harnesses";
+    public string Title => "Connect kcap to your harnesses";
     public string Eyebrow => "Your harnesses";
     public bool Applicable => true;
     public string SkipLabel => "Not now";
@@ -121,6 +120,23 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public string? CurrentVisibilityNote { get; private set; }
+
+    bool Local => _onLocalPath?.Invoke() == true;
+
+    public string SavedNote => Local
+        ? "These connection choices are saved."
+        : "These connection choices are saved. Use kcap plugin remove in your terminal to disconnect a harness.";
+
+    public string CliMissingNote => Local
+        ? "The kcap command line isn't available on this machine, so there is nothing to turn on from here."
+        : "kcap isn't available on this machine, so there is nothing to turn on from here.";
+
+    public string ProviderKeyDetail => Local
+        ? " By default kcap leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use."
+        : " By default kcap leaves them out when it runs Claude or Codex for titles and summaries, so your subscription is used. Keep them if you pay per use.";
+
+    /// A local install keeps sessions on this machine, so there is no audience to choose.
+    public bool VisibilityVisible => _onLocalPath?.Invoke() != true;
 
     bool HasVisibilityChoice => Visibility is { } value && AppConfig.ValidVisibilities.Contains(value);
 
@@ -179,6 +195,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
     public async Task OnEnterAsync(CancellationToken ct) {
         if (_detected) return; // re-entering must not stomp the user's choices
+        if (_onLocalPath?.Invoke() == true) Visibility = "private";
+        this.RaisePropertyChanged(nameof(VisibilityVisible));
         Busy = true;
         try {
 
@@ -259,14 +277,9 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         _stampOffered(Rows.Select(r => r.Id));
         if (direction == WizardNavigation.Skip) return true;
-        if (_installed || !CliAvailable) {
-            // A row retried into success after the first pass still owes the daemon.
-            if (_installed) await EnableDaemonOnceAsync(ct).ConfigureAwait(true);
-            return true;
-        }
+        if (_installed || !CliAvailable) return true;
 
         await (_inFlight = InstallSelectedAsync()).ConfigureAwait(true);
-        await EnableDaemonOnceAsync(ct).ConfigureAwait(true);
         _installed = true;
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(ChoicesEditable));
@@ -274,20 +287,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         // Stay only when a selected row failed, so its Retry is on screen. A clean install leaves.
         return Rows.All(r => !r.Selected || !r.Failed);
-    }
-
-    // Best effort: whatever the daemon could not do quietly, its own step still offers.
-    async Task EnableDaemonOnceAsync(CancellationToken ct) {
-        if (_enableDaemon is null || _daemonAttempted || !Rows.Any(r => r is { Selected: true, Succeeded: true })) return;
-        _daemonAttempted = true;
-        Busy = true;
-        try {
-            await _enableDaemon(ct).ConfigureAwait(true);
-        } catch (Exception ex) when (ex is not OperationCanceledException) {
-            Console.Error.WriteLine($"kcap: wizard quiet daemon enable failed unexpectedly: {ex.Message}");
-        } finally {
-            Busy = false;
-        }
     }
 
     async Task<bool> PersistAsync(CancellationToken ct) {

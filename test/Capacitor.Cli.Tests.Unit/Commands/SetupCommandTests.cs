@@ -2,6 +2,7 @@ using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Auth;
+using Capacitor.Cli.Core.Http;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
 using WireMock.RequestBuilders;
@@ -18,7 +19,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 
 public class SetupCommandTests {
     // Never reached: these tests drive the import and discovery steps, which do not provision.
-    static readonly TenantProvisioningClient Provisioning = new(new HttpClient());
+    static readonly TenantProvisioningClient Provisioning = new(new HttpClient(), ClientAgent.Cli);
     static readonly WorkOSClient Workos = new(new PlainHttpClientFactory(), TimeProvider.System);
     static readonly GitHubOAuthClient Github = new(new PlainHttpClientFactory());
     static readonly IHttpClientFactory HttpFactory = new PlainHttpClientFactory();
@@ -51,8 +52,8 @@ public class SetupCommandTests {
             TestHarnesses.Under(Home, TestBinaries.Searching(Bin)),
             new AgentsPaths(Home), new FixedCapacitorHttpClient(), Provisioning, Discovery,
             NoTelemetry.Facade, AuthEndpoints.Defaults, RealFacades(), imports, spawner, launcher,
-            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
-            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin"))) {
+            new ChosenServerHttp(Config.Root, Resolutions.None(Config.Root), ProfileOverrides.None, MachineAuth.None, NoLocalInstallation.Root), router: new GitProviderRouter(), workdir: new WorkingDirectory(workdir), TimeProvider.System,
+            TestBinaries.None, TestAccounts.None, TestPluginEnvironment.For(Home, Home.PathTo("plugin")), NoLocalInstallation.Root, FakeLocalInstallerFactory.Unused) {
             PickHandoffVendor = pick ?? (_ => "Skip")
         };
 
@@ -656,8 +657,8 @@ public class SetupCommandTests {
         await Assert.That(reloaded.Profiles["acme"].ServerUrl).IsEqualTo("https://a.example");
     }
 
-    /// <summary>A service the browser's request put in place replaces the start-it-yourself advice, which
-    /// would otherwise start a second daemon beside it.</summary>
+    /// <summary>A service in place replaces the start-it-yourself advice, which would otherwise start a
+    /// second daemon beside it.</summary>
     [Test]
     [Arguments(FirstRunMachineActionOutcomes.Enabled)]
     [Arguments(FirstRunMachineActionOutcomes.AlreadyEnabled)]
@@ -669,14 +670,41 @@ public class SetupCommandTests {
         await Assert.That(line).Contains("background service");
     }
 
-    /// <summary>No request, or one that did not end in a service, keeps the optional start hint.</summary>
+    /// <summary>A failed ensure is retried as a service; only a platform without one gets the plain start.</summary>
     [Test]
-    public async Task DaemonClosingLine_keeps_the_start_hint_without_a_service() {
-        await Assert.That(SetupCommand.DaemonClosingLine(null)).Contains("kcap daemon start -d");
+    public async Task DaemonClosingLine_offers_a_plain_start_only_without_a_service_manager() {
         await Assert.That(SetupCommand.DaemonClosingLine(
                 new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null)))
+            .Contains("kcap daemon service ensure");
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(
+                    FirstRunMachineActionOutcomes.Refused, FirstRunMachineActionReasons.UnsupportedPlatform)))
             .Contains("kcap daemon start -d");
     }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments(" ")]
+    [Arguments("--no-prompt")]
+    public async Task DaemonNameArgumentError_refuses_a_flag_with_no_usable_value(string? value) =>
+        await Assert.That(SetupCommand.DaemonNameArgumentError(
+            value is null ? ["setup", "--daemon-name"] : ["setup", "--daemon-name", value])).IsNotNull();
+
+    [Test]
+    public async Task DaemonNameArgumentError_accepts_a_name_or_no_flag() {
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--daemon-name", "laptop"])).IsNull();
+        await Assert.That(SetupCommand.DaemonNameArgumentError(["setup", "--no-prompt"])).IsNull();
+    }
+
+    /// <summary>A refusal no retry can change says why instead of sending the user to the same refusal.</summary>
+    [Test]
+    [Arguments(FirstRunMachineActionReasons.NotConfigured)]
+    [Arguments(FirstRunMachineActionReasons.NeedsAttention)]
+    public async Task DaemonClosingLine_suggests_no_retry_for_a_stable_refusal(string reason) =>
+        await Assert.That(SetupCommand.DaemonClosingLine(
+                new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Refused, reason)))
+            .DoesNotContain("retry");
 
     /// <summary>The browser path keeps the stored setting rather than asking, and names the command that
     /// changes it, in the direction that would change it.</summary>
@@ -694,15 +722,6 @@ public class SetupCommandTests {
         await Assert.That(SetupCommand.GitHookLine(new Version(2, 54, 0))).Contains("[green]✓[/]");
         await Assert.That(SetupCommand.GitHookLine(null)).Contains("could not read");
         await Assert.That(SetupCommand.GitHookLine(null)).DoesNotContain("[green]✓[/]");
-    }
-
-    /// <summary>The browser path cannot fall back to a prompt, so its fallbacks must be finite.</summary>
-    [Test]
-    public async Task BrowserDaemonNameFallbacks_start_with_the_prompt_s_suggestion_and_stop() {
-        var names = SetupCommand.BrowserDaemonNameFallbacks("tony", "mbp").ToList();
-
-        await Assert.That(names[0]).IsEqualTo("tony-mbp");
-        await Assert.That(names).IsEquivalentTo(["tony-mbp", "tony-mbp-2", "tony-mbp-3", "tony-mbp-4"]);
     }
 
     [Test]
@@ -842,15 +861,15 @@ public class SetupCommandTests {
         // prompt it names must appear verbatim in that skill's description (asserted below)
         // or the phrase we tell users to type won't reliably fire it.
         await Assert.That(SetupCommand.GuidedTourCallToAction).IsEqualTo(
-            "New to Capacitor? Prompt \"Start kcap guided tour\" in your coding agent to see what "
-          + "Capacitor can do for you");
+            "New to kcap? Prompt \"Start kcap guided tour\" in your coding agent to see what "
+          + "kcap can do for you");
     }
 
     [Test]
     public async Task ServerSetupCallToAction_is_the_exact_agreed_wording() {
         // Pinned wording: a question the reader self-selects on, then the instruction itself.
         await Assert.That(SetupCommand.ServerSetupQuestion).IsEqualTo(
-            "Did you create this Capacitor server?");
+            "Did you create this kcap server?");
 
         await Assert.That(SetupCommand.ServerSetupAction).IsEqualTo(
             "Complete server setup with instructions here:");
@@ -876,6 +895,17 @@ public class SetupCommandTests {
         await Assert.That(withTour[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
         await Assert.That(withTour[1].Answer)
                     .Contains($"[cyan]{SetupCommand.GuidedTourPromptQuoted}[/]");
+    }
+
+    [Test]
+    public async Task NextSteps_for_the_local_installation_points_at_its_web_ui_instead_of_server_setup() {
+        var items = SetupCommand.NextStepItems(offerGuidedTour: true, localServerUrl: "http://localhost:9473");
+
+        await Assert.That(items.Count).IsEqualTo(2);
+        await Assert.That(items.Any(i => i.Question == SetupCommand.ServerSetupQuestion)).IsFalse();
+        await Assert.That(items[0].Question).IsEqualTo(SetupCommand.LocalServerQuestion);
+        await Assert.That(items[0].Answer).Contains("[cyan]http://localhost:9473[/]");
+        await Assert.That(items[1].Question).IsEqualTo(SetupCommand.GuidedTourQuestion);
     }
 
     [Test]
@@ -1437,7 +1467,7 @@ public class SetupCommandTests {
     // The environment they probe and the /auth/config cache they stub are both process-global, so no
     // cohort of key-holders can exclude the readers: bare.
 
-    static string[] SkipAllAgentInstallFlags => [
+    internal static string[] SkipAllAgentInstallFlags => [
         "--skip-claude-hooks", "--skip-codex-hooks", "--skip-codex-network-access",
         "--skip-cursor-hooks", "--skip-cursor-mcp",
         "--skip-copilot-hooks", "--skip-copilot-mcp", "--skip-copilot-instructions",
@@ -1572,7 +1602,7 @@ public class SetupCommandTests {
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
             .HandleAsync(["setup", "--muse-assistant"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--muse-assistant");
         await Assert.That(capture.GetCapturedError()).Contains("<tenant>");
     }
@@ -1703,10 +1733,10 @@ public class SetupCommandTests {
         await Assert.That(workspace.Origin).IsEqualTo("https://acme.kcap.ai");
     }
 
-    // A run that never mentions a plan must not start a time-limited trial nobody chose.
+    // Null records that no plan was named, which is what lets provisioning ask for Team when Free is closed.
     [Test]
-    public async Task ParseRequestedWorkspace_defaults_to_the_free_plan() {
-        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsEqualTo(WorkspaceTier.Free);
+    public async Task ParseRequestedWorkspace_leaves_an_unnamed_plan_unset() {
+        await Assert.That(Parse("setup", "--org", "Acme", "--slug", "acme").Workspace!.Tier).IsNull();
     }
 
     [Test]
@@ -1896,7 +1926,7 @@ public class SetupCommandTests {
 
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--slug");
     }
 
@@ -1908,7 +1938,7 @@ public class SetupCommandTests {
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(
             ["setup", "--org", "Acme", "--slug", "acme", "--server-url", "https://other.kcap.ai"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url");
     }
 
@@ -1919,7 +1949,7 @@ public class SetupCommandTests {
 
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--org", "Acme", "--slug", "acme", "--github"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--github");
     }
 
@@ -1930,9 +1960,45 @@ public class SetupCommandTests {
 
         var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory).HandleAsync(["setup", "--no-prompt"]);
 
-        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
         await Assert.That(capture.GetCapturedError()).Contains("--server-url is required");
         await Assert.That(capture.GetCapturedError()).Contains("--org");
+    }
+
+    /// <summary>Both values are only read after sign-in, so a bad one must stop the run before the server is
+    /// even contacted, or the script is told "refused" after a login was committed.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility", "everyone")]
+    [Arguments("--use-provider-api-key", "maybe")]
+    public async Task HandleAsync_refuses_an_invalid_answer_before_contacting_the_server(string flag, string value) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync(BuildArgs("--server-url", server.Url!, "--no-prompt", flag, value));
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains(flag);
+        await Assert.That(server.LogEntries).IsEmpty();
+    }
+
+    /// <summary>A flag left as the last argument has no value; reading that as absent would apply the default the
+    /// script never chose.</summary>
+    [Test]
+    [NotInParallel]
+    [Arguments("--default-visibility")]
+    [Arguments("--use-provider-api-key")]
+    public async Task HandleAsync_refuses_an_answer_flag_with_no_value(string flag) {
+        using var server  = WireMockServer.Start();
+        using var capture = ConsoleOutput.StartErrorCapture();
+
+        var exit = await Command(FakeImportRunner.Of(_ => throw new InvalidOperationException("must not run import")), Config.Directory)
+            .HandleAsync([.. BuildArgs("--server-url", server.Url!, "--no-prompt"), flag]);
+
+        await Assert.That(exit).IsEqualTo(SetupExit.Refused);
+        await Assert.That(capture.GetCapturedError()).Contains($"{flag} needs a value");
+        await Assert.That(server.LogEntries).IsEmpty();
     }
 
     // Presence, not value: a valueless --server-url parses as absent, and taking that as "no conflict"

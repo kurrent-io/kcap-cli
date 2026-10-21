@@ -42,13 +42,15 @@
             <views:AppIcon Kind="Circle" Size="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" IsVisible="{Binding ShowsRing}"
                            Foreground="{StaticResource KcapPurpleBrush}" />
             <Ellipse Width="5" Height="5" Fill="{StaticResource KcapPurpleBrush}"
-                     HorizontalAlignment="Center" VerticalAlignment="Center" IsVisible="{Binding ShowsRing}" />
+                     HorizontalAlignment="Center" VerticalAlignment="Center" UseLayoutRounding="False" IsVisible="{Binding ShowsRing}" />
             <views:AppIcon Kind="Clock" Size="12" IsVisible="{Binding ShowsClock}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                            Foreground="{StaticResource KcapWarningBrush}" />
             <views:AppIcon Kind="CircleQuestionMark" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
                            VerticalAlignment="Center" IsVisible="{Binding ShowsAsk}" />
             <views:AppIcon Kind="CircleAlert" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
                            VerticalAlignment="Center" IsVisible="{Binding ShowsBang}" />
+            <views:AppIcon Kind="CirclePause" Size="12" Foreground="{StaticResource KcapWarningBrush}" HorizontalAlignment="Center"
+                           VerticalAlignment="Center" IsVisible="{Binding ShowsPause}" />
             <views:AppIcon Kind="X" Size="12" IsVisible="{Binding ShowsCross}" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                            Foreground="{StaticResource KcapDangerBrush}" />
             <views:AppIcon Kind="Minus" Size="12" Foreground="{StaticResource KcapMutedBrush}" IsVisible="{Binding ShowsDash}" />
