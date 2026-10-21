@@ -19,6 +19,9 @@ public interface IChatDisplayRules {
 
     /// Subagent facts read off the raw envelope, whatever Filter decides for it.
     IReadOnlyList<RunSignal> Runs(CanonicalEvent evt, AcpEventEnvelope raw) => [];
+
+    /// True when the vendor's own records start its subagent rows, so a start record only names one of them.
+    bool StartsSubagentRows => false;
 }
 
 /// The chat's view of a transcript: the leaf projection, the envelope mapping, one vendor's rules.
@@ -73,7 +76,7 @@ public static class TranscriptChat {
             return new([], [], [new RunSignal.Finished(null, completed.AgentId, null, evt.Timestamp)]);
         // Written from the subagent-start hook, which names the agent but not its call.
         if (evt.Payload is SubagentStarted started)
-            return new([], [], started.AgentId is { Length: > 0 } agentId ? [new RunSignal.Identified(null, agentId)] : []);
+            return new([], [], started.AgentId is { Length: > 0 } agentId ? SubagentStart(agentId, started.AgentType, evt.Timestamp, rules) : []);
         var envelopes = TranscriptEnvelopes.From(evt);
         if (envelopes.Count == 0) return new([], [], []);
         var parts = new List<ChatProjectionResult>(envelopes.Count);
@@ -90,5 +93,14 @@ public static class TranscriptChat {
             });
         }
         return ChatProjectionResult.Combine(parts);
+    }
+
+    /// A subagent's start record. Where the vendor's own records start no row, it starts one keyed by the agent, so the
+    /// agent's completion finds it; otherwise it only names the row the vendor's call started.
+    public static IReadOnlyList<RunSignal> SubagentStart(string agentId, string? agentType, DateTimeOffset at, IChatDisplayRules? rules) {
+        if (rules?.StartsSubagentRows == true) return [new RunSignal.Identified(null, agentId)];
+
+        var key = $"agent:{agentId}";
+        return [new RunSignal.Started(key, agentType is { Length: > 0 } type ? type : "agent", "", at), new RunSignal.Identified(key, agentId)];
     }
 }

@@ -39,17 +39,35 @@ public class TranscriptChatCanonicalTests {
         await Assert.That(result.SubmittedInputs).IsEmpty();
     }
 
-    /// The server writes it from the subagent-start hook, which names the agent but not its call.
+    /// The server writes it from the subagent-start hook, which names the agent but not its call. Claude's own records
+    /// start the row, so the record only names it there and never adds a second.
     [Test]
-    public async Task A_subagent_start_identifies_an_agent_with_no_call_under_any_rules() {
-        foreach (var rules in new IChatDisplayRules?[] { null, ClaudeChatRules.Instance }) {
-            var result = TranscriptChat.Project(Event(CanonicalEventTypes.SubagentStarted, new SubagentStarted { AgentId = "a1" }), rules);
-            await Assert.That(result.Envelopes).IsEmpty();
-            var identified = (RunSignal.Identified)result.Runs.Single();
-            await Assert.That(identified.CallId).IsNull();
-            await Assert.That(identified.AgentId).IsEqualTo("a1");
-        }
+    public async Task A_subagent_start_identifies_an_agent_with_no_call_where_the_vendor_starts_its_rows() {
+        var result = TranscriptChat.Project(Event(CanonicalEventTypes.SubagentStarted, new SubagentStarted { AgentId = "a1" }), ClaudeChatRules.Instance);
+        await Assert.That(result.Envelopes).IsEmpty();
+        var identified = (RunSignal.Identified)result.Runs.Single();
+        await Assert.That(identified.CallId).IsNull();
+        await Assert.That(identified.AgentId).IsEqualTo("a1");
         await Assert.That(TranscriptChat.Project(Event(CanonicalEventTypes.SubagentStarted, new SubagentStarted()), ClaudeChatRules.Instance).Runs).IsEmpty();
+    }
+
+    /// Every other vendor's subagents have no row of their own, so the start record starts one, named for the agent.
+    [Test]
+    [Arguments("codex")]
+    [Arguments("gemini")]
+    public async Task A_subagent_start_starts_a_named_row_where_the_vendor_starts_none(string vendor) {
+        var at     = new DateTimeOffset(2026, 10, 21, 9, 0, 0, TimeSpan.Zero);
+        var result = TranscriptChat.Project(
+            new CanonicalEvent(CanonicalEventTypes.SubagentStarted, new SubagentStarted { AgentId = "a1", AgentType = "explorer" }, Guid.NewGuid(), at),
+            TranscriptChat.RulesFor(vendor));
+
+        var started    = (RunSignal.Started)result.Runs[0];
+        var identified = (RunSignal.Identified)result.Runs[1];
+        await Assert.That(started.Name).IsEqualTo("explorer");
+        await Assert.That(started.At).IsEqualTo(at);
+        await Assert.That(started.Kind).IsEqualTo(RunKind.Agent);
+        await Assert.That(identified.CallId).IsEqualTo(started.CallId);
+        await Assert.That(identified.AgentId).IsEqualTo("a1");
     }
 
     /// The server writes it from the subagent-stop hook, which says the subagent ended but not how.

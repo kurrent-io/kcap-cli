@@ -198,6 +198,35 @@ public class SessionRunsTests {
         await Assert.That(s.RunningCount).IsEqualTo(0);
     }
 
+    /// A vendor with no subagent rows of its own gets one from the start record: named, openable, ended by its
+    /// completion, and still one row when the record is replayed.
+    [Test]
+    public async Task A_start_record_row_is_named_and_ended_by_its_agent() {
+        var s     = new SessionRuns(Clock());
+        var start = Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0, rules: null)]);
+        s.Apply(start);
+        s.Apply(start);
+
+        await Assert.That(Only(s).AgentId).IsEqualTo("a1");
+        await Assert.That(Only(s).CanOpen).IsTrue();
+        await Assert.That(s.RunningCount).IsEqualTo(1);
+
+        s.Apply(Signals(Finished(null, "a1", outcome: null, at: T0.AddSeconds(62))));
+        await Assert.That(Only(s).State).IsEqualTo(RunState.Done);
+        await Assert.That(s.RunningCount).IsEqualTo(0);
+    }
+
+    /// A lane that cannot read a subagent's transcript must not offer a row that opens nothing.
+    [Test]
+    public async Task A_row_offers_to_open_only_where_the_lane_can_open_it() {
+        var s = new SessionRuns(Clock()) { OpensSubagents = false };
+        s.Apply(Signals([.. TranscriptChat.SubagentStart("a1", "explorer", T0, rules: null)]));
+        await Assert.That(Only(s).CanOpen).IsFalse();
+
+        s.OpensSubagents = true;
+        await Assert.That(Only(s).CanOpen).IsTrue();
+    }
+
     [Test]
     public async Task A_background_row_is_stopped_by_its_agent_id_alone() {
         var s = new SessionRuns(Clock());

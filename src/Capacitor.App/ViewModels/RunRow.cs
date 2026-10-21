@@ -9,6 +9,7 @@ public sealed class RunRow : ReactiveObject {
     bool _isBackground;
     string? _agentId;
     bool _outcomeUnknown;
+    bool _openable = true;
     RunState _state = RunState.Running;
     string _stateText = "";
 
@@ -43,7 +44,17 @@ public sealed class RunRow : ReactiveObject {
     }
 
     /// Whether the subagent's own transcript can be opened from this row.
-    public bool CanOpen => Kind == RunKind.Agent && AgentId is not null;
+    public bool CanOpen => Kind == RunKind.Agent && AgentId is not null && _openable;
+
+    /// Set by the owning lane: false where it has no way to read a subagent's transcript.
+    internal bool Openable {
+        get => _openable;
+        set {
+            if (_openable == value) return;
+            _openable = value;
+            this.RaisePropertyChanged(nameof(CanOpen));
+        }
+    }
 
     internal void Identify(string agentId) {
         if (Kind == RunKind.Agent) AgentId = agentId;

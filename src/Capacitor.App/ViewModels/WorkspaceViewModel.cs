@@ -245,7 +245,11 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Where(state => state == AttachState.Connected).ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(_ => PullRequests?.Reconnected()).DisposeWith(_disposables);
 
-        presence.Select(p => p.Dto).Subscribe(dto => _latestDto = dto).DisposeWith(_disposables);
+        presence.Select(p => p.Dto).Subscribe(dto => {
+            _latestDto = dto;
+            // Only Claude Code files a subagent's transcript beside its parent's, so only its rows open here.
+            if (dto is not null) runs.OpensSubagents = dto.Vendor == "claude";
+        }).DisposeWith(_disposables);
 
         // Replays through presence, which the cards pipeline relies on: its filter admits nothing
         // until a first session id arrives.
