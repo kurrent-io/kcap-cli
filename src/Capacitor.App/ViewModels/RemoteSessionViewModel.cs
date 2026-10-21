@@ -87,6 +87,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     void PrefillComposer(string prompt) {
         Chat.ComposerText = PullRequestContextViewModel.WithFixPrompt(Chat.ComposerText, prompt);
+        // The prompt is in the session's own composer, which an open subagent pane would hide.
+        CloseSubagent();
         ActiveTab = RemoteTab.Chat;
     }
 

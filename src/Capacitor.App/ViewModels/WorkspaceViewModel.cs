@@ -145,6 +145,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     void PrefillComposer(string prompt) {
         if (Chat is not { } chat) return;
         chat.ComposerText = PullRequestContextViewModel.WithFixPrompt(chat.ComposerText, prompt);
+        // The prompt is in the session's own composer, which an open subagent pane would hide.
+        CloseSubagent();
         ActiveTab = WorkspaceTab.Chat;
     }
 
