@@ -1902,6 +1902,14 @@ sealed class FakeKcapCli : IKcapCli {
         return LocalUpgradeBehavior(onLine, interrupt, ct);
     }
 
+    public List<bool> UninstallPurgeFlags { get; } = [];
+    public Func<Action<StreamedLine>, Task<StreamingResult>> UninstallBehavior =
+        _ => Task.FromResult(new StreamingResult(1, false, []));
+    public Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct) {
+        UninstallPurgeFlags.Add(purgeLocal);
+        return UninstallBehavior(onLine);
+    }
+
     public Task<ProcessResult> LocalStartAsync(CancellationToken ct) =>
         Task.FromResult(new ProcessResult(0, "", "", false));
 }
