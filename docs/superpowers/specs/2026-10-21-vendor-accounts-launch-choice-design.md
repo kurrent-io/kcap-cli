@@ -22,38 +22,48 @@ before starting, which account has room.
 | Decision | Choice |
 |---|---|
 | When | An account is chosen only when a session starts. Switching a running session is a follow-up. |
-| Where in the launcher | Inside the Agent chip's panel, above the model rows, shown only when the vendor has two or more accounts on the target machine. No new chip. |
-| Default | Per vendor and per daemon: the account whose directory the daemon's own environment points at. Not stored; derived. |
-| Memory | Per repository, vendor and machine. No memory means the default, never what another repository used. |
+| Where in the launcher | Inside the Agent chip's panel, above the model rows, shown only when the vendor has two or more rows on the target machine. No new chip. |
+| Default | Per vendor and per daemon: the directory the daemon's own environment points at. Derived, never written to the registry; published by each daemon as its own fact, apart from the host's registry. |
+| Resolved account | The daemon resolves every launch to a directory before the process starts and keeps that, not the request, on the agent. |
+| Contract | One optional account id appended to the launch request on each hop. Null means the default. An explicit id is honoured or refused at every hop; no hop and no screen substitutes the default for it. |
+| Support gate | A daemon advertises account launches; the server reports that per listed daemon and refuses an explicit id for a daemon without it; the app offers rows only for a daemon the server reports as supporting them. |
+| Memory | Per repository, vendor and host, read only from a complete snapshot. No memory means the default, never what another repository used. |
 | Managing accounts | A tab in the Settings window, this machine only. Remote machines are read-only in the launcher. |
-| Account actions | The app runs `kcap accounts` through its mutation lane; the daemon only watches and publishes. |
-| Readings in a session | A strip under the chat composer, always shown for a Claude or Codex session, read-only. |
+| Account actions | The app runs `kcap accounts` through its mutation lane; the daemon only watches and publishes. Every verb commits a registry revision after its wiring attempt. |
+| Readings in a session | A strip under the chat composer, always shown for a Claude or Codex session whose account is known, read-only. |
 | Reviewers | Review flows and PR reviews keep the vendor's default account. |
-| Contract | One optional account id appended to the launch request on each hop. Null means the default. An unknown id refuses the launch. |
 | Vocabulary | "Account" everywhere; "profile" stays a kcap server sign-in. |
 
 ## 3. The default account
 
 The daemon resolves its vendor layouts once from its environment (`HarnessRegistry.FromEnvironment`
 in `DaemonRunner`). That directory is the vendor's **default account** for this daemon: what a launch
-with no account id runs under. It is derived, never written: the daemon registers nothing, because a
-registered directory gets wired at the next refresh, and the first spec records no directory nobody
-listed. Two daemons on one host with different environments share the registry and each advertises
-its own default; the launcher targets a daemon, so "default" always means the targeted daemon's.
+with no account id resolves to. It is derived, never written: the daemon registers nothing, because
+a registered directory gets wired at the next refresh (`plugin --if-installed` wires every
+registered account), and the first spec records no directory nobody listed. Two daemons on one host
+with different environments share the registry and each advertises its own default; the launcher
+targets a daemon, so "default" always means the targeted daemon's, and the default travels as the
+daemon's own fact, never inside the host's registry snapshot (Section 5).
 
-The snapshot (Section 5.1) names the default directory per vendor. When it is registered, that
-account carries the Default badge. When it is not, which happens when the daemon's environment
-differs from the shell `kcap setup` ran in, hosted sessions under it are not recorded, and both the
-launcher panel and the Settings tab show it as a row of its own, labelled by directory name, with the
-Default badge and a "not recording" hint; adding it is the row's one action. Removing a registered
-default turns it into that row.
+When the default directory is registered, that account carries the Default badge. When it is not,
+which happens when the daemon's environment differs from the shell `kcap setup` ran in, both the
+launcher panel and the Settings tab show it as a row of its own, labelled by directory name, with
+the Default badge, the recording state **Not wired**, and Add as its one action. What a launch
+under it does follows from the wiring that exists, not from registry membership:
 
-The registry is otherwise as Part A left it. Labels default to the directory name; Part B's identity
-probe replaces them with the email.
+- Codex: the PTY launcher refuses to start when neither the account directory nor the repository
+  carries the kcap hooks, with the existing error, whose remedy names adding the account. With
+  repository hooks it starts and records. An app-server launch records through the runtime's own
+  envelope transcript whatever the wiring.
+- Claude: the launch starts; the session records only if the repository wires the kcap hooks.
+
+Adding the row registers and wires the directory, and the row becomes an ordinary account.
+Removing a registered default turns it back into this row. The registry is otherwise as Part A left
+it. Labels default to the directory name; Part B's identity probe replaces them with the email.
 
 ## 4. Launching under an account
 
-### 4.1 The request
+### 4.1 The request and its gates
 
 `account_id` is appended as an optional field, null meaning the default, on each hop:
 
@@ -63,56 +73,97 @@ probe replaces them with the email.
 - Daemon: `LaunchAgentCommand` in `Capacitor.Cli.Core/Models.cs`, appended last under the same
   positional wire-compatibility rule as the fields before it.
 
-The server does not validate the id. The daemon does: it reads the registry under no lock
-(`accounts.json` is replaced atomically) and refuses the launch with a named reason when the id is
-not registered, is registered for another vendor, or names a directory that no longer exists. A
-refusal is reported like any other launch failure. The daemon never substitutes the default for an id
-it cannot honour: the person chose the account to spend, and a silent swap spends the wrong one.
+An older hop drops the field silently: an old server never forwards it, and an old daemon ignores a
+trailing field. Both would turn an explicit choice into a default launch, so support is gated at
+every hop rather than inferred from merge order:
 
-A launch with no id, including every review-flow and PR-review launch, runs under the default.
+- The daemon advertises `accounts/1` on `DaemonConnect`, beside its other advertised capabilities,
+  and on the local socket's capability list.
+- The server keeps it on the listed daemon (`DaemonInfo`), and its launch capability policy, the one
+  that already refuses a Codex posture a daemon did not advertise, refuses an explicit `account_id`
+  for a daemon without `accounts/1`, with a named reason. It never forwards the id for the daemon to
+  ignore.
+- The app offers account rows for a machine, local or remote, only when the listed daemon the
+  server reports carries `accounts/1`. An old server reports no such flag, so the rows stay absent
+  and every launch goes to the default by the person's own, visible, choice. The local socket's flag
+  is not enough on its own: local launches also travel through the server.
+
+The server does not validate the id beyond that gate. The daemon does: it reads the registry under
+no lock (`accounts.json` is replaced atomically) and refuses the launch with a named reason,
+`account_unavailable`, when the id is not registered, is registered for another vendor, or names a
+directory that no longer exists. A refusal is reported like any other launch failure and is never
+collapsed into a generic rejection. The daemon never substitutes the default for an id it cannot
+honour: the person chose the account to spend, and a silent swap spends the wrong one.
+
+A launch with no id, including every review-flow and PR-review launch, resolves to the default.
 
 ### 4.2 Per-launch layouts in the daemon
+
+Before the process starts, the daemon resolves the launch to a **resolved account**: the directory,
+the registry id when the directory is registered, and the label (the registered label, else the
+directory name). Everything below keys on that, never on the request's id.
 
 `ClaudeLauncher` and `CodexLauncher` each hold one `ClaudePaths` / `CodexPaths` taken from the
 harness registry, and every write and read they make is keyed on it: workspace trust in `.claude.json`,
 the MCP config, the project symlink, tool permissions, the Codex MCP inventory and `config.toml`
 reads. Both launchers take the layout per launch instead, built with `AccountLayouts.Claude` /
-`AccountLayouts.Codex` from the account's directory. The same applies to the Codex app-server runtime
+`AccountLayouts.Codex` from the resolved directory. The same applies to the Codex app-server runtime
 and to anything else that starts a vendor process for an agent.
 
-The spawned process gets its config directory explicitly, never by inheritance: `CLAUDE_CONFIG_DIR` or
-`CODEX_HOME` set to the account's directory. The one exception is the layout's own rule: the default
-directory is a null override, so for an account at the vendor's default location the variable is
-left unset rather than set to `~/.claude`, which would move `.claude.json` away from where Claude reads
-it.
+The child environment is an operation on the inherited one, not an overlay: the PTY and app-server
+environment builders (`UnixPtyProcess.BuildChildEnv`, `ConPtyProcess.BuildEnvironmentBlock`, the
+Codex factory's child-environment step) inherit the daemon's variables and then **remove**
+`CLAUDE_CONFIG_DIR` / `CODEX_HOME` when the resolved directory is the vendor's built-in location
+(`~/.claude`, `~/.codex`), and **set** it to the resolved directory in every other case, the daemon's
+own custom default included. The daemon's process environment is never changed. Removing, rather than
+leaving unset, is what keeps a daemon started with `CLAUDE_CONFIG_DIR=~/.claude-work` from handing
+that directory to a launch resolved to `~/.claude`; the built-in location stays unset because naming
+it as the override moves `.claude.json` away from where Claude reads it, the rule `AccountLayouts`
+already encodes as a null override.
 
 Hooks and the transcript watcher already attribute a session to its account by path (Part A), and
 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` may strip the variable from hook environments; nothing here relies
 on the variable reaching a hook.
 
-### 4.3 The agent remembers its account
+### 4.3 The agent keeps its resolved account
 
-`ResumeLaunchDescriptor` in the resume ledger gains the account id. A resume after a daemon restart
-relaunches under that account. When the account is no longer registered at resume time, the resume
-fails with a reason and the entry is marked interrupted, as any other resume failure is; it does not
-resume under the default.
+`ResumeLaunchDescriptor` in the resume ledger gains the resolved account: directory, registry id or
+null, label. A resume after a daemon restart relaunches under that directory, not under whatever the
+restarted daemon's default is now:
 
-`AgentStatusDto` in `LocalIpc/StatusIpc.cs` gains the account id and label, appended. The daemon's
-agent registration and status report to the server carry the same two fields, so the server's agent
-row shows the account for a remote session. All optional; an older daemon reports neither and the
-app shows nothing for that session.
+- A registered id that is no longer registered, or whose directory is gone, fails the resume with
+  `account_unavailable`; the entry is marked interrupted. The reason survives the native-resume
+  path: it is not collapsed into `launch_rejected`, and the continuation fallback that follows a
+  failed native resume is not attempted for it, since a continuation would spend another account.
+- An unregistered default (null id) resumes under its stored directory while that directory exists,
+  and fails the same way when it does not. It is never registered by the resume.
+- A ledger entry written before this field exists resumes under the current default, as today.
+
+`AgentStatusDto` in `LocalIpc/StatusIpc.cs` gains the resolved account's directory, id and label,
+appended. The daemon's agent registration and status report to the server carry the same three
+fields, so the server's agent row shows the account for a remote session and the composer strip can
+name a directory even for an unregistered default. All optional; an older daemon reports none and
+the app shows nothing for that session.
 
 ### 4.4 The Codex model catalog is per account
 
 `CodexHostedAgentRuntimeFactory.ProbeModelsAsync` probes once per daemon with an empty environment
 and fingerprints the default home's `models_cache` and `auth.json`. With accounts, it runs once per
-registered Codex account, and for an unregistered default, with `CODEX_HOME` set to that directory,
-fingerprinting that account's files. Per-machine catalogs already travel on `DaemonConnect.VendorModels`
-to the server's `ListedDaemon` and on `DaemonStatusDto.VendorModels` to the local app, and
-`HomeViewModel.ModelChoicesFor` prefers the machine's list; a per-account map keyed by account id is
-appended beside `VendorModels` on both wires, with the default account's catalog staying in
-`VendorModels` for older readers. The launcher reads the selected account's catalog, falling back to
-the machine's vendor catalog, then to the curated list, so a launch is never blocked on this.
+registered Codex account, and once for an unregistered default, with `CODEX_HOME` set to that
+directory and that account's files in the fingerprint set. Per-machine catalogs already travel on
+`DaemonConnect.VendorModels` to the server's listed daemon and on `DaemonStatusDto.VendorModels` to
+the local app, and `HomeViewModel.ModelChoicesFor` prefers the machine's list; a per-account map
+keyed by registry id is appended beside `VendorModels` on both wires, with the default's catalog
+staying in `VendorModels` for older readers. The launcher reads the selected account's catalog,
+falling back to the machine's vendor catalog, then to the curated list, so a launch is never blocked
+on this.
+
+The catalog follows the registry while the daemon runs. The registry watcher of Section 5.1 drives
+it: an added account is probed and its files join the watched set; a removed account's catalog is
+dropped and a probe still in flight for it is discarded on completion, matched by id; an
+unregistered default that becomes registered moves from the default catalog to a map entry while
+`VendorModels` stays as it was. A change to the account map alone, with `VendorModels` unchanged, is
+published to the server and to the local app; the re-advertisement check compares both.
 
 ## 5. Listing a machine's accounts
 
@@ -121,54 +172,86 @@ the machine's vendor catalog, then to the curated list, so a launch is never blo
 Two of the local-socket frames of the first spec, Section 6.3, are built: `AccountsSubscribe` and
 `AccountsSnapshot`, appended to `FrameType` and advertised in `LocalControlCapabilities.Current` beside
 their handlers. The daemon watches `accounts.json` as that spec's Section 6.1 describes and pushes a
-snapshot on change. The snapshot carries the registry revision, the default directory per vendor,
-and the public account view: id, vendor, directory, label, and the recording state; Part B appends
-identity and the reading. `AccountAction` and `AccountActionResult` are not built; Section 7 says
-why.
+snapshot on change. The snapshot has two parts:
+
+- The **host registry**: host id (from `host.json`), registry revision, and the public account view
+  per account: id, vendor, directory, label, recording state. Part B appends identity and the
+  reading.
+- The **daemon's defaults**: the default directory per vendor, with its registry id when
+  registered. This is the daemon's own fact, carries no revision, and changes only when the daemon
+  starts with another environment.
+
+A snapshot is **complete** when it carries both parts; the app acts on nothing less.
+`AccountAction` and `AccountActionResult` are not built; Section 7 says why.
 
 ### 5.2 A remote machine
 
-The daemon publishes the same snapshot, without readings, to a server that advertises the `accounts`
-capability: `DaemonConnect.Accounts`, `AccountsChanged` with the 30-second trailing throttle, and the
-revision gate of the first spec's Sections 6.1 and 6.2. The server stores it per host and serves it
-to the owner only, and the app reads the selected machine's accounts from there. Part B adds
-readings to a snapshot that is already flowing. Until the server part lands, the panel shows no
-account rows for a remote machine and the launch goes to its default.
+The daemon publishes the same two parts, without readings, to a server that advertises the
+`accounts` capability: `DaemonConnect.Accounts`, `AccountsChanged` with the 30-second trailing
+throttle, and the revision gate of the first spec's Sections 6.1 and 6.2 for the host registry. The
+server stores the registry per host behind that gate, and the defaults per daemon with no gate: the
+daemon's latest publication wins, and every connect republishes them, so a daemon restarted with
+another environment updates its defaults without touching the host's revision. Two daemons on one
+host publishing equal revisions in either order leave one registry and two sets of defaults. The
+server serves both to the host's owner only, and the app composes the targeted daemon's defaults
+with its host's registry. Part B adds readings to a snapshot that is already flowing. Until the
+server part lands, the panel shows no account rows for a remote machine and the launch goes to its
+default.
 
 ## 6. The launcher
 
 ### 6.1 Account rows in the Agent panel
 
 `LauncherPaneView.OnAgentChipClick` builds the panel: a vendor rail and searchable model rows. When
-the selected vendor has two or more accounts on the selected machine, an **Account** section goes
-above the model rows, under the search field, with one row per account: label, directory in faint
-text, a neutral Default badge on the default, and the selection check the model rows use. Once Part
-B exists each row also carries one bar per window with its percentage and the next reset. Picking a
-row sets the account and rebuilds the model rows for it. The search field does not match accounts.
+the selected vendor has two or more rows on the selected machine, an **Account** section goes above
+the model rows, under the search field, with one row per registered account of that vendor and, when
+the targeted daemon's default is unregistered, the row of Section 3: label, directory in faint text,
+a neutral Default badge on the targeted daemon's default, the recording state where it is not
+Recording, and the selection check the model rows use. Once Part B exists each row also carries one
+bar per window with its percentage and the next reset. Picking a row sets the account and rebuilds
+the model rows for it. The search field does not match accounts.
 
-An unregistered default counts as a row (Section 3). With one row the section is absent and the
-panel is unchanged.
+With one row the section is absent and the panel is unchanged. Without a complete snapshot for the
+selected machine, or for a machine whose listed daemon lacks `accounts/1`, the section is absent.
 
 ### 6.2 The chip
 
 The chip label stays "Claude · Opus 4.1" while the chosen account is the default and becomes
 "Claude · Opus 4.1 · work" otherwise. The label is identity, so it takes no status colour.
 
-### 6.3 The draft and the start
+### 6.3 Selection, the draft and Start
 
-`HomeViewModel` keeps the selected account per vendor beside `SelectedModel`. Start validates it
-against the latest snapshot for the selected machine and vendor; an account that has gone resets to
-the default and the launch proceeds under it, with the reset shown in the chip. The request carries
-null for the default.
+`HomeViewModel` keeps the selected account per vendor beside `SelectedModel`. It is set from two
+sources only: a row the person picks, and the restore of Section 6.4, which runs when the
+repository, vendor or machine changes and a complete snapshot for the target exists, before the
+selection is displayed. A change of repository, vendor or machine with no complete snapshot yet
+shows the default and restores when the snapshot arrives, provided the person has not picked a row
+since.
+
+Start captures the selection into the draft and the request carries null for the default. An
+explicit selection that is absent from the latest complete snapshot of the target host, at Start or
+when the attachment upload completes, fails the launch with a named message in the launcher; the
+draft keeps the account, nothing is sent, and the person picks again, the Default row included,
+before another Start. A restore from memory may fall back to the default silently (6.4); an account
+the person selected for this launch may not.
 
 ### 6.4 Memory per repository
 
-`AppState` gains `AccountByRepo`, a map keyed by repository path, vendor and machine name to an
-account id, beside `HarnessByRepo` and with its reserved scratch key. Picking a row writes it; picking
-the default removes the entry, so a later change of default is followed. A launch restores the entry
-for the current repository, vendor and machine. An entry whose id is not in that machine's snapshot
-is ignored and removed. No entry means the default, never another repository's account. Switching
-the vendor in the panel restores that vendor's own entry for the repository.
+`AppState` gains `AccountByRepo`, a map keyed by repository path, vendor and **host id** to a
+registry id, beside `HarnessByRepo` and with its reserved scratch key. The host id comes from the
+complete snapshot of the targeted machine, so two daemons on one host share one memory, a daemon
+rename changes nothing, and two servers listing daemons of the same name never collide, since
+`AppState` is shared across server profiles.
+
+- Picking a row writes the entry; picking the Default row removes it, so a later change of the
+  daemon's default is followed.
+- The restore runs only from a complete snapshot: it looks up the entry for the repository, vendor
+  and the snapshot's host id, and selects that account when the snapshot lists it.
+- An entry whose id is absent from a complete snapshot of its own host is dropped and the default
+  is restored. An entry is never dropped because the snapshot is missing, stale, from another host,
+  or because the machine is disconnected: unknown is not removed.
+- No entry means the default, never another repository's account. Switching the vendor in the
+  panel restores that vendor's own entry for the repository.
 
 ## 7. Settings: the Accounts tab
 
@@ -178,8 +261,9 @@ sessions and pickable when a session starts. The line exists because the Profile
 kcap sign-ins.
 
 - Rows grouped by vendor: label, directory, Default badge, recording state as Part A reports it
-  (Recording, Needs trust with its hint, Broken, Not wired), and a menu with Rename, Re-wire and
-  Remove. Part B adds email, plan, the bars with resets, the reading age and Refresh.
+  (Recording, Needs trust with its hint, Broken, Not wired), the unregistered-default row of
+  Section 3 where it applies, and a menu with Rename, Re-wire and Remove. Part B adds email, plan,
+  the bars with resets, the reading age and Refresh.
 - **Add account** offers the candidates `AccountDiscovery.Find` returns, then a directory picker.
   Adding wires the account. Signing in is the person's job in the vendor CLI, as the first spec
   states.
@@ -187,10 +271,19 @@ kcap sign-ins.
   mutation lane's existing executor (`DaemonMutationLane` over `IKcapCli`), one at a time, as daemon
   mutations do. The daemon does no wiring: the CLI already owns `AccountWiring` and its
   `WiringOptions`, and a second wiring path in the daemon would need the plugin and MCP paths moved
-  out of the CLI assembly. The CLI gains a machine-readable result for the lane, carrying each wiring
-  step's outcome and the registry revision the action committed at. Success is exit 0 with every
-  step succeeded and a snapshot at or past that revision; a failed step is a failure even when the
-  row already looks right. The lane's request factory admits the account verbs without a server
+  out of the CLI assembly.
+- **Every verb commits a revision after its wiring attempt**, under the registry lock, recording the
+  wiring outcome on the entry: an add that wired, an add whose wiring failed (still registered, as
+  today, and reported as a failure), a rewire that changed nothing, a rename, a removal. The
+  revision in the result is this post-wiring one, so a snapshot cached before the wiring cannot
+  satisfy it, and a rewire produces a snapshot the watcher can see.
+- The CLI gains a machine-readable result for the lane carrying each wiring step's outcome and that
+  revision. Success is exit 0 with every step succeeded and a snapshot at or past the revision; a
+  failed step is a failure even when the row already looks right. A missing or malformed result, a
+  timeout, or a snapshot subscription lost before the revision arrives is **unconfirmed**, never
+  success; the next complete snapshot shows the true state.
+- Each action carries its own request id, so the lane never coalesces two actions, equal or not,
+  the first spec's rule. The lane's request factory admits the account verbs without a server
   profile, since they touch nothing on the server.
 - This machine only. A daemon that does not advertise the frames gets the tab in a read-only state
   that says to update kcap on this machine, and the launcher shows no account rows for it.
@@ -198,15 +291,16 @@ kcap sign-ins.
 ## 8. In the session: the strip under the composer
 
 Under `ComposerCard` in `ChatTabView.axaml`, inside the composer band, one line for every Claude or
-Codex session whose account is known: the vendor glyph and the account label, then one bar per window
-with its percentage and the next reset. Before any reading it shows the directory and "no reading
-yet". When the account is blocked, the exhausted window's bar is danger-coloured and a danger pill
-reads "Limit hit" with the reset; the existing usage-limit notice in the composer is unchanged.
+Codex session whose resolved account is known: the vendor glyph and the account label, then one bar
+per window with its percentage and the next reset. Before any reading it shows the directory and
+"no reading yet". When the account is blocked, the exhausted window's bar is danger-coloured and a
+danger pill reads "Limit hit" with the reset; the existing usage-limit notice in the composer is
+unchanged.
 
-The strip is read-only. It takes the account from `ChatSessionInfo`, filled from `AgentStatusDto` on
-the local lane and from the server's agent row on the remote lane, and the reading from the
-machine's accounts snapshot. A session from a daemon that reports no account shows no strip, as does
-any vendor without accounts.
+The strip is read-only. It takes the resolved account from `ChatSessionInfo`, filled from
+`AgentStatusDto` on the local lane and from the server's agent row on the remote lane, and the
+reading, when the account is registered, from the host's registry snapshot. A session from a daemon
+that reports no account shows no strip, as does any vendor without accounts.
 
 ## 9. Readings
 
@@ -216,20 +310,25 @@ three changes:
 - The Accounts screen of its Section 6.4 is the Settings tab of Section 7; there is no standalone
   page and no host switcher.
 - Its Sections 5.3 and 5.4 attribute app-server readings and limit hits to "the daemon's default
-  account until spec 2". With Section 4.3 the agent carries its account, and both attribute to it.
+  account until spec 2". With Section 4.3 the agent carries its resolved account, and both attribute
+  to it when it is registered; an unregistered default has no reading to attribute to.
 - The bars also appear in the launcher rows (6.1) and the composer strip (8).
 
 ## 10. Delivery
 
 Five pull requests, each shipping on its own. The server carries this CLI as a submodule, so the
-daemon's contract change lands before the server's.
+daemon's contract change lands before the server's, and the server's account-launch support is
+enabled only by the submodule update that carries it. Nothing relies on merge order for
+correctness: the gates of Section 4.1 hold for every mixed pairing of app, server and daemon.
 
-1. **kcap-cli, daemon and CLI.** Sections 3, 4 and 5: the account id on the launch command,
-   per-launch layouts, the resume ledger field, agent status fields, per-account Codex catalogs, the
-   registry watcher, the local snapshot frames, publishing to the server behind its capability, and
-   the CLI's machine-readable account results.
-2. **kcap-server.** Section 4.1's pass-through, the agent row's account, the per-account catalog on
-   the listed daemon, and the accounts snapshot store of the first spec's Section 6.2.
+1. **kcap-cli, daemon and CLI.** Sections 3, 4 and 5: the account id on the launch command, the
+   resolved account, per-launch layouts and the child-environment rule, the resume ledger field
+   and resume policy, agent status fields, per-account Codex catalogs with their lifecycle, the
+   registry watcher, the local snapshot frames, the `accounts/1` advertisement, publishing to the
+   server behind its capability, and the CLI's post-wiring revisions and machine-readable results.
+2. **kcap-server.** Section 4.1's pass-through and refusal, `accounts/1` on the listed daemon, the
+   agent row's account, the per-account catalog on the listed daemon, and the accounts store of
+   Section 5.2 with its split between host registry and daemon defaults.
 3. **kcap-cli, app.** Sections 6, 7 and the strip of Section 8 without bars.
 4. **kcap-cli and kcap-server.** Part B of the first spec: the status line wrapper, the Codex
    producers, the readings store, publishing.
@@ -239,25 +338,45 @@ README and `help-*.txt` change with the PR that changes user-facing behaviour.
 
 ## 11. Testing
 
-- **Daemon:** a launch with an account id spawns with the directory set; the default account spawns
-  with the variable unset; an unknown, cross-vendor or missing-directory id is refused with its
-  reason and nothing is spawned; a resume relaunches under the ledger's account and fails named when
-  it is gone; trust, MCP config and project symlink land in the account's directory and not the
-  default's; the Codex catalog probe runs per account and advertises per account; the snapshot names
-  this daemon's default directory and registers nothing; a second daemon with another environment
-  names a different one; a registry change reaches the local snapshot and the server within the
-  throttle.
-- **CLI:** each account verb prints its step outcomes and committed revision; a failed step reports
+- **Daemon, launch:** an explicit id resolves to its directory; null resolves to the daemon's
+  default; an unknown, cross-vendor or missing-directory id is refused with `account_unavailable`
+  and nothing is spawned; the child environment, for a daemon started with a custom inherited home,
+  removes the variable for the built-in location, sets it for the daemon's own default and for
+  another custom account, on the PTY and app-server paths alike, with `.claude.json` landing where
+  Claude reads it in each case; trust, MCP config and project symlink land in the resolved
+  directory and not the default's; the daemon's process environment is unchanged after a launch.
+- **Daemon, resume:** a resume relaunches under the ledger's directory after the daemon restarts
+  with a different environment; a removed registered account fails with `account_unavailable`, not
+  `launch_rejected`, and no continuation is attempted; an unregistered default resumes under its
+  directory and fails named when the directory is gone; a legacy entry resumes under the current
+  default.
+- **Daemon, snapshot and catalog:** the snapshot carries the host id, the revision and the daemon's
+  defaults, and registers nothing; a second daemon with another environment publishes different
+  defaults under the same revision, in both orders, and a restart of one with a new default
+  republishes defaults without a revision change; a registry change reaches the local snapshot and
+  the server within the throttle; adding, removing and re-adding a Codex account without a restart
+  probes, drops and re-probes its catalog, a late probe for a removed account is discarded, and an
+  auth or cache change on a non-default account republishes the map alone.
+- **CLI:** each verb commits a post-wiring revision, including an unchanged rewire and an add whose
+  wiring failed; the result names each step's outcome and that revision; a failed step reports
   failure with exit 1 even when the registry already holds the requested state.
-- **Server:** old daemon with new server and the reverse; the id reaches the daemon unchanged; the
-  agent row carries the label; per-account model options alongside per-vendor ones for an older app.
-- **App, headless view-model tests:** the account section appears at two accounts and not at one;
-  the chip label with and without a non-default account; the request carries null for the default;
-  memory restore per repository, vendor and machine; the removed-account fallback and entry removal;
-  the default pick removing the entry; vendor switch restoring the other vendor's entry; the
-  unregistered default as a row in the panel and the tab; the lane admitting an account verb with no
-  server profile and refusing success on a failed step; the tab's read-only state on an old daemon;
-  the strip's three states and its absence for other vendors and for an older daemon.
+- **Server:** old daemon with new server and the reverse; the id reaches a daemon with `accounts/1`
+  unchanged and is refused, named, for one without; the agent row carries the resolved account; the
+  per-account catalog rides beside the per-vendor one for an older app; registry snapshots with
+  equal revisions from two daemons keep both daemons' defaults.
+- **App, headless view-model tests:** the section appears at two rows and not at one, counting an
+  unregistered default; it is absent without a complete snapshot and for a daemon the server lists
+  without `accounts/1`; the chip label with and without a non-default account; the request carries
+  null for the default; restore per repository, vendor and host id runs on a repository, vendor or
+  machine change once the snapshot is complete, and a late snapshot restores unless the person has
+  picked since; an entry absent from its host's complete snapshot is dropped, and one is kept
+  through a missing snapshot, a disconnect and a switch to another host; the Default pick removes
+  the entry; a vendor switch restores the other vendor's entry; an explicit selection removed before
+  Start, and one removed during an attachment upload, fail named with no request sent; the lane
+  admits an account verb with no server profile, refuses success on a failed step, treats a lost
+  result or subscription as unconfirmed, and never coalesces two queued actions; the tab's read-only
+  state on an old daemon; the strip's three states, its directory for an unregistered default, and
+  its absence for other vendors and for an older daemon.
 - **App smoke:** the panel opens with the section and keyboard focus reaches the account rows.
 
 ## 12. Not doing
