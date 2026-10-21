@@ -58,6 +58,15 @@ public sealed class UninstallRunViewModel : ReactiveObject {
         State = UninstallRunState.Running;
         Lines.Clear();
 
+        // Running disables Close, so no exception may leave the run there.
+        try {
+            await RunStepsAsync();
+        } catch (Exception ex) {
+            Fail($"The uninstall stopped: {ex.Message}");
+        }
+    }
+
+    async Task RunStepsAsync() {
         StreamingResult result;
         var streamed = 0;
         try {
@@ -92,7 +101,11 @@ public sealed class UninstallRunViewModel : ReactiveObject {
             return;
         }
 
-        _removal.DeleteSupportFiles();
+        try {
+            _removal.DeleteSupportFiles();
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: could not remove the app's support files: {ex.Message}");
+        }
 
         bool trashed;
         try {

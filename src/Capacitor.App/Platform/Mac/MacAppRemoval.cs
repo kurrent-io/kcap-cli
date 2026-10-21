@@ -32,11 +32,19 @@ public sealed partial class MacAppRemoval : IAppRemoval {
     }
 
     public async Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {
-        var remover = new KcapLinkRemover(_linkFolders, Path.Combine(_bundleRoot, "Contents", "MacOS", "kcap"));
+        var remover = new KcapLinkRemover(_linkFolders, BundleBinary);
+        await RemoveAsAdminAsync(remover.Remove(), ct).ConfigureAwait(false);
+        return remover.Find();
+    }
 
-        foreach (var failure in remover.Remove()) {
-            // A link that vanished or changed since the scan is no longer ours to remove.
-            if (new FileInfo(failure.Path).LinkTarget is not { } expected) continue;
+    internal async Task RemoveAsAdminAsync(IReadOnlyList<KcapLinkFailure> failures, CancellationToken ct) {
+        var bundleBinary = ResolveFully(BundleBinary);
+
+        foreach (var failure in failures) {
+            // Re-checked here because a link repointed since the scan (brew link, a reinstalled CLI)
+            // is no longer ours, and the script only guards against a change after this read.
+            if (new FileInfo(failure.Path).LinkTarget is not { } expected
+             || bundleBinary is null || ResolveFully(failure.Path) != bundleBinary) continue;
 
             try {
                 var result = await _runner.RunAsync("/usr/bin/osascript", ["-e", AdminRemoveScript, "--", failure.Path, expected],
@@ -47,8 +55,17 @@ public sealed partial class MacAppRemoval : IAppRemoval {
                 Console.Error.WriteLine($"kcap: could not remove {failure.Path}: {ex.Message}");
             }
         }
+    }
 
-        return remover.Find();
+    string BundleBinary => Path.Combine(_bundleRoot, "Contents", "MacOS", "kcap");
+
+    static string? ResolveFully(string path) {
+        try {
+            var info = new FileInfo(path);
+            return info.LinkTarget is null ? info.FullName : info.ResolveLinkTarget(true)?.FullName;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return null;
+        }
     }
 
     public void DeleteSupportFiles() {
@@ -112,13 +129,17 @@ public sealed partial class MacAppRemoval : IAppRemoval {
             var entries = XDocument.Load(reader).Root?.Element("dict")?.Elements().ToArray() ?? [];
             for (var i = 0; i + 1 < entries.Length; i++)
                 if (entries[i].Name == "key" && entries[i].Value == "CFBundleIdentifier" && entries[i + 1].Name == "string")
-                    return string.IsNullOrWhiteSpace(entries[i + 1].Value) || entries[i + 1].Value.Contains('/')
-                        ? null : entries[i + 1].Value;
+                    return IsReverseDns(entries[i + 1].Value) ? entries[i + 1].Value : null;
             return null;
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or XmlException) {
             return null;
         }
     }
+
+    // The id names paths that are deleted recursively, so `..` or a separator must never get through.
+    internal static bool IsReverseDns(string id) =>
+        id.Split('.') is { Length: > 1 } segments
+        && segments.All(segment => segment.Length > 0 && segment.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'));
 
     [LibraryImport(ObjC, EntryPoint = "objc_getClass", StringMarshalling = StringMarshalling.Utf8)]
     private static partial nint GetClass(string name);

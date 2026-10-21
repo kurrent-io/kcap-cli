@@ -9,13 +9,17 @@ public class UninstallRunViewModelTests {
     sealed class FakeRemoval(List<string> calls) : IAppRemoval {
         public IReadOnlyList<string> LeftLinks = [];
         public bool Trashed = true;
+        public Exception? SupportFailure;
 
         public Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {
             calls.Add("links");
             return Task.FromResult(LeftLinks);
         }
 
-        public void DeleteSupportFiles() => calls.Add("support");
+        public void DeleteSupportFiles() {
+            calls.Add("support");
+            if (SupportFailure is not null) throw SupportFailure;
+        }
 
         public Task<bool> TrashBundleAsync(CancellationToken ct) {
             calls.Add("trash");
@@ -114,6 +118,31 @@ public class UninstallRunViewModelTests {
         await vm.CloseCommand.Execute();
 
         await Assert.That(calls[^1]).IsEqualTo("quit");
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Support_file_failure_is_logged_and_the_run_continues() {
+        var (vm, _, removal, calls) = Build();
+        removal.SupportFailure = new InvalidOperationException("boom");
+        using var stderr = ConsoleOutput.StartErrorCapture();
+
+        await vm.RunAsync();
+
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Finished);
+        await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash,quit");
+    }
+
+    [Test]
+    public async Task Unexpected_failure_never_stays_running() {
+        var removal = new FakeRemoval([]);
+        var cli     = new FakeKcapCli { UninstallBehavior = _ => Task.FromResult(Exit(0)) };
+        var vm      = new UninstallRunViewModel(cli, removal, false, () => throw new InvalidOperationException("boom"), action => action());
+
+        await vm.RunAsync();
+
+        await Assert.That(vm.State).IsEqualTo(UninstallRunState.Failed);
+        await Assert.That(await vm.CloseCommand.CanExecute.FirstAsync()).IsTrue();
     }
 
     [Test]

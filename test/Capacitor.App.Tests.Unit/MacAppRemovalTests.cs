@@ -1,5 +1,7 @@
 using Capacitor.App.Platform.Mac;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Setup;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -8,9 +10,11 @@ public class MacAppRemovalTests {
 
     sealed class NoProcesses : IProcessRunner {
         public int Calls;
+        public List<string[]> Seen { get; } = [];
 
         public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
             Calls++;
+            Seen.Add([fileName, .. args]);
             return Task.FromResult(new ProcessResult(1, "", "", false));
         }
 
@@ -86,4 +90,68 @@ public class MacAppRemovalTests {
         await Assert.That(File.Exists(prefs)).IsFalse();
         await Assert.That(File.Exists(unrelated)).IsTrue();
     }
+
+    [Test]
+    public async Task Repointed_link_never_reaches_the_admin_prompt() {
+        if (!OperatingSystem.IsMacOS()) return;
+
+        var bundle = Bundle();
+        var other  = Tmp.CreateFile("other-kcap", "");
+        Tmp.CreateDir("bin");
+        var link   = Path.Combine(Tmp.GetResolvedPath("bin"), "kcap");
+        File.CreateSymbolicLink(link, other);
+        var runner  = new NoProcesses();
+        var removal = new MacAppRemoval(runner, new UserHome(Tmp.PathTo("home")), bundle, []);
+
+        await removal.RemoveAsAdminAsync([new KcapLinkFailure(link, "Permission denied")], CancellationToken.None);
+
+        await Assert.That(runner.Calls).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Undeletable_link_into_the_bundle_asks_for_admin() {
+        if (!OperatingSystem.IsMacOS()) return;
+
+        var bundle = Bundle();
+        Tmp.CreateDir("locked");
+        var folder = Tmp.GetResolvedPath("locked");
+        var link   = Path.Combine(folder, "kcap");
+        var binary = Path.Combine(bundle, "Contents", "MacOS", "kcap");
+        File.CreateSymbolicLink(link, binary);
+        File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try {
+            // Root deletes from a read-only folder, so the plain delete would not fail.
+            try {
+                File.WriteAllText(Path.Combine(folder, "probe"), "");
+                return;
+            } catch (UnauthorizedAccessException) { }
+
+            var runner  = new NoProcesses();
+            var removal = new MacAppRemoval(runner, new UserHome(Tmp.PathTo("home")), bundle, [folder]);
+
+            var left = await removal.RemoveLinksAsync(CancellationToken.None);
+
+            await Assert.That(runner.Calls).IsEqualTo(1);
+            await Assert.That(runner.Seen[0][0]).IsEqualTo("/usr/bin/osascript");
+            await Assert.That(runner.Seen[0][^2..]).IsEquivalentTo(new[] { link, binary }, CollectionOrdering.Matching);
+            await Assert.That(left).IsEquivalentTo(new[] { link });
+        } finally {
+            File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Test]
+    [Arguments("io.kurrent.kcap", true)]
+    [Arguments("io.kurrent-dev.kcap2", true)]
+    [Arguments("kcap", false)]
+    [Arguments(".", false)]
+    [Arguments("..", false)]
+    [Arguments("io..kcap", false)]
+    [Arguments("io.kurrent.", false)]
+    [Arguments("../io.kcap", false)]
+    [Arguments("io/kurrent.kcap", false)]
+    [Arguments("io.kurrent kcap", false)]
+    [Arguments("", false)]
+    public async Task Bundle_id_must_be_reverse_dns(string id, bool accepted) =>
+        await Assert.That(MacAppRemoval.IsReverseDns(id)).IsEqualTo(accepted);
 }
