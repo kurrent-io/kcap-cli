@@ -202,8 +202,15 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
     /// deleting a running binary there leaves the process its file.
     /// </summary>
     internal static bool AnyFileInUse(string dir) {
+        // A link inside the directory would make whatever it reaches count; an unreadable entry counts.
+        var options = new EnumerationOptions {
+            RecurseSubdirectories = true,
+            AttributesToSkip      = FileAttributes.ReparsePoint,
+            IgnoreInaccessible    = false,
+        };
+
         try {
-            foreach (var file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories)) {
+            foreach (var file in Directory.EnumerateFiles(dir, "*", options)) {
                 using var _ = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
             }
 

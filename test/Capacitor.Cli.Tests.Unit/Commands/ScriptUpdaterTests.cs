@@ -249,4 +249,16 @@ public class ScriptUpdaterTests {
             await Assert.That(ScriptUpdater.AnyFileInUse(dir)).IsTrue();
         await Assert.That(ScriptUpdater.AnyFileInUse(dir)).IsFalse();
     }
+
+    [Test]
+    public async Task A_link_to_a_file_held_open_elsewhere_does_not_mark_the_directory_in_use() {
+        Skip.When(Unsupported, "a file symlink needs a privilege on Windows");
+        using var tmp = new TempDir();
+        var dir     = tmp.CreateDir("1.0.0");
+        var outside = tmp.CreateFile("elsewhere/held");
+        File.CreateSymbolicLink(tmp.PathTo("1.0.0/held"), outside);
+
+        using (new FileStream(outside, FileMode.Open, FileAccess.Read, FileShare.Read))
+            await Assert.That(ScriptUpdater.AnyFileInUse(dir)).IsFalse();
+    }
 }
