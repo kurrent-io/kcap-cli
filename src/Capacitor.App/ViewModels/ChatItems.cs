@@ -218,16 +218,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     string _summary = "";
     public string Summary { get => _summary; private set => this.RaiseAndSetIfChanged(ref _summary, value); }
 
-    /// What the header shows: the category phrase, plus a peek at the first settled detail while
-    /// folded so the useful bit is visible without expanding.
-    public string SummaryLine {
-        get {
-            if (_summary.Length == 0) return "";
-            if (_isExpanded || PeekDetail() is not { Length: > 0 } peek) return _summary;
-            return $"{_summary} · {peek}";
-        }
-    }
-
     bool _hasSummary;
     public bool HasSummary { get => _hasSummary; private set => this.RaiseAndSetIfChanged(ref _hasSummary, value); }
 
@@ -336,14 +326,6 @@ public sealed class ToolGroupItem : ChatItemViewModel {
     void NotifyVisible() {
         this.RaisePropertyChanged(nameof(VisibleCalls));
         this.RaisePropertyChanged(nameof(HasVisibleCalls));
-        this.RaisePropertyChanged(nameof(SummaryLine));
-    }
-
-    /// First settled call's line, capped so the header stays one scannable row.
-    string? PeekDetail() {
-        var first = _calls.FirstOrDefault(c => c.IsSettled);
-        if (first is null) return null;
-        return first.DetailIsProse ? TextElision.End(first.LineText, 56) : TextElision.Middle(first.LineText, 56);
     }
 }
 

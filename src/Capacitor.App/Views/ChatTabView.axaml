@@ -268,8 +268,8 @@
                                                       Label="{Binding KindChip}" IconKind="{Binding HeaderIconKind}" />
                                 <Button Classes="toolSummary" IsVisible="{Binding ShowsSummaryHeader}"
                                         Command="{Binding ToggleCommand}" Click="OnToolSummaryClick"
-                                        AutomationProperties.Name="{Binding SummaryLine}">
-                                    <views:ChatKindHeader Label="{Binding SummaryLine}" IconKind="{Binding HeaderIconKind}">
+                                        AutomationProperties.Name="{Binding Summary}">
+                                    <views:ChatKindHeader Label="{Binding Summary}" IconKind="{Binding HeaderIconKind}">
                                         <views:ChatKindHeader.Status>
                                             <Panel Width="12" Height="12" VerticalAlignment="Center">
                                                 <views:AppIcon Kind="ChevronDown" Size="12" IsVisible="{Binding IsExpanded}"

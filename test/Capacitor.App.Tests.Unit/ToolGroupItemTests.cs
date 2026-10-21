@@ -35,12 +35,11 @@ public class ToolGroupItemTests {
             await Assert.That(group.Summary).IsEqualTo("Ran a command, read a file");
             await Assert.That(group.HasFailure).IsTrue();
             await Assert.That(group.IsExpanded).IsTrue();
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
             await Assert.That(group.HasVisibleCalls).IsTrue();
 
             group.Toggle();
             await Assert.That(group.IsExpanded).IsFalse();
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file · Bash");
+            await Assert.That(group.Summary).IsEqualTo("Ran a command, read a file");
             await Assert.That(group.HasVisibleCalls).IsFalse();
         });
     }
@@ -100,21 +99,21 @@ public class ToolGroupItemTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Folded_summary_peeks_the_first_settled_detail_and_caps_long_ones() {
+    public async Task Folded_summary_keeps_file_paths_in_the_expanded_calls() {
         await RunOnUiAsync(async () => {
             var group = new ToolGroupItem();
-            var longDetail = new string('x', 40) + new string('y', 40);
-            var first = new ToolCallItem("Bash", longDetail, ToolCategory.Command);
-            var second = Call("Read", ToolCategory.Read);
+            var path = "/Users/example/.config/kcap/sessions/transcript.jsonl";
+            var first = new ToolCallItem("Read", path, ToolCategory.Read);
+            var second = Call("Bash", ToolCategory.Command);
             group.Add(first);
             group.Add(second);
             first.Outcome = ToolOutcome.Done;
             second.Outcome = ToolOutcome.Done;
 
-            await Assert.That(group.SummaryLine)
-                .IsEqualTo($"Ran a command, read a file · {new string('x', 28)}…{new string('y', 27)}");
+            await Assert.That(group.Summary).IsEqualTo("Read a file, ran a command");
             group.Toggle();
-            await Assert.That(group.SummaryLine).IsEqualTo("Ran a command, read a file");
+            await Assert.That(group.Summary).IsEqualTo("Read a file, ran a command");
+            await Assert.That(group.VisibleCalls[0].LineText).IsEqualTo(path);
         });
     }
 
