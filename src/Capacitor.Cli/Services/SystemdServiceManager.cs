@@ -30,8 +30,7 @@ sealed class SystemdServiceManager(
         if (!File.Exists(path)) return new ServiceStatus(ServiceState.NotInstalled, null);
         var (_, active, _)      = ServiceProcess.Run("systemctl", SystemdUnit.IsActiveArgs(serviceId));
         var (enabledExit, _, _) = ServiceProcess.Run("systemctl", SystemdUnit.IsEnabledArgs(serviceId));
-        var bin = SystemdUnit.BinaryFromUnit(File.ReadAllText(path)); // quote-aware ExecStart parse
-        return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), bin);
+        return new ServiceStatus(SystemdUnit.StatusFrom(active, enabledExit), UnitBinary(serviceId));
     }
 
     public string? UnitBinary(string serviceId) {
@@ -43,10 +42,11 @@ sealed class SystemdServiceManager(
         }
     }
 
+    /// <summary>The state comes from systemctl alone, so an unreadable unit file costs only the binary path:
+    /// <see cref="Uninstall"/> runs this after a failed disable and must get an answer, not an exception.</summary>
     public ServiceQuery Query(string serviceId) {
-        var path = SystemdUnit.UnitPath(home, serviceId);
-        var unitPresent = File.Exists(path);
-        var bin = unitPresent ? SystemdUnit.BinaryFromUnit(File.ReadAllText(path)) : null;
+        var unitPresent = File.Exists(SystemdUnit.UnitPath(home, serviceId));
+        var bin = unitPresent ? UnitBinary(serviceId) : null;
         var (exit, output, _) = _runProcess("systemctl", SystemdUnit.ShowStateArgs(serviceId));
         return SystemdUnit.QueryFromShow(exit, output, unitPresent, bin);
     }

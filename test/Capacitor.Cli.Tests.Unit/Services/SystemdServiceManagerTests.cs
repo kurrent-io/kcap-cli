@@ -88,4 +88,36 @@ public class SystemdServiceManagerTests {
         await Assert.That(mgr.Uninstall(Id, out _)).IsFalse();
         await Assert.That(File.Exists(path)).IsTrue();
     }
+
+    /// <summary>An exclusive handle makes the unit file unreadable on every platform and for root too; the
+    /// state still comes back from systemctl, so a failed disable keeps the unit instead of throwing.</summary>
+    [Test]
+    public async Task Uninstall_keeps_an_unreadable_unit_whose_daemon_is_still_running() {
+        var path = Home.CreateFile(UnitFile, "unit");
+        var mgr = new SystemdServiceManager(Home, runProcess: (_, args) =>
+            args.Contains("disable") ? (1, "", "Access denied")
+            : args.Contains("show") ? (0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", "")
+            : (0, "", ""));
+
+        bool ok;
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            ok = mgr.Uninstall(Id, out _);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(File.Exists(path)).IsTrue();
+    }
+
+    [Test]
+    public async Task Query_of_an_unreadable_unit_reports_its_state_without_a_binary() {
+        var path = Home.CreateFile(UnitFile, "ExecStart=/opt/kcap/kcap-daemon --name test");
+        var mgr = new SystemdServiceManager(Home, runProcess: (_, _) => (0, "ActiveState=active\nUnitFileState=enabled\nMainPID=4242\n", ""));
+
+        ServiceQuery q;
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            q = mgr.Query(Id);
+
+        await Assert.That(q.JobPid).IsEqualTo(4242);
+        await Assert.That(q.UnitPresent).IsTrue();
+        await Assert.That(q.BinaryPath).IsNull();
+    }
 }
