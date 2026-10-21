@@ -120,7 +120,7 @@ public static class SessionStatusDots {
     }
 
     /// Blank line between facts, caption under the value. The first line stays the sentence.
-    static string FormatTip(IReadOnlyList<AgentStatusFact> facts) {
+    internal static string FormatTip(IReadOnlyList<AgentStatusFact> facts) {
         var lines = new List<string>();
         foreach (var fact in facts) {
             if (lines.Count > 0) lines.Add("");
