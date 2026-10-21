@@ -178,6 +178,10 @@ internal sealed record AcpVendorDescriptor {
     /// updates all belong to the hosted agent.</summary>
     public Func<Core.Acp.AcpNotification, AcpSubagentSignal?>? SubagentReader { get; }
 
+    /// <summary>The vendor's own client method for asking the user questions, for a vendor that does not
+    /// use ACP's <c>elicitation/create</c>. Null leaves such a request unhandled.</summary>
+    public AcpQuestionProtocol? QuestionProtocol { get; }
+
     public AcpVendorDescriptor(
             HarnessId                   Harness,
             ImmutableArray<string>      Argv,
@@ -198,7 +202,8 @@ internal sealed record AcpVendorDescriptor {
             Func<Core.Acp.AcpNotification, IReadOnlyList<Core.AcpEventEnvelope>>?
                                         TurnUsageReader = null,
             Func<Core.Acp.AcpNotification, AcpSubagentSignal?>?
-                                        SubagentReader = null
+                                        SubagentReader = null,
+            AcpQuestionProtocol?        QuestionProtocol = null
         ) {
         // Before the checks below, every one of which names {Vendor} in its message: that is derived
         // from this, so reporting a malformed descriptor would otherwise accuse whichever vendor the
@@ -259,6 +264,7 @@ internal sealed record AcpVendorDescriptor {
         this.ToolAdmitter   = ToolAdmitter;
         this.TurnUsageReader = TurnUsageReader;
         this.SubagentReader  = SubagentReader;
+        this.QuestionProtocol = QuestionProtocol;
 
         if (UnattendedInteractionPolicy == AcpUnattendedInteractionPolicy.AllowlistedAutoApprove && ToolAdmitter is null)
             throw new ArgumentException(
@@ -558,7 +564,8 @@ internal static class AcpVendorDescriptors {
         SupportsReconnectResume: false,
         SessionNewMeta:      GrokReviewerLaunch.SessionNewMeta,
         TurnUsageReader:     GrokTurnUsage.Read,
-        SubagentReader:      GrokSubagentSignals.Read
+        SubagentReader:      GrokSubagentSignals.Read,
+        QuestionProtocol:    GrokQuestions.Protocol
     );
 
     /// <summary>Google Gemini CLI as an ACP hosted agent (<c>gemini --experimental-acp</c>).

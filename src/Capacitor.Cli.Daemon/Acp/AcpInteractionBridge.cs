@@ -64,7 +64,9 @@ internal sealed partial class AcpInteractionBridge(
         PolicyJudgeGateway?                                                           policyJudge = null,
         TimeSpan?                                                                     judgeBudget = null,
         // The vendor's own match for an admitted frame; Kiro's title match when unset.
-        Func<JsonElement, IReadOnlySet<string>, bool>?                                admissionMatcher = null
+        Func<JsonElement, IReadOnlySet<string>, bool>?                                admissionMatcher = null,
+        // The vendor's own question method, answered through question cards; unhandled when null.
+        AcpQuestionProtocol?                                                          questionProtocol = null
     ) {
     static readonly IReadOnlySet<string> EmptyAdmitted = new HashSet<string>(StringComparer.Ordinal);
 
@@ -154,14 +156,149 @@ internal sealed partial class AcpInteractionBridge(
                 return ElicitationCancelResult();
             }
 
+            if (questionProtocol is { } declined && request.Method == declined.Method)
+                return declined.Reply(null);
+
             return request.Method == "session/request_permission" ? CancelledResult() : null;
         }
 
         return request.Method switch {
             "session/request_permission" => await HandlePermissionAsync(request, ct).ConfigureAwait(false),
             "elicitation/create"         => await HandleElicitationAsync(request, ct).ConfigureAwait(false),
+            var method when questionProtocol is { } protocol && method == protocol.Method
+                                         => await HandleVendorQuestionAsync(protocol, request, ct).ConfigureAwait(false),
             _                            => null
         };
+    }
+
+    /// <summary>Asks each of a vendor's questions in turn, as a question card, and replies once with every
+    /// answer. A declined card, or one that cannot be read, declines the whole request.</summary>
+    async Task<JsonElement?> HandleVendorQuestionAsync(AcpQuestionProtocol protocol, AcpRequest request, CancellationToken ct) {
+        if (unattendedPolicy == AcpUnattendedInteractionPolicy.AutoApprove) {
+            LogUnattendedElicitationDeclined(agentId);
+
+            return protocol.Reply(null);
+        }
+
+        if (request.Params is not { } p || protocol.Read(p) is not { Questions.Count: > 0 } asked) {
+            logger.LogWarning("ACP: {Method} for agent {AgentId} could not be read as questions; declining", request.Method, agentId);
+            AcpMetrics.RecordElicitationUnrenderable("vendor_malformed_request");
+
+            return protocol.Reply(null);
+        }
+
+        // The vendor keys each answer by its question's text: a repeated question is asked once, and two
+        // different questions sharing a text cannot both be answered.
+        var questions = new List<AcpVendorQuestion>(asked.Questions.Count);
+
+        foreach (var question in asked.Questions) {
+            if (questions.Find(q => q.Text == question.Text) is not { } seen) {
+                questions.Add(question);
+                continue;
+            }
+
+            if (seen.MultiSelect != question.MultiSelect || !seen.Options.SequenceEqual(question.Options)) {
+                logger.LogWarning("ACP: {Method} for agent {AgentId} asked two different questions with the same text; declining",
+                    request.Method, agentId);
+                AcpMetrics.RecordElicitationUnrenderable("vendor_conflicting_questions");
+
+                return protocol.Reply(null);
+            }
+        }
+
+        var prompts = questions
+            .Select((q, i) => questions.Count > 1 ? $"({i + 1} of {questions.Count}) {q.Text}" : q.Text)
+            .ToArray();
+
+        if (questions.Where((q, i) => !FitsAQuestionCard(q, prompts[i])).FirstOrDefault() is { } oversized) {
+            logger.LogWarning(
+                "ACP: {Method} for agent {AgentId} asked a question too large for a question card ({Options} options); declining",
+                request.Method, agentId, oversized.Options.Count);
+            AcpMetrics.RecordElicitationUnrenderable("vendor_question_too_large");
+
+            return protocol.Reply(null);
+        }
+
+        var answered = new List<AcpVendorQuestionAnswer>(questions.Count);
+
+        for (var i = 0; i < questions.Count; i++) {
+            var question = questions[i];
+            var options  = question.Options
+                .Select((o, n) => new AcpInteractionOption(n.ToString(System.Globalization.CultureInfo.InvariantCulture), o.Label, o.Description))
+                .ToArray();
+            var multi = question.MultiSelect && options.Length > 0;
+
+            var card = new AcpInteractionRequest(
+                AgentId: agentId,
+                AcpSessionId: asked.SessionId,
+                Kind: "elicitation",
+                ToolName: null,
+                ToolInput: null,
+                ToolCallId: null,
+                Prompt: prompts[i],
+                Options: options,
+                IsMultiSelect: multi,
+                MinSelections: multi ? 1 : null,
+                MaxSelections: multi ? options.Length : null
+            );
+
+            LogInteractionIssued(agentId, "elicitation");
+            AcpMetrics.RecordBlockingRequest("elicitation");
+
+            AcpInteractionDecision decision;
+
+            try {
+                decision = await requestInteraction(card, ct).ConfigureAwait(false);
+            } catch (Exception ex) {
+                logger.LogDebug(ex, "ACP: {Method} could not be routed for agent {AgentId}; declining", request.Method, agentId);
+                LogInteractionResolved(agentId, "elicitation", "cancel");
+
+                return protocol.Reply(null);
+            }
+
+            var chosen = ChosenAnswers(decision, options, multi);
+            LogInteractionResolved(agentId, "elicitation", chosen is null ? "cancel" : "accept");
+
+            if (chosen is null) return protocol.Reply(null);
+
+            answered.Add(new AcpVendorQuestionAnswer(question, chosen));
+        }
+
+        return protocol.Reply(answered);
+    }
+
+    /// <summary>The same bounds an elicitation's question card is held to, which the server enforces.</summary>
+    static bool FitsAQuestionCard(AcpVendorQuestion question, string prompt) =>
+        prompt.Length <= MaxElicitationMessageCodeUnits
+     && question.Options.Count <= ElicitationSchemaClassifier.MaxOptions
+     && question.Options.All(o => o.Label.Length <= MaxQuestionOptionCodeUnits
+                               && (o.Description?.Length ?? 0) <= MaxQuestionOptionCodeUnits);
+
+    /// <summary>The server cuts a card option's label and description to this, and a vendor question's label
+    /// is its answer, so a longer one could look like another while answering differently.</summary>
+    const int MaxQuestionOptionCodeUnits = 256;
+
+    /// <summary>The labels a decision picked from the offered options, or the answer typed instead of
+    /// picking one; null when it declined or names an option that was not offered.</summary>
+    static string[]? ChosenAnswers(AcpInteractionDecision decision, AcpInteractionOption[] options, bool multi) {
+        if (!AffirmativeOutcomes.Contains(decision.Outcome)) return null;
+
+        var ids = multi
+            ? decision.SelectedOptionIds ?? (decision.SelectedOptionId is { } scalar ? [scalar] : null)
+            : decision.SelectedOptionId is { } one ? [one] : null;
+
+        if (options.Length == 0 || ids is not { Length: > 0 })
+            return string.IsNullOrWhiteSpace(decision.FreeText) ? null : [decision.FreeText];
+
+        var labels = new List<string>(ids.Length);
+
+        foreach (var id in ids.Distinct(StringComparer.Ordinal)) {
+            if (options.FirstOrDefault(o => o.OptionId == id) is not { OptionId: not null } match) return null;
+
+            labels.Add(match.Label);
+        }
+
+        return [.. labels];
     }
 
     async Task<JsonElement?> HandlePermissionAsync(AcpRequest request, CancellationToken ct) {
