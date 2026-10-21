@@ -45,6 +45,15 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
 
     bool? _agentIdle;
     bool _canSendNow;
+    bool _canDiscard;
+    public bool CanDiscard {
+        get => _canDiscard;
+        private set {
+            if (_canDiscard == value) return;
+            _canDiscard = value;
+            this.RaisePropertyChanged();
+        }
+    }
     /// The agent is idle and the channel can take text, so this row can be delivered instead of waiting.
     public bool CanSendNow {
         get => _canSendNow;
@@ -62,12 +71,13 @@ public sealed class QueuedChatMessage(string text, int composerEdits, int genera
         null => UnknownPickupNote,
     };
 
-    internal void SetPickup(bool? agentIdle, bool canSend) {
+    internal void SetPickup(bool? agentIdle, bool canSend, bool canDiscard = false) {
         var idleChanged = _agentIdle != agentIdle;
         _agentIdle = agentIdle;
         // Recovery is explicit: the original dispatch may still arrive, so the action says
         // Send again rather than implying that it moves the existing dispatch forward.
         CanSendNow = canSend && !IsForeign && !Acknowledged && AttachmentIds.Count == 0;
+        CanDiscard = canDiscard && DispatchId is not null && !Acknowledged;
         if (idleChanged) this.RaisePropertyChanged(nameof(PickupNote));
     }
 

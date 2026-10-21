@@ -49,5 +49,6 @@ public interface IServerLane {
     Task<HubCallOutcome> RequestResizeTerminalAsync(string agentId, int cols, int rows, CancellationToken ct);
     Task<HubCallOutcome> ReleaseResizeTerminalAsync(string agentId, CancellationToken ct);
     Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct);
+    Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct);
     Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct);
 }
