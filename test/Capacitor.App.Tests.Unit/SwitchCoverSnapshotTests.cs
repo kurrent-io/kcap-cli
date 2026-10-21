@@ -82,8 +82,6 @@ public class SwitchCoverSnapshotTests {
         try {
             bitmap.CopyPixels(new PixelRect(x, y, 1, 1), pin.AddrOfPinnedObject(), pixel.Length, pixel.Length);
             return Read(pin.AddrOfPinnedObject(), pixel.Length, bitmap.Format ?? PixelFormat.Rgba8888, 0, 0);
-        } catch (Exception e) {
-            return e.GetType().Name;
         } finally {
             pin.Free();
         }
