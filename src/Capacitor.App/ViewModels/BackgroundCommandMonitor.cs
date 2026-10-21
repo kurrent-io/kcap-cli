@@ -124,7 +124,7 @@ internal sealed class BackgroundCommandMonitor : IDisposable {
                     _seeded = true;
                     _runs.Clear();
                 }
-                foreach (var line in read.Lines) _runs.Apply(line.Projection);
+                _runs.ApplyAll(read.Lines.Select(line => line.Projection));
                 _report(_runs.RunningCommandCount);
             });
         } catch (Exception ex) {

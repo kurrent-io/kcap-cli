@@ -211,7 +211,7 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
-    public async Task Concurrent_reads_of_one_subject_share_a_single_spawn_and_a_completed_view_is_reused_for_ten_seconds() {
+    public async Task Concurrent_reads_share_a_spawn_and_a_view_is_served_on_its_fetch_time_lease() {
         using var h = new GhHarness(Tmp); h.SignedIn("github.com");
         var pending = new TaskCompletionSource<ProcessResult>();
         h.Process.WhenPending(["pr", "view"], pending);
@@ -227,9 +227,33 @@ public class GitHubCliReaderProviderReadTests {
         await h.Provider.OverviewAsync("session", Subject, default);
         await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(1);
         h.Time.Advance(TimeSpan.FromSeconds(2));
-        h.Process.When(["pr", "view"], GhHarness.Fixture("pr-view.json"));
-        await h.Provider.OverviewAsync("session", Subject, default);
+        var refetch = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], refetch);
+        var stale = await h.Provider.OverviewAsync("session", Subject, default);
+        await Assert.That(stale.RemainingSeconds(h.Time)).IsEqualTo(19);
+        h.Time.Advance(TimeSpan.FromSeconds(9));
+        var waiting = h.Provider.OverviewAsync("session", Subject, default);
+        await Task.Delay(50);
+        await Assert.That(waiting.IsCompleted).IsFalse();
         await Assert.That(h.Process.Calls.Count(call => call.Args[0] == "pr")).IsEqualTo(2);
+        refetch.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await Assert.That((await waiting).RemainingSeconds(h.Time)).IsEqualTo(21);
+    }
+
+    [Test]
+    public async Task A_failed_refetch_evicts_the_view_instead_of_serving_it_on() {
+        using var h = await Ready(Tmp);
+        await h.Provider.OverviewAsync("session", Subject, default);
+        h.Time.Advance(TimeSpan.FromSeconds(11));
+        h.Process.When(["pr", "view"], "", exitCode: 1, stderr: "not found");
+        await h.Provider.OverviewAsync("session", Subject, default);
+        var cold = new TaskCompletionSource<ProcessResult>();
+        h.Process.WhenPending(["pr", "view"], cold);
+        var waiting = h.Provider.OverviewAsync("session", Subject, default);
+        await Task.Delay(50);
+        await Assert.That(waiting.IsCompleted).IsFalse();
+        cold.SetResult(new(0, GhHarness.Fixture("pr-view.json"), "", false));
+        await Assert.That((await waiting).Kind).IsEqualTo(PullRequestReadKind.Ready);
     }
 
     [Test]
@@ -249,7 +273,7 @@ public class GitHubCliReaderProviderReadTests {
     }
 
     [Test]
-    public async Task A_synchronously_completed_fetch_does_not_pin_the_subject_after_the_reuse_window() {
+    public async Task A_synchronously_completed_fetch_does_not_pin_the_subject_past_the_fresh_window() {
         using var h = await Ready(Tmp);
         await h.Provider.OverviewAsync("session", Subject, default);
         h.Time.Advance(TimeSpan.FromSeconds(11));
@@ -318,7 +342,7 @@ public class GitHubCliReaderProviderReadTests {
         await Assert.That(h.Process.Calls.Count).IsEqualTo(calls);
     }
 
-    /// <summary>A section page served from the reuse window dates its snapshot to the fetch that produced the data, as the overview does.</summary>
+    /// <summary>A section page served from the cache dates its snapshot to the fetch that produced the data, as the overview does.</summary>
     [Test]
     public async Task A_section_page_from_the_reuse_window_carries_the_view_fetch_time() {
         using var h = await Ready(Tmp);

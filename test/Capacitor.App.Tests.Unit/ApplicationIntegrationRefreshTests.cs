@@ -1,3 +1,4 @@
+using Capacitor.App.Platform.Mac;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness.Codex;

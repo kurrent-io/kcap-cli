@@ -1,3 +1,4 @@
+using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using Avalonia;
@@ -5,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Notifications;
 using Avalonia.Input;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
@@ -143,7 +145,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             activityFlyout.Closed += (_, _) => { _activityOpen = false; UpdateActivityVisibility(); };
         }
 
+        var switchCover = new WorkspaceSwitchCover(ContentPane, SwitchCover, SwitchCoverStill);
         this.WhenActivated(disposables => {
+            var coverTracking = new SerialDisposable().DisposeWith(disposables);
+            this.WhenAnyValue(x => x.ViewModel)
+                .Subscribe(vm => coverTracking.Disposable = vm is null ? null : switchCover.Track(vm))
+                .DisposeWith(disposables);
             // Switched over the ViewModel, not read once: an onboarding window activates before
             // the main surface hands it one.
             Observable.Switch(this.WhenAnyValue(x => x.ViewModel)
@@ -151,9 +158,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                         ? Observable.Return<ISessionWorkspace?>(null)
                         : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
-                    // A popup can't meaningfully survive the pane swapping under it — opening a
-                    // workspace closes the feed; its Closed handler then turns the gate off.
                     if (workspace is not null) ActivityButton.Flyout?.Hide();
+                    else Dispatcher.UIThread.Post(LauncherView.FocusComposer, DispatcherPriority.Loaded);
                     UpdateActivityVisibility();
                 })
                 .DisposeWith(disposables);

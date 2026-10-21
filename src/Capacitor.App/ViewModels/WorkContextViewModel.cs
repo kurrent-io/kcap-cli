@@ -288,7 +288,8 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
             ex => WorkContextRead.Of(WorkContextReadKind.Unreachable, ex.Message),
             Apply,
             "work context",
-            reading => IsReading = reading);
+            reading => IsReading = reading,
+            cached: _source.Cached);
         Plan = new PlanSectionViewModel(plans, planActivity ?? new PlanActivity(), time);
         Artefacts = artefacts;
         _opener = opener;

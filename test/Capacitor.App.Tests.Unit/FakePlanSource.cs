@@ -23,6 +23,8 @@ sealed class FakePlanSource : IPlanSource {
         return gate;
     }
 
+    public SessionPlansRead? Cached(string sessionId) => null;
+
     public async Task<SessionPlansRead> ReadAsync(string sessionId, CancellationToken ct) {
         Requested.Add(sessionId);
         if (_gates.Count > 0) return await _gates.Dequeue().Task.WaitAsync(ct);

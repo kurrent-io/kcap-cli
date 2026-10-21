@@ -54,6 +54,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     public TerminalTabViewModel Terminal { get; }
 
+    public IObservable<Unit> Ended { get; }
+
     ChatTabViewModel? _chat;
     /// Built once, on the first dto; the reader comes from transcript_format and the input channel
     /// from has_terminal.
@@ -183,7 +185,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             SessionAccessService? access = null, IObservable<bool>? localDaemonOnAppServer = null, IAgentDirectory? directory = null,
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
-            Func<string, ResumeLedgerEntry?>? resumeLedger = null, Action<string>? pullRequestLinksChanged = null) {
+            Func<string, ResumeLedgerEntry?>? resumeLedger = null, LastReads<PullRequestSnapshot>? pullRequestSnapshots = null,
+            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -198,6 +201,15 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Scan(new AgentPresence(null, false), Accumulate)
             .Replay(1)
             .RefCount();
+        // A terminal status, not a removed row: a row dropped while its twin takes over on the
+        // server lane is still a live session.
+        Ended = presence.Where(p => p.Dto is not null)
+            .Select(p => SessionStatusDots.IsTerminal(p.Dto!.Status))
+            .DistinctUntilChanged()
+            .SkipWhile(terminal => terminal)
+            .Where(terminal => terminal)
+            .Take(1)
+            .Select(_ => Unit.Default);
 
         var runs = _runs = new SessionRuns(time);
         commands?.Track($"local:{agentId}", runs, () => Chat?.ReleaseFeed()).DisposeWith(_disposables);
@@ -221,7 +233,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Subscribe(_ => CloseSubagent()).DisposeWith(_disposables);
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(presence.Select(p => p.Dto), pullRequests, time, opener,
             () => ActiveTab = WorkspaceTab.PullRequest, requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
-            linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: () => Chat is { ShowsComposer: true });
+            snapshots: pullRequestSnapshots, linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: () => Chat is { ShowsComposer: true });
         WorkContext.PullRequests = PullRequests;
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
@@ -308,7 +320,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts) {
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts) {
                     ShowTerminal = () => ActiveTab = WorkspaceTab.Terminal,
                     InputSending = inputSending,
                 };

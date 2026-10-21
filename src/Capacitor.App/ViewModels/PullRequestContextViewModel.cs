@@ -18,6 +18,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     static readonly TimeSpan SnapshotGrace = TimeSpan.FromMinutes(5);
     sealed record Position(string Section, string? Thread, string Resolved, double Scroll, long Touched);
     readonly IPullRequestSource _source;
+    readonly LastReads<PullRequestSnapshot>? _snapshots;
     readonly Func<string?, string?> _readBranch;
     readonly bool _hasCustomBranchReader;
     readonly TimeProvider _time;
@@ -140,8 +141,10 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
 
     public PullRequestContextViewModel(IObservable<AgentStatusDto?> presence, IPullRequestSource source, TimeProvider time, IUrlOpener opener,
         Action openReader, Action? signIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, Func<PullRequestRepository?>? primaryRepo = null, Func<string?, string?>? readBranch = null,
-        Action<string>? linksChanged = null, Action<string>? requestFix = null, Func<bool>? canRequestFix = null) {
+        LastReads<PullRequestSnapshot>? snapshots = null, Action<string>? linksChanged = null,
+        Action<string>? requestFix = null, Func<bool>? canRequestFix = null) {
         _source = source;
+        _snapshots = snapshots;
         _canRequestFix = canRequestFix ?? (() => requestFix is not null);
         _linksChanged = linksChanged;
         _readBranch = readBranch ?? GitRepository.CurrentBranch;
@@ -184,6 +187,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             // so only BorrowedFrom still has the branch live discovery matches.
             _worktree = CheckoutLabel.CheckoutPathFor(dto);
             if (dto.SessionId is not { Length: > 0 } id || _session == id) return;
+            var snapshot = _snapshots?.Get(id);
             CancelReads();
             if (_session is not null) _requestedSubject = null;
             _session = id;
@@ -203,7 +207,8 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
-            SetNotice("Loading pull requests…");
+            SetNotice(snapshot is null ? "Loading pull requests…" : "");
+            if (snapshot is not null) Seed(snapshot);
             RequestRefresh();
         }).DisposeWith(_subscriptions);
         signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(_ => {
@@ -242,12 +247,14 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         _masked = true;
         _grace = false;
         _staleReason = null;
-        // Nothing polls in the background, and the return lists afresh anyway.
-        if (!foreground) _queuedRefresh = false;
         Notify();
+        // Nothing polls in the background, and the return lists afresh anyway.
+        if (!foreground) { _queuedRefresh = false; return; }
+        ShowLastOverview();
         // A null _lastRefresh means this session has never refreshed yet, so the coming discovery is
         // already fresh; force only a genuine return, where a prior refresh could have gone stale.
-        if (foreground) { if (_lastRefresh is not null) _refreshDiscovery = true; _lastRefresh = null; _lastOverview = null; RequestRefresh(); }
+        if (_lastRefresh is not null) _refreshDiscovery = true;
+        _lastRefresh = null; _lastOverview = null; RequestRefresh();
     }
     public void Reconnected() {
         if (_disposed) return;

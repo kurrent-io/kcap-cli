@@ -57,6 +57,11 @@ static class SystemdUnit {
     public static string[] IsActiveArgs(string id)  => ["--user", "is-active", UnitName(id)];
     public static string[] IsEnabledArgs(string id) => ["--user", "is-enabled", UnitName(id)];
     public static string[] NeedDaemonReloadArgs(string id) => ["--user", "show", "--property=NeedDaemonReload", "--value", UnitName(id)];
+    public static string[] MainPidArgs(string id) => ["--user", "show", "--property=MainPID", "--value", UnitName(id)];
+
+    /// <summary>Reads <see cref="MainPidArgs"/> output: null when the unit has no main process (systemd prints 0).</summary>
+    public static int? MainPid(string output) =>
+        int.TryParse(output.Trim(), out var pid) && pid > 0 ? pid : null;
 
     /// <summary>Reads <see cref="NeedDaemonReloadArgs"/> output: <c>yes</c> when systemd's copy of the unit is stale.</summary>
     public static bool NeedsDaemonReload(string output) => output.Trim().Equals("yes", StringComparison.OrdinalIgnoreCase);
@@ -125,6 +130,31 @@ static class SystemdUnit {
     }
 
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");
+
+    /// <summary>The <c>Environment=</c> assignments of a rendered unit, reversing <see cref="EnvAssignment"/>.</summary>
+    public static Dictionary<string, string> EnvFromUnit(string unitText) {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var raw in unitText.Split('\n')) {
+            var line = raw.Trim();
+            if (!line.StartsWith("Environment=", StringComparison.Ordinal)) continue;
+            var assignment = Unquote(line["Environment=".Length..]);
+            var eq = assignment.IndexOf('=');
+            if (eq <= 0) continue;
+            env[assignment[..eq]] = assignment[(eq + 1)..].Replace("%%", "%");
+        }
+        return env;
+    }
+
+    static string Unquote(string s) {
+        if (s.Length == 0 || s[0] != '"') return s;
+        var sb = new StringBuilder();
+        for (var i = 1; i < s.Length; i++) {
+            if (s[i] == '\\' && i + 1 < s.Length) { sb.Append(s[++i]); continue; }
+            if (s[i] == '"') break;
+            sb.Append(s[i]);
+        }
+        return sb.ToString();
+    }
 
     // ── systemd value/argument quoting ──
     // systemd splits Environment= and ExecStart on unquoted whitespace, so any

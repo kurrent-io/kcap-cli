@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -141,6 +142,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
 
+    readonly ReplaySubject<Unit> _ended = new(1);
+    public IObservable<Unit> Ended => _ended.Take(1);
+    // A transient empty registry snapshot also removes a live row, so only a removal after an
+    // accepted stop counts as an end. Either may arrive first.
+    bool _stopAccepted;
+    bool _seenLive;
+
     // Same reason as _sessionEndedChanges above: Stop's canExecute reads the flag through a subject.
     readonly BehaviorSubject<bool> _originChangedChanges = new(false);
     public IObservable<bool> OriginChangedChanges => _originChangedChanges.AsObservable();
@@ -228,7 +236,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             Func<ITerminalSurface>? surfaceFactory = null, IPlanArtifactSource? planArtifacts = null,
             BackgroundCommandActivity? commands = null, IPullRequestSource? pullRequests = null,
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
-            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null, Action<string>? pullRequestLinksChanged = null,
+            ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
+            LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
             SubagentEventsReader? readSubagent = null) {
         _drafts = drafts;
         _time = time;
@@ -264,7 +273,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         PullRequests = pullRequests is null ? null : new PullRequestContextViewModel(
             _presence.Select(dto => dto is null ? null : dto with { RepoPath = null, WorktreePath = null, BorrowedFrom = null }),
             pullRequests, time, opener, () => ActiveTab = RemoteTab.PullRequest,
-            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository,
+            requestSignIn, linkGitHub, signInCompleted, () => WorkContext.PrimaryRepository, snapshots: pullRequestSnapshots,
             linksChanged: pullRequestLinksChanged, requestFix: PrefillComposer, canRequestFix: CanPrefillComposer);
         if (PullRequests is { } context)
             context.HasPullRequestChanges.CombineLatest(context.WhenAnyValueUnsafe(pr => pr.HasListed), (has, listed) => (has, listed))
@@ -323,6 +332,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                         } else {
                             SessionEnded = true;
                             PublishSession(ended: true);
+                            if (_stopAccepted) _ended.OnNext(Unit.Default);
                         }
                         Release();
                         continue;
@@ -338,7 +348,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             .CombineLatest(_originChangedChanges, actions.StopsInFlight,
                 (ended, movedLocal, inFlight) => !ended && !movedLocal && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(
-            () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote),
+            () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote,
+                accepted: () => RxSchedulers.MainThreadScheduler.Schedule(() => {
+                    _stopAccepted = true;
+                    if (SessionEnded) _ended.OnNext(Unit.Default);
+                })),
             canStop);
         ShowPullRequestCommand = ReactiveCommand.Create(() => { if (ShowsPullRequestTab) ActiveTab = RemoteTab.PullRequest; });
         _disposables.Add(ShowPullRequestCommand);
@@ -362,6 +376,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         if (SessionStatusDots.IsTerminal(row.Status)) {
             SessionEnded = true;
             PublishSession(ended: true);
+            if (_seenLive) _ended.OnNext(Unit.Default);
             Release();
             return;
         }
@@ -370,6 +385,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         // removal's verdict. Release() cleared the leased id, so the lease is re-acquired below.
         SessionEnded = false;
         OriginChangedToLocal = false;
+        _seenLive = true;
 
         var sessionId = row.SessionId;
         if (sessionId != _leasedSession) {
