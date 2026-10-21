@@ -316,10 +316,15 @@ public class ChatTabViewSmokeTests {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (var i = 0; i < 80; i++) {
                 var middle = host.Scroll.Viewport.Height / 2;
+                var inTailReserve = items.ItemsPanelRoot is { } panel
+                    && panel.TranslatePoint(new Point(0, panel.Bounds.Height), host.Scroll) is { } end
+                    && end.Y <= middle;
                 // At the scroll end the tail reserve can leave the middle blank, so read the visible row nearest it.
                 var reading = drag ? null : items.GetRealizedContainers()
                     .Select(container => (container, top: container.TranslatePoint(default, host.Scroll)?.Y))
-                    .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0)
+                    .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0
+                        && (inTailReserve
+                            || top <= middle && top + row.container.Bounds.Height > middle))
                     .OrderBy(row => Math.Max(0, Math.Max(row.top!.Value - middle, middle - row.top.Value - row.container.Bounds.Height)))
                     .Select(row => row.container)
                     .FirstOrDefault();
