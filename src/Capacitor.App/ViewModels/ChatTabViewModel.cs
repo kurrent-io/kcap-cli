@@ -448,14 +448,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     bool _showsActivityNote;
-    /// Failure text beside the composer.
     public bool ShowsActivityNote {
         get => _showsActivityNote;
         private set => this.RaiseAndSetIfChanged(ref _showsActivityNote, value);
     }
 
     bool _showsLiveNote;
-    /// Starting or working, shown with the mascot under the last message.
     public bool ShowsLiveNote {
         get => _showsLiveNote;
         private set => this.RaiseAndSetIfChanged(ref _showsLiveNote, value);
