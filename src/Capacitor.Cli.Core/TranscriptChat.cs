@@ -51,8 +51,11 @@ public static class TranscriptChat {
             ? new TranscriptChatProjection(projection, rules)
             : null;
 
-    public static IChatDisplayRules? SubagentRulesFor(string vendor) =>
-        vendor.Equals("claude", StringComparison.OrdinalIgnoreCase) ? ClaudeChatRules.Subagent : RulesFor(vendor);
+    public static IChatDisplayRules? SubagentRulesFor(string vendor) => vendor.ToLowerInvariant() switch {
+        "claude" => ClaudeChatRules.Subagent,
+        "codex"  => CodexChatRules.Subagent,
+        _        => RulesFor(vendor),
+    };
 
     public static IChatDisplayRules? RulesFor(string vendor) => vendor.ToLowerInvariant() switch {
         "claude" => ClaudeChatRules.Instance,
