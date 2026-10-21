@@ -13,7 +13,9 @@ public class ToolImagePreviewTests {
     public async Task Relative_paths_require_a_session_root() {
         using var tmp = new TempDir();
         await Assert.That(ToolDetail.ResolvePreviewPath("images/a.png", tmp.Path))
-            .IsEqualTo(tmp.PathTo("images/a.png"));
+            .IsEqualTo(tmp.PathTo("images", "a.png"));
+        await Assert.That(ToolDetail.ResolvePreviewPath("images/../images/a.png", tmp.Path))
+            .IsEqualTo(tmp.PathTo("images", "a.png"));
         await Assert.That(ToolDetail.ResolvePreviewPath(tmp.PathTo("a.png"), "/other"))
             .IsEqualTo(tmp.PathTo("a.png"));
         await Assert.That(ToolDetail.ResolvePreviewPath("a.png", null)).IsNull();

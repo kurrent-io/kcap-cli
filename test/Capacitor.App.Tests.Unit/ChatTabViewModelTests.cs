@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -182,7 +183,7 @@ public class ChatTabViewModelTests {
                 await Assert.That(call.PreviewPath).IsNull();
                 File.AppendAllText(path, result + "\n");
                 await h.TickAsync();
-                await Assert.That(call.PreviewPath).IsEqualTo(Tmp.PathTo("images/a.png"));
+                await Assert.That(call.PreviewPath).IsEqualTo(Tmp.PathTo("images", "a.png"));
                 File.AppendAllText(path, read.Replace("t2", "t3") + "\n" + ToolErrorLine.Replace("t1", "t3") + "\n");
                 await h.TickAsync();
                 await Assert.That(Group(h.Chat, 0).Calls[^1].PreviewPath).IsNull();
@@ -193,11 +194,14 @@ public class ChatTabViewModelTests {
     }
 
     [Test]
+    [Arguments(false)]
+    [Arguments(true)]
     [NotInParallel("AvaloniaSession")]
-    public async Task Remote_reads_never_acquire_workstation_previews() {
+    public async Task Remote_reads_never_acquire_workstation_previews(bool useWindowsPath) {
         await RunOnUiAsync(async () => {
+            var imagePath = useWindowsPath ? @"C:\Users\runneradmin\AppData\Local\Temp\images\a.png" : Tmp.PathTo("a.png");
             var path = Tmp.CreateFile("remote-image.jsonl", [
-                ReadCallLine.Replace("/repo/x/src/a.cs", Tmp.PathTo("a.png")),
+                ReadCallLine.Replace("\"/repo/x/src/a.cs\"", JsonSerializer.Serialize(imagePath)),
                 ToolResultLine.Replace("t1", "t2"),
             ]);
             var time = new FakeTimeProvider();
@@ -208,9 +212,11 @@ public class ChatTabViewModelTests {
                 _ => new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { }),
                 new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
             try {
-                await WaitUntilAsync(() => chat.Items.Count > 0, what: "the remote read rows");
+                await (chat.PendingReadForTesting ?? throw new InvalidOperationException("The session did not start its transcript read."));
+                await Assert.That(chat.Items.Count).IsEqualTo(1);
                 var call = Group(chat, 0).Calls.Single();
                 await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
+                await Assert.That(ToolDetail.ImageFile(call.InputJson)).IsEqualTo(imagePath);
                 await Assert.That(call.PreviewPath).IsNull();
             } finally {
                 await chat.TeardownAsync();
