@@ -108,7 +108,7 @@ public partial class ChatTabView : UserControl {
         _followTail = true;
         base.OnDataContextChanged(e);
         _sent?.Dispose();
-        _sent = DataContext is ChatTabViewModel vm ? vm.SendCommand.Merge(vm.SendQueuedCommand).Subscribe(_ => FollowSentTurn()) : null;
+        _sent = DataContext is ChatTabViewModel vm ? Observable.FromEvent(h => vm.TurnSubmitted += h, h => vm.TurnSubmitted -= h).Subscribe(_ => FollowSentTurn()) : null;
     }
 
     /// A send brings its turn to the top even when the reader had scrolled back.

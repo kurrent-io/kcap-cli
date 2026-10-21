@@ -378,6 +378,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// channel accepts the prompt. A reply answers the session's open questions, and no permission
     /// response will ever say so.
     public Func<string, Action>? InputSending { get; init; }
+    /// Raised once a turn has gone to the channel and was not refused.
+    public event Action? TurnSubmitted;
     volatile string? _sessionId;
     public ReactiveCommand<Unit, Unit> ShowTerminalCommand { get; }
 
@@ -1160,6 +1162,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             return outcome;
         }
         if (outcome == ChatSendOutcome.Rejected) _unechoed.Remove(queued);
+        else TurnSubmitted?.Invoke();
         var waits = !queued.Acknowledged && outcome switch {
             ChatSendOutcome.Accepted    => _openFeed is not null,
             ChatSendOutcome.Unconfirmed => true,
