@@ -566,10 +566,11 @@ public class WorkContextViewSmokeTests {
             host.Runs.Identify("c1", "a1");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Count(b => b.IsEnabled)).IsEqualTo(1);
-            // A screen reader hears the row's state with its name, as a sighted user sees it.
+            // A screen reader hears the row's state with its name, but not its ticking duration, which would
+            // re-announce a focused row every second.
             var row = host.Runs.Rows.Single(r => r.CanOpen);
             await Assert.That(Avalonia.Automation.AutomationProperties.GetName(RowButtons(host.Find<ItemsControl>("RunningSubagentList")).Single(b => b.IsEnabled)))
-                .IsEqualTo($"{row.Name}, {row.StateText}");
+                .IsEqualTo($"{row.Name}, running");
 
             await host.Vm.ToggleRunsCommand.Execute();
             Dispatcher.UIThread.RunJobs();

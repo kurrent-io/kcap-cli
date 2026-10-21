@@ -56,6 +56,7 @@ public sealed class RunRow : ReactiveObject {
             this.RaiseAndSetIfChanged(ref _state, value);
             this.RaisePropertyChanged(nameof(IsRunning));
             this.RaisePropertyChanged(nameof(IsFailed));
+            this.RaisePropertyChanged(nameof(StateWord));
         }
     }
 
@@ -64,7 +65,19 @@ public sealed class RunRow : ReactiveObject {
     public bool IsRunning => State == RunState.Running;
     public bool IsFailed  => State == RunState.Failed;
 
-    internal void MarkBackground() => IsBackground = true;
+    /// The row's state without its ticking duration, so a screen reader's name for it changes only when the run does.
+    public string StateWord => State switch {
+        RunState.Running when IsBackground => "running in background",
+        RunState.Running                   => "running",
+        RunState.Failed                    => "failed",
+        RunState.Stopped                   => "stopped",
+        _                                  => "done",
+    };
+
+    internal void MarkBackground() {
+        IsBackground = true;
+        this.RaisePropertyChanged(nameof(StateWord));
+    }
 
     /// An end with an outcome is final. One without reads as done until one with an outcome
     /// arrives, and the earlier of the two dates the row: the server stamps a stop when it heard

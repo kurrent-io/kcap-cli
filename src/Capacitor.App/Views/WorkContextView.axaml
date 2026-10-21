@@ -250,7 +250,7 @@
                 <AutomationProperties.Name>
                     <MultiBinding StringFormat="{}{0}, {1}">
                         <Binding Path="Name" />
-                        <Binding Path="StateText" />
+                        <Binding Path="StateWord" />
                     </MultiBinding>
                 </AutomationProperties.Name>
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
