@@ -306,7 +306,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             _                          => ClassifyServiceVerbAsync(request, result, executor, observation, ct),
         };
 
-    // Install/Replace/StartVerified: the CLI's own ServiceVerify transaction engine already
+    // Install/Replace/StartVerified: the CLI's own LaunchdServiceVerify transaction engine already
     // performed its readiness poll — exit code alone routes every non-success case.
     static async Task<MutationOutcome> ClassifyServiceVerbAsync(
             MutationRequest request, ProcessResult result, IKcapCli executor, IDaemonObservation observation, CancellationToken ct) {

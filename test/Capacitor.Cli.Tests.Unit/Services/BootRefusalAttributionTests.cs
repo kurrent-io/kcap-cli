@@ -4,8 +4,8 @@ using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
-/// <summary>Boot-refusal marker attribution in <see cref="ServiceVerify"/>'s
-/// gated readiness-timeout path. The pure <see cref="ServiceVerify.Attributable"/> rule is exercised
+/// <summary>Boot-refusal marker attribution in <see cref="LaunchdServiceVerify"/>'s
+/// gated readiness-timeout path. The pure <see cref="LaunchdServiceVerify.Attributable"/> rule is exercised
 /// verbatim per the task brief; the <see cref="FakeServiceManager"/>-driven tests exercise the
 /// verified pre-clear + observed-pid correlation end to end, planting a marker with the same
 /// <see cref="BootRefusalMarker"/> the daemon writes through, so the read proves it can parse what
@@ -24,37 +24,37 @@ public class BootRefusalAttributionTests {
     [Test]
     public async Task Marker_with_matching_name_expectation_and_observed_pid_attributes() {
         var e = new BootRefusalRecord(1, "d1", "server_expectation_mismatch", "https://s", "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsTrue();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsTrue();
     }
 
     [Test]
     public async Task Foreign_pid_never_attributes_even_with_same_name_and_expectation() {
         var e = new BootRefusalRecord(1, "d1", "server_expectation_mismatch", "https://s", "https://t", 9999, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Different_daemon_name_never_attributes() {
         var e = new BootRefusalRecord(1, "other", "consent_seed_unwritable", null, null, 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", null, new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", null, new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Attempt_id_bearing_marker_is_detached_evidence_not_service_evidence() {
         var e = new BootRefusalRecord(1, "d1", "server_expectation_mismatch", "https://s", "https://t", 4242, "i", "att-1", DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s", new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Trailing_slash_difference_still_attributes() {
         var e = new BootRefusalRecord(1, "d1", "server_expectation_mismatch", "https://s", "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s/", new HashSet<int> { 4242 })).IsTrue();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s/", new HashSet<int> { 4242 })).IsTrue();
     }
 
     [Test]
     public async Task Case_only_difference_still_attributes() {
         var e = new BootRefusalRecord(1, "d1", "server_expectation_mismatch", "https://S.Example", "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://s.example", new HashSet<int> { 4242 })).IsTrue();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://s.example", new HashSet<int> { 4242 })).IsTrue();
     }
 
     // A present-but-empty expectation on one side is a deliberate value, never a trivial agreement
@@ -62,25 +62,25 @@ public class BootRefusalAttributionTests {
     [Test]
     public async Task Null_versus_empty_expectation_never_attributes() {
         var e = new BootRefusalRecord(1, "d1", "consent_seed_unwritable", null, "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "", new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Both_null_expectation_still_attributes() {
         var e = new BootRefusalRecord(1, "d1", "consent_seed_unwritable", null, "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", null, new HashSet<int> { 4242 })).IsTrue();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", null, new HashSet<int> { 4242 })).IsTrue();
     }
 
     [Test]
     public async Task Both_empty_expectation_never_attributes() {
         var e = new BootRefusalRecord(1, "d1", "consent_seed_unwritable", "", "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "", new HashSet<int> { 4242 })).IsFalse();
     }
 
     [Test]
     public async Task Genuinely_different_expectation_never_attributes() {
         var e = new BootRefusalRecord(1, "d1", "server_expectation_mismatch", "https://s", "https://t", 4242, "i", null, DateTimeOffset.UtcNow);
-        await Assert.That(ServiceVerify.Attributable(e, "d1", "https://other.example", new HashSet<int> { 4242 })).IsFalse();
+        await Assert.That(LaunchdServiceVerify.Attributable(e, "d1", "https://other.example", new HashSet<int> { 4242 })).IsFalse();
     }
 
     // ── FakeServiceManager-driven: end-to-end pre-clear + collection + attribution ──
@@ -130,7 +130,7 @@ public class BootRefusalAttributionTests {
     }
 
     /// <summary>Minimal launchd plist carrying the consent-seed directive and (optionally) a baked
-    /// server expectation — mirrors <c>ServiceVerifyStartTests.MinimalPlist</c>. The identity gate
+    /// server expectation — mirrors <c>LaunchdServiceVerifyStartTests.MinimalPlist</c>. The identity gate
     /// now fails closed on an unresolvable unit server (spec §3.4(b)), so this also bakes
     /// <c>KCAP_URL</c> whenever <paramref name="expectServerUrl"/> is supplied — otherwise the unit
     /// would have no resolvable identity for Phase A to agree with.</summary>
@@ -181,7 +181,7 @@ public class BootRefusalAttributionTests {
 
         // Ownership never matches (validated pid always disagrees with the observed job pid), so
         // readiness never settles and the forward budget genuinely rolls back to a timeout.
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => -1, Hello, time,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => -1, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2),
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", "https://s.example"),
             gateEnv: GatedEnvWithIdentity("https://s.example"),
@@ -218,7 +218,7 @@ public class BootRefusalAttributionTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(false, null, null, null)); // never well-formed
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => -1, Hello, time,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => -1, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2),
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", "https://s.example"),
             gateEnv: GatedEnvWithIdentity("https://s.example"),
@@ -248,7 +248,7 @@ public class BootRefusalAttributionTests {
         static Task<HelloProbeResult> Hello(string _, TimeSpan __) =>
             Task.FromResult(new HelloProbeResult(true, 1, "1.2.3", "kcap-daemon"));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager, _ => 4242, Hello, TimeProvider.System,
             readPlist: _ => MinimalPlist("/bin/kcap-daemon", "prompt", "https://s.example"),
             gateEnv: GatedEnvWithIdentity("https://s.example"),
             digestMatches: _ => true);

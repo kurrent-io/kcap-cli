@@ -326,7 +326,7 @@ public sealed class DaemonCommands(
 
     /// <summary><c>DaemonRunner.BootCarriers.Seed</c>'s twin: the daemon project defines the
     /// canonical constant, but the CLI project does not reference the daemon project, so the
-    /// literal is duplicated here (same pattern as <c>ServiceVerify</c>'s duplicated verify codes).</summary>
+    /// literal is duplicated here (same pattern as <c>LaunchdServiceVerify</c>'s duplicated verify codes).</summary>
     const string SeedVar = "KCAP_CONSENT_SEED_DEFAULT";
 
     /// <summary>

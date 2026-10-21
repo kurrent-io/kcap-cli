@@ -36,7 +36,7 @@ static class DaemonKill {
             } catch {
                 // Kill(entireProcessTree: true) can also throw AggregateException (a child it
                 // couldn't signal, e.g. EPERM) or a raw Win32Exception. This call runs mid-transaction
-                // (ServiceVerify already holds the flock and has mutated state) — it must never
+                // (LaunchdServiceVerify already holds the flock and has mutated state) — it must never
                 // escape uncaught; the gone-check below is the authoritative answer regardless of
                 // what the kill attempt itself reported.
             }

@@ -250,7 +250,7 @@ public class AppMutationLaneWiringTests {
         await Assert.That(surface.AttentionMessages[0]).DoesNotContain("verify_readiness_timeout");
     }
 
-    // DigestGate (43) is DaemonCommands' own gate, not a ServiceVerify exit code, but it still
+    // DigestGate (43) is DaemonCommands' own gate, not a LaunchdServiceVerify exit code, but it still
     // needs a real presentable token when the CLI emits no reason line — falling back to
     // "verify_unknown_43" would surface a meaningless code to the user.
     [Test]

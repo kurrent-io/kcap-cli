@@ -3,10 +3,10 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Services;
 
-/// The Windows <c>--verify</c> transaction reports success only once the task's own daemon answers
+/// The <c>--verify</c> transaction reports success only once the supervisor's own daemon answers
 /// as the right name, protocol and version, and undoes its mutation otherwise — the evidence the
 /// desktop app's lane classifies, with launchd's exit codes.
-public class WindowsServiceVerifyTests {
+public class GenericServiceVerifyTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
 
     const string Id = "win-verify-svc";
@@ -24,6 +24,7 @@ public class WindowsServiceVerifyTests {
         public bool OldRunning;
         public int? OldJobPid = OldDaemonPid;
         public bool OldUninstallFails;
+        public bool Unanswered;
         public readonly List<string> Calls = [];
 
         public string Describe() => "fake task";
@@ -34,7 +35,7 @@ public class WindowsServiceVerifyTests {
         ServiceState State => !Registered ? ServiceState.NotInstalled : Running ? ServiceState.Running : ServiceState.Installed;
 
         public ServiceQuery Query(string serviceId) => serviceId == Id
-            ? new(Registered ? LabelProbe.Loaded : LabelProbe.Absent, UnitPresent, State, null, Running ? JobPid : null)
+            ? new(Unanswered ? LabelProbe.Unknown : Registered ? LabelProbe.Loaded : LabelProbe.Absent, UnitPresent, State, null, Running ? JobPid : null)
             : new(OldRegistered ? LabelProbe.Loaded : LabelProbe.Absent, OldRegistered,
                 !OldRegistered ? ServiceState.NotInstalled : OldRunning ? ServiceState.Running : ServiceState.Installed,
                 null, OldRunning ? OldJobPid : null);
@@ -84,7 +85,7 @@ public class WindowsServiceVerifyTests {
     static HelloProbeResult Hello(string name = Id, string? version = "1.0.0") =>
         new(true, HelloProtocol.CurrentVersion, version, name);
 
-    WindowsServiceVerify Verify(FakeManager manager, Func<HelloProbeResult>? hello = null, bool viable = true,
+    GenericServiceVerify Verify(FakeManager manager, Func<HelloProbeResult>? hello = null, bool viable = true,
             Func<string, IReadOnlyDictionary<string, string>?>? unitEnv = null, FakeFence? fence = null) =>
         new(Daemons.Store, manager,
             id => id == Id ? (manager.Running ? DaemonPid : null) : manager.OldRunning ? OldDaemonPid : null,
@@ -136,7 +137,7 @@ public class WindowsServiceVerifyTests {
     public async Task A_pid_that_changes_between_readings_is_never_confirmed() {
         var manager = new FakeManager();
         var reads   = 0;
-        var verify  = new WindowsServiceVerify(Daemons.Store, manager,
+        var verify  = new GenericServiceVerify(Daemons.Store, manager,
             _ => manager.Running ? (reads++ % 2 == 0 ? DaemonPid : DaemonPid + 1) : null,
             (_, _) => Task.FromResult(manager.Running ? Hello() : new HelloProbeResult(false, null, null, null)),
             TimeProvider.System, () => true, ShortBudget);
@@ -377,6 +378,30 @@ public class WindowsServiceVerifyTests {
         var exit = await Verify(manager).StartVerifiedAsync(Id);
 
         await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    /// <summary>A supervisor that cannot say whether the unit exists — systemd without a user bus — gets no
+    /// install over it, not even with --replace.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task An_install_whose_unit_state_is_unknown_is_contended_and_touches_nothing(bool replace) {
+        var manager = new FakeManager { Unanswered = true };
+
+        var exit = await Verify(manager).InstallVerifiedAsync(Spec(), replace, expectedVersion: null);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
+        await Assert.That(manager.Calls).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_verified_start_whose_unit_state_is_unknown_is_contended_and_touches_nothing() {
+        var manager = new FakeManager { Unanswered = true };
+
+        var exit = await Verify(manager).StartVerifiedAsync(Id);
+
+        await Assert.That(exit).IsEqualTo(VerifyExit.Contended);
         await Assert.That(manager.Calls).IsEmpty();
     }
 }

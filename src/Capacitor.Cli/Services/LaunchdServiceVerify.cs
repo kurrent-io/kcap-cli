@@ -5,7 +5,7 @@ using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Services;
 
-/// <summary>Coded, stable exit codes for the <see cref="ServiceVerify"/> transaction engine.
+/// <summary>Coded, stable exit codes for the <see cref="LaunchdServiceVerify"/> transaction engine.
 /// Every non-<see cref="Ok"/> member has a matching stderr token defined beside it.</summary>
 public static class VerifyExit {
     public const int Ok = 0;
@@ -81,7 +81,7 @@ public static class VerifyExit {
     public const string RetireRefusedToken = "verify_retire_refused";
 }
 
-/// <summary>Why <see cref="ServiceVerify.EvaluateStartGate"/> refused a gated start. Reported on
+/// <summary>Why <see cref="LaunchdServiceVerify.EvaluateStartGate"/> refused a gated start. Reported on
 /// stderr as <c>start_gate_reason=&lt;snake_case&gt;</c> beside <see cref="VerifyExit.StartGateToken"/>.</summary>
 internal enum StartGateReason { DirectiveMissing, DirectiveInvalid, IdentityMismatch, ForeignBinary, PackageInconsistent, EvidenceUnreadable }
 
@@ -93,7 +93,7 @@ internal enum StartGateReason { DirectiveMissing, DirectiveInvalid, IdentityMism
 /// probe, hello probe, clock, profile viability) make every case drivable without shelling out to
 /// <c>launchctl</c>.
 /// </summary>
-sealed class ServiceVerify(
+sealed class LaunchdServiceVerify(
     DaemonStore store,
     ConfigRoot config,
     IVerifyServiceManager manager,

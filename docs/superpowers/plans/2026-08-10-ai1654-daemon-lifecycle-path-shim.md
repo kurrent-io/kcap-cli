@@ -462,9 +462,9 @@ static class HelloProbe {
 Spec §3.4 `--verify`. One process: marker → mutate → ownership+readiness → final recheck → commit, or rollback to the verified-safe failure state. Engine is a class with injectable seams so every §7 case is drivable without launchctl.
 
 **Files:**
-- Create: `src/Capacitor.Cli/Services/ServiceVerify.cs`
+- Create: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs`
 - Modify: `src/Capacitor.Cli/Commands/DaemonCommands.cs` (`case "start"` honors `--verify`)
-- Test: `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyStartTests.cs`
+- Test: `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyStartTests.cs`
 
 **Interfaces (Produces):**
 ```csharp
@@ -480,7 +480,7 @@ public static class VerifyExit {          // coded, stable; stderr carries the t
     public const int RestoreVerification = 27;
 }
 /// Injectable clock + seams; defaults are production.
-sealed class ServiceVerify(
+sealed class LaunchdServiceVerify(
     IServiceManager manager,
     Func<string, int?> validatedDaemonPid,                 // DaemonPidProbe.ValidatedPid
     Func<string, TimeSpan, Task<HelloProbeResult>> hello,  // HelloProbe.RunAsync
@@ -522,7 +522,7 @@ forward cutoff hit → rollback within reserve:
     else → keep marker; return RestoreVerification
 ```
 
-Wire `case "start"`: `--verify` present → `new ServiceVerify(manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync, TimeProvider.System).StartVerifiedAsync(id)` exit code; stderr gets the coded token (`verify_readiness_timeout` etc. — one constant string per `VerifyExit` member, defined next to it).
+Wire `case "start"`: `--verify` present → `new LaunchdServiceVerify(manager, DaemonPidProbe.ValidatedPid, HelloProbe.RunAsync, TimeProvider.System).StartVerifiedAsync(id)` exit code; stderr gets the coded token (`verify_readiness_timeout` etc. — one constant string per `VerifyExit` member, defined next to it).
 - [ ] **Step 4: Run tests; PASS. Publish AOT check.**
 - [ ] **Step 5: Commit** — `feat: service start --verify transaction`
 
@@ -531,10 +531,10 @@ Wire `case "start"`: `--verify` present → `new ServiceVerify(manager, DaemonPi
 Spec §3.4: viability inside, classifier-gated initial bootout, write only on positive `Absent`, expected-version hello validation, final on-disk fingerprint recheck, verified-safe failure state = no label + no file.
 
 **Files:**
-- Modify: `src/Capacitor.Cli/Services/ServiceVerify.cs` (`InstallVerifiedAsync`, `replace:false` path)
+- Modify: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs` (`InstallVerifiedAsync`, `replace:false` path)
 - Modify: `src/Capacitor.Cli/Services/LaunchdServiceManager.cs` (split `Install` so the engine can drive bootout/write/bootstrap as separate steps: add `void WriteAndBootstrap(ServiceSpec spec)` = `WriteUnitFiles` + bootstrap only, no leading bootout — the engine owns the bootout via classifier)
 - Modify: `src/Capacitor.Cli/Commands/DaemonCommands.cs` (`ServiceInstall` honors `--verify`; computes `expectedVersion` from its own `AssemblyInformationalVersion` — same attribute `--version` prints)
-- Test: `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyInstallTests.cs`
+- Test: `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyInstallTests.cs`
 
 - [ ] **Step 1: Write failing tests:**
   - **Viability aborts before anything:** `installBinaryPath` seam returns null → exit `Viability`; fake manager records zero calls; no marker file.
@@ -571,9 +571,9 @@ Spec §3.4 `--replace` + marker recovery authority. Also the leftover-marker sel
 
 **Files:**
 - Create: `src/Capacitor.Cli/Services/DaemonKill.cs` (raw-kill helper below `StopByName`)
-- Modify: `src/Capacitor.Cli/Services/ServiceVerify.cs` (`replace:true` matrix + entry-time marker recovery)
+- Modify: `src/Capacitor.Cli/Services/LaunchdServiceVerify.cs` (`replace:true` matrix + entry-time marker recovery)
 - Modify: `src/Capacitor.Cli/Commands/DaemonCommands.cs` (`--replace` flag)
-- Test: `test/Capacitor.Cli.Tests.Unit/Services/ServiceVerifyReplaceTests.cs`
+- Test: `test/Capacitor.Cli.Tests.Unit/Services/LaunchdServiceVerifyReplaceTests.cs`
 
 **Interfaces (Produces):**
 ```csharp
@@ -602,12 +602,12 @@ static class DaemonKill {
 Spec §7 "parent death & stdio". Process-lifetime-shaped guarantees need real processes. Model on the existing `ProcessRunnerTests` (app test project) which already drives real children.
 
 **Files:**
-- Test: `test/Capacitor.Cli.Tests.Integration/ServiceVerifyProcessTests.cs`
+- Test: `test/Capacitor.Cli.Tests.Integration/LaunchdServiceVerifyProcessTests.cs`
 
 - [ ] **Step 1: Write the tests.** These do NOT run launchctl: they exercise (a) a child `kcap`-like process (use the test-host binary trick: spawn `dotnet` running a tiny inline C# script is NOT available — instead spawn the *built CLI* with a `--verify` invocation against a temp `DaemonLockPaths` dir where the transaction will fail fast on viability; assert the child completes and writes its coded stderr even when the parent kills its own handles first). Concretely:
   - Spawn built CLI (`dotnet run --project src/Capacitor.Cli … -- daemon service start --name ptest --verify` with `KCAP_CONFIG_DIR`+lock-dir env pointed at temp) with redirected stdio; close/dispose our ends of the pipes immediately; assert the process still exits (no hang, no crash from EPIPE) with a coded non-zero exit.
   - Same but kill the intermediate shell (`/bin/sh -c 'exec …'` wrapper as the "parent") after 200 ms; assert the CLI child completes and the service lock file is released (probe `IsHeld` false within 30 s).
-- [ ] **Step 2: Run; expect failures if `Say()` isn't broken-pipe-safe — fix in `ServiceVerify` until green.**
+- [ ] **Step 2: Run; expect failures if `Say()` isn't broken-pipe-safe — fix in `LaunchdServiceVerify` until green.**
 - [ ] **Step 3: Commit** — `test: verify transaction survives parent death and closed stdio`
 
 ### Task 13: Daemon deliberate-refusal exit codes

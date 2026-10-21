@@ -10,7 +10,7 @@ namespace Capacitor.Cli.Tests.Unit.Services;
 /// same transaction, only when it is pinned to the same profile, and a live daemon under the new
 /// name is a collision rather than a takeover.
 /// </summary>
-public class ServiceVerifyRetireTests {
+public class LaunchdServiceVerifyRetireTests {
     [TempHome] public required TempHome Home { get; init; }
 
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
@@ -35,7 +35,7 @@ public class ServiceVerifyRetireTests {
         </dict></plist>
         """;
 
-    /// <summary>Same state machine as ServiceVerifyInstallTests' fake, plus the retired label's own
+    /// <summary>Same state machine as LaunchdServiceVerifyInstallTests' fake, plus the retired label's own
     /// presence flag so Query answers per id.</summary>
     sealed class FakeServiceManager(UserHome home) : IVerifyServiceManager {
         public string UnitPath(string serviceId) => LaunchdUnit.PlistPath(home, serviceId);
@@ -143,7 +143,7 @@ public class ServiceVerifyRetireTests {
             ? new HelloProbeResult(true, 1, ExpectedVersion, NewId)
             : new HelloProbeResult(false, null, null, null));
 
-    ServiceVerify Sut(
+    LaunchdServiceVerify Sut(
             FakeServiceManager manager, string? oldPlist, Func<string, int?>? validatedPid = null, FakeFence? fence = null,
             Func<string, TimeSpan, Task>? endDaemon = null) =>
         new(Daemons.Store, Config.Root, manager,
@@ -154,7 +154,7 @@ public class ServiceVerifyRetireTests {
             acquireFence: (fence ?? new FakeFence(manager)).AcquireAsync,
             endDaemon: endDaemon);
 
-    /// <summary>Same drive loop as ServiceVerifyInstallTests: Task.Delay(interval, time, ct)'s
+    /// <summary>Same drive loop as LaunchdServiceVerifyInstallTests: Task.Delay(interval, time, ct)'s
     /// continuation resumes synchronously inside Advance(), so a tight Advance-loop reliably steps
     /// a multi-iteration poll to completion without any real waiting.</summary>
     static async Task<int> Drive(Task<int> task, FakeTimeProvider time, TimeSpan step) {
@@ -179,7 +179,7 @@ public class ServiceVerifyRetireTests {
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
         var time = new FakeTimeProvider();
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null,
             (_, _) => Task.FromResult(new HelloProbeResult(false, null, null, null)),
             time,
@@ -311,7 +311,7 @@ public class ServiceVerifyRetireTests {
     public async Task An_unreadable_retired_unit_is_refused_untouched() {
         using var err = ConsoleOutput.StartErrorCapture();
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello(manager), TimeProvider.System,
             readPlist: path => path == manager.UnitPath(OldId) ? null : OwnPlistContent,
             plistExists: _ => true,
@@ -337,7 +337,7 @@ public class ServiceVerifyRetireTests {
                 ? new HelloProbeResult(true, 1, ExpectedVersion, OldId)
                 : new HelloProbeResult(false, null, null, null));
 
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello, time,
             forwardBudget: TimeSpan.FromSeconds(2),
             readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,
@@ -451,7 +451,7 @@ public class ServiceVerifyRetireTests {
         var manager = new FakeServiceManager(Home) { OldUnitInstalled = true };
         var time    = new FakeTimeProvider();
         var waits   = new List<TimeSpan>();
-        var sut = new ServiceVerify(Daemons.Store, Config.Root, manager,
+        var sut = new LaunchdServiceVerify(Daemons.Store, Config.Root, manager,
             id => id == NewId && manager.Bootstrapped ? 4242 : null, Hello(manager), time,
             forwardBudget: TimeSpan.FromSeconds(forwardSeconds),
             readPlist: path => path == manager.UnitPath(OldId) ? OldPlist("mine") : OwnPlistContent,

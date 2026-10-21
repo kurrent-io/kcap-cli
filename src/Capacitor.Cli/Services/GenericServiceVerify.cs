@@ -4,16 +4,16 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Services;
 
 /// <summary>
-/// The <c>--verify</c> contract on a Windows Scheduled Task: mutate, then prove the service's own daemon
-/// answers a hello under the right name, protocol and version before reporting success, and undo the
-/// mutation when it does not. Exit codes and tokens are <see cref="VerifyExit"/>'s, so the desktop app
-/// classifies a Windows outcome exactly as a launchd one.
+/// The <c>--verify</c> contract for a supervisor whose <see cref="IServiceManager.Query"/> reports the
+/// daemon's own pid — a Windows Scheduled Task or a systemd user unit: mutate, then prove that daemon
+/// answers a hello under the right name, protocol and version, and undo the mutation when it does not.
+/// Exit codes and tokens are <see cref="VerifyExit"/>'s, so the desktop app classifies the outcome
+/// exactly as a launchd one.
 ///
-/// <para>Smaller than the launchd engine because a task has no loaded-but-stale definition to boot
-/// out: <c>schtasks /Create /F</c> replaces the registration outright, and stopping ends the wrapper
-/// and the daemon together.</para>
+/// <para>Smaller than the launchd engine because neither supervisor keeps a loaded-but-stale definition
+/// to boot out: registering replaces the unit outright, and stopping ends the daemon with it.</para>
 /// </summary>
-sealed class WindowsServiceVerify(
+sealed class GenericServiceVerify(
         DaemonStore store,
         IServiceManager manager,
         Func<string, int?> validatedDaemonPid,
@@ -28,7 +28,9 @@ sealed class WindowsServiceVerify(
     static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(500);
     static readonly TimeSpan KillWait     = TimeSpan.FromSeconds(5);
 
-    readonly TimeSpan _forwardBudget = forwardBudget ?? ServiceVerify.DefaultForwardBudget;
+    static readonly TimeSpan DefaultForwardBudget = TimeSpan.FromSeconds(20);
+
+    readonly TimeSpan _forwardBudget = forwardBudget ?? DefaultForwardBudget;
 
     readonly Func<string, CancellationToken, Task<AdmissionFenceAcquireResult>> _acquireFence =
         acquireFence ?? ((name, ct) => AdmissionFenceClient.AcquireAsync(store, name, FenceWait, time, ct));
@@ -64,6 +66,7 @@ sealed class WindowsServiceVerify(
             return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
         var pre = manager.Query(id);
+        if (pre.Probe == LabelProbe.Unknown) return Unanswered(id);
         if (!replace && (pre.Probe == LabelProbe.Loaded || pre.UnitPresent))
             return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
@@ -109,9 +112,9 @@ sealed class WindowsServiceVerify(
     }
 
     /// <summary>
-    /// Proves the task a rename leaves behind is this profile's and, when its daemon runs, takes that
-    /// daemon's admission fence, before anything changes. Uninstalling the task kills the daemon, so one
-    /// that is busy, or cannot be fenced, is refused; so is an installed task whose wrapper cannot be read.
+    /// Proves the unit a rename leaves behind is this profile's and, when its daemon runs, takes that
+    /// daemon's admission fence, before anything changes. Uninstalling the unit kills the daemon, so one
+    /// that is busy, or cannot be fenced, is refused; so is an installed unit whose environment cannot be read.
     /// </summary>
     async Task<(int? Exit, bool Present, IAdmissionFenceSession? Fence)> PrepareRetireAsync(string retireId, ServiceSpec spec) {
         ServiceQuery old;
@@ -148,7 +151,9 @@ sealed class WindowsServiceVerify(
         using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, LockWait, time);
         if (txn is null) return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
 
-        if (manager.Query(id).Probe != LabelProbe.Loaded) {
+        var probe = manager.Query(id).Probe;
+        if (probe == LabelProbe.Unknown) return Unanswered(id);
+        if (probe != LabelProbe.Loaded) {
             Say($"Service '{id}' is not installed.");
             return 1;
         }
@@ -181,7 +186,7 @@ sealed class WindowsServiceVerify(
         await ReadyPidAsync(id, expectedVersion) is { } pid && await ReadyPidAsync(id, expectedVersion) == pid;
 
     // The same four legs the launchd engine requires: a well-formed hello, from this name, on the
-    // current protocol and expected version, and from the daemon the task itself runs.
+    // current protocol and expected version, and from the daemon the supervisor itself runs.
     async Task<int?> ReadyPidAsync(string id, string? expectedVersion) {
         var h = await hello(id, PollInterval * 4);
         if (!h.WellFormed || h.DaemonName != id || h.ProtocolVersion != HelloProtocol.CurrentVersion) return null;
@@ -216,6 +221,12 @@ sealed class WindowsServiceVerify(
     static int RetireRefusal(string reason) {
         Say($"retire_reason={reason}");
         return Fail(VerifyExit.RetireRefused, VerifyExit.RetireRefusedToken);
+    }
+
+    // Nothing is known about the unit, so neither installing over it nor starting it is safe to attempt.
+    int Unanswered(string id) {
+        Say($"query: {manager.Describe()} did not report the state of '{id}'");
+        return Fail(VerifyExit.Contended, VerifyExit.ContendedToken);
     }
 
     static int Fail(int exit, string token) {

@@ -3,23 +3,14 @@ using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-/// <summary>`install --verify` runs on launchd and on a Windows Scheduled Task; systemd reports no job
-/// pid to verify against, so it gets a clear rejection rather than a deep failure inside a transaction.</summary>
+/// <summary>Flag combinations `install` refuses before any service manager is called.</summary>
 internal sealed class DaemonCommandsServiceInstallTests {
     [TempDaemonPaths] public required TempDaemonStore Daemons { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome] public required TempHome Home { get; init; }
 
-    [Test]
-    public async Task Verify_flag_is_rejected_on_a_non_launchd_manager() {
-        var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--verify"], true);
-        await Assert.That(exit).IsEqualTo(1);
-    }
-
-    /// <summary>--replace only has meaning inside the verify transaction engine (it selects
-    /// ServiceVerify.InstallVerifiedAsync's ownership matrix) — a plain install has no transaction
-    /// to hand it to, so the combination is rejected before even reaching the platform gate (asserted
-    /// here on systemd, which would otherwise reject for a different reason).</summary>
+    /// <summary>--replace only has meaning inside the verify transaction engine (it selects the
+    /// ownership matrix) — a plain install has no transaction to hand it to.</summary>
     [Test]
     public async Task Replace_without_verify_is_rejected() {
         var exit = await new DaemonServiceCommands(Daemons.Store, Config.Root, Resolutions.None(Config.Root), new SystemdServiceManager(Home), "test-id", Home, TimeProvider.System).Install(["--replace"], true);

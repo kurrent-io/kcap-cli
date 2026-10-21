@@ -714,7 +714,7 @@ closes it.
   discovery moving the selection from a legacy-only A to B leave A's
   credential in `tokens/A.json`; `active_profile` is untouched by a
   known-server sign-in.
-- `ServiceVerify`: `--retire-profile` match, mismatch, unit with no
+- `LaunchdServiceVerify`: `--retire-profile` match, mismatch, unit with no
   `KCAP_PROFILE`, absent, unreadable, and the unchanged default; `--activate`
   refused without `--replace --verify` and with an empty or unset
   `KCAP_EXPECT_SERVER_URL`; with `--activate`: `expect_server_mismatch` and
