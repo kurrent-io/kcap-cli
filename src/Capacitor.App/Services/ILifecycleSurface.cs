@@ -13,6 +13,9 @@ public interface ILifecycleSurface {
 
     /// Repair-affordance surfaces — never a silent mutation.
     void Attention(string message);
+
+    /// Takes back an Attention line whose condition has cleared, if it is still the one shown.
+    void Withdraw(string message) { }
 }
 
 /// <param name="Kind">One of the Kind* consts below.</param>

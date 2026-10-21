@@ -2,6 +2,7 @@ using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
@@ -1502,6 +1503,229 @@ public class DaemonLifecycleControllerTests {
     /// 10's controller tests drive instead of a raw IKcapCli mutation call. Defaults to an
     /// immediate Succeeded so tests that don't care about the mutation's own outcome (most of the
     /// "no mutation happens" tests never even call this) aren't forced to script one.
+    static DaemonStatusDto ForeignDaemon(string server = "https://norton.kcap.ai:443", string? profile = "norton", int active = 0) =>
+        FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: server, profile: profile, active: active);
+
+    /// A daemon attached by name that serves another server or profile is reported, and an idle one is offered
+    /// the ordinary Replace, which the lane runs for the app's own profile.
+    [Test]
+    [Arguments("https://norton.kcap.ai:443", "norton", "Daemon daemon-a is running for norton.kcap.ai, profile norton, not kcap.example.com, profile default.")]
+    [Arguments("https://kcap.example.com:443", "norton", "Daemon daemon-a is running for profile norton, not profile default.")]
+    public async Task A_daemon_serving_another_identity_is_reported_and_offered_a_replace(string server, string profile, string message) {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server, profile));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace");
+        // The report carries the command too, so a declined or failed replace still leaves a fix.
+        await Assert.That(h.Surface.AttentionMessages.Any(m => m.StartsWith(message, StringComparison.Ordinal) && m.Contains("kcap daemon service", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(h.Lane.Requests.Single().Profile).IsEqualTo("default");
+    }
+
+    /// A reconnect while the offer waits on the gate is checked afresh rather than suppressed as already reported.
+    [Test]
+    public async Task A_reconnect_while_the_offer_waits_for_the_gate_still_gets_one() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        var running = false;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: running ? "running" : "installed"));
+        var release = new TaskCompletionSource<MutationOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+        h.Lane.Behavior = (_, _) => Interlocked.Increment(ref calls) == 1
+            ? release.Task
+            : Task.FromResult<MutationOutcome>(new MutationOutcome.Failed(24, "verify_readiness_timeout", RecoverySurface.Attention));
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+        var startTask = h.Controller.StartActionAsync(CancellationToken.None);
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "a Start holding the gate");
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        h.PushConnecting();
+        h.PushConnected();
+        await Task.Delay(50);
+        running = true;
+        release.SetResult(new MutationOutcome.Failed(24, "verify_readiness_timeout", RecoverySurface.Attention));
+        await startTask;
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Any(p => p.Kind == LifecyclePrompt.KindRepair), what: "the replace offer");
+        await Assert.That(h.Surface.AttentionMessages.Count(m => m.StartsWith("Daemon daemon-a is running", StringComparison.Ordinal))).IsEqualTo(1);
+    }
+
+    /// Where the platform has no verified replace, a mismatch is reported with the command to run by hand.
+    [Test]
+    public async Task Without_a_verified_replace_the_mismatch_is_only_reported() {
+        if (AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single()).Contains("kcap daemon service uninstall --name daemon-a");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// A busy daemon is reported but not offered a replace, which would end its agents; once they finish,
+    /// without a reconnect, the offer follows.
+    [Test]
+    public async Task A_busy_foreign_daemon_is_offered_a_replace_once_its_agents_finish() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 2));
+        h.PushConnected();
+
+        const string held = "The app offers to replace it once its 2 running agents finish.";
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Any(m => m.EndsWith(held, StringComparison.Ordinal)), what: "the report");
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 0));
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the replace once idle");
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
+    }
+
+    /// A mismatch the daemon no longer has is taken back from wherever the report still shows, the tray included.
+    [Test]
+    public async Task A_resolved_mismatch_withdraws_its_report() {
+        await using var h = new Harness(autoActionsPermanentlyClosed: true);
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        var report = h.Surface.AttentionMessages.Single();
+
+        h.PushConnecting();
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server: "https://kcap.example.com:443", profile: "default"));
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Withdrawn.Count > 0, what: "the withdrawal");
+        await Assert.That(h.Surface.Withdrawn.Single()).IsEqualTo(report);
+    }
+
+    /// A launch the daemon has admitted but not yet listed is work in progress: no replace is offered over it.
+    [Test]
+    public async Task A_daemon_still_starting_a_launch_is_not_offered_a_replace() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 0) with { Busy = true });
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Task.Delay(50);
+        await Assert.That(h.Surface.AttentionMessages.Any(m => m.Contains("The app offers to replace it once", StringComparison.Ordinal))).IsTrue();
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+    }
+
+    /// Agents that start while the prompt is open cancel the replace it was answered for.
+    [Test]
+    public async Task Agents_starting_while_the_prompt_is_open_cancel_the_replace() {
+        if (!AttachedIdentity.SupportsVerifiedReplace) return;
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(unitPresent: true, state: "running"));
+        h.Surface.ConfirmBehavior = (_, _) => {
+            h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 1));
+            return Task.FromResult(true);
+        };
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.StatusMessages.Any(m => m.StartsWith("Agents started", StringComparison.Ordinal)), what: "the cancel");
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// Under a server override the resolution names no profile, so no request can be built: the report says
+    /// how to fix it by hand. Auto actions closed after an abandoned wizard report the same way.
+    [Test]
+    [Arguments(true, false)]
+    [Arguments(false, true)]
+    public async Task Without_a_profile_or_with_auto_actions_closed_the_mismatch_is_only_reported(bool urlOverride, bool closed) {
+        await using var h = new Harness(autoActionsPermanentlyClosed: closed);
+        if (urlOverride) h.ProfileName = null;
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon());
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        await Assert.That(h.Surface.AttentionMessages.Single())
+            .Contains($"--name daemon-a --profile {(urlOverride ? "<profile>" : "default")}");
+        await Assert.That(h.Surface.AttentionMessages.Single().Contains("with <profile> replaced", StringComparison.Ordinal)).IsEqualTo(urlOverride);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    /// An older daemon reports no profile, and one that matches on name and server is then accepted;
+    /// a reattach to the same mismatch does not report it again.
+    [Test]
+    public async Task A_daemon_matching_what_it_reports_is_accepted_and_a_mismatch_is_reported_once() {
+        await using var h = new Harness();
+        h.Start();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(server: "https://kcap.example.com:443", profile: null));
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Cli.StatusCallCount >= 1, what: "the reconciliation");
+        await Assert.That(h.Surface.AttentionMessages).IsEmpty();
+
+        h.Client.SnapshotsSubject.OnNext(ForeignDaemon(active: 1));
+        h.PushConnected();
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count > 0, what: "the report");
+        h.PushConnecting();
+        h.PushConnected();
+        await Task.Delay(50);
+        await Assert.That(h.Surface.AttentionMessages.Count).IsEqualTo(1);
+    }
+
+    /// The command offered by hand names the daemon by its service id and the profile as the named shell
+    /// reads it, and asks for the verified replace only where the platform supports it. An app under a server
+    /// override has no profile, so the daemon must be given one that resolves the override's server.
+    [Test]
+    [Arguments("daemon-a", "default", false, true,
+        "`kcap daemon service install --replace --verify --name daemon-a --profile default` in a shell ")]
+    [Arguments("-My Laptop", "it's mine", false, false,
+        "`kcap daemon service uninstall --name my-laptop`, then `kcap daemon service install --name my-laptop --profile 'it'\\''s mine'` in a shell ")]
+    [Arguments("my laptop", "it's mine", true, true,
+        "`kcap daemon service install --replace --verify --name 'my laptop' --profile 'it''s mine'` in PowerShell ")]
+    [Arguments("laptop", "it\u2019s", true, false,
+        "`kcap daemon service uninstall --name laptop`, then `kcap daemon service install --name laptop --profile 'it\u2019\u2019s'` in PowerShell ")]
+    [Arguments("laptop", null, false, true,
+        "--profile <profile>`, with <profile> replaced by a profile for the server this app uses, in a shell ")]
+    public async Task The_manual_repair_command_is_one_the_named_shell_runs(string name, string? profile, bool windows, bool verified, string expected) =>
+        await Assert.That(AttachedIdentity.ManualRepair(name, profile, windows, verified)).Contains(expected);
+
+    /// A configured name the socket reduces to the daemon's own is the same daemon, and two servers on one host
+    /// are told apart in full.
+    [Test]
+    public async Task Names_compare_as_the_socket_does_and_servers_on_one_host_read_in_full() {
+        var sameName = FakeDaemonClientService.Snap(daemon: "my-laptop", serverUrl: "https://kcap.example.com:443").Daemon;
+        await Assert.That(AttachedIdentity.Mismatch(sameName, "My Laptop", "https://kcap.example.com:443", null)).IsNull();
+
+        var otherPort = FakeDaemonClientService.Snap(daemon: "daemon-a", serverUrl: "https://kcap.example.com:8443").Daemon;
+        await Assert.That(AttachedIdentity.Mismatch(otherPort, "daemon-a", "https://kcap.example.com:443", null))
+            .IsEqualTo("Daemon daemon-a is running for https://kcap.example.com:8443, not https://kcap.example.com:443.");
+    }
+
     sealed class FakeMutationLane {
         public readonly List<MutationRequest> Requests = [];
         public Func<MutationRequest, CancellationToken, Task<MutationOutcome>> Behavior =
@@ -1548,7 +1772,8 @@ public class DaemonLifecycleControllerTests {
             Client.StatusSubject.OnNext(new AttachStatus(AttachState.Unreachable, reason, null, daemonVersion));
 
         public void PushSnapshot(int activeAgents) =>
-            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents));
+            Client.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(daemon: "daemon-a", active: activeAgents,
+                serverUrl: CanonicalServer ?? "http://localhost:9999"));
 
         public bool Background() { bool? v = null; using (Controller.BackgroundPriority.Subscribe(x => v = x)) { } return v ?? false; }
         public ReloadState? Reload() { ReloadState? v = null; using (Controller.ReloadState.Subscribe(x => v = x)) { } return v; }
