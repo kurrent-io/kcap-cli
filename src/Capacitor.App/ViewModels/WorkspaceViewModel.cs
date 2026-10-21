@@ -414,9 +414,9 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         ActiveTab = WorkspaceTab.Chat;
     }
 
-    /// Claude Code's own transcript, not a journal the daemon writes for it.
+    /// Claude Code's own transcript, known and not a journal the daemon writes for it.
     static bool FilesSubagentsBesideItself(AgentStatusDto dto) =>
-        dto is { Vendor: "claude" } && dto.TranscriptFormat != TranscriptFormats.Envelopes;
+        dto is { Vendor: "claude", TranscriptPath: not null } && dto.TranscriptFormat != TranscriptFormats.Envelopes;
 
     void CloseSubagent() => ReplaceSubagent(null);
 
