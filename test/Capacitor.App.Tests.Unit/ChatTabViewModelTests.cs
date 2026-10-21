@@ -2871,6 +2871,36 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_local_command_result_settles_one_send_without_a_chat_row() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                const string result = """{"type":"system","subtype":"local_command","commandRun":{"command":"rename","args":"receipt check"},"content":"<local-command-stdout>Session renamed to: receipt check</local-command-stdout>"}""";
+                var path = Tmp.CreateFile("local-command.jsonl", [result]);
+                await h.PushAsync(Dto(path));
+                for (var i = 0; i < 2; i++) {
+                    h.Chat.ComposerText = "/rename receipt check";
+                    var send = h.Chat.SendCommand.Execute().ToTask();
+                    input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                    await send;
+                }
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+                File.AppendAllText(path, """{"type":"system","subtype":"local_command","content":"<command-name>/rename</command-name><command-args>receipt check</command-args>"}""" + "\n");
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                await Assert.That(h.Chat.Items).IsEmpty();
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items).IsEmpty();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_slash_command_echo_acknowledges_input_without_a_display_row() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
