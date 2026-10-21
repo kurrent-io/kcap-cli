@@ -49,14 +49,17 @@ public class MuseModelCatalogTests {
         await Assert.That(options[0].Label).IsEqualTo("old");
     }
 
+    /// <summary>The first file by name owns a shared id even when a later file would sort it earlier:
+    /// the row is chosen before the ordering is applied, not after.</summary>
     [Test]
     public async Task Several_profiles_merge_by_id_in_file_name_order() {
-        Write("b.json", """{"schema_version":2,"rows":[{"model_id":"shared","display_label":"From b","visibility":"visible","release_date":"2026-01-01"}]}""");
-        Write("a.json", """{"schema_version":2,"rows":[{"model_id":"shared","display_label":"From a","visibility":"visible","release_date":"2026-01-01"},{"model_id":"only-a","display_label":"Only a","visibility":"visible","release_date":"2025-01-01"}]}""");
+        Write("b.json", """{"schema_version":2,"rows":[{"model_id":"shared","display_label":"From b","visibility":"visible","release_date":"2026-12-01","display_order":1}]}""");
+        Write("a.json", """{"schema_version":2,"rows":[{"model_id":"shared","display_label":"From a","visibility":"visible","release_date":"2026-01-01","display_order":20},{"model_id":"only-a","display_label":"Only a","visibility":"visible","release_date":"2025-01-01","display_order":2}]}""");
 
         var options = MuseModelCatalog.Read(Dir)!;
 
-        await Assert.That(options.Select(o => o.Value)).IsEquivalentTo(["shared", "only-a"], CollectionOrdering.Matching);
+        await Assert.That(options.Select(o => o.Value)).IsEquivalentTo(["only-a", "shared"], CollectionOrdering.Matching);
+        await Assert.That(options.Single(o => o.Value == "shared").Label).IsEqualTo("From a");
         await Assert.That(MuseModelCatalog.Files(Dir).Select(f => Path.GetFileName(f)!)).IsEquivalentTo(["a.json", "b.json"], CollectionOrdering.Matching);
     }
 

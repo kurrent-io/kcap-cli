@@ -19,7 +19,8 @@ public static class MuseModelCatalog {
     }
 
     /// <summary>Null when no file yields a visible model, never an empty list: an empty list would
-    /// suppress the server's catalog while saying nothing about what Muse can launch.</summary>
+    /// suppress the server's catalog while saying nothing about what Muse can launch. An id listed by
+    /// several profiles takes its row from the first file by name.</summary>
     public static IReadOnlyList<VendorModelOption>? Read(string dir) {
         var rows = new List<Row>();
         foreach (var file in Files(dir)) {
@@ -31,15 +32,14 @@ public static class MuseModelCatalog {
 
         if (rows.Count == 0) return null;
 
-        var seen    = new HashSet<string>(StringComparer.Ordinal);
-        var options = rows
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return rows
+            .Where(r => seen.Add(r.ModelId))
             .OrderBy(r => r.DisplayOrder ?? int.MaxValue)
             .ThenByDescending(r => r.ReleaseDate ?? "", StringComparer.Ordinal)
             .ThenBy(r => r.ModelId, StringComparer.Ordinal)
-            .Where(r => seen.Add(r.ModelId))
             .Select(r => new VendorModelOption(r.ModelId, r.Label))
             .ToArray();
-        return options.Length == 0 ? null : options;
     }
 
     /// <summary>Appends the visible rows of one document; a document of another schema, or one that is
