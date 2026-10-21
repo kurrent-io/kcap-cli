@@ -8,17 +8,13 @@ namespace Capacitor.Cli.Core.Harness.Codex;
 public sealed class CodexChatRules : IChatDisplayRules {
     public static readonly CodexChatRules Instance = new();
 
-    static readonly string[] InjectedPreludes = [
-        "<environment_context>", "# AGENTS.md instructions", "<turn_aborted>", "<user_instructions>", "<permissions instructions>",
-    ];
-
     CodexChatRules() { }
 
     public IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) =>
         raw is { Kind: AcpEventKind.UserMessage, Text: { Length: > 0 } text } ? [text] : [];
 
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) => envelope.Kind switch {
-        AcpEventKind.UserMessage when IsInjectedPrelude(envelope.Text ?? "") => null,
+        AcpEventKind.UserMessage when CodexPrelude.IsPrelude(envelope.Text ?? "", null) => null,
         AcpEventKind.AssistantText when IsAgentMessage(evt)                  => null,
         AcpEventKind.ToolCall => envelope with { ToolKind = CodexToolKinds.Of(envelope.ToolName, envelope.ToolInputJson) },
         _                     => envelope,
@@ -26,11 +22,4 @@ public sealed class CodexChatRules : IChatDisplayRules {
 
     static bool IsAgentMessage(CanonicalEvent evt) =>
         SchemaExtensions.Slug(evt.Payload, CodexExtension.Slug)?.Fields.ContainsKey(CodexExtension.AgentMessage) == true;
-
-    static bool IsInjectedPrelude(string text) {
-        var trimmed = text.TrimStart();
-        foreach (var prelude in InjectedPreludes)
-            if (trimmed.StartsWith(prelude, StringComparison.Ordinal)) return true;
-        return false;
-    }
 }
