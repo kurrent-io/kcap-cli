@@ -400,7 +400,6 @@ sealed class CodexHookCommand(
 
         var enrichedNode = JsonNode.Parse(enriched);
         var sessionId    = TryGetString(enrichedNode, "session_id");
-        if (sessionId is not null) FreezePolicySnapshot(sessionId, TryGetString(enrichedNode, "workspace_root"));
 
         // spawn-before-post. A lapsed-auth or transient/unreachable failure durably
         // spools the payload instead of dropping it (Spooled) — never AuthLapsed here, unlike the
@@ -426,6 +425,10 @@ sealed class CodexHookCommand(
         var spool = new HookSpool(config, clock.Time);
         var outcome = await _poster.PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
             sessionId: sessionId ?? "", route: "session-start/codex");
+
+        // After the post, so a fault here cannot lose the session-start record; before the stdout handshake, because
+        // Codex runs its first tool once that is written.
+        if (sessionId is not null) FreezePolicySnapshot(sessionId, TryGetString(enrichedNode, "workspace_root"));
 
         // Codex blocks on this hook's stdout — satisfy the handshake contract FIRST, and only
         // then run the best-effort watcher-ensure and the global spool drain. Routed through
