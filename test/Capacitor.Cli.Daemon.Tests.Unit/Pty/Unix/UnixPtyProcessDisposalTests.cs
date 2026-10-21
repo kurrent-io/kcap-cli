@@ -15,7 +15,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = SpawnCat(spawner);
         var       fd      = proc.MasterFdForTest;
 
         await proc.DisposeAsync().AsTask().WaitAsync(Bound);
@@ -33,7 +33,7 @@ public class UnixPtyProcessDisposalTests {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
         using var spawner = new UnixSpawnerThread();
-        var       proc    = Spawn(spawner, "/bin/cat");
+        var       proc    = SpawnCat(spawner);
         var       fd      = proc.MasterFdForTest;
 
         using var stop = new CancellationTokenSource();
@@ -84,6 +84,9 @@ public class UnixPtyProcessDisposalTests {
         await Assert.That(written).IsEqualTo(2);
         await Assert.That(reuse.WrittenBytes).IsEqualTo(2L);
     }
+
+    // Through sh: a multi-call coreutils binary (uutils) refuses the descriptor exec the PTY launcher uses.
+    static UnixPtyProcess SpawnCat(UnixSpawnerThread spawner) => Spawn(spawner, "/bin/sh", "-c", "exec cat");
 
     static UnixPtyProcess Spawn(UnixSpawnerThread spawner, string command, params string[] args)
         => UnixPtyProcess.Spawn(spawner, command, args, AppContext.BaseDirectory, TimeProvider.System);

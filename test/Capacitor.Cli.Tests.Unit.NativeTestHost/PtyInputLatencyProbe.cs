@@ -31,7 +31,8 @@ static class PtyInputLatencyProbe {
         var       ptys    = new List<IPtyProcess>(count);
 
         try {
-            for (var i = 0; i < count; i++) ptys.Add(factory.Spawn("/bin/cat", [], AppContext.BaseDirectory));
+            // Through sh: a multi-call coreutils binary (uutils) refuses the descriptor exec the PTY launcher uses.
+            for (var i = 0; i < count; i++) ptys.Add(factory.Spawn("/bin/sh", ["-c", "exec cat"], AppContext.BaseDirectory));
 
             _ = DrainAsync(ptys[0], echoes, stop.Token);
             foreach (var pty in ptys.Skip(1)) _ = DrainAsync(pty, null, stop.Token);
