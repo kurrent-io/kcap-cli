@@ -802,9 +802,6 @@ public class MainWindowViewModelTests {
         });
     }
 
-    // ---- Shell view state and rail wiring (Home/Sessions surfaces, orthogonal to
-    // CurrentWorkspace, and the rail's SelectedSessionKey tracking the open workspace) ----
-
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task OpenSession_builds_the_workspace_and_reopening_the_same_id_is_a_noop() {
