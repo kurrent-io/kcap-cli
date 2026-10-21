@@ -246,7 +246,13 @@
                  announced as actionable, but it reads the same. -->
             <Button x:Name="RunRowButton" Classes="toggle" Classes.openable="{Binding CanOpen}" IsEnabled="{Binding CanOpen}"
                     Command="{Binding $parent[views:WorkContextView].((vm:WorkContextViewModel)DataContext).OpenRunCommand}"
-                    CommandParameter="{Binding}" AutomationProperties.Name="{Binding Name}">
+                    CommandParameter="{Binding}">
+                <AutomationProperties.Name>
+                    <MultiBinding StringFormat="{}{0}, {1}">
+                        <Binding Path="Name" />
+                        <Binding Path="StateText" />
+                    </MultiBinding>
+                </AutomationProperties.Name>
                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
                     <Panel Width="12" Height="16" VerticalAlignment="Top" RenderTransform="translateY(-1.5px)">
                         <ContentControl Content="{Binding State}" ContentTemplate="{StaticResource SubagentMark}" VerticalAlignment="Center" />
