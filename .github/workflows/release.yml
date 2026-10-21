@@ -937,7 +937,7 @@ jobs:
           fi
           # JIT under hardened runtime: the signed app must still be alive after 15 s.
           SCRATCH="$(mktemp -d)"
-          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" "$APP/Contents/MacOS/kcap-desktop" &
+          KCAP_CONFIG_DIR="$SCRATCH" KCAP_APP_UPDATE_URL="http://127.0.0.1:9/" DO_NOT_TRACK=1 "$APP/Contents/MacOS/kcap-desktop" &
           APP_PID=$!
           sleep 15
           kill -0 "$APP_PID" || { echo "::error::the signed app exited within 15 s"; exit 1; }

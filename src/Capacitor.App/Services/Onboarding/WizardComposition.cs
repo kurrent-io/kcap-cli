@@ -107,7 +107,8 @@ internal static class WizardComposition {
         WizardSignInOperation.For(new OnboardingFacade(
             spec.Root, spec.TokenStore, spec.HttpFactory, spec.Proxy, spec.GitHub, spec.WorkOS, spec.Progress,
             SystemBrowser.Instance, spec.Picker, null, spec.Telemetry, spec.Endpoints,
-            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition);
+            spec.Time, spec.BeforeCommit) { ProbeWorkspace = spec.ProbeWorkspace }, spec.Profile, spec.Precondition,
+            spec.Telemetry.Funnel);
 
     /// The ONE façade a wizard run signs in through, with the consent-flip claim arming hook wired as
     /// before-commit, so a claim exists before anything durable is published.
@@ -268,12 +269,15 @@ internal static class WizardComposition {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
         };
+        var funnel = WizardFunnel.Attach(wizard, options.Bridges.Telemetry.Funnel,
+            daemon.WhenAnyValue(x => x.Satisfied, x => x.Row, (satisfied, row) => (satisfied, row == DaemonRow.AlreadyEnabled)));
         wizard.CloseRequested += signIn.EndSignUpWait;
         // The controller outlives this graph: a later wizard over it must not drive this one's enabler.
         wizard.CloseRequested += () => {
             install.Settling -= OnSettling;
             install.Settled -= OnInstallSettled;
             installStep.Detach();
+            funnel.Dispose();
         };
 
         return new WizardGraph(wizard, auth, steps, history, connect, daemon, install);

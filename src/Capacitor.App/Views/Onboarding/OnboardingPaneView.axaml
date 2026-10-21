@@ -120,6 +120,17 @@
                                 IsVisible="{Binding NextVisible}" />
                     </Grid>
 
+                    <!-- Once per device: the usage-data disclosure, until acknowledged here or on the launcher. -->
+                    <Grid x:Name="UsageNotice" ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10"
+                          IsVisible="{Binding UsageNotice.Visible, FallbackValue=False}">
+                        <TextBlock Classes="frNote" TextWrapping="Wrap" VerticalAlignment="Center"
+                                   Text="{Binding UsageNotice.Message, FallbackValue={x:Null}}" />
+                        <Button Grid.Column="1" x:Name="UsageNoticeTurnOffButton" Classes="frSecondary" Content="Turn off"
+                                Command="{Binding UsageNotice.TurnOffCommand, FallbackValue={x:Null}}" IsVisible="{Binding UsageNotice.CanTurnOff, FallbackValue=False}" VerticalAlignment="Center" />
+                        <Button Grid.Column="2" x:Name="UsageNoticeOkButton" Classes="frSecondary" Content="OK"
+                                Command="{Binding UsageNotice.AcknowledgeCommand, FallbackValue={x:Null}}" VerticalAlignment="Center" />
+                    </Grid>
+
                     <!-- Done page only: the daemon is enabled beside the steps, and its outcome lands here. -->
                     <TextBlock x:Name="LifecycleStatusText" Classes="onboardingNote" Text="{Binding Surface.StatusText}"
                                IsVisible="{Binding ShowLifecycleStatus}" />

@@ -69,10 +69,13 @@ public partial class App : Application {
     // cannot read another instance field, so the fields below name it again rather than take it.
     readonly TimeProvider _time = TimeProvider.System;
 
-    /// The wizard signs in through the CLI's own stack, which reports the signup funnel. The app
-    /// shows no privacy notice and offers no opt-out of its own, so it hands that stack a facade
-    /// that is off — nothing a wizard run does can emit.
-    readonly CliTelemetry _telemetry = CliTelemetry.Disabled(TimeProvider.System);
+    /// The app's own facade, labelled <c>desktop</c>. The CLI children it spawns stay silent under
+    /// <c>KCAP_APP_SPAWN_NO_TELEMETRY</c>, so a desktop step is never also counted as a CLI one.
+    readonly CliTelemetry _telemetry;
+
+    /// The one-time disclosure, shared by the wizard and the main window so acknowledging it in one
+    /// hides it in both.
+    readonly UsageDataNotice _usageNotice;
 
     /// Process-lifetime rather than per wizard run — a provisioning poll can outlive the window that
     /// started it, and this client degrades a transport failure but not a disposed handler. What it
@@ -86,6 +89,8 @@ public partial class App : Application {
     readonly UiScaleSetting _uiScale;
 
     public App() {
+        _telemetry   = CliTelemetry.Start(TelemetryStartup.ForDesktopApp(serverUrl: null, _endpoints.SignupUrl), _config, _time);
+        _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
         _appState = new AppStateStore(_config.Path("app-state.json"));
@@ -802,7 +807,7 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer, localStack: localStack, uiScale: _uiScale)),
+                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -931,7 +936,10 @@ public partial class App : Application {
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
-                profiles: profilesVm) { Appearance = new AppearanceSettingsViewModel(_uiScale) };
+                profiles: profilesVm) {
+                Appearance = new AppearanceSettingsViewModel(_uiScale),
+                Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
+            };
         } catch (Exception ex) {
             notifier.Notify($"Could not open settings: {ex.Message}");
             return;
@@ -1026,7 +1034,8 @@ public partial class App : Application {
             _foreignHttp.GetRequiredService<GitHubOAuthClient>(),
             _foreignHttp.GetRequiredService<WorkOSClient>(),
             profile, serverUrl,
-            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), _telemetry, _endpoints),
+            // A re-auth is not setup, so none of its sign-in reaches the setup funnel.
+            WizardComposition.BuildBridges(action => Dispatcher.UIThread.Post(action), CliTelemetry.Disabled(_time), _endpoints),
             new ConsentFlipClaims(_config),
             _appState,
             new ShellUrlOpener(),
@@ -1143,6 +1152,7 @@ public partial class App : Application {
             ProfileOverride: _serverEnv.Profile);
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
+        graph.ViewModel.UsageNotice = _usageNotice;
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
@@ -1458,7 +1468,7 @@ public partial class App : Application {
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
             LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
-            UiScaleSetting? uiScale = null) {
+            UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1489,7 +1499,7 @@ public partial class App : Application {
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
             modelCatalog: modelCatalog, uploader: uploader, appServerUrl: appServerUrl,
-            launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack };
+            launchFailed: agentId => vm?.CloseFailedLaunch(agentId)) { LocalStack = localStack, UsageNotice = usageNotice };
         if (localServer is not null) home.AttachLocalServerRecovery(localServer);
         // Same knot as home above, over the SAME `service` instance — its callbacks close over
         // `vm`, not a local, so no two-step forward-declaration is needed.
@@ -2138,6 +2148,8 @@ public partial class App : Application {
     // never skips _service's disposal); the lane goes LAST — its substrate must outlive any caller
     // still awaiting RunAsync.
     async ValueTask DisposeLifecycleAndServiceAsync() {
+        // Budgeted inside and never throws: what the app queued is shipped before the process goes.
+        await _telemetry.FlushAndClose().ConfigureAwait(false);
         await DisposeServerClientsAsync().ConfigureAwait(false);
         if (_lifecycle is not null) {
             try {
