@@ -20,7 +20,8 @@ internal static class GrokQuestions {
         var questions = new List<AcpVendorQuestion>();
 
         foreach (var q in list.EnumerateArray()) {
-            if (q.ValueKind != JsonValueKind.Object || q.Str("question") is not { Length: > 0 } text) return null;
+            if (q.ValueKind != JsonValueKind.Object || q.Str("question") is not { } text || string.IsNullOrWhiteSpace(text)) return null;
+            if (!IsOptional(q, "multiSelect", JsonValueKind.True, JsonValueKind.False)) return null;
             if (OptionsOf(q) is not { } options) return null;
 
             questions.Add(new AcpVendorQuestion(text, options, q.Bool("multiSelect") == true));
@@ -38,13 +39,18 @@ internal static class GrokQuestions {
         var options = new List<AcpVendorQuestionOption>();
 
         foreach (var o in offered.EnumerateArray()) {
-            if (o.ValueKind != JsonValueKind.Object || o.Str("label") is not { Length: > 0 } label) return null;
+            if (o.ValueKind != JsonValueKind.Object || o.Str("label") is not { } label || string.IsNullOrWhiteSpace(label)) return null;
+            if (!IsOptional(o, "description", JsonValueKind.String)) return null;
 
             options.Add(new AcpVendorQuestionOption(label, o.Str("description")));
         }
 
         return [.. options];
     }
+
+    /// <summary>True when <paramref name="name"/> is absent, null, or of one of the expected kinds.</summary>
+    static bool IsOptional(JsonElement element, string name, params JsonValueKind[] kinds) =>
+        !element.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null || kinds.Contains(value.ValueKind);
 
     // Written token by token: JsonNode values lower to generic calls that NativeAOT cannot compile.
     static JsonElement Reply(IReadOnlyList<AcpVendorQuestionAnswer>? answered) {

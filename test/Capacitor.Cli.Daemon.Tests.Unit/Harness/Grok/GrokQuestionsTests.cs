@@ -189,14 +189,47 @@ public class GrokQuestionsTests {
         await Assert.That(asked).IsEmpty();
     }
 
-    /// <summary>The card shows only the start of a long label, so two labels could look alike while
-    /// answering differently.</summary>
+    /// <summary>A question that cannot be shown as Grok meant it is never asked in some other form.</summary>
     [Test]
-    public async Task A_label_longer_than_a_card_shows_is_declined_without_asking() {
+    [Arguments("""[{"question":"   ","options":[{"label":"Red"}]}]""")]
+    [Arguments("""[{"question":"Which colour?","options":[{"label":"Red"}],"multiSelect":"yes"}]""")]
+    [Arguments("""[{"question":"Which colour?","options":[{"label":"Red","description":7}]}]""")]
+    public async Task A_malformed_question_is_declined_without_asking(string questions) {
         var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
-        var label = new string('l', 257);
 
-        var result = await bridge.HandleAsync(Ask($$"""[{"question":"Which?","options":[{"label":"{{label}}"}]}]"""), CancellationToken.None);
+        var result = await bridge.HandleAsync(Ask(questions), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+    }
+
+    /// <summary>Grok keys each answer by the question's text, so two different questions sharing a text
+    /// cannot both be answered.</summary>
+    [Test]
+    public async Task Different_questions_with_the_same_text_are_declined_without_asking() {
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
+
+        var result = await bridge.HandleAsync(Ask("""
+            [{"question":"Which colour?","options":[{"label":"Red"},{"label":"Blue"}]},
+             {"question":"Which colour?","options":[{"label":"Green"},{"label":"Yellow"}]}]
+            """), CancellationToken.None);
+
+        await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
+        await Assert.That(asked).IsEmpty();
+    }
+
+    /// <summary>The card shows only the start of a long label or description, so two options could look
+    /// alike while answering differently.</summary>
+    [Test]
+    [Arguments(257, 0)]
+    [Arguments(1, 257)]
+    public async Task An_option_longer_than_a_card_shows_is_declined_without_asking(int labelLength, int descriptionLength) {
+        var (bridge, asked) = Bridge(_ => throw new InvalidOperationException("nothing should be asked"));
+        var label       = new string('l', labelLength);
+        var description = new string('d', descriptionLength);
+
+        var result = await bridge.HandleAsync(
+            Ask($$"""[{"question":"Which?","options":[{"label":"{{label}}","description":"{{description}}"}]}]"""), CancellationToken.None);
 
         await Assert.That(Json(result)).IsEqualTo("""{"outcome":"cancelled"}""");
         await Assert.That(asked).IsEmpty();
