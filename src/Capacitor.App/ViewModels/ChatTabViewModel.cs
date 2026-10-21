@@ -446,10 +446,17 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     bool _showsActivityNote;
-    /// Failure text beside the composer. Working and starting ride the header status instead.
+    /// Failure text beside the composer.
     public bool ShowsActivityNote {
         get => _showsActivityNote;
         private set => this.RaiseAndSetIfChanged(ref _showsActivityNote, value);
+    }
+
+    bool _showsLiveNote;
+    /// Starting or working, shown beside the composer with the mascot.
+    public bool ShowsLiveNote {
+        get => _showsLiveNote;
+        private set => this.RaiseAndSetIfChanged(ref _showsLiveNote, value);
     }
 
     string _activityNote = "";
@@ -494,6 +501,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 : working && _workingSince is { } since
                     ? WorkingNote(_worked + _time.GetElapsedTime(since)) : "";
         ShowsActivityNote = _failureNote is not null && Phase != ChatTabPhase.Failed && ActivityNote.Length > 0;
+        ShowsLiveNote = !ShowsActivityNote && ActivityNote.Length > 0;
         RefreshAgentStatus();
         RefreshQueuedSend();
     }

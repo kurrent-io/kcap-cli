@@ -370,6 +370,12 @@
                            Text="{Binding ActivityNote}" ToolTip.Tip="{Binding ActivityNote}"
                            Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5"
                            TextWrapping="Wrap" MaxLines="3" TextTrimming="CharacterEllipsis" />
+                <StackPanel x:Name="ChatLiveNote" Grid.Row="2" Orientation="Horizontal" Spacing="6" Margin="8,0,14,8"
+                            IsVisible="{Binding ShowsLiveNote}">
+                    <views:OuroMascot Width="32" Height="32" Margin="0,-5" IsPlaying="{Binding ShowsLiveNote}" />
+                    <TextBlock Text="{Binding ActivityNote}" VerticalAlignment="Center"
+                               Foreground="{StaticResource KcapMutedBrush}" FontSize="13.5" />
+                </StackPanel>
 
                 <Border x:Name="ComposerCard" Classes="attachTarget" Grid.Row="3"
                         Background="{StaticResource KcapSurfaceRaisedBrush}"
