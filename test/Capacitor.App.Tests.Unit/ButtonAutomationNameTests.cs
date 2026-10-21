@@ -168,7 +168,7 @@ public class ButtonAutomationNameTests {
             var opened = await AnnouncedAsync(window);
 
             var names = folded.Concat(opened).ToHashSet();
-            string[] expected = ["Parts", "Who's on it", "Ada", "Bob", "Issues", "Plan", "Agents and commands",
+            string[] expected = ["Parts", "Who's on it", "Copy Ada", "Copy Bob", "Issues", "Plan", "Agents and commands",
                                  "Session details, More", "Session details, Less",
                                  "x-design.md", pullRequestCard ? "Pull requests" : "#7: Fix",
                                  .. titledIssues ? ["WK-1: One", "WK-2: Two"] : new[] { "WK-1" }];
@@ -213,13 +213,13 @@ public class ButtonAutomationNameTests {
                 return names;
             }
 
-            await Assert.That(await OpenAsync("RepositoryChip")).Contains("alpha");
-            await Assert.That(await OpenAsync("MachineChip")).Contains(service.DaemonName);
+            await Assert.That(await OpenAsync("RepositoryChip")).Contains("alpha, selected");
+            await Assert.That(await OpenAsync("MachineChip")).Contains($"{service.DaemonName}, selected");
             var agent = await OpenAsync("AgentChip");
             await Assert.That(agent).Contains("Claude Code");
-            await Assert.That(agent).Contains("Default — Claude Code chooses, Claude Code");
-            await Assert.That(await OpenAsync("EffortChip")).Contains(HostedHarnessCatalog.EffortDefaultLabel);
-            await Assert.That(await OpenAsync("PermissionChip")).Contains(HostedHarnessCatalog.PermissionModes[0].Label);
+            await Assert.That(agent).Contains("Default — Claude Code chooses, Claude Code, selected");
+            await Assert.That(await OpenAsync("EffortChip")).Contains($"{HostedHarnessCatalog.EffortDefaultLabel}, selected");
+            await Assert.That(await OpenAsync("PermissionChip")).Contains($"{HostedHarnessCatalog.PermissionModes[0].Label}, selected");
         } finally {
             window.Close();
             Dispatcher.UIThread.RunJobs();

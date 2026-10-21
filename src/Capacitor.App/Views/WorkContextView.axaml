@@ -477,7 +477,7 @@
                                                     </Panel>
                                                 </Border>
                                                 <Button Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Name}"
-                                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
+                                                        HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Name}" AutomationProperties.Name="{Binding Name, StringFormat='Copy {0}'}">
                                                     <StackPanel>
                                                         <TextBlock x:Name="ContributorNameText" Text="{Binding Name}" FontSize="13" FontWeight="SemiBold"
                                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />
@@ -500,7 +500,7 @@
                                 </Border>
                                 <Button x:Name="RequesterName" Grid.Column="1" Classes="copyValue" Click="OnCopyTextClick" Tag="{Binding Requester}"
                                         HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Requester}" IsVisible="{Binding PeopleExpanded}"
-                                        AutomationProperties.Name="{Binding Requester}">
+                                        AutomationProperties.Name="{Binding Requester, StringFormat='Copy {0}'}">
                                     <StackPanel>
                                         <TextBlock Text="{Binding Requester}" FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource KcapTextBrush}" TextTrimming="CharacterEllipsis" />

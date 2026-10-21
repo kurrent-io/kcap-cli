@@ -149,7 +149,7 @@ public partial class LauncherPaneView : UserControl {
             flyout.Hide();
             _ = SelectRepositoryObservedAsync(vm, repoPath);
         });
-        AutomationProperties.SetName(row, title.Text);
+        AutomationProperties.SetName(row, ChoiceName(title.Text, option.Selected));
         return row;
     }
 
@@ -212,7 +212,7 @@ public partial class LauncherPaneView : UserControl {
             _ = SelectMachineObservedAsync(vm, daemonName, isLocal);
         });
         row.IsEnabled = option.Connected;
-        AutomationProperties.SetName(row, option.DaemonName);
+        AutomationProperties.SetName(row, ChoiceName(option.DaemonName, option.Selected));
         return row;
     }
 
@@ -340,9 +340,12 @@ public partial class LauncherPaneView : UserControl {
         Grid.SetColumn(check, 1);
         body.Children.Add(check);
         var row = ChoiceButton(body, pick);
-        AutomationProperties.SetName(row, label);
+        AutomationProperties.SetName(row, ChoiceName(label, selected));
         return row;
     }
+
+    /// The check mark is drawn only, so the selection has to be spoken in the row's name.
+    internal static string ChoiceName(string? label, bool selected) => selected ? $"{label}, selected" : label ?? "";
 
     AppIcon SelectionCheck(bool selected) => new() {
         Kind = LucideIconKind.Check, Size = 14, IsVisible = selected,
@@ -485,7 +488,7 @@ public partial class LauncherPaneView : UserControl {
                 CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 7),
             };
             row.Classes.Add("kcapGhost");
-            AutomationProperties.SetName(row, $"{label}, {vendorLabel}");
+            AutomationProperties.SetName(row, ChoiceName($"{label}, {vendorLabel}", selected));
             row.Click += (_, _) => pick();
             return row;
         }

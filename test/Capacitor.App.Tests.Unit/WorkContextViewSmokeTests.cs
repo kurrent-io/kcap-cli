@@ -293,6 +293,7 @@ public class WorkContextViewSmokeTests {
             host.Window.UpdateLayout();
 
             await Assert.That(IsAnnounced(avatar)).IsFalse();
+            await Assert.That(Peer(host.Find<Button>("RequesterName")).GetName()).IsEqualTo($"Copy {host.Vm.Requester}");
         });
     }
 

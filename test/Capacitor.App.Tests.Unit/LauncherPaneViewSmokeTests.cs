@@ -258,6 +258,12 @@ public class LauncherPaneViewSmokeTests {
         await Assert.That(labels.Item2).IsEqualTo("Approvals · On request");
     }
 
+    [Test]
+    public async Task A_picker_row_names_its_selection() {
+        await Assert.That(LauncherPaneView.ChoiceName("High", selected: true)).IsEqualTo("High, selected");
+        await Assert.That(LauncherPaneView.ChoiceName("High", selected: false)).IsEqualTo("High");
+    }
+
     /// The button carries a glyph, not text, so assistive technology reads the automation name.
     [Test]
     [NotInParallel("AvaloniaSession")]
