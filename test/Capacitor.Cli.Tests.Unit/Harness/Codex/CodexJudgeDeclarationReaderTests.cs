@@ -88,6 +88,16 @@ public class CodexJudgeDeclarationReaderTests {
         await Assert.That((await Read(path)).WindowlessReason).IsEqualTo("redaction_incomplete");
     }
 
+    /// The reader must find a human line however its JSON is spaced, or it declares a stale set.
+    [Test]
+    public async Task A_spaced_json_line_is_read_like_a_compact_one() {
+        var spaced = User("fix the build", "t1", "user.text").Replace("\":", "\": ", StringComparison.Ordinal);
+        var path   = Rollout(spaced);
+        Cursor.Write(Sid, 1);
+
+        await Assert.That((await Read(path)).Turns!.UserMessages.Single().Id).IsEqualTo(TranscriptIds.CodexRecord(spaced).ToString());
+    }
+
     [Test]
     public async Task No_count_is_windowless() =>
         await Assert.That((await Read(Rollout(User("fix", "t1", "user.text")))).WindowlessReason).IsEqualTo("no_ack_cursor");

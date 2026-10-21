@@ -34,7 +34,14 @@ internal sealed class CodexPolicySeam(ConfigRoot config, TimeProvider time, Poli
 
             var action = CodexHookActions.Normalize(fields.ToolName, fields.ToolInput, fields.Cwd);
             var eval   = PolicyEngine.Evaluate(snapshot, action, EvaluationMode.Full);
-            if (eval.Outcome != PolicyOutcome.Deny) return;
+
+            // A matched rule is recorded; this hook fires on every call, so one no rule matched is not.
+            if (eval.Outcome != PolicyOutcome.Deny) {
+                if (eval.Outcome != PolicyOutcome.None)
+                    await Emit(sessionId, PolicySeams.CodexPreToolUse, snapshot, action, eval, fields.CallId,
+                        eval.Outcome == PolicyOutcome.Allow ? "allow" : "ask", "pass_through", null);
+                return;
+            }
 
             stdout.Write(new JsonObject {
                 ["hookSpecificOutput"] = new JsonObject {

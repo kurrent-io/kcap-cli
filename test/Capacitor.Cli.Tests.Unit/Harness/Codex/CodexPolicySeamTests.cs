@@ -83,6 +83,20 @@ public class CodexPolicySeamTests : IDisposable {
         await Assert.That(Decisions().Single()["seam"]!.GetValue<string>()).IsEqualTo(PolicySeams.CodexPreToolUse);
     }
 
+    /// A rule that matched is recorded even where Codex cannot act on its answer; an unmatched call is not, since
+    /// this hook fires on every call.
+    [Test]
+    public async Task A_matched_allow_at_pre_tool_use_is_recorded_and_an_unmatched_call_is_not() {
+        WritePolicy();
+
+        await PreToolUse("git fetch origin");
+        await PreToolUse("ls");
+
+        var recorded = Decisions().Single();
+        await Assert.That(recorded["requested_outcome"]!.GetValue<string>()).IsEqualTo("allow");
+        await Assert.That(recorded["effective_outcome"]!.GetValue<string>()).IsEqualTo("pass_through");
+    }
+
     /// Codex rejects an allow or an ask at PreToolUse, so nothing but a deny is ever written there.
     [Test]
     [Arguments("git fetch origin")]

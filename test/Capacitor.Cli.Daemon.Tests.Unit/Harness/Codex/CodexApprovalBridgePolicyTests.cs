@@ -62,6 +62,22 @@ public class CodexApprovalBridgePolicyTests {
         await Assert.That(_refusals.Declare(Session).Entries.Single().PromptId).IsEqualTo("turn-1");
     }
 
+    /// Codex sees a decline when the card times out or fails, so the judge is told of it too.
+    [Test]
+    public async Task A_card_that_fails_declines_and_is_declared() {
+        var snapshot = new PolicySnapshot("snap-1", [
+            new PolicyScopeDocument(PolicyScope.Repo, "/wt/.kcap/approvals.yaml", Policy, PolicyDocumentBinder.Bind(Policy, PolicyScope.Repo))], false, []);
+        var seam = new CodexHostedPolicySeam(snapshot, null, _ => { }, _refusals, () => null, "agent-1", TimeProvider.System, NullLogger.Instance);
+        seam.MarkBridgedSinceStart(ThreadId);
+        var bridge = new CodexApprovalBridge((_, _) => throw new InvalidOperationException("card lost"), "agent-1", NullLogger.Instance,
+            TimeSpan.FromSeconds(30), TimeProvider.System, seam);
+
+        var result = await bridge.HandleAsync(Command("curl https://example.com"), CancellationToken.None);
+
+        await Assert.That(DecisionOf(result)).IsEqualTo("decline");
+        await Assert.That(_refusals.Declare(Session).Entries.Single().ToolUseId).IsEqualTo("exec-1");
+    }
+
     [Test]
     public async Task A_permissions_grant_decline_is_not_a_refusal() {
         var grant = new AcpRequest(1, "item/permissions/requestApproval", JsonDocument.Parse(

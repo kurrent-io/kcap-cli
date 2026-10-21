@@ -110,10 +110,16 @@ internal sealed class CodexApprovalBridge {
             return mapped;
         } catch (OperationCanceledException) {
             _logger.LogDebug("codex approval: {Method} cancelled or timed out; denying.", method);
-            return Deny();
+            return DeclineRecorded();
         } catch (Exception ex) {
             // The handler must never throw — the connection maps a throw to -32603. Deny with a valid body.
             _logger.LogWarning(ex, "codex approval: unexpected failure handling {Method}; denying.", method);
+            return DeclineRecorded();
+        }
+
+        // Codex saw a no either way, so the judge is told of it.
+        JsonElement DeclineRecorded() {
+            if (!isPermissionsGrant && request.Params is { } refused) _policy?.RecordUserDecline(method, refused);
             return Deny();
         }
     }

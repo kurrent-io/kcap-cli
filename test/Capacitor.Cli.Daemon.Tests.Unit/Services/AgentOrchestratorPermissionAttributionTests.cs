@@ -83,10 +83,21 @@ public class AgentOrchestratorPermissionAttributionTests {
             bySession.HandleAttributePermission(new(null, S1, null)),                              // session id
         ];
 
-        foreach (var rung in rungs) {
-            await Assert.That(rung!.Value.PolicySnapshot).IsSameReferenceAs(snap);
-            await Assert.That(rung.Value.BridgedSinceStart).IsTrue();
-        }
+        foreach (var rung in rungs) await Assert.That(rung!.Value.PolicySnapshot).IsSameReferenceAs(snap);
+        await Assert.That(rungs[^1]!.Value.BridgedSinceStart).IsTrue();
+    }
+
+    /// Only the session a fresh agent reported as its own started under this daemon; one resumed inside it, or a
+    /// request naming another session, may carry refusals the daemon never saw.
+    [Test]
+    public async Task Only_a_fresh_agents_own_session_is_bridged_since_start() {
+        await using var orch = Build();
+        orch.RegisterAgentForTest(Agent("a1", "/w1", sessionId: S1, fresh: true));
+        orch.RegisterAgentForTest(Agent("a2", "/w2", sessionId: "6ba7b8119dad11d180b400c04fd430c8"));
+
+        await Assert.That(orch.HandleAttributePermission(new("a1", S1, null))!.Value.BridgedSinceStart).IsTrue();
+        await Assert.That(orch.HandleAttributePermission(new("a1", "ffffffffffffffffffffffffffffffff", null))!.Value.BridgedSinceStart).IsFalse();
+        await Assert.That(orch.HandleAttributePermission(new("a2", "6ba7b8119dad11d180b400c04fd430c8", null))!.Value.BridgedSinceStart).IsFalse();
     }
 
     [Test]

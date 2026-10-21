@@ -84,7 +84,8 @@ internal static class CodexJudgeDeclarationReader {
 
     /// <summary>The line's turn id ("" when it carries none) when it is a human user message, else null.</summary>
     static string? HumanTurn(string raw) {
-        if (!raw.Contains("\"role\":\"user\"", StringComparison.Ordinal)) return null;
+        // A cheap skip for the many lines that cannot be a user message, whatever their spacing.
+        if (!raw.Contains("\"user\"", StringComparison.Ordinal)) return null;
 
         try {
             using var doc = JsonDocument.Parse(raw);
