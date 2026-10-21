@@ -24,7 +24,7 @@ public sealed class LocalTranscripts(int capacity = 16) {
 
     /// Reads run on worker threads, and a pane being torn down can still be reading beside its
     /// successor, so every read of the tail and its history holds the lock.
-    sealed class Shared(LocalTranscriptFeed feed) {
+    internal sealed class Shared(LocalTranscriptFeed feed) {
         public readonly Lock Lock = new();
         public readonly LocalTranscriptFeed Feed = feed;
         public readonly List<ProjectedLine> History = [];
@@ -34,7 +34,7 @@ public sealed class LocalTranscripts(int capacity = 16) {
 
     /// A reader's first read is the whole history as Ok, as a cold tail's would be; a reset after
     /// that replays it as Reset.
-    sealed class Reader(Shared shared) : IChatTranscriptFeed {
+    internal sealed class Reader(Shared shared) : IChatTranscriptFeed {
         bool _started;
         int _epoch;
         int _cursor;

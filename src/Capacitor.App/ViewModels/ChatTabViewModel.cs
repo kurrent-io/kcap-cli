@@ -1567,7 +1567,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// <summary>Gives up a local feed to whoever carries on reading it after this tab closes. Only between reads,
     /// so two readers never share it; null otherwise, and the caller reads afresh. The tab reads nothing after.</summary>
     public TranscriptFeedHandoff? ReleaseFeed() {
-        if (_lease is not { Feed: LocalTranscriptFeed } lease || _feedKey is not { } key) return null;
+        if (_lease is not { Feed: LocalTranscriptFeed or LocalTranscripts.Reader } lease || _feedKey is not { } key) return null;
         if (Interlocked.CompareExchange(ref _readInFlight, 1, 0) != 0) return null;
         Interlocked.Increment(ref _generation);
         _feedReleased = true;
