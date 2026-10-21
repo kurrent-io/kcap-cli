@@ -1253,10 +1253,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         // Building every row shares the UI thread with the switch cover's timer, so a long
         // transcript holds the launcher on screen until the replay returns.
         var cursor = LineCursor.Copy(this);
-        if (CanProjectAway())
-            cursor = await Task.Run(() => ProjectLines(read, cursor, matchSends: false));
-        else
-            cursor = ProjectLines(read, cursor, matchSends: true);
+        if (CanProjectAway()) {
+            var history = new HashSet<(long Offset, string Text)>(_literalInputHistory);
+            cursor = await Task.Run(() => ProjectLines(read, cursor, matchSends: false, history));
+        } else
+            cursor = ProjectLines(read, cursor, matchSends: true, _literalInputHistory);
         if (generation != Volatile.Read(ref _generation)) return;
         Finish(read, cursor);
     }
@@ -1324,7 +1325,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         return true;
     }
 
-    LineCursor ProjectLines(FeedRead read, LineCursor cursor, bool matchSends) {
+    LineCursor ProjectLines(FeedRead read, LineCursor cursor, bool matchSends, HashSet<(long Offset, string Text)> history) {
         foreach (var (line, offset) in read.Lines) {
             var projected = line.RestoreSubmittedInputs(text => {
                 if (!matchSends) return false;
@@ -1332,7 +1333,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     && !_superseded.Any(pair => !pair.Old.Acknowledged && pair.Old.Matches(text, _inputGeneration, offset))) return false;
                 _literalInputHistory.Add((offset, text));
                 return true;
-            }, text => _literalInputHistory.Contains((offset, text)));
+            }, text => history.Contains((offset, text)));
             cursor.Restored.Add(projected);
             if (matchSends) {
                 foreach (var text in projected.SubmittedInputs) {
