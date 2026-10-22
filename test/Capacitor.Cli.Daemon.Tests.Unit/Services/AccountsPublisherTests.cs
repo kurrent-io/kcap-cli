@@ -25,6 +25,14 @@ public class AccountsPublisherTests {
 
     AccountStore Store() => new(Home.PathTo("accounts"));
 
+    static async Task WaitUntil(Func<bool> condition) {
+        var deadline = DateTime.UtcNow + Timeout;
+        while (!condition()) {
+            if (DateTime.UtcNow > deadline) throw new TimeoutException("condition not met");
+            await Task.Delay(10);
+        }
+    }
+
     void Add(AccountStore store, string label) {
         var account = new VendorAccount(Guid.NewGuid().ToString("N"), HarnessId.Claude,
             AccountDirectory.Normalize(Home.PathTo($".claude-{label}")), label, DateTimeOffset.UnixEpoch);
@@ -132,6 +140,70 @@ public class AccountsPublisherTests {
 
             await Assert.That(publisher.Current).IsSameReferenceAs(before);
             await Assert.That(Volatile.Read(ref changes)).IsEqualTo(0);
+            await Assert.That(warnings.Captured.Warnings.Count).IsEqualTo(1);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Test]
+    public async Task A_throwing_handler_neither_stops_the_poll_nor_fails_a_rebuild() {
+        var store = Store();
+        Add(store, "work");
+        var time     = new FakeTimeProvider();
+        var warnings = new Warnings();
+        using var publisher = Publisher(store, time, logger: warnings);
+        var seen = new List<long>();
+        publisher.Changed += _ => throw new InvalidOperationException("subscriber bug");
+        publisher.Changed += s => { lock (seen) seen.Add(s.Revision); };
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            Add(store, "spare");
+            time.Advance(Poll);
+            await WaitUntil(() => { lock (seen) return seen.Count == 1; });
+
+            Add(store, "third");
+            time.Advance(Poll);
+            await WaitUntil(() => { lock (seen) return seen.Count == 2; });
+
+            Add(store, "fourth");
+            await publisher.RebuildAsync(CancellationToken.None);
+
+            long[] revisions;
+            lock (seen) revisions = [.. seen];
+            await Assert.That(revisions).IsEquivalentTo([2L, 3L, 4L]);
+            await Assert.That(publisher.Current!.Revision).IsEqualTo(4L);
+            await Assert.That(warnings.Captured.Warnings.Count).IsEqualTo(3);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// <summary>The failure lands on the change tick and again on the settle read, the case that would
+    /// otherwise mark the stat trusted and skip every later tick until the next write.</summary>
+    [Test]
+    public async Task A_transient_read_failure_is_retried_on_the_next_tick() {
+        var store = Store();
+        Add(store, "work");
+        var time     = new FakeTimeProvider();
+        var warnings = new Warnings();
+        using var publisher = Publisher(store, time, logger: warnings);
+        var changed = new TaskCompletionSource<AccountsSnapshotDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        publisher.Changed += s => changed.TrySetResult(s);
+        await publisher.StartAsync(CancellationToken.None);
+        var loads = 0;
+        publisher.LoadRegistry = s =>
+            Interlocked.Increment(ref loads) <= 2 ? throw new IOException("sharing violation") : s.Load();
+        try {
+            Add(store, "spare");
+            time.Advance(Poll);
+            await WaitUntil(() => Volatile.Read(ref loads) == 1);
+            time.Advance(Poll);
+            await WaitUntil(() => Volatile.Read(ref loads) == 2);
+            time.Advance(Poll);
+
+            var snapshot = await changed.Task.WaitAsync(Timeout);
+            await Assert.That(snapshot.Revision).IsEqualTo(2L);
             await Assert.That(warnings.Captured.Warnings.Count).IsEqualTo(1);
         } finally {
             await publisher.StopAsync(CancellationToken.None);

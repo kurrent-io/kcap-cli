@@ -40,12 +40,14 @@ public class AccountsIpcTests {
         var toClient = new Pipe();
         var client   = toClient.Reader.AsStream();
 
-        var handler = new AccountsIpc(publisher).HandleSubscribeAsync(
+        var ipc     = new AccountsIpc(publisher);
+        var handler = ipc.HandleSubscribeAsync(
             new DuplexTestStream(toDaemon.Reader.AsStream(), toClient.Writer.AsStream()), cts.Token);
         try {
             var initial = await NextSnapshot(client, cts.Token);
             await Assert.That(initial.HostId).IsEqualTo(store.HostId());
             await Assert.That(initial.Revision).IsEqualTo(1L);
+            await Assert.That(ipc.ActiveSubscribersForTest).IsEqualTo(1);
 
             Add(store, "spare");
             await publisher.RebuildAsync(cts.Token);
@@ -58,10 +60,11 @@ public class AccountsIpcTests {
             await Assert.That((await NextSnapshot(client, cts.Token)).Revision).IsEqualTo(3L);
         } finally {
             await toDaemon.Writer.CompleteAsync();
-            await publisher.StopAsync(CancellationToken.None);
         }
 
         await handler.WaitAsync(TimeSpan.FromSeconds(5));
+        await Assert.That(ipc.ActiveSubscribersForTest).IsEqualTo(0);
+        await publisher.StopAsync(CancellationToken.None);
     }
 
     [Test]

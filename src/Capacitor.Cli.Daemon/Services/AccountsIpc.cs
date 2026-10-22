@@ -8,7 +8,11 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <summary>Local-socket handler for AccountsSubscribe: the current snapshot at once, then each new
 /// one, until the client goes away. Before the first snapshot exists it writes nothing and waits.</summary>
 internal sealed class AccountsIpc(AccountsPublisher publisher) {
+    int _subscribers;
+    internal int ActiveSubscribersForTest => Volatile.Read(ref _subscribers);
+
     public async Task HandleSubscribeAsync(Stream stream, CancellationToken ct) {
+        Interlocked.Increment(ref _subscribers);
         try {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             // Without this a vanished subscriber would park the handler on the publisher forever.
@@ -35,6 +39,8 @@ internal sealed class AccountsIpc(AccountsPublisher publisher) {
             // the subscriber disconnected mid-write
         } catch (SocketException) {
             // the same, signalled by the transport
+        } finally {
+            Interlocked.Decrement(ref _subscribers);
         }
     }
 }

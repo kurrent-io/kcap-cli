@@ -28,9 +28,13 @@ internal sealed partial class AccountsPublisher(
 
     public AccountsSnapshotDto? Current => Volatile.Read(ref _current);
 
-    /// <summary>Raised under the rebuild gate so handlers see revisions in order; a handler must not
-    /// wait on <see cref="RebuildAsync"/>. The snapshot built at start is not announced.</summary>
+    /// <summary>Raised under the rebuild gate so handlers see revisions in order. A handler must not
+    /// throw, block, or wait on <see cref="RebuildAsync"/>; one that throws is logged and the rest still
+    /// run. The snapshot built at start is not announced.</summary>
     public event Action<AccountsSnapshotDto>? Changed;
+
+    // Seam: tests substitute a failing read.
+    internal Func<AccountStore, AccountRegistry> LoadRegistry { get; set; } = store => store.Load();
 
     public long Version => _notifier.Version;
 
@@ -71,33 +75,47 @@ internal sealed partial class AccountsPublisher(
             if (unchanged && _settled && !force) return;
 
             // Two same-length writes inside one filesystem timestamp tick stat alike, so a stat is
-            // trusted only once a later tick has read the file under it again.
+            // trusted only once a later tick has read the file under it successfully.
             _settled = unchanged && !force;
             if (!unchanged) _loadWarned = false;
             _stat = stat;
 
-            Publish(store, hostId, announce);
+            if (!Publish(store, hostId, announce)) _settled = false;
         } finally {
             _gate.Release();
         }
     }
 
-    void Publish(AccountStore store, string hostId, bool announce) {
+    /// <summary>False when the registry could not be read.</summary>
+    bool Publish(AccountStore store, string hostId, bool announce) {
         AccountRegistry registry;
         try {
-            registry = store.Load();
+            registry = LoadRegistry(store);
         } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
             if (!_loadWarned) LogRegistryUnreadable(logger, store.RegistryPath, ex);
             _loadWarned = true;
-            return;
+            return false;
         }
 
-        if (Current is { } current && current.Revision == registry.Revision && current.HostId == hostId) return;
+        if (Current is { } current && current.Revision == registry.Revision && current.HostId == hostId) return true;
 
         var next = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home);
         Volatile.Write(ref _current, next);
         _notifier.Pulse();
-        if (announce) Changed?.Invoke(next);
+        if (announce) Announce(next);
+        return true;
+    }
+
+    void Announce(AccountsSnapshotDto snapshot) {
+        if (Changed is not { } changed) return;
+
+        foreach (var handler in changed.GetInvocationList()) {
+            try {
+                ((Action<AccountsSnapshotDto>) handler)(snapshot);
+            } catch (Exception ex) {
+                LogHandlerFailed(logger, ex);
+            }
+        }
     }
 
     // Any failure here leaves the publisher waiting for a host id rather than stopping the daemon.
@@ -121,4 +139,7 @@ internal sealed partial class AccountsPublisher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The host id could not be read; accounts are not published until it can")]
     static partial void LogHostIdUnavailable(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "An accounts snapshot subscriber threw; the others were still notified")]
+    static partial void LogHandlerFailed(ILogger logger, Exception ex);
 }
