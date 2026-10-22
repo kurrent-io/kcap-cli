@@ -3452,6 +3452,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task ReadAgentOutputAsync(AgentInstance agent) {
         var cloud = TryStartCloudSink(agent);
         agent.CloudSink = cloud;
+        var outputActivity = new TerminalOutputActivity();
 
         // An UNATTENDED reviewer (bypassPermissions, no human present) can wedge forever on a
         // one-time consent/trust dialog — the original silent failure. Watch its PTY stream for the
@@ -3469,8 +3470,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = _time.GetUtcNow().UtcDateTime;
                 agent.HasReceivedOutput = true;
-                // PTY output IS the activity signal for a PTY-hosted agent — no turn gate applies.
-                agent.ActivityClock.Advance();
+                // Mode changes and cursor housekeeping prove liveness without starting a turn.
+                agent.ActivityClock.AdvanceTerminalOutput(outputActivity.Observe(data));
 
                 if (agent.Status == "Starting") {
                     SetAgentStatus(agent, "Running");
@@ -4934,6 +4935,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (IsClosingToInput(agent)) return;
 
+        if (!IsSubmit(SpecialKeyMap.ToBytes(key))) agent.ActivityClock.NoteViewerInput();
         await agent.Runtime.SendSpecialKeyAsync(key);
     }
 
@@ -4964,10 +4966,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (bytes.Length == 0) return;
 
         var waitGeneration = agent.ActivityClock.WaitGeneration;
+        var submit = IsSubmit(bytes);
+        if (!submit) agent.ActivityClock.NoteViewerInput();
 
         try {
             await agent.Runtime.SendRawInputAsync(bytes);
-            if (IsSubmit(bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
         } catch (NotSupportedException) {
             LogSendRawInputNotSupported(cmd.AgentId, agent.Runtime.Vendor);
         }

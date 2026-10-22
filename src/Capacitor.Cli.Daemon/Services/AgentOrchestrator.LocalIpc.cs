@@ -692,9 +692,12 @@ internal partial class AgentOrchestrator {
                         // before the write so a wait that begins during it survives.
                         var waitGeneration = agent.ActivityClock.WaitGeneration;
 
+                        var submit = IsSubmit(f.Bytes);
+                        if (!submit) agent.ActivityClock.NoteViewerInput();
+
                         try {
                             await agent.Runtime.SendRawInputAsync(f.Bytes);
-                            if (IsSubmit(f.Bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
                         } catch (NotSupportedException) {
                             // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
                             // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
@@ -777,6 +780,9 @@ internal partial class AgentOrchestrator {
         }
 
         if (c > 0 && r > 0) {
+            // Arm before Resize: a PTY can produce the redraw on another thread immediately.
+            // All viewers (local, web, and a departing smaller viewer) share this path.
+            agent.ActivityClock.NoteViewerInput();
             agent.Runtime.Resize(c, r);
             agent.CurrentCols = c;
             agent.CurrentRows = r;

@@ -143,6 +143,67 @@ public class AgentActivityClockTests {
         await Assert.That(clock.AwaitingInput).IsTrue();
     }
 
+    [Test]
+    public async Task Idle_resize_grace_expires_even_when_output_keeps_arriving() {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.TryMarkQuiet(AgentActivityClock.QuietTurn);
+        clock.NoteViewerInput();
+
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        time.Advance(TimeSpan.FromMilliseconds(999));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsTrue();
+        await Assert.That(clock.ActivitySeq).IsEqualTo(3UL);
+        await Assert.That(clock.IdleForMs).IsEqualTo(0UL);
+
+        time.Advance(TimeSpan.FromMilliseconds(1));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsFalse();
+    }
+
+    [Test]
+    [Arguments("submit")]
+    [Arguments("hook")]
+    [Arguments("turn")]
+    [Arguments("activity")]
+    public async Task Real_activity_during_idle_resize_grace_publishes_working_immediately(string signal) {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.TryMarkQuiet(AgentActivityClock.QuietTurn);
+        clock.NoteViewerInput();
+        var seen = new List<bool>();
+        clock.OnAwaitingInputChanged = seen.Add;
+
+        switch (signal) {
+            case "submit": clock.ClearAwaitingInputSince(clock.WaitGeneration); break;
+            case "hook": clock.SetAwaitingInput(false); break;
+            case "turn": clock.SetTurnInFlight(true); break;
+            case "activity": clock.Advance(); break;
+        }
+
+        await Assert.That(clock.AwaitingInput).IsFalse();
+        await Assert.That(seen).IsEquivalentTo([false], CollectionOrdering.Matching);
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsFalse();
+    }
+
+    [Test]
+    public async Task Terminal_output_after_resize_grace_cannot_override_an_explicit_stop() {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn);
+        clock.TryMarkQuiet(AgentActivityClock.QuietTurn);
+        clock.NoteViewerInput();
+        clock.SetAwaitingInput(true);
+
+        time.Advance(TimeSpan.FromSeconds(2));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsTrue();
+    }
+
     /// A key that clears the wait starts its own quiet window. The idle time already elapsed
     /// must not mark the agent waiting again in the same instant.
     [Test]
