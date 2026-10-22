@@ -237,6 +237,8 @@ public class PtyHostedAgentRuntimeTests {
         await StepAsync(time, PtyHostedAgentRuntime.LaunchPromptMaxWait, () => pty.Writes.Count >= 1);
 
         await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~build it\x1b[201~");
+        await StepAsync(time, PtyHostedAgentRuntime.SingleSubmitDelay, () => runtime.LaunchPromptDelivery!.IsCompleted);
+        await Assert.That(await runtime.LaunchPromptDelivery!).IsEqualTo(LaunchPromptOutcome.DeliveredAfterMaxWait);
         pty.Exit();
     }
 
@@ -249,10 +251,68 @@ public class PtyHostedAgentRuntimeTests {
         pty.Exit();
 
         runtime.DeliverLaunchPrompt("build it");
-        await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
 
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.AgentExited);
         await Assert.That(pty.Writes).IsEmpty();
         await runtime.SendUserInputAsync("later").WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>A viewer's keystrokes must reach the TUI while the launch prompt is still waiting for
+    /// startup to settle: that is how a human dismisses a dialog the paste would otherwise answer.</summary>
+    [Test]
+    public async Task Raw_input_during_startup_is_not_held_behind_the_launch_prompt() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.SendRawInputAsync([0x1b]).WaitAsync(TimeSpan.FromSeconds(2));
+
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("\x1b");
+        pty.Exit();
+    }
+
+    /// <summary>A graceful stop during the startup wait withdraws the prompt: pasting it after the
+    /// stop's "/exit" would start a turn the stop just asked to end.</summary>
+    [Test]
+    public async Task Launch_prompt_is_dropped_when_a_graceful_stop_is_requested_during_startup() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("build it");
+        await runtime.RequestGracefulStopAsync();
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.StopRequested);
+        await Assert.That(string.Join("|", pty.Writes)).IsEqualTo("/exit|\r");
+        pty.Exit();
+    }
+
+    /// <summary>Text carrying the paste-end sequence, such as captured terminal output, must not end
+    /// the paste early and turn the rest into keystrokes.</summary>
+    [Test]
+    public async Task An_embedded_paste_end_marker_cannot_end_a_follow_up_paste_early() {
+        var pty     = new RecordingPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        await runtime.SendUserInputAsync("one\x1b[201~\rtwo\x1b[200~three");
+
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~one[201~\rtwo[200~three\x1b[201~");
+    }
+
+    [Test]
+    public async Task An_embedded_paste_end_marker_cannot_end_the_launch_prompt_paste_early() {
+        var pty     = new RecordingScriptedPtyProcess();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        runtime.DeliverLaunchPrompt("one\x1b[201~\rtwo");
+        _ = PumpAsync(runtime);
+        pty.Emit("banner");
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.Delivered);
+        await Assert.That(pty.Writes[0]).IsEqualTo("\x1b[200~one[201~\rtwo\x1b[201~");
+        pty.Exit();
     }
 
     /// <summary>Disposal during the startup wait abandons the prompt without faulting the delivery.</summary>
@@ -264,7 +324,9 @@ public class PtyHostedAgentRuntimeTests {
         runtime.DeliverLaunchPrompt("build it");
         await runtime.DisposeAsync();
 
-        await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+        var outcome = await runtime.LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await Assert.That(outcome).IsEqualTo(LaunchPromptOutcome.Cancelled);
         await Assert.That(pty.Writes).IsEmpty();
     }
 

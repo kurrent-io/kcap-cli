@@ -143,7 +143,10 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
         var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts);
 
-        if (launchPrompt is not null) runtime.DeliverLaunchPrompt(launchPrompt);
+        if (launchPrompt is not null) {
+            runtime.DeliverLaunchPrompt(launchPrompt);
+            _ = LogLaunchPromptOutcomeAsync(runtime.LaunchPromptDelivery!, ctx.AgentId);
+        }
 
         return new HostedRuntimeStart(runtime, mcpConfigPath);
     }
@@ -153,4 +156,44 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
 
     [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} receives its {Length}-character prompt through the PTY after spawn")]
     partial void LogPromptPastedAfterSpawn(string agentId, int length);
+
+    /// <summary>An agent that never received its task leaves no other trace, so every withdrawn or
+    /// blind delivery is logged here; the runtime itself has no logger.</summary>
+    async Task LogLaunchPromptOutcomeAsync(Task<LaunchPromptOutcome> delivery, string agentId) {
+        LaunchPromptOutcome outcome;
+
+        try {
+            outcome = await delivery.ConfigureAwait(false);
+        } catch (Exception ex) {
+            LogLaunchPromptFaulted(ex, agentId);
+
+            return;
+        }
+
+        switch (outcome) {
+            case LaunchPromptOutcome.Delivered:             LogLaunchPromptDelivered(agentId); break;
+            case LaunchPromptOutcome.DeliveredAfterMaxWait: LogLaunchPromptPastedBlind(agentId, PtyHostedAgentRuntime.LaunchPromptMaxWait.TotalSeconds); break;
+            case LaunchPromptOutcome.AgentExited:           LogLaunchPromptAgentExited(agentId); break;
+            case LaunchPromptOutcome.WriteFailed:           LogLaunchPromptWriteFailed(agentId); break;
+            default:                                        LogLaunchPromptWithdrawn(agentId, outcome); break;
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId} received its launch prompt")]
+    partial void LogLaunchPromptDelivered(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s startup output never settled; its launch prompt was pasted after {Seconds}s")]
+    partial void LogLaunchPromptPastedBlind(string agentId, double seconds);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId} exited before it received its launch prompt")]
+    partial void LogLaunchPromptAgentExited(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s launch prompt could not be written to its PTY")]
+    partial void LogLaunchPromptWriteFailed(string agentId);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Agent {AgentId}'s launch prompt was withdrawn ({Outcome})")]
+    partial void LogLaunchPromptWithdrawn(string agentId, LaunchPromptOutcome outcome);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Agent {AgentId}'s launch prompt delivery faulted")]
+    partial void LogLaunchPromptFaulted(Exception ex, string agentId);
 }

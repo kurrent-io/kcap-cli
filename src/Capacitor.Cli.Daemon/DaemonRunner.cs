@@ -443,6 +443,8 @@ public static partial class DaemonRunner {
 
         builder.Services.AddHttpClient("Attachments", client => client.BaseAddress = new Uri(config.ServerUrl));
 
+        LegacyPromptFiles.Sweep(coverageStateDir);
+
         builder.Services.AddSingleton<IHostedAgentLauncher, ClaudeLauncher>();
         builder.Services.AddSingleton<IHostedAgentLauncher, CodexLauncher>();
 

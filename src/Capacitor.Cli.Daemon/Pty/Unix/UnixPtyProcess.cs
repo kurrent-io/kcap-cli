@@ -237,7 +237,18 @@ public sealed class UnixPtyProcess : IPtyProcess {
     public Task WriteAsync(byte[] data) {
         if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
 
-        return Task.Run(() => _master.TryUse(fd => UnixPtyInterop.write(fd, data, data.Length)));
+        return Task.Run(() => _master.TryUse(fd => WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length))));
+    }
+
+    /// <summary>A master write may take only part of the buffer, and a negative count is a failure;
+    /// either would otherwise drop the tail of a paste without a trace.</summary>
+    internal static void WriteFully(ReadOnlyMemory<byte> data, Func<ReadOnlyMemory<byte>, nint> write) {
+        while (data.Length > 0) {
+            var written = write(data);
+            if (written <= 0) throw new IOException($"The PTY master write returned {written}.");
+
+            data = data[(int) written..];
+        }
     }
 
     public void Resize(ushort cols, ushort rows) {

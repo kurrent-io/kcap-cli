@@ -4,6 +4,7 @@ using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
@@ -243,6 +244,34 @@ public class PtyHostedAgentRuntimeFactoryTests {
             process.Exit();
             await start.Runtime.DisposeAsync();
         }
+    }
+
+    /// <summary>An agent that quits before its prompt arrives leaves no other trace that the task
+    /// never reached it.</summary>
+    [Test]
+    public async Task An_agent_that_exits_before_its_launch_prompt_is_logged() {
+        var config   = new DaemonConfig { ClaudePath = "claude", ServerUrl = "", CapacitorPath = "kcap" };
+        var launcher = new ClaudeLauncher(config, TestHarnesses.Under(Home), NullLogger<ClaudeLauncher>.Instance);
+        var process  = new RecordingScriptedPtyProcess();
+        var logger   = new CapturingLogger<PtyHostedAgentRuntimeFactory>();
+        var factory  = new PtyHostedAgentRuntimeFactory(launcher, new SpyPtyProcessFactory(process), logger, TimeProvider.System);
+
+        var start = await factory.StartAsync(BuildClaudeLaunchContext(null), CancellationToken.None);
+
+        try {
+            process.Exit();
+            await ((PtyHostedAgentRuntime) start.Runtime).LaunchPromptDelivery!.WaitAsync(TimeSpan.FromSeconds(5));
+            await WaitUntilAsync(() => logger.Entries.Any(e => e.Level == LogLevel.Warning));
+
+            await Assert.That(logger.Entries.Single(e => e.Level == LogLevel.Warning).Message).Contains("agent-mode-1");
+        } finally {
+            await start.Runtime.DisposeAsync();
+        }
+    }
+
+    static async Task WaitUntilAsync(Func<bool> done) {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (!done() && DateTime.UtcNow < deadline) await Task.Delay(25);
     }
 
     /// <summary>A leading absolute path is not a slash command, so it is pasted like any prose.</summary>
