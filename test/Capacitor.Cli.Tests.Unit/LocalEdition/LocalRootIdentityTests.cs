@@ -74,8 +74,10 @@ public class LocalRootIdentityTests {
             Skip.When(Run("hdiutil", "create", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
             var (attachExit, attachOutput) = RunWithOutput("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image);
             Skip.When(attachExit != 0, "hdiutil attach failed");
-            // The first line names the image's whole disk; detaching that releases the image, not just its volume.
-            device = attachOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Split((char[])[' ', '\t'], 2)[0] ?? mount;
+            // The first device row names the image's whole disk; detaching that releases the image, not just its volume.
+            device = attachOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                         .Select(line => line.Split((char[])[' ', '\t'], 2)[0])
+                         .FirstOrDefault(token => token.StartsWith("/dev/disk", StringComparison.Ordinal)) ?? mount;
 
             var upper = Directory.CreateDirectory(Path.Combine(mount, "Root")).FullName;
             Directory.CreateDirectory(Path.Combine(mount, "root"));
@@ -211,11 +213,13 @@ public class LocalRootIdentityTests {
             foreach (var a in args) psi.ArgumentList.Add(a);
 
             using var p = Process.Start(psi)!;
-            var output = p.StandardOutput.ReadToEnd();
-            p.StandardError.ReadToEnd();
+            // Both drained at once: a child that fills one pipe while the other is read to its end would block forever.
+            var output = p.StandardOutput.ReadToEndAsync();
+            var error  = p.StandardError.ReadToEndAsync();
+            Task.WaitAll(output, error);
             p.WaitForExit();
 
-            return (p.ExitCode, output);
+            return (p.ExitCode, output.Result);
         } catch (System.ComponentModel.Win32Exception) {
             return (-1, "");
         }
