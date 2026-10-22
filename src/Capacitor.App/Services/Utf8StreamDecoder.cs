@@ -25,6 +25,20 @@ public sealed class Utf8StreamDecoder {
         }
     }
 
+    /// Bytes per piece: at most as many characters, so every piece stays under the 85 KB large-object threshold.
+    const int PieceBytes = 32 * 1024;
+
+    /// <see cref="Decode"/> in pieces, for a replay of megabytes that would otherwise be one
+    /// large-object string.
+    public IReadOnlyList<string> DecodePieces(ReadOnlySpan<byte> bytes) {
+        var pieces = new List<string>(bytes.Length / PieceBytes + 1);
+        for (var start = 0; start < bytes.Length; start += PieceBytes) {
+            var piece = Decode(bytes.Slice(start, Math.Min(PieceBytes, bytes.Length - start)));
+            if (piece.Length > 0) pieces.Add(piece);
+        }
+        return pieces;
+    }
+
     public string Flush() {
         var chars = new char[4];
         var n = _decoder.GetChars(ReadOnlySpan<byte>.Empty, chars, flush: true);

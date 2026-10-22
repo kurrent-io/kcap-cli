@@ -40,9 +40,23 @@ public sealed class XtermTerminalSurface : ITerminalSurface {
         Model.Terminal.Engine.DataReceived += OnDataReceived;
     }
 
-    public void Feed(string text) {
-        if (_dumpPath is not null) File.AppendAllText(_dumpPath, text);
-        Model.Feed(TerminalGlyphSubstitution.Apply(text));
+    /// Characters parsed per call: each piece's rewritten copy stays under the 85 KB large-object threshold.
+    const int ParseChars = 32 * 1024;
+
+    public void Feed(string text) => Feed([text]);
+
+    /// The body of the model's own Feed, minus its UTF-8 encode and decode of the whole text: on a
+    /// reattach's megabytes of ring those two copies land on the large-object heap.
+    public void Feed(IReadOnlyList<string> pieces) {
+        Model.SearchService?.Invalidate();
+        var atBottom = Model.Terminal.Buffer.IsAtBottom;
+        foreach (var piece in pieces) {
+            if (_dumpPath is not null) File.AppendAllText(_dumpPath, piece);
+            for (var start = 0; start < piece.Length; start += ParseChars)
+                Model.Terminal.Feed(TerminalGlyphSubstitution.Apply(piece, start, Math.Min(ParseChars, piece.Length - start)));
+        }
+        Model.UpdateDisplay();
+        if (atBottom) Model.EnsureCaretIsVisible();
     }
 
     void OnUserInput(object? sender, TerminalUserInputEventArgs e) =>
