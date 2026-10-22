@@ -91,7 +91,7 @@ internal static class AgentOrchestratorHarness {
         var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
         foreach (var l in launchers.Values)
             runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System,
-                Path.Combine(config.Store.StateDirectory(config.Name), "prompts"));
+                Path.Combine(config.Store.StateDirectory(config.Name), "prompts"), config.Home);
         foreach (var f in extraRuntimeFactories ?? [])
             runtimeFactories[f.Vendor] = f;
 

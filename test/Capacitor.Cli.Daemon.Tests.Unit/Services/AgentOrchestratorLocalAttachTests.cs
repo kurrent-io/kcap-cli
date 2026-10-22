@@ -1051,7 +1051,7 @@ public class AgentOrchestratorLocalAttachTests {
     sealed class EnvCapturingPtyFactory : IPtyProcessFactory {
         public Dictionary<string, string>? LastEnv { get; private set; }
 
-        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40) {
+        public IPtyProcess Spawn(string command, string[] args, string cwd, Dictionary<string, string>? extraEnv = null, ushort cols = 120, ushort rows = 40, IReadOnlyCollection<string>? removeEnv = null) {
             LastEnv = extraEnv;
 
             return new StubPtyProcess();

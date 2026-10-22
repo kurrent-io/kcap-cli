@@ -161,6 +161,29 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(pty.SpawnCalls).IsEqualTo(1);
     }
 
+    /// <summary>The local spawn hands its child the account's directory, and drops the variable for the
+    /// built-in one rather than naming it.</summary>
+    [Test]
+    public async Task Spawn_frame_launch_hands_the_child_its_account_directory() {
+        const string PersonalId = "c1a0de02-personal";
+        var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        var cwd  = Tmp.CreateDir("cwd");
+        var pty  = new SpyPtyProcessFactory();
+        await using var orch = Build(new CaptureServerConnection(), pty, Spy());
+        Register(PersonalId, HarnessId.Claude, new TempDirHandle(DaemonHome.Path).CreateDir(".claude"), "Personal");
+
+        await SpawnAsync(orch, cwd, WorkId);
+
+        await Assert.That(pty.LastEnv!["CLAUDE_CONFIG_DIR"]).IsEqualTo(work);
+        await Assert.That(pty.LastRemoveEnv ?? []).DoesNotContain("CLAUDE_CONFIG_DIR");
+
+        await SpawnAsync(orch, cwd, PersonalId);
+
+        await Assert.That(pty.SpawnCalls).IsEqualTo(2);
+        await Assert.That(pty.LastEnv!.ContainsKey("CLAUDE_CONFIG_DIR")).IsFalse();
+        await Assert.That(pty.LastRemoveEnv!).Contains("CLAUDE_CONFIG_DIR");
+    }
+
     [Test]
     public async Task Malformed_registry_refuses_an_explicit_id_and_defaults_a_null_one() {
         Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");

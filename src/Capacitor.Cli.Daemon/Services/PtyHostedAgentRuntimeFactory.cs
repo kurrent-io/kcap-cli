@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -25,12 +26,15 @@ namespace Capacitor.Cli.Daemon.Services;
 /// </summary>
 /// <param name="promptRoot">Where launch prompts are written. It must be owner-only, which the
 /// daemon's state directory is and a shared temp directory is not.</param>
+/// <param name="home">The daemon's home, against which an account directory is told apart from the
+/// vendor's built-in one.</param>
 internal sealed partial class PtyHostedAgentRuntimeFactory(
         IHostedAgentLauncher                  launcher,
         IPtyProcessFactory                    ptyFactory,
         ILogger<PtyHostedAgentRuntimeFactory> logger,
         TimeProvider                          time,
-        string                                promptRoot
+        string                                promptRoot,
+        UserHome                              home
     ) : IHostedAgentRuntimeFactory {
     public string Vendor            => launcher.Vendor;
     public bool   SupportsUnattended => launcher.SupportsUnattended;
@@ -150,13 +154,17 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
         }
 
+        var removeEnv = ctx.Account is { } account
+            ? VendorHomeEnv.Apply(env, ctx.Vendor, account, home)
+            : FrozenSet<string>.Empty;
+
         // Read before the spawn so a throw cannot orphan the PTY. Gates the multi-CR submit spray; see
         // PtyHostedAgentRuntime.SubmitAsync.
         var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
 
         IPtyProcess pty;
         try {
-            pty = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
+            pty = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows, removeEnv);
         } catch {
             if (promptFile is not null) PromptFile.Delete(promptFile);
             throw;

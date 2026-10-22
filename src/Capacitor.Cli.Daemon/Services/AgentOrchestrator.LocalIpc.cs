@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text;
 using System.Text.Json;
 using Capacitor.Cli.Core;
@@ -503,8 +504,12 @@ internal partial class AgentOrchestrator {
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
+            var removeEnv = resolution.Account is { } account
+                ? VendorHomeEnv.Apply(env, vendor, account, _config.Home)
+                : FrozenSet<string>.Empty;
+
             spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
-            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
+            var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows, removeEnv);
             var runtime = new PtyHostedAgentRuntime(vendor, pty, _time);
 
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;

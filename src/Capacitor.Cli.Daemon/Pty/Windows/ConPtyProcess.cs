@@ -92,7 +92,7 @@ public sealed class ConPtyProcess : IPtyProcess {
         return (command, false);
     }
 
-    static IntPtr BuildEnvironmentBlock(Dictionary<string, string>? extraEnv) {
+    static IntPtr BuildEnvironmentBlock(Dictionary<string, string>? extraEnv, IReadOnlyCollection<string>? removeEnv) {
         var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
@@ -128,6 +128,12 @@ public sealed class ConPtyProcess : IPtyProcess {
             env.Remove(key);
         }
 
+        if (removeEnv is not null) {
+            foreach (var key in removeEnv) {
+                env.Remove(key);
+            }
+        }
+
         if (extraEnv is not null) {
             foreach (var (key, value) in extraEnv) {
                 env[key] = value;
@@ -160,7 +166,8 @@ public sealed class ConPtyProcess : IPtyProcess {
             TimeProvider                time,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         ) {
         var cmdLine = BuildCommandLine(command, args, ResolveCommand, NpmCmdShim.TryRead);
 
@@ -300,7 +307,7 @@ public sealed class ConPtyProcess : IPtyProcess {
             si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
             si.lpAttributeList     = attrList;
 
-            var envBlock = BuildEnvironmentBlock(extraEnv);
+            var envBlock = BuildEnvironmentBlock(extraEnv, removeEnv);
 
             try {
                 const uint creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
@@ -651,7 +658,8 @@ public class WinPtyProcessFactory(TimeProvider time) : IPtyProcessFactory {
             string                      cwd,
             Dictionary<string, string>? extraEnv = null,
             ushort                      cols     = 120,
-            ushort                      rows     = 40
+            ushort                      rows     = 40,
+            IReadOnlyCollection<string>? removeEnv = null
         )
-        => ConPtyProcess.Spawn(command, args, cwd, time, extraEnv, cols, rows);
+        => ConPtyProcess.Spawn(command, args, cwd, time, extraEnv, cols, rows, removeEnv);
 }

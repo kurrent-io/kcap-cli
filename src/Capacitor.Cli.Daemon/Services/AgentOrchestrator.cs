@@ -3068,7 +3068,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!agent.IsServerSilent) runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
 
             if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
-                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
+                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path, agent.Account);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
@@ -3345,10 +3345,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath) {
+    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath, ResolvedAccount? account) {
         try {
             var commands = await Harness.Claude.ClaudeCommandProbe.ProbeAsync(
-                _harnesses, worktreePath, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
+                _harnesses, worktreePath, account, _config.Home, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
 
             if (commands.Count > 0) ReportCommands(agentId, commands);
         } catch (Exception ex) {

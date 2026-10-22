@@ -470,7 +470,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
                 sp.GetRequiredService<TimeProvider>(),
-                promptRoot
+                promptRoot,
+                config.Home
             )
         );
         // Codex is the ONE vendor with two transports. The composite factory routes review-flow
@@ -485,7 +486,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
                 sp.GetRequiredService<TimeProvider>(),
-                promptRoot);
+                promptRoot,
+                config.Home);
             return new Harness.Codex.CodexHostedAgentRuntimeFactory(
                 (Harness.Codex.CodexLauncher) codexLauncher, pty,
                 sp.GetRequiredService<DaemonConfig>(),
