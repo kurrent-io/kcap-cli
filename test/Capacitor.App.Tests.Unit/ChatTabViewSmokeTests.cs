@@ -680,28 +680,29 @@ public class ChatTabViewSmokeTests {
     public async Task A_new_session_in_the_same_view_opens_at_the_bottom_and_follows() {
         await RunOnUiAsync(async () => {
             var host = new Host();
-            await host.LoadAsync(Tmp.CreateFile("first.jsonl", Enumerable.Repeat(UserLine, 60).ToArray()));
-            WheelUp(host);
-            host.Settle();
-            await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
+            try {
+                await host.LoadAsync(Tmp.CreateFile("first.jsonl", Enumerable.Repeat(UserLine, 60).ToArray()));
+                WheelUp(host);
+                host.Settle();
+                await Assert.That(host.Scroll.Offset.Y).IsEqualTo(0);
 
-            var next = new Host(show: false);
-            var nextPath = Tmp.CreateFile("second.jsonl", Enumerable.Repeat(UserLine, 60).ToArray());
-            await next.LoadAsync(nextPath);
-            host.View.DataContext = next.Chat;
-            host.Settle();
-            await Assert.That(host.AtBottom()).IsTrue();
-            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
-            var last = items.ContainerFromItem(next.Chat.Items[^1])!;
-            var lastBottom = last.TranslatePoint(new Point(0, last.Bounds.Height), host.Scroll)!.Value.Y;
-            await Assert.That(host.Scroll.Viewport.Height - lastBottom).IsLessThan(40);
+                var next = new Host(show: false);
+                try {
+                    var nextPath = Tmp.CreateFile("second.jsonl", Enumerable.Repeat(UserLine, 60).ToArray());
+                    await next.LoadAsync(nextPath);
+                    host.View.DataContext = next.Chat;
+                    host.Settle();
+                    await Assert.That(host.AtBottom()).IsTrue();
+                    var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+                    var last = items.ContainerFromItem(next.Chat.Items[^1])!;
+                    var lastBottom = last.TranslatePoint(new Point(0, last.Bounds.Height), host.Scroll)!.Value.Y;
+                    await Assert.That(Math.Abs(host.Scroll.Viewport.Height - lastBottom)).IsLessThan(40);
 
-            await next.AppendAndTickAsync(nextPath, 20);
-            host.Settle();
-            await Assert.That(host.AtBottom()).IsTrue();
-
-            await host.CloseAsync();
-            await next.CloseAsync();
+                    await next.AppendAndTickAsync(nextPath, 20);
+                    host.Settle();
+                    await Assert.That(host.AtBottom()).IsTrue();
+                } finally { await next.CloseAsync(); }
+            } finally { await host.CloseAsync(); }
         });
     }
 
