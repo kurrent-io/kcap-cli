@@ -195,6 +195,22 @@ still land after publication and reach the server's `HostedAgentDeathBridge`.
   without an origin, written by an older kcap, posts as today. The exited-session sweep, which runs
   in another process, reads the epoch from the session's recorded origin, which gains it.
 
+Checking at production and delivery still leaves a request in flight: an end can pass its last
+check and be posted, the planned stop can then mark the entry `Resuming`, and the successor can
+publish before the server processes the old end. So committing an end and marking for resume are
+made mutually exclusive, by a compare-and-set on the entry under a per-entry cross-process lock
+(`flock` on a lock file beside the entry; an exclusive open on Windows) that the hook, the watcher,
+the spool drain and the daemon all take:
+
+- Before posting a session end, the producer or drain stamps the entry with `EndCommittedAt` and the
+  ending epoch, only if the entry is `Running` under that epoch; otherwise the end is held.
+- `TryMarkResuming` marks `Resuming` only if the entry carries no `EndCommittedAt`; otherwise the
+  agent takes the ordinary end path at shutdown and is not resumed.
+- The stamp is durable and never cleared for that run. An end that posted, timed out with an unknown
+  outcome, or is still queued therefore makes its run ineligible for resume, which is safe: the flow
+  heals as today. A resumed run's publish writes a fresh entry without the stamp, under its own
+  epoch.
+
 A genuine exit of the resumed process carries the matching epoch and posts. This also closes the
 same window for interactive resumes.
 
@@ -262,6 +278,8 @@ entries' predecessor is not its prior instance, and discards them however recent
 - Predecessor end delivered before and after successor registration, including one spooled by the
   old process while its entry was still `Running` and drained by another process after publication:
   role stays live; a genuine exit of the resumed process still ends it.
+- An end paused after its stamp and released after successor registration, and one that times out:
+  the planned stop finds the stamp, the agent is not resumed, and the flow heals as today.
 - A replacement that starts, fails recovery and cannot yet be proven dead: its worktree and snapshot
   stay until it is.
 - Nested-cwd borrowed Cursor snapshot: the resumed process's boundary and result channel match a
