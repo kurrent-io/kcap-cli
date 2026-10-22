@@ -1,7 +1,9 @@
 using System.Collections.Frozen;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Daemon.Services;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
@@ -11,6 +13,7 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 public class AccountsPublisherServerTests {
     [TempHome] public required TempHome Home { get; init; }
+    [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     static readonly TimeSpan Throttle = TimeSpan.FromSeconds(30);
     static readonly TimeSpan Timeout  = TimeSpan.FromSeconds(5);
@@ -20,6 +23,31 @@ public class AccountsPublisherServerTests {
         new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1" },
         new FixedCredentialSource(), NullLoggerFactory.Instance, logger, TimeProvider.System) {
         internal override bool IsReady => true;
+    }
+
+    /// <summary>Connected, with the hub invoke and send recorded, so readiness follows the real
+    /// registration bracket.</summary>
+    sealed class RegisteringServerConnection(DaemonConfig config) : ServerConnection(
+        config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System) {
+        readonly List<DaemonConnect>       _connects = [];
+        readonly List<AccountsSnapshotDto> _sent     = [];
+
+        public Func<Task>? DuringConnect { get; set; }
+
+        public DaemonConnect[] Connects { get { lock (_connects) return [.. _connects]; } }
+        public AccountsSnapshotDto[] Sent { get { lock (_sent) return [.. _sent]; } }
+
+        internal override HubConnectionState HubState => HubConnectionState.Connected;
+
+        internal override async Task InvokeDaemonConnectRawAsync(DaemonConnect connect) {
+            lock (_connects) _connects.Add(connect);
+            if (DuringConnect is { } during) await during();
+        }
+
+        internal override Task SendAccountsChangedRawAsync(AccountsSnapshotDto snapshot) {
+            lock (_sent) _sent.Add(snapshot);
+            return Task.CompletedTask;
+        }
     }
 
     AccountStore Store() => new(Home.PathTo("accounts"));
@@ -103,5 +131,31 @@ public class AccountsPublisherServerTests {
         (LogLevel Level, string Message)[] Entries() {
             lock (log.Entries) return [.. log.Entries];
         }
+    }
+
+    /// <summary>The publisher's own send of a change landing inside the registration bracket is dropped
+    /// by the readiness guard; an unchanged snapshot is not sent again.</summary>
+    [Test]
+    public async Task A_change_between_the_connect_payload_and_registration_reaches_the_server_after_registration() {
+        var store = Store();
+        Add(store, "work");
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        await using var connection = new RegisteringServerConnection(
+            new DaemonConfig { Name = "test", ServerUrl = "http://127.0.0.1:1", ConfigRoot = Config.Root });
+        connection.GetAccountsSnapshot = () => publisher.Current;
+        publisher.SendToServer         = connection.AccountsChangedAsync;
+
+        await connection.RegisterDaemonAsync();
+        await Assert.That(connection.Sent).IsEmpty();
+
+        connection.DuringConnect = async () => {
+            Add(store, "spare");
+            await publisher.RebuildAsync(CancellationToken.None);
+        };
+        await connection.RegisterDaemonAsync();
+
+        await Assert.That(connection.Connects.Select(c => c.Accounts!.Revision)).IsEquivalentTo([1L, 1L], CollectionOrdering.Matching);
+        await Assert.That(connection.Sent.Select(s => s.Revision)).IsEquivalentTo([2L], CollectionOrdering.Matching);
     }
 }

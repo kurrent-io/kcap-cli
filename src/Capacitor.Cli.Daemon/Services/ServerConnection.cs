@@ -207,12 +207,16 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     /// <summary>One-way, like <see cref="DaemonStatusReportAsync"/>, so a server without the handler only
-    /// logs it. Nothing is retried: the next <c>DaemonConnect</c> carries the current snapshot.</summary>
+    /// logs it. A dropped or failed send is not retried: every registration brings the server up to date,
+    /// on <c>DaemonConnect</c> or right after it.</summary>
     public virtual async Task AccountsChangedAsync(AccountsSnapshotDto snapshot) {
         if (!IsReady) return;
-        try { await _hub.SendAsync("AccountsChanged", snapshot, cancellationToken: _ct); }
+        try { await SendAccountsChangedRawAsync(snapshot); }
         catch (Exception ex) { _logger.LogDebug(ex, "AccountsChanged send failed (old server or transient)"); }
     }
+
+    internal virtual Task SendAccountsChangedRawAsync(AccountsSnapshotDto snapshot) =>
+        _hub.SendAsync("AccountsChanged", snapshot, cancellationToken: _ct);
 
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): answer a sequenced command ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>CommandAck</c>/<c>CommandRejected</c> handler
@@ -692,6 +696,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     try { _logger.LogDebug(ex, "post-registration hook failed — ignoring"); }
                     catch { /* logger provider threw — swallow so post-register containment holds */ }
                 }
+
+                await SendAccountsChangedSinceConnectAsync();
             }
         );
 
@@ -764,14 +770,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
         var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
+        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents);
 
         try {
-            await _hub.InvokeAsync(
-                "DaemonConnect",
-                BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents),
-                cancellationToken: _ct
-            );
+            await InvokeDaemonConnectRawAsync(connect);
             _advertisedRepoStore = repoStore;
+            _connectAccounts     = connect.Accounts;
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -785,6 +789,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             throw;
         }
     }
+
+    internal virtual Task InvokeDaemonConnectRawAsync(DaemonConnect connect) =>
+        _hub.InvokeAsync("DaemonConnect", connect, cancellationToken: _ct);
 
     /// <summary>
     /// Set by <see cref="AgentOrchestrator"/>: re-registers this daemon's live agents with the
@@ -808,6 +815,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     internal RepoStoreFingerprint? AdvertisedRepoStore => _advertisedRepoStore;
 
     volatile RepoStoreFingerprint? _advertisedRepoStore;
+
+    volatile AccountsSnapshotDto? _connectAccounts;
+
+    // A change after the connect payload was built had its own send dropped by the IsReady guard.
+    Task SendAccountsChangedSinceConnectAsync() {
+        if (GetAccountsSnapshot?.Invoke() is not { } current) return Task.CompletedTask;
+
+        var sent = _connectAccounts;
+        return sent is not null && sent.HostId == current.HostId && sent.Revision == current.Revision
+            ? Task.CompletedTask
+            : AccountsChangedAsync(current);
+    }
 
     // Taken before the read it pairs with, so a write landing during the read still reads as a
     // change afterwards.
@@ -838,7 +857,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <c>virtual</c> so unit tests can control readiness directly without a live SignalR transport
     /// (see the ACP hub-method tests).
     /// </summary>
-    internal virtual bool IsReady => _gate.IsReady(_hub.State);
+    internal virtual bool IsReady => _gate.IsReady(HubState);
 
     /// <summary>The current SignalR connection incarnation. Review-flow launch commands pin this
     /// value server-side and the daemon rechecks it immediately before any spawn side effects.</summary>
