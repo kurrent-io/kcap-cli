@@ -152,12 +152,12 @@ public class LocalSetupProgressTests {
     [Test]
     public async Task A_skip_ends_in_keyword_search_with_its_reason_and_fails_nothing() {
         var p = Run(
-            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"Ollama is not responding on http://localhost:11434. Install Ollama if needed, then start it. The kcap server installation can continue; search works by keyword.\"}",
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"Ollama is not responding on http://localhost:11434; search works by keyword. Start Ollama, then run kcap setup --local again to turn on search by meaning.\"}",
             "{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}");
 
         await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Skipped);
         await Assert.That(p.Embeddings.Skipped).IsTrue();
-        await Assert.That(p.Embeddings.Summary).IsEqualTo("Ollama is not responding on http://localhost:11434. Install Ollama if needed, then start it. The kcap server installation can continue; search works by keyword.");
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Ollama is not responding on http://localhost:11434; search works by keyword.");
         await Assert.That(p.FailedCode).IsNull();
         await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Running);
     }
