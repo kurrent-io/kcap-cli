@@ -320,12 +320,13 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             .Subscribe(p => {
                 var dto = p.Dto!;
                 var (projection, note) = ChatTranscriptSource.Resolve(dto);
-                ChatInput input = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor)
+                var hasTerminal = HostedHarnessCatalog.ShowsTerminal(dto.HasTerminal, dto.Vendor);
+                ChatInput input = hasTerminal
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
                     agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts) {
-                    ShowTerminal = () => ActiveTab = WorkspaceTab.Terminal,
+                    ShowTerminal = hasTerminal ? () => ActiveTab = WorkspaceTab.Terminal : null,
                     InputSending = inputSending,
                 };
                 if (PullRequests is { } fixHost)

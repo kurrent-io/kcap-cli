@@ -301,10 +301,20 @@
             </ItemsControl.DataTemplates>
         </ItemsControl>
 
-        <TextBlock x:Name="ChatPhaseNote" Grid.Row="0" Text="{Binding PhaseNote}"
-                   IsVisible="{Binding PhaseNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                   Foreground="{StaticResource KcapMutedBrush}" FontSize="14"
-                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+        <StackPanel Grid.Row="0" Spacing="22" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <TextBlock x:Name="ChatPhaseNote" Text="{Binding PhaseNote}"
+                       IsVisible="{Binding PhaseNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Foreground="{StaticResource KcapMutedBrush}" FontSize="14" HorizontalAlignment="Center" />
+            <StackPanel x:Name="ChatTerminalOffer" Orientation="Horizontal" HorizontalAlignment="Center"
+                        IsVisible="{Binding ShowsTerminalOffer}">
+                <TextBlock Text="Check on the agent in the " Foreground="{StaticResource KcapMutedBrush}" FontSize="14"
+                           VerticalAlignment="Center" />
+                <Button x:Name="ChatOpenTerminal" Classes="kcapLink" Command="{Binding ShowTerminalCommand}"
+                        VerticalAlignment="Center" AutomationProperties.Name="Open the terminal">
+                    <TextBlock Text="terminal" FontSize="14" />
+                </Button>
+            </StackPanel>
+        </StackPanel>
 
         <!-- Everything about the next turn — runs, queue, in-flight note, composer — shares one band,
              so the transcript's last card never reads as part of the input area. -->

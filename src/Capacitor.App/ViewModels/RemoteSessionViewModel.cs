@@ -43,6 +43,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     readonly BehaviorSubject<SessionAccessState> _accessStates = new(SessionAccessState.Unavailable);
     bool _workAccessDenied;
     string? _leasedSession;
+    /// The chat keeps a session's rows when the row loses its session id, so only an agent that never
+    /// had one shows its chat before a session.
+    bool _hadSession;
     AgentRow _row;
 
     public string AgentId { get; }
@@ -138,7 +141,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         private set {
             if (_sessionEnded == value) return;
             this.RaiseAndSetIfChanged(ref _sessionEnded, value);
-            this.RaisePropertyChanged(nameof(ShowsTerminalButton));
             this.RaisePropertyChanged(nameof(AccessNote));
             _sessionEndedChanges.OnNext(value);
         }
@@ -183,12 +185,14 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// transcript, and so does a dropped lane — the access banner has its own row above the panes,
     /// so it reads over the retained rows. A refusal is different: Denied, a session that has not
     /// started and an agent that moved to this machine show the note instead of a pane.
-    /// The terminal is the exception: whether it may show is the server's answer to its own subscribe,
-    /// which it gives before a session too, so its pane shows whenever its tab is selected.
+    /// The chat and the terminal are the exceptions. Before a session the chat shows under the note,
+    /// empty, and offers the terminal; whether the terminal may show is the server's answer to its own
+    /// subscribe, which it gives before a session too, so its pane shows whenever its tab is selected.
     public bool ShowsPanes =>
         Access is RemoteSessionAccess.Ready or RemoteSessionAccess.Offline && !OriginChangedToLocal;
 
-    public bool ShowsChatPane => ShowsPanes && IsChatActive && Subagent is null;
+    public bool ShowsChatPane =>
+        (ShowsPanes || Access == RemoteSessionAccess.NoSession && !_hadSession && !OriginChangedToLocal) && IsChatActive && Subagent is null;
     public bool ShowsSubagentPane => ShowsPanes && IsChatActive && Subagent is not null;
 
     SubagentPaneViewModel? _subagent;
@@ -202,7 +206,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         }
     }
     public bool ShowsTerminalPane => IsTerminalActive && !OriginChangedToLocal;
-    public bool ShowsTerminalButton => Access == RemoteSessionAccess.NoSession && ShowsTerminalTab && !SessionEnded && !IsTerminalActive && !OriginChangedToLocal;
     public bool ShowsPullRequestPane => ShowsPanes && IsPullRequestActive;
     public bool ShowsArtefactsPane => ShowsPanes && IsArtefactsActive;
 
@@ -224,7 +227,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         this.RaisePropertyChanged(nameof(ShowsChatPane));
         this.RaisePropertyChanged(nameof(ShowsSubagentPane));
         this.RaisePropertyChanged(nameof(ShowsTerminalPane));
-        this.RaisePropertyChanged(nameof(ShowsTerminalButton));
         _terminalPaneShown.OnNext(ShowsTerminalPane);
     }
 
@@ -232,9 +234,9 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
-        RemoteSessionAccess.NoSession => ShowsTerminalTab && !SessionEnded
-            ? "Waiting for the session to start — the terminal shows what the agent is doing"
-            : "Waiting for the session to start",
+        RemoteSessionAccess.NoSession => !SessionEnded ? "Waiting for the session to start"
+            : _hadSession ? ""
+            : "The agent ended before its session started",
         _ => "",
     };
 
@@ -311,6 +313,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
             ? new RemoteTerminalViewModel(row.Id, lane, _accessStates, _sessionEndedChanges, _terminalPaneShown, time, surfaceFactory)
             : null;
+        if (Terminal is not null) Chat.ShowTerminal = () => ActiveTab = RemoteTab.Terminal;
         Apply(row);
 
         directory.Rows.Connect()
@@ -378,7 +381,13 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     void Apply(AgentRow row) {
         _row = row;
         PublishWorkPresence();
-        if (_sessionIds.Value != row.SessionId) _sessionIds.OnNext(row.SessionId);
+        var sessionId = row.SessionId;
+        if (!_hadSession && sessionId is not null) {
+            _hadSession = true;
+            this.RaisePropertyChanged(nameof(AccessNote));
+            this.RaisePropertyChanged(nameof(ShowsChatPane));
+        }
+        if (_sessionIds.Value != sessionId) _sessionIds.OnNext(sessionId);
         Title = row.Title ?? row.Vendor;
         RepoLabelText = $"{row.RepoGroupLabel} · on {row.MachineBadge}";
         if (SessionStatusDots.IsTerminal(row.Status)) {
@@ -395,7 +404,6 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         OriginChangedToLocal = false;
         _seenLive = true;
 
-        var sessionId = row.SessionId;
         if (sessionId != _leasedSession) {
             Release();
             if (sessionId is null) Access = RemoteSessionAccess.NoSession;

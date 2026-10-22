@@ -221,18 +221,29 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set {
             if (_phase == value) return;
             this.RaiseAndSetIfChanged(ref _phase, value);
-            this.RaisePropertyChanged(nameof(PhaseNote));
+            RaisePhaseNote();
             RefreshActivityNote();
         }
     }
 
+    /// A working agent's chat is never empty for long, so an empty one is still waiting, read or not,
+    /// until the session ends.
     public string PhaseNote => _items.Count > 0 ? "" : Phase switch {
-        ChatTabPhase.Waiting     => "Waiting for chat…",
+        ChatTabPhase.Waiting or ChatTabPhase.Reading when !_ended => "Waiting for chat…",
         ChatTabPhase.Missing     => _missingNote ?? "The transcript file is missing",
         ChatTabPhase.Unavailable => _unavailableNote ?? "No chat view for this harness",
         ChatTabPhase.Failed      => FailureNote(_failureNote),
         _                        => "",
     };
+
+    /// Nothing in the chat yet can mean the agent is held at a prompt only its terminal shows, so
+    /// the empty chat's note points there, unless the terminal-menu card already does.
+    public bool ShowsTerminalOffer => ShowTerminal is not null && PhaseNote.Length > 0 && !_ended && !ShowsTerminalMenu;
+
+    void RaisePhaseNote() {
+        this.RaisePropertyChanged(nameof(PhaseNote));
+        this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+    }
 
     /// The chips staged for the next prompt. A send clears the ones it carried, never the tray.
     public AttachmentTray Tray { get; } = new();
@@ -353,7 +364,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// The menu card. A pending hook card hides the screen's copy of the dialog it raised.
     public bool ShowsTerminalMenu {
         get => _showsTerminalMenu;
-        private set => this.RaiseAndSetIfChanged(ref _showsTerminalMenu, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _showsTerminalMenu, value);
+            this.RaisePropertyChanged(nameof(ShowsTerminalOffer));
+        }
     }
 
     public string TerminalMenuTitle {
@@ -372,7 +386,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         private set => this.RaiseAndSetIfChanged(ref _terminalMenuScreen, value);
     }
 
-    /// Set by the workspace hosting this chat; the card's fallback sends the user there.
+    /// Set by the workspace hosting this chat when the agent has a terminal; the menu card's fallback
+    /// and the empty chat's offer send the user there.
     public Action? ShowTerminal { get; set; }
     /// Called with the session id as a prompt goes out; the action it returns runs only if the
     /// channel accepts the prompt. A reply answers the session's open questions, and no permission
@@ -662,6 +677,13 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             })
             .DisposeWith(_disposables);
 
+        // The note follows whether the chat is empty, which every path that adds or clears rows changes.
+        var empty = true;
+        _items.CollectionChanged += (_, _) => {
+            if (empty == (_items.Count == 0)) return;
+            empty = _items.Count == 0;
+            RaisePhaseNote();
+        };
         ShowTerminalCommand = ReactiveCommand.Create(() => ShowTerminal?.Invoke());
         _disposables.Add(ShowTerminalCommand);
 
@@ -890,7 +912,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         ApplyTerminalMenu(info.UsageLimit, info.TerminalDialog);
         _status = info.Status;
         _interruption = info.Interruption;
-        _ended = info.Ended;
+        if (_ended != info.Ended) {
+            _ended = info.Ended;
+            RaisePhaseNote();
+        }
         _waitsOnUser = info.WaitsOnUser;
         if (info.Ended)
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
@@ -1004,7 +1029,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         Phase = ChatTabPhase.Waiting;
         // The rows are gone, so the view has to re-read what stands in for them even when the phase
         // is unchanged — and only then, since the setter itself raises the note on a real change.
-        if (wasWaiting) this.RaisePropertyChanged(nameof(PhaseNote));
+        if (wasWaiting) RaisePhaseNote();
         SyncPendingCardItems();
         OnTick();
     }
@@ -1286,7 +1311,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 // the reason beneath them.
                 if (_items.Count == 0) Phase = ChatTabPhase.Failed;
                 if (changed) {
-                    this.RaisePropertyChanged(nameof(PhaseNote));
+                    RaisePhaseNote();
                     RefreshActivityNote();
                 }
                 return false;
@@ -1482,7 +1507,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var suppressGroup = trailingGroup is not null && HidesBehindQuestionCard(trailingGroup, questionPending);
 
         if (!TrailingCardsMatch(start, cards)) {
-            var wasEmpty = _items.Count == 0;
             for (var i = _items.Count - 1; i >= 0; i--)
                 if (_items[i] is PendingCardItem) _items.RemoveAt(i);
             var first = true;
@@ -1490,8 +1514,6 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 _items.Add(new PendingCardItem(card, packsWithPrevious: first && trailingGroup is not null && !suppressGroup));
                 first = false;
             }
-            if (wasEmpty != (_items.Count == 0))
-                this.RaisePropertyChanged(nameof(PhaseNote));
         }
 
         if (!ReferenceEquals(_flaggedGroup, trailingGroup) && _flaggedGroup is { } stale) {
