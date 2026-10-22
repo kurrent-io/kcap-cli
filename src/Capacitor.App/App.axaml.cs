@@ -190,6 +190,8 @@ public partial class App : Application {
     // frame: the prompt window factory and BuildAndShowMainWindow both close over the SAME
     // instance.
     ActivityViewModel? _activity;
+    LaunchApprovalsCoordinator? _launchApprovals;
+    WebWorkspaceViewModel? _webWorkspace;
     // Both constructed INSIDE BuildAndShowMainWindow, over the same `service` instance, and read
     // back off the built window's DataContext so they can be disposed.
     HomeViewModel? _home;
@@ -355,29 +357,24 @@ public partial class App : Application {
             _wizardWindow = null;
             _wizardAuth = null;
         } catch (Exception ex) {
-            // BEFORE any await: a shutdown request can arrive while cleanup below is still
-            // awaiting (or if the helper itself throws), and the deferred path reads this.
+            // A quit during cleanup must retain the startup failure's exit code.
             _exitCode = 1;
-            // Also before any await, and for the same reason: if the main window was already up
-            // when the failure hit, no tray will ever exist to bring it back, so hide-on-close
-            // must not intercept anything from here on — every close on this path is a real one.
+            _shutdown.Cancel();
+            // Block window recreation and hide-on-close before cleanup can yield.
             if (_coordinator is not null) _coordinator.QuitInProgress = true;
-            // Also before any await, and the same reasoning as the shutdown path's: a workspace the
-            // user opened before the failure landed must release its attach here, not survive into
-            // the error window.
             LatchNavigation();
-            // No orphan wizard beside the error window: it is a dead shell once startup has failed,
-            // and its own close path (the handoff) is exactly what did not run.
             if (_wizardWindow is { IsVisible: true } wizard) wizard.Close();
             if (TakeAdoptableWindow() is { } adoptable) adoptable.Window.Close();
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall,
+                lifecycle: null, lane: null, QuiesceShutdownCap, _time);
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane, _localUpgrade, _localSearch);
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
+                _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -404,13 +401,13 @@ public partial class App : Application {
             _pullRequestTones = null;
             _pause = null;
             _activity = null;
+            _launchApprovals = null;
+            _webWorkspace = null;
             _home = null;
             _localServer = null;
             _rail = null;
-            _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
-            if (_historyImport is { } history) await history.CancelActiveRunAsync();
+            _wizardAuth = null;
             _historyImport = null;
-            if (_localInstall is { } install) await install.SettleAsync();
             _localInstall = null;
             _wizardWindow = null;
         }
@@ -654,6 +651,9 @@ public partial class App : Application {
             () => ConsentDecisionLogReader.ReadTail(_daemonStore, service.DaemonName, 200),
             () => ActivityStatKey(_daemonStore, service.DaemonName), ticker);
         _activity = activity;
+        var launchApprovals = new LaunchApprovalsCoordinator(activity);
+        _launchApprovals = launchApprovals;
+        _menuBar?.SetLaunchApprovalsAction(launchApprovals.Show);
 
         // The prompt window is built per raise, never here: the coordinator owns its lifetime
         // and each window gets its own ViewModel over the one shared service.
@@ -797,6 +797,9 @@ public partial class App : Application {
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
             busy: stackOwnsStart);
         _localServer = localServer;
+        var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,
+            _shutdown.Token, localServer);
+        _webWorkspace = webWorkspace;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
@@ -866,7 +869,8 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice)),
+                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
+                web: webWorkspace, openLaunchApprovals: launchApprovals.Show)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -931,7 +935,7 @@ public partial class App : Application {
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory, attention.SessionsWithAttention),
             updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
-            restartPending: restartPending.Pending, openSettings: openSettings);
+            restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
     }
 
@@ -1323,7 +1327,9 @@ public partial class App : Application {
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
         void OnClosing(object? sender, WindowClosingEventArgs e) {
-            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false } && shuttingDown?.Invoke() != true;
+            // Teardown settles setup itself; requesting handover here would race that cleanup.
+            if (shuttingDown?.Invoke() == true) return;
+            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false };
             if (WizardWindowClosing(wizard, install, userClose)) e.Cancel = true;
         }
         window.Closing += OnClosing;
@@ -1402,19 +1408,19 @@ public partial class App : Application {
         return result;
     }
 
-    // Split out of the catch so a test can drive "dispose-then-show-error" against a real
-    // DaemonClientService (constructed with fakes, disposal observable) and the same fake
-    // IClassicDesktopStyleApplicationLifetime AppStartupTests already uses for ShowStartupError.
-    // Ordering matters: dispose WHILE WE STILL CAN. `service` may already be live (Start()
-    // called, socket/IPC pump running) if the failure happened later in StartAsync (e.g.
-    // BuildAndShowMainWindow throwing) — and the error window's own close handler force-shuts-
-    // down via desktop.Shutdown(1), which bypasses OnShutdownRequested/DisposeAndShutdownAsync
-    // entirely, so nothing else would ever run this cleanup.
+    // The error window shuts down directly, bypassing normal teardown, so all live services
+    // and windows must be released before showing it.
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
             DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null,
-            LocalSearchController? search = null) {
+            LocalSearchController? search = null, AppMenuBar? menuBar = null, MainWindowCoordinator? coordinator = null) {
+        menuBar?.SetLaunchApprovalsAction(null);
+        if (coordinator is not null) coordinator.QuitInProgress = true;
+        shutdown.Cancel();
+        desktop.MainWindow?.Close();
+        desktop.MainWindow = null;
+
         // The dependent goes first (it subscribes to service's streams) — same ordering rule as
         // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
         // token and waits out any mutation it started; that wait is unbounded here on purpose — a
@@ -1427,7 +1433,6 @@ public partial class App : Application {
             }
         }
         if (service is not null) {
-            shutdown.Cancel();
             try {
                 await service.DisposeAsync();
             } catch (Exception disposeEx) {
@@ -1548,7 +1553,8 @@ public partial class App : Application {
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
             LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
-            UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null) {
+            UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
+            WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1599,8 +1605,9 @@ public partial class App : Application {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
-            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon) {
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
             LocalStack = localStack,
+            Web = web,
         };
         var window = adopt?.Window ?? new MainWindow();
         window.DataContext = vm;
@@ -2202,6 +2209,8 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        _launchApprovals?.Dispose();
+        _menuBar?.SetLaunchApprovalsAction(null);
         if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
         if (_reauthSettle is { } reauthSettle) await reauthSettle.ConfigureAwait(false);
 
@@ -2221,7 +2230,7 @@ public partial class App : Application {
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });
         } else {

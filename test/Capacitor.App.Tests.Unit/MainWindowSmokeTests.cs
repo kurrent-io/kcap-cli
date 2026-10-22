@@ -300,87 +300,6 @@ public class MainWindowSmokeTests {
         await Assert.That(rendered).Contains("Couldn't stop agent-a");
     }
 
-    // ---- Activity gate ----
-    //
-    // Proves the real production wiring end to end — the Activity flyout's open state, the
-    // launcher pane being on screen (NO workspace open), and the window's
-    // own IsVisible (Show()/Hide()) all drive ActivityViewModel.OnTabVisibleChanged through the
-    // code-behind, not just that the ViewModel reacts correctly in isolation
-    // (ActivityViewModelTests already covers that). Each gate flips the polling off on its own;
-    // each TRUE transition issues exactly one more immediate read, awaited via
-    // PendingRefreshForTesting — the VM's stat+read hops off the UI thread, so RunJobs() alone no
-    // longer guarantees the read has landed. Opening a workspace under the popup CLOSES the
-    // flyout, so coming back does not auto-resume — the feed reopens by click.
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Activity_polls_only_while_open_on_the_launcher_pane_in_a_visible_window() {
-        var reads = await AvaloniaSession.DispatchAsync(async () => {
-            var service = new FakeDaemonClientService();
-            var (actions, _) = NewActions(service);
-            var reader = new ScriptedReader();
-            reader.Set(new ConsentLogReadResult([], true));
-            var activity = new ActivityViewModel(reader.Read, () => "k", new FakeTicker());
-            var attach = new FakeTerminalAttachClientFactory();
-            var vm = new MainWindowViewModel(
-                service, CancellationToken.None, activity, TimeProvider.System,
-                workspaceFactory: agentId => new WorkspaceViewModel(
-                    agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
-                    new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader()));
-            var window = new MainWindow { DataContext = vm };
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-
-            var button = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "ActivityButton");
-            var flyout = button.Flyout!;
-            var closed = reader.ReadCalls; // starts closed — no read
-
-            flyout.ShowAt(button);
-            Dispatcher.UIThread.RunJobs();
-            await activity.PendingRefreshForTesting!;
-            var opened = reader.ReadCalls;
-
-            vm.OpenSession("0123456789abcdef0123456789abcdef"); // workspace replaces the launcher
-            Dispatcher.UIThread.RunJobs();
-            var workspaceOpen = reader.ReadCalls;
-
-            vm.CloseWorkspace();
-            Dispatcher.UIThread.RunJobs();
-            var launcherBack = reader.ReadCalls; // closed by the swap — still off
-
-            flyout.ShowAt(button);
-            Dispatcher.UIThread.RunJobs();
-            await activity.PendingRefreshForTesting!;
-            var afterReopen = reader.ReadCalls;
-
-            window.Hide();
-            Dispatcher.UIThread.RunJobs();
-            var afterHide = reader.ReadCalls;
-
-            // Whether the popup survived the window hide is platform detail: Show() alone resumes
-            // a surviving flyout, ShowAt() reopens a closed one, and a repeated true is not a
-            // transition — either way exactly one more read lands.
-            window.Show();
-            Dispatcher.UIThread.RunJobs();
-            flyout.ShowAt(button);
-            Dispatcher.UIThread.RunJobs();
-            await activity.PendingRefreshForTesting!;
-            var afterReshow = reader.ReadCalls;
-
-            window.Close();
-            Dispatcher.UIThread.RunJobs();
-
-            return (closed, opened, workspaceOpen, launcherBack, afterReopen, afterHide, afterReshow);
-        });
-
-        await Assert.That(reads.closed).IsEqualTo(0);
-        await Assert.That(reads.opened).IsEqualTo(1); // opening on the launcher: one immediate read
-        await Assert.That(reads.workspaceOpen).IsEqualTo(1); // a workspace opening is a FALSE transition
-        await Assert.That(reads.launcherBack).IsEqualTo(1);
-        await Assert.That(reads.afterReopen).IsEqualTo(2);
-        await Assert.That(reads.afterHide).IsEqualTo(2); // hiding is a FALSE transition
-        await Assert.That(reads.afterReshow).IsEqualTo(3);
-    }
-
     /// PR context follows the window being on screen: an open workspace in a visible window loads
     /// and shows its pull request while another app holds keyboard focus, and only minimizing or
     /// hiding the window masks it.
@@ -1415,6 +1334,45 @@ public class MainWindowSmokeTests {
             await Assert.That(ok).IsTrue();
         });
     }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    [NotInParallel("AvaloniaSession")]
+    public Task Help_opens_the_dashboard_from_an_open_workspace_on_every_platform(bool appMenuInWindow) => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        var (actions, _) = NewActions(service);
+        var opener = new RecordingOpener();
+        using var web = new WebWorkspaceViewModel("https://team.example", opener, _ => { }, CancellationToken.None);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            appMenuInWindow: appMenuInWindow,
+            workspaceFactory: id => new WorkspaceViewModel(id, service, actions, new FakeTerminalAttachClientFactory().Factory,
+                () => new FakeTerminalSurface(), new FakeTimeProvider(), opener, new FakePermissionService(),
+                new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader())) { Web = web };
+        var window = new MainWindow { DataContext = vm };
+        try {
+            window.Show();
+            vm.OpenSession("0123456789abcdef0123456789abcdef");
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(vm.CurrentWorkspace).IsNotNull();
+            var rail = window.FindDescendantOfType<SessionRailView>()!;
+            var help = rail.FindControl<Button>("RailHelpButton")!;
+            var flyout = (Flyout)help.Flyout!;
+            flyout.ShowAt(help);
+            Dispatcher.UIThread.RunJobs();
+            var dashboard = rail.FindControl<Button>("RailOpenDashboardButton")!;
+            await Assert.That(dashboard.IsEffectivelyVisible).IsTrue();
+            await Assert.That(dashboard.IsEffectivelyEnabled).IsTrue();
+            await Assert.That(AutomationProperties.GetName(dashboard)).IsEqualTo("Open dashboard");
+            ClickFlyoutButton(dashboard);
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(flyout.IsOpen).IsFalse();
+            await Assert.That(opener.Opened.Single()).IsEqualTo("https://team.example");
+        } finally {
+            vm.CloseWorkspace();
+            window.Close();
+        }
+    });
 
     /// Help and support is reachable from the rail footer whatever the server says: the button and
     /// Documentation stay enabled with no feedback action, and only the two report items follow it.

@@ -1,4 +1,5 @@
 using Capacitor.App.Services;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -52,7 +53,7 @@ public class UiScaleTests {
         await setting.SetAsync(1.2);
         await setting.SetAsync(1.2);
 
-        await Assert.That(string.Join(",", seen)).IsEqualTo("1,1.2");
+        await Assert.That(seen).IsEquivalentTo([1.0, 1.2], CollectionOrdering.Matching);
         await Assert.That(setting.Current).IsEqualTo(1.2);
         var reloaded = await UiScaleSetting.LoadAsync(new AppStateStore(path));
         await Assert.That(reloaded.Current).IsEqualTo(1.2);
