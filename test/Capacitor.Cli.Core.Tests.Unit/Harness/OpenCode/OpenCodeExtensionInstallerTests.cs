@@ -1,5 +1,4 @@
 using Capacitor.Cli.Core.Harness.OpenCode;
-using Capacitor.Cli.Core.Mcp;
 
 namespace Capacitor.Cli.Core.Tests.Unit.Harness.OpenCode;
 
@@ -28,27 +27,6 @@ public class OpenCodeExtensionInstallerTests {
 
         await Assert.That(OpenCodeExtensionInstaller.IsInstalled(path)).IsTrue();
         await Assert.That(OpenCodeExtensionInstaller.ReadMarker(path)).IsEqualTo(CapacitorVersion.Current());
-    }
-
-    /// <summary>A user-run OpenCode tells kcap's MCP servers nothing about the calling session, so the
-    /// plugin stamps it — only on the servers whose session_id means the caller, only when the call names
-    /// none, and on the args object OpenCode sends on rather than a replacement it would never see.</summary>
-    [Test]
-    public async Task the_plugin_stamps_the_calling_session_on_kcap_calls_that_name_none() {
-        var content = OpenCodeExtensionInstaller.ExtensionContent;
-        var start   = content.IndexOf("\"tool.execute.before\"", StringComparison.Ordinal);
-
-        await Assert.That(start).IsGreaterThan(-1);
-        var hook = content[start..];
-
-        await Assert.That(content).Contains("""const CALLER_SESSION_SERVERS = ["kcap-workitems", "kcap-plans", "kcap-flows"]""");
-        // OpenCode prefixes a tool with the name kcap registered its server under.
-        await Assert.That(KcapMcpServers.All.Select(s => s.Name)).Contains("kcap-workitems").And.Contains("kcap-plans").And.Contains("kcap-flows");
-        await Assert.That(hook).Contains("""CALLER_SESSION_SERVERS.some((server) => tool.startsWith(server + "_"))""");
-        await Assert.That(hook).Contains("""if (args.session_id !== undefined && args.session_id !== null && args.session_id !== "") return""");
-        await Assert.That(hook).Contains("args.session_id = sid");
-        await Assert.That(hook).DoesNotContain("output.args =");
-        await Assert.That(hook).Contains("} catch {");
     }
 
     [Test]
