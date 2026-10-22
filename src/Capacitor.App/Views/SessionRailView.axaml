@@ -333,18 +333,18 @@
                                 <Flyout Placement="TopEdgeAlignedRight" VerticalOffset="6"
                                         FlyoutPresenterClasses="kcapPanel">
                                     <StackPanel Spacing="2" Margin="6" MinWidth="188">
-                                        <Button x:Name="RailHelpSetupButton" Classes="kcapGhost" Content="Set up kcap…"
-                                                Command="{Binding SetupCommand}" Click="OnHelpFlyoutItemClick"
-                                                IsVisible="{Binding CanOpenSetup}" HorizontalAlignment="Stretch"
-                                                HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
-                                        <Button x:Name="RailHelpSignInButton" Classes="kcapGhost" Content="Sign in"
-                                                Command="{Binding SignInCommand}" Click="OnHelpFlyoutItemClick"
-                                                IsVisible="{Binding SignInVisible}"
-                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
-                                                Padding="10,8" FontSize="13.5"
-                                                AutomationProperties.Name="Sign in" />
+                                        <Button x:Name="RailOpenDashboardButton" Classes="kcapGhost"
+                                                Command="{Binding Web.OpenCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding Web.IsVisible, FallbackValue=False}"
+                                                ToolTip.Tip="{Binding Web.Tooltip}" AutomationProperties.Name="{Binding Web.Label}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5">
+                                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                                <TextBlock Text="{Binding Web.Label}" VerticalAlignment="Center" />
+                                                <views:AppIcon Kind="ExternalLink" Size="14" />
+                                            </StackPanel>
+                                        </Button>
                                         <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}"
-                                                IsVisible="{Binding SignInVisible}" />
+                                                IsVisible="{Binding Web.IsVisible, FallbackValue=False}" />
                                         <Button x:Name="RailHelpDocsButton" Classes="kcapGhost" Content="Documentation"
                                                 Command="{Binding OpenDocsCommand}" Click="OnHelpFlyoutItemClick"
                                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
@@ -359,10 +359,32 @@
                                                 Click="OnHelpFlyoutItemClick"
                                                 HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                 Padding="10,8" FontSize="13.5" />
+                                        <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}">
+                                            <Border.IsVisible>
+                                                <MultiBinding Converter="{x:Static BoolConverters.Or}">
+                                                    <Binding Path="CanOpenSetup" />
+                                                    <Binding Path="SignInVisible" />
+                                                </MultiBinding>
+                                            </Border.IsVisible>
+                                        </Border>
+                                        <Button x:Name="RailHelpSetupButton" Classes="kcapGhost" Content="Set up kcap…"
+                                                Command="{Binding SetupCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding CanOpenSetup}" HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Left" Padding="10,8" FontSize="13.5" />
+                                        <Button x:Name="RailHelpSignInButton" Classes="kcapGhost" Content="Sign in"
+                                                Command="{Binding SignInCommand}" Click="OnHelpFlyoutItemClick"
+                                                IsVisible="{Binding SignInVisible}"
+                                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                Padding="10,8" FontSize="13.5"
+                                                AutomationProperties.Name="Sign in" />
                                         <StackPanel x:Name="RailAppMenuItems" Spacing="2" IsVisible="{Binding AppMenuInWindow}">
                                             <Border Height="1" Margin="8,4" Background="{StaticResource KcapBorderBrush}" />
                                             <Button x:Name="RailHelpAboutButton" Classes="kcapGhost" Content="About kcap"
                                                     Click="OnAboutClick" IsVisible="{Binding ShowsAbout}"
+                                                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                                    Padding="10,8" FontSize="13.5" />
+                                            <Button x:Name="RailLaunchApprovalsButton" Classes="kcapGhost" Content="Launch approvals…"
+                                                    Command="{Binding OpenLaunchApprovalsCommand}" Click="OnHelpFlyoutItemClick"
                                                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                                     Padding="10,8" FontSize="13.5" />
                                             <Button x:Name="RailHelpSettingsButton" Classes="kcapGhost" Content="Settings…"

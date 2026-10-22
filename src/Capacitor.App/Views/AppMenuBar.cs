@@ -17,6 +17,13 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
     const string HelpMenuTitle = "Help";
 
     Action<FeedbackCategory>? _openFeedback;
+    Action? _showLaunchApprovals;
+    readonly List<NativeMenuItem> _launchApprovalItems = [];
+
+    public void SetLaunchApprovalsAction(Action? show) {
+        _showLaunchApprovals = show;
+        foreach (var item in _launchApprovalItems) item.IsEnabled = show is not null;
+    }
     readonly List<ReportItems> _reportItems = [];
 
     public void SetFeedbackAction(Action<FeedbackCategory>? open) {
@@ -59,9 +66,13 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
 
         if (showMainWindow() is { } show) {
             menu.Add(Item("kcap", show));
-            menu.Add(new NativeMenuItemSeparator());
         }
 
+        var approvals = Item("Launch approvals", () => _showLaunchApprovals?.Invoke(), enabled: _showLaunchApprovals is not null);
+        _launchApprovalItems.Add(approvals);
+        window.Closed += (_, _) => _launchApprovalItems.Remove(approvals);
+        menu.Add(approvals);
+        menu.Add(new NativeMenuItemSeparator());
         menu.Add(Item("Bring All to Front", () => BringAllToFront(window)));
         return menu;
     }

@@ -190,6 +190,8 @@ public partial class App : Application {
     // frame: the prompt window factory and BuildAndShowMainWindow both close over the SAME
     // instance.
     ActivityViewModel? _activity;
+    LaunchApprovalsCoordinator? _launchApprovals;
+    WebWorkspaceViewModel? _webWorkspace;
     // Both constructed INSIDE BuildAndShowMainWindow, over the same `service` instance, and read
     // back off the built window's DataContext so they can be disposed.
     HomeViewModel? _home;
@@ -376,7 +378,7 @@ public partial class App : Application {
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 _lifecycle, _lane, _localUpgrade, _localSearch);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
@@ -404,6 +406,8 @@ public partial class App : Application {
             _pullRequestTones = null;
             _pause = null;
             _activity = null;
+            _launchApprovals = null;
+            _webWorkspace = null;
             _home = null;
             _localServer = null;
             _rail = null;
@@ -654,6 +658,9 @@ public partial class App : Application {
             () => ConsentDecisionLogReader.ReadTail(_daemonStore, service.DaemonName, 200),
             () => ActivityStatKey(_daemonStore, service.DaemonName), ticker);
         _activity = activity;
+        var launchApprovals = new LaunchApprovalsCoordinator(activity);
+        _launchApprovals = launchApprovals;
+        _menuBar?.SetLaunchApprovalsAction(launchApprovals.Show);
 
         // The prompt window is built per raise, never here: the coordinator owns its lifetime
         // and each window gets its own ViewModel over the one shared service.
@@ -797,6 +804,9 @@ public partial class App : Application {
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
             busy: stackOwnsStart);
         _localServer = localServer;
+        var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,
+            _shutdown.Token, localServer);
+        _webWorkspace = webWorkspace;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
@@ -866,7 +876,8 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice)),
+                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
+                web: webWorkspace, openLaunchApprovals: launchApprovals.Show)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -931,7 +942,7 @@ public partial class App : Application {
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory, attention.SessionsWithAttention),
             updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
-            restartPending: restartPending.Pending, openSettings: openSettings);
+            restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
     }
 
@@ -1548,7 +1559,8 @@ public partial class App : Application {
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
             LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
-            UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null) {
+            UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
+            WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1599,8 +1611,9 @@ public partial class App : Application {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
-            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon) {
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
             LocalStack = localStack,
+            Web = web,
         };
         var window = adopt?.Window ?? new MainWindow();
         window.DataContext = vm;
@@ -2202,6 +2215,8 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        _launchApprovals?.Dispose();
+        _menuBar?.SetLaunchApprovalsAction(null);
         if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
         if (_reauthSettle is { } reauthSettle) await reauthSettle.ConfigureAwait(false);
 
@@ -2221,7 +2236,7 @@ public partial class App : Application {
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });
         } else {

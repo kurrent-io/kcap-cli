@@ -347,11 +347,28 @@ public class TrayAdapterTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task Launch_approvals_is_always_available_when_wired() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        var opened = 0;
+        using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(),
+            openLaunchApprovals: () => opened++);
+        var menu = new NativeMenu();
+        new TrayMenuBuilder(vm).Rebuild(menu, Model());
+        var item = menu.Items.OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
+        var layout = string.Join("|", menu.Items.Select(i => i is NativeMenuItem entry ? entry.Header : "-"));
+        await Assert.That(layout).Contains("Open kcap|Launch approvals…|-|Pause new launches|Settings…");
+        await Assert.That(item.IsEnabled).IsTrue();
+        ((INativeMenuItemExporterEventsImplBridge)item).RaiseClicked();
+        await Assert.That(opened).IsEqualTo(1);
+    });
+
     // ---- "Install command-line tool…" item ----
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public Task Settings_follows_Open_and_invokes_its_command() => AvaloniaSession.RunOnUiAsync(async () => {
+    public Task Settings_follows_Pause_and_invokes_its_command() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         var opened = 0;
         using var vm = new TrayViewModel(service, new FakePauseController(), NewActions(service), new FakeConsentService(),
@@ -360,7 +377,7 @@ public class TrayAdapterTests {
         new TrayMenuBuilder(vm).Rebuild(menu, Model());
         var items = menu.Items.OfType<NativeMenuItem>().ToList();
         var settings = items.Single(i => i.Header == "Settings…");
-        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Open kcap") + 1);
+        await Assert.That(items.IndexOf(settings)).IsEqualTo(items.FindIndex(i => i.Header == "Pause new launches") + 1);
         await Assert.That(settings.IsEnabled).IsTrue();
         ((INativeMenuItemExporterEventsImplBridge)settings).RaiseClicked();
         await Assert.That(opened).IsEqualTo(1);
