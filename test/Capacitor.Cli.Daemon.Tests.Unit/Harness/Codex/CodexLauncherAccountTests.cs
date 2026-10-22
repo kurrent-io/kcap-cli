@@ -63,7 +63,8 @@ public class CodexLauncherAccountTests {
         Home.CreateFile([".codex", "hooks.json"], CapacitorHooks);
 
         await Assert.That(() => NewLauncher().Prepare(Ctx(source, worktree, Account(accountDir))))
-            .Throws<CodexHooksNotInstalledException>();
+            .Throws<CodexHooksNotInstalledException>()
+            .WithMessageContaining($"kcap accounts add codex {accountDir.Path}");
     }
 
     [Test]

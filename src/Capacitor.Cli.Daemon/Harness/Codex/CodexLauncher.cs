@@ -129,10 +129,12 @@ internal sealed partial class CodexLauncher(
         var worktreeHooks = Path.Combine(ctx.Worktree.Path, ".codex", "hooks.json");
 
         if (!HooksInstalledIn(worktreeHooks) && !HooksInstalledIn(paths.UserHooksJson)) {
+            // Not `kcap plugin install --codex`: it wires the CLI shell's Codex directory, which
+            // need not be the one this launch uses.
             throw new CodexHooksNotInstalledException(
-                "Codex hooks not installed. Run `kcap plugin install --codex` " +
-                "(user scope) or `kcap plugin install --codex --project` "      +
-                "(project scope) and try again."
+                $"Codex hooks not installed in {paths.Home}. Run `kcap accounts add codex {paths.Home}` " +
+                "to wire that directory, or `kcap plugin install --codex --project` "                   +
+                "(project scope), and try again."
             );
         }
 
