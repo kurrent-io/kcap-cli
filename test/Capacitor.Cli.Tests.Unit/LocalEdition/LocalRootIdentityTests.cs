@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.Versioning;
+using System.Text.RegularExpressions;
 using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.LocalEdition;
 
@@ -77,7 +78,7 @@ public class LocalRootIdentityTests {
             // The first device row names the image's whole disk; detaching that releases the image, not just its volume.
             device = attachOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries)
                          .Select(line => line.Split((char[])[' ', '\t'], 2)[0])
-                         .FirstOrDefault(token => token.StartsWith("/dev/disk", StringComparison.Ordinal)) ?? mount;
+                         .FirstOrDefault(WholeDisk.IsMatch) ?? mount;
 
             var upper = Directory.CreateDirectory(Path.Combine(mount, "Root")).FullName;
             Directory.CreateDirectory(Path.Combine(mount, "root"));
@@ -204,6 +205,9 @@ public class LocalRootIdentityTests {
         await Assert.That(LocalRootIdentity.Decide(root, new(At(root.Directory), At(other)))).IsEqualTo(OwnerDecision.Unknown);
         await Assert.That(LocalRootIdentity.Decide(root, new(new OwnerReading.Unreadable("denied"), Gone))).IsEqualTo(OwnerDecision.Unknown);
     }
+
+    // A whole disk, not one of its slices (/dev/disk4s1): detaching the slice can leave the image attached.
+    static readonly Regex WholeDisk = new(@"^/dev/disk\d+$");
 
     static int Run(string file, params string[] args) => RunWithOutput(file, args).Exit;
 
