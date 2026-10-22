@@ -88,11 +88,18 @@ public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog 
         if (finished != daemon.Exited) {
             log.Write($"{entry.Enrollment.Name} (pid {daemon.Pid}) did not stop within {GracefulStopWait.TotalSeconds:0}s; ending it");
             daemon.Terminate();
-            await daemon.Exited.ConfigureAwait(false);
         }
+        var code = await daemon.Exited.ConfigureAwait(false);
 
+        // Cleared here, not left to the watcher: a start that lands before the watcher runs would see the
+        // stopped daemon as live and launch nothing
         lock (_gate) {
-            if (entry.Daemon is null || ReferenceEquals(entry.Daemon, daemon)) entry.State = DaemonState.Stopped;
+            if (ReferenceEquals(entry.Daemon, daemon)) {
+                entry.Daemon = null;
+                entry.LastExit = code;
+                log.Write($"{entry.Enrollment.Name} pid {daemon.Pid} stopped with {code}");
+            }
+            if (entry.Daemon is null) entry.State = DaemonState.Stopped;
             return Describe(entry);
         }
     }
@@ -168,20 +175,23 @@ public sealed class Supervisor(IDaemonHost host, TimeProvider time, IServiceLog 
 
         int session;
         bool relaunch;
+        Task? pause = null;
         lock (_gate) {
             if (!_entries.TryGetValue(sid, out var e) || !ReferenceEquals(e.Daemon, daemon)) return;
             e.Daemon = null;
             e.LastExit = code;
             relaunch = e.WantRunning && code != 0;
+            // Counting from before the state reads Relaunching, so the pause is measured from that moment
+            if (relaunch) pause = Task.Delay(RelaunchPause, time);
             e.State = relaunch ? DaemonState.Relaunching
                 : e.State is DaemonState.SessionEnded ? DaemonState.SessionEnded
                 : DaemonState.Stopped;
             session = e.User.SessionId;
             log.Write($"{e.Enrollment.Name} pid {daemon.Pid} exited with {code}{(relaunch ? $"; relaunching in {RelaunchPause.TotalSeconds:0}s" : "")}");
         }
-        if (!relaunch) return;
+        if (pause is null) return;
 
-        await Task.Delay(RelaunchPause, time).ConfigureAwait(false);
+        await pause.ConfigureAwait(false);
         lock (_gate) {
             if (_detached || !_entries.TryGetValue(sid, out var e) || !e.WantRunning) return;
         }
