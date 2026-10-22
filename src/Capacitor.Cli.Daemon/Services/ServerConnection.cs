@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
@@ -130,6 +131,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
     public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
 
+    /// <summary>The host's accounts snapshot, carried on <c>DaemonConnect</c>; between connects a change
+    /// goes out through <see cref="AccountsChangedAsync"/>.</summary>
+    public Func<AccountsSnapshotDto?>? GetAccountsSnapshot { get; set; }
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
     /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
     /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
@@ -199,6 +204,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         if (!IsReady) return;
         try { await _hub.SendAsync("DaemonStatusReport", report, cancellationToken: _ct); }
         catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed (old server or transient)"); }
+    }
+
+    /// <summary>One-way, like <see cref="DaemonStatusReportAsync"/>, so a server without the handler only
+    /// logs it. Nothing is retried: the next <c>DaemonConnect</c> carries the current snapshot.</summary>
+    public virtual async Task AccountsChangedAsync(AccountsSnapshotDto snapshot) {
+        if (!IsReady) return;
+        try { await _hub.SendAsync("AccountsChanged", snapshot, cancellationToken: _ct); }
+        catch (Exception ex) { _logger.LogDebug(ex, "AccountsChanged send failed (old server or transient)"); }
     }
 
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): answer a sequenced command ONE-WAY (never
@@ -741,7 +754,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
-            ResumingAgents: GetResumingAgents?.Invoke());
+            ResumingAgents: GetResumingAgents?.Invoke(),
+            SupportsAccountLaunches: true,
+            Accounts: GetAccountsSnapshot?.Invoke());
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";

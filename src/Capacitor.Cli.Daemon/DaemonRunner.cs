@@ -753,6 +753,9 @@ public static partial class DaemonRunner {
         var lifetime   = host.Services.GetRequiredService<IHostApplicationLifetime>();
         var connection = host.Services.GetRequiredService<ServerConnection>();
 
+        connection.GetAccountsSnapshot = () => accounts.Current;
+        accounts.SendToServer          = connection.AccountsChangedAsync;
+
         // Death-rattle instrumentation: without these, a daemon dying mid-run
         // (signal, OOM, unobserved-task FailFast, native crash) leaves no trace
         // in the log and we can't tell a clean shutdown from a kill. Each hook

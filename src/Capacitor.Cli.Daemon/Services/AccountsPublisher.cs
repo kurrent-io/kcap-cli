@@ -13,7 +13,8 @@ namespace Capacitor.Cli.Daemon.Services;
 internal sealed partial class AccountsPublisher(
         DaemonConfig config, UserHome home, TimeProvider time, ILogger<AccountsPublisher> logger)
     : BackgroundService {
-    static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan PollInterval       = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan ServerSendInterval = TimeSpan.FromSeconds(30);
 
     readonly SemaphoreSlim        _gate     = new(1, 1);
     readonly DaemonStatusNotifier _notifier = new();
@@ -26,6 +27,12 @@ internal sealed partial class AccountsPublisher(
     bool                       _loadWarned;
     bool                       _hostWarned;
 
+    readonly Lock _sendLock = new();
+    ITimer?       _trailingSend;
+    long?         _lastSentAt;
+    bool          _trailingDue;
+    bool          _sendStopped;
+
     public AccountsSnapshotDto? Current => Volatile.Read(ref _current);
 
     /// <summary>Raised under the rebuild gate so handlers see revisions in order. A handler must not
@@ -36,6 +43,10 @@ internal sealed partial class AccountsPublisher(
 
     // Seam: tests substitute a failing read.
     internal Func<AccountStore, AccountRegistry> LoadRegistry { get; set; } = store => store.Load();
+
+    /// <summary>Takes a new snapshot to the server, at most once per <see cref="ServerSendInterval"/>: a change
+    /// inside the interval waits for its end and sends whatever snapshot is current then.</summary>
+    public Func<AccountsSnapshotDto, Task>? SendToServer { get; set; }
 
     public long Version => _notifier.Version;
 
@@ -104,6 +115,7 @@ internal sealed partial class AccountsPublisher(
         Volatile.Write(ref _current, next);
         _notifier.Pulse();
         Announce(next);
+        QueueServerSend(next);
         return true;
     }
 
@@ -117,6 +129,54 @@ internal sealed partial class AccountsPublisher(
                 LogHandlerFailed(logger, ex);
             }
         }
+    }
+
+    // Runs under the rebuild gate, so it never waits on the send.
+    void QueueServerSend(AccountsSnapshotDto snapshot) {
+        lock (_sendLock) {
+            if (_sendStopped || SendToServer is null || _trailingDue) return;
+
+            var wait = _lastSentAt is { } last ? ServerSendInterval - time.GetElapsedTime(last) : TimeSpan.Zero;
+            if (wait > TimeSpan.Zero) {
+                _trailingDue = true;
+                if (_trailingSend is { } timer) timer.Change(wait, Timeout.InfiniteTimeSpan);
+                else _trailingSend = time.CreateTimer(_ => SendTrailing(), null, wait, Timeout.InfiniteTimeSpan);
+                return;
+            }
+
+            _lastSentAt = time.GetTimestamp();
+        }
+
+        _ = SendAsync(snapshot);
+    }
+
+    void SendTrailing() {
+        lock (_sendLock) {
+            if (_sendStopped) return;
+            _trailingDue = false;
+            _lastSentAt  = time.GetTimestamp();
+        }
+
+        if (Current is { } snapshot) _ = SendAsync(snapshot);
+    }
+
+    async Task SendAsync(AccountsSnapshotDto snapshot) {
+        if (SendToServer is not { } send) return;
+
+        try {
+            await send(snapshot);
+        } catch (Exception ex) {
+            LogServerSendFailed(logger, ex);
+        }
+    }
+
+    public override void Dispose() {
+        lock (_sendLock) {
+            _sendStopped = true;
+            _trailingSend?.Dispose();
+        }
+
+        base.Dispose();
     }
 
     // Any failure here leaves the publisher waiting for a host id rather than stopping the daemon.
@@ -143,4 +203,7 @@ internal sealed partial class AccountsPublisher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "An accounts snapshot subscriber threw; the others were still notified")]
     static partial void LogHandlerFailed(ILogger logger, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Sending the accounts snapshot to the server failed; the next connect carries it")]
+    static partial void LogServerSendFailed(ILogger logger, Exception ex);
 }
