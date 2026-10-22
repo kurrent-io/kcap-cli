@@ -27,6 +27,10 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="TextDecorations" Value="Underline" />
         </Style>
+        <!-- Nested under a filled search mode, a second fill stacks; the indent and the dot carry the model pick. -->
+        <Style Selector="RadioButton.onboardingOption.nested:checked">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
         <Style Selector="RadioButton">
             <Setter Property="FontSize" Value="13" />
         </Style>
@@ -64,14 +68,14 @@
             </Grid>
         </StackPanel>
         <StackPanel Spacing="8" Margin="28,0,0,0" IsVisible="{Binding ModelChoiceVisible}">
-            <RadioButton x:Name="SearchDefaultOption" Classes="onboardingOption"
+            <RadioButton x:Name="SearchDefaultOption" Classes="onboardingOption nested"
                          IsChecked="{Binding UseDefault, Mode=TwoWay}">
                 <StackPanel Spacing="3">
                     <TextBlock Text="{x:Static vm:SearchChoiceViewModel.DefaultLabel}" TextWrapping="Wrap" />
                     <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.DefaultDetail}" />
                 </StackPanel>
             </RadioButton>
-            <RadioButton x:Name="SearchOtherOption" Classes="onboardingOption"
+            <RadioButton x:Name="SearchOtherOption" Classes="onboardingOption nested"
                          IsChecked="{Binding UseOther, Mode=TwoWay}">
                 <StackPanel Spacing="6">
                     <TextBlock Text="Another Ollama model" />
