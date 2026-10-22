@@ -68,12 +68,14 @@ public class LocalRootIdentityTests {
 
         var image = Tmp.PathTo("cs.dmg");
         var mount = Tmp.CreateDir("m");
-        var attached = false;
+        string? device = null;
 
         try {
             Skip.When(Run("hdiutil", "create", "-size", "20m", "-fs", "Case-sensitive APFS", "-volname", "kcs", image) != 0, "hdiutil create failed");
-            Skip.When(Run("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image) != 0, "hdiutil attach failed");
-            attached = true;
+            var (attachExit, attachOutput) = RunWithOutput("hdiutil", "attach", "-nobrowse", "-mountpoint", mount, image);
+            Skip.When(attachExit != 0, "hdiutil attach failed");
+            // The first line names the image's whole disk; detaching that releases the image, not just its volume.
+            device = attachOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Split((char[])[' ', '\t'], 2)[0] ?? mount;
 
             var upper = Directory.CreateDirectory(Path.Combine(mount, "Root")).FullName;
             Directory.CreateDirectory(Path.Combine(mount, "root"));
@@ -81,19 +83,19 @@ public class LocalRootIdentityTests {
 
             await Assert.That(LocalRootIdentity.Compare(root, Path.Combine(mount, "root"))).IsEqualTo(RootMatch.Different);
         } finally {
-            if (attached) await DetachAsync(mount);
+            if (device is not null) await DetachAsync(device, mount);
         }
     }
 
     // Cleanup, not what the test pins: on a loaded runner Spotlight or fseventsd can hold a fresh volume busy past
     // every forced detach, and failing the test there would report a passing comparison as a failure.
-    static async Task DetachAsync(string mount) {
+    static async Task DetachAsync(string device, string mount) {
         foreach (var pause in (int[])[0, 1, 2, 4, 8]) {
             await Task.Delay(TimeSpan.FromSeconds(pause));
-            if (Run("hdiutil", "detach", "-force", mount) == 0) return;
+            if (Run("hdiutil", "detach", "-force", device) == 0) return;
         }
 
-        Run("diskutil", "unmount", "force", mount);
+        if (Run("diskutil", "unmount", "force", mount) == 0) Run("hdiutil", "detach", "-force", device);
     }
 
     [Test]
@@ -201,19 +203,21 @@ public class LocalRootIdentityTests {
         await Assert.That(LocalRootIdentity.Decide(root, new(new OwnerReading.Unreadable("denied"), Gone))).IsEqualTo(OwnerDecision.Unknown);
     }
 
-    static int Run(string file, params string[] args) {
+    static int Run(string file, params string[] args) => RunWithOutput(file, args).Exit;
+
+    static (int Exit, string Output) RunWithOutput(string file, params string[] args) {
         try {
             var psi = new ProcessStartInfo(file) { RedirectStandardOutput = true, RedirectStandardError = true };
             foreach (var a in args) psi.ArgumentList.Add(a);
 
             using var p = Process.Start(psi)!;
-            p.StandardOutput.ReadToEnd();
+            var output = p.StandardOutput.ReadToEnd();
             p.StandardError.ReadToEnd();
             p.WaitForExit();
 
-            return p.ExitCode;
+            return (p.ExitCode, output);
         } catch (System.ComponentModel.Win32Exception) {
-            return -1;
+            return (-1, "");
         }
     }
 }
