@@ -22,6 +22,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     bool _useMeaning, _useOther, _checking, _ollamaInstalledNow;
     // Until someone picks, or a recorded choice is loaded, the selection follows whether Ollama answers.
     bool _followOllama = true;
+    bool _recordedMeaning;
     bool? _ollamaRunning;
     string _otherModel = "";
 
@@ -52,11 +53,13 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         set { if (value) UseMeaning = false; }
     }
 
+    /// Picking a model is a pick of search by meaning, so it stops the selection following Ollama too.
     public bool UseDefault {
         get => !_useOther;
         set {
-            if (!value) return;
-            _useOther = false;
+            if (!value || !_useOther) return;
+            _followOllama = false;
+            _useOther     = false;
             RestateChoice();
         }
     }
@@ -64,8 +67,9 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     public bool UseOther {
         get => _useOther;
         set {
-            if (!value) return;
-            _useOther = true;
+            if (!value || _useOther) return;
+            _followOllama = false;
+            _useOther     = true;
             RestateChoice();
         }
     }
@@ -77,8 +81,9 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
 
     bool OllamaRunning => _ollamaRunning == true;
 
-    /// A model can only be pulled through a running Ollama; a recorded meaning choice stays selectable.
-    public bool MeaningEnabled => OllamaRunning || UseMeaning;
+    /// A model can only be pulled through a running Ollama; a recorded model stays selectable, so a
+    /// switch to keyword can be undone while Ollama is stopped.
+    public bool MeaningEnabled => OllamaRunning || UseMeaning || _recordedMeaning;
 
     public bool ModelChoiceVisible => UseMeaning && OllamaRunning;
 
@@ -142,7 +147,8 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     /// Starts from what an earlier setup recorded, so a plain confirmation changes nothing. With
     /// nothing recorded, the selection follows whether Ollama is running.
     public void Prefill(LocalEmbeddingSetting? recorded) {
-        _followOllama = recorded is null;
+        _followOllama    = recorded is null;
+        _recordedMeaning = recorded?.Model is not null;
         switch (recorded) {
             case null:
                 _useOther = false;

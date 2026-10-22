@@ -72,10 +72,22 @@ public class SearchChoiceViewModelTests {
             await picked.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(picked.UseKeyword).IsTrue();
 
+            var running = true;
+            var model = new SearchChoiceViewModel(_ => Task.FromResult(running), () => true);
+            model.Prefill(null);
+            await model.CheckOllamaCommand.Execute().ToTask();
+            model.UseOther   = true;
+            model.OtherModel = "nomic-embed-text";
+            running = false;
+            await model.CheckOllamaCommand.Execute().ToTask();
+            await Assert.That(model.Choice.Model).IsEqualTo("nomic-embed-text");
+
             var recorded = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
             recorded.Prefill(new LocalEmbeddingSetting("nomic-embed-text"));
             await recorded.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(recorded.Choice.Model).IsEqualTo("nomic-embed-text");
+            // Switching away from a recorded model while Ollama is stopped can still be undone.
+            recorded.UseKeyword = true;
             await Assert.That(recorded.MeaningEnabled).IsTrue();
             return true;
         });
