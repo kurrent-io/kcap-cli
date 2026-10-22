@@ -39,7 +39,9 @@ public sealed record DaemonInfoDto(
     // credential is not the problem, and from a daemon that predates the field.
     string? Credential = null,
     // The profile the daemon resolved its server and sign-in from. Null from an older daemon.
-    string? Profile = null);
+    string? Profile = null,
+    // Same shape as VendorModels, keyed by registry id.
+    Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null);
 
 /// <summary>
 /// <see cref="Status"/> is the daemon's internal status string VERBATIM (PascalCase, open
@@ -108,7 +110,11 @@ public sealed record AgentStatusDto(
     TerminalDialogDto? TerminalDialog = null,
     // Why the daemon could not resume an agent a restart stopped, on a row whose Status is
     // "Interrupted". Such a row and a "Resuming" one have no process, only a resume ledger entry.
-    string? Interruption = null);
+    string? Interruption = null,
+    // The account the agent runs under. Null from an older daemon.
+    string? AccountDirectory = null,
+    string? AccountId = null,
+    string? AccountLabel = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

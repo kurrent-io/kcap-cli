@@ -443,7 +443,7 @@ internal partial class AgentOrchestrator {
     }
 
     async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle) = FrameCodec.Spawn(spawn);
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle, _) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);

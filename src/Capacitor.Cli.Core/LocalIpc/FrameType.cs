@@ -45,6 +45,7 @@ public enum FrameType : byte {
     // Attach, answered with RuntimeStarted ahead of the Attached/AttachedReadOnly reply. Sent only to a
     // daemon advertising AgentAttachClient.RuntimeCapability.
     AttachWithRuntime = 30, // Text = agent id
+    AccountsSubscribe = 86, // long-lived: push an AccountsSnapshot (immediate + on change)
     // daemon → client
     Attached  = 64,
     Stdout    = 65,
@@ -70,4 +71,5 @@ public enum FrameType : byte {
     ShutdownAck    = 83, // Text = "stopping"
     AgentResumeAck = 84, // Text = "resuming" | "not_interrupted" | "unknown"
     RuntimeStarted = 85, // BE64 UTC ticks: the attached runtime's start, as the resume ledger's started_at
+    AccountsSnapshot = 87, // Text = AccountsSnapshotDto JSON, pushed on AccountsSubscribe
 }

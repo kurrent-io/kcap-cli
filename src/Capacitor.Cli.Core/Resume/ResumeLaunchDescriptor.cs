@@ -27,5 +27,8 @@ public sealed record ResumeLaunchDescriptor(
     bool? WorktreeIsStandalone = null,
     string? WorktreeSourceRepo = null,
     string? PermissionMode = null,
-    int? InactivityBoundSeconds = null
+    int? InactivityBoundSeconds = null,
+    string? AccountDirectory = null,
+    string? AccountId = null,
+    string? AccountLabel = null
 );
