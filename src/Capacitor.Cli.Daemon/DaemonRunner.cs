@@ -164,7 +164,6 @@ public static partial class DaemonRunner {
         var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
         builder.Services.AddLogging();
 
-        // Configure logging: file when detached, console when foreground.
         // Minimum level defaults to Information; raise verbosity for transport
         // diagnostics (e.g. per-tick DaemonPing RTT, which logs at Debug) via
         // --log-level or KCAP_DAEMON_LOG_LEVEL=debug. The --log-level arg wins
@@ -175,16 +174,6 @@ public static partial class DaemonRunner {
 
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(minLevel);
-
-        if (logFile is not null) {
-            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
-        } else {
-            builder.Logging.AddSimpleConsole(opts => {
-                    opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
-                    opts.UseUtcTimestamp = false;
-                }
-            );
-        }
 
         // Daemon settings from the active profile, with env overrides
         var profileDaemon = profiles.Resolution.Profile?.Daemon;
@@ -297,6 +286,18 @@ public static partial class DaemonRunner {
 
         config.InstanceId = daemonLock.InstanceId;
         StartupPhase(time, "lock acquired");
+
+        // File when detached, console when foreground. After the lock: Windows opens the log file
+        // write-exclusive, so a duplicate daemon opening it first would crash instead of refusing above.
+        if (logFile is not null) {
+            builder.Logging.AddProvider(new RollingFileLoggerProvider(logFile, time, minLevel: minLevel));
+        } else {
+            builder.Logging.AddSimpleConsole(opts => {
+                    opts.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
+                    opts.UseUtcTimestamp = false;
+                }
+            );
+        }
 
         // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by
         // the pre-host boot-check block immediately below AND (further down) by the coverage journal /
