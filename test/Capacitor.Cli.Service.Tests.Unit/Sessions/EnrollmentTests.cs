@@ -1,7 +1,10 @@
 using Capacitor.Cli.Service.Sessions;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Service.Tests.Unit.Sessions;
 
+/// Windows path semantics: the service runs nowhere else
+[RunOn(OS.Windows)]
 public class EnrollmentTests {
     const string Daemon = @"C:\Users\alice\AppData\Local\kcap\current\kcap-daemon.exe";
 
