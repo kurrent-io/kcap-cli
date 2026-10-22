@@ -203,7 +203,7 @@ sealed class LocalCommand(
         await Console.Out.WriteLineAsync($"  • Retire {installation.ServerUrl}: nothing is sent to it again, and a new installation gets a new port");
     }
 
-    static void RenderRecovery(LocalInstallEvent e) {
+    internal static void RenderRecovery(LocalInstallEvent e) {
         var line = e switch {
             LocalInstallEvent.Recovering r  => $"Finishing an interrupted {r.Operation} (stopped at {r.Phase})…",
             LocalInstallEvent.Recovered r   => $"Finished the interrupted {r.Operation}",

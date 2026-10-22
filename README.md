@@ -111,6 +111,8 @@ Updates arrive through the app: it checks a few times a day, downloads in the ba
 
 Help → Report a Bug… / Send Feedback… (or the help button in the session rail's footer) sends a report to Kurrent support; replies arrive by email.
 
+**Uninstall kcap…** in the application menu removes what [`kcap uninstall`](#uninstalling) removes, plus the app and the `kcap` links it made. It first lists what will go, and warns when the local server is installed (or a change to it was interrupted), because its recorded sessions are deleted with it; sessions already sent to a cloud server stay there. The app then reopens in a small window to do the work and moves itself to the Trash.
+
 **Upgrading an existing macOS installation:** use **Check for Updates…** in the installed app, or open **kcap** from the new disk image and choose **Quit and update**. The installation stays in its Applications folder. Moving the app to the other Applications folder updates owned terminal links and background-service paths, then refreshes previously installed agent integrations with the bundled CLI to repair MCP commands, git hooks, and the Claude marketplace path. A failed integration refresh is reported and retried on the next launch. An update preserves sign-in and settings, and keeps supported agent sessions for resumption unless `daemon.auto_resume` is off. An installer that finds valid installations in both Applications folders, or another app occupying the destination, asks for a destination first. An unrelated app is never replaced. Redundant copies are removed after the replacement opens successfully; a failed update restores the installation or retains recovery backups and reports what needs attention. An equal or newer installed version offers **Open installed copy**.
 
 ### Desktop app on Windows
@@ -2659,15 +2661,21 @@ To remove kcap from this machine, run:
 ```bash
 kcap uninstall                  # interactive, user-scope removal
 kcap uninstall --yes            # non-interactive
+kcap uninstall --yes --purge-local  # non-interactive, deleting a local server's sessions
+kcap uninstall --yes --force    # also end a daemon that is running agents
 kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
+
+When a local server is installed (`kcap setup --local`), `uninstall` removes it first, as `kcap local uninstall --purge` does: its service, binaries, data and logs go, with every session it recorded. The prompt names the server and the deletion; `--yes` alone is not consent to it, so a non-interactive run refuses unless you pass `--purge-local` (or `--keep-config`, which removes the server but keeps its data). An interrupted purge needs `--purge-local` even with `--keep-config`: recovering it finishes deleting the data. If the local server cannot be removed, or its registry cannot be read, `~/.config/kcap/` is kept and the uninstall reported incomplete, so a re-run can finish.
+
+`uninstall` also removes the `kcap` command links on your PATH that point at this install (macOS and Linux). A link it cannot delete, such as one in a root-owned folder, is reported with a `sudo rm <path>` command to run yourself, and the uninstall counts as incomplete.
 
 `uninstall` covers every supported agent: it stops running daemons and watcher processes, strips kcap entries from user-level Claude Code, Codex CLI, Cursor, and Copilot CLI hook files (preserving any non-kcap entries), deletes the Pi extensions (`~/.pi/agent/extensions/kcap.ts` + the `kcap-mcp.ts` bridge) and strips kcap's block from `~/.pi/agent/AGENTS.md`, deletes the OpenCode plugin (`~/.config/opencode/plugins/kcap.ts`), removes the kcap capture plugin from Antigravity's `~/.gemini/config/plugins/kcap/`, removes agent skills under `~/.agents/skills/` (plus the legacy `~/.codex/skills/kcap-*` folders), removes the `kcap` git hook from `~/.gitconfig`, and deletes `~/.config/kcap/`. Every registered vendor account (see `kcap accounts`) is unwired too, and the account registry (`~/.config/kcap/accounts/`) and the daemon state directory (`~/.config/kcap/daemons/`, which `KCAP_CONFIG_DIR` never moves; kept whole while a daemon or daemon command still holds one of its locks, and left alone when `KCAP_DAEMONS_DIR` moved it or it is a link) are deleted last, only when no step failed — neither `--keep-config` nor `--project` spares them. A registry kcap could not read or lock is kept and the uninstall reported incomplete, since it is the only record of which accounts still record; check them with `kcap accounts`, then re-run `kcap uninstall`.
 
 `--project` additionally cleans up `<repo>/.claude/settings.local.json` and `<repo>/.codex/hooks.json` in the current git working tree (errors if you're not inside one). Cursor only has a user-scope `hooks.json`, so `--project` does not affect it. Project-scope hooks in other repos are not touched — re-run from each repo that has them.
 
-Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--muse|--skills]` for finer-grained removal.
+`uninstall` refuses, changing nothing, while a daemon is running or starting agents; stop them, or pass `--force` to end them. Use `--keep-config` to preserve profiles, tokens, and ignore lists when you plan to reinstall. Per-agent selective cleanup is not exposed here — use `kcap plugin remove [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--mistral-vibe|--grok|--muse|--skills]` for finer-grained removal.
 
 ### New-harness detection
 

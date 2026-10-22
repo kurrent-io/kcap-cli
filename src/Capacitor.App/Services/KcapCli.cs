@@ -91,6 +91,10 @@ public interface IKcapCli {
     /// contract as <see cref="SetupLocalAsync"/>.
     Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct);
 
+    /// `uninstall --yes --force --keep-path-links` (and `--purge-local`), streamed live via onLine. No internal
+    /// timeout; <paramref name="ct"/> bounds only the work before the spawn, so a running uninstall is never killed.
+    Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct);
+
     /// `local start`, bounded above the CLI's own readiness budget.
     Task<ProcessResult> LocalStartAsync(CancellationToken ct);
 
@@ -303,6 +307,18 @@ public sealed class KcapCli : IKcapCli {
         return await _runner.RunStreamingAsync(cliPath, ["local", "upgrade", "--json", "--no-update-check"],
             new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false), Interrupt: interrupt, InterruptGrace: UpgradeInterruptGrace),
             onLine, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    public async Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct) {
+        if (CliPath is not { } cliPath)
+            return new StreamingResult(-1, false, [new StreamedLine(ProcessStreamKind.Stderr, "kcap CLI not found")]);
+
+        string[] args = purgeLocal
+            ? ["uninstall", "--yes", "--force", "--keep-path-links", "--purge-local"]
+            : ["uninstall", "--yes", "--force", "--keep-path-links"];
+
+        return await _runner.RunStreamingAsync(cliPath, args,
+            new RunOptions(EnvOverlay: await SpawnEnvAsync(ct).ConfigureAwait(false)), onLine, CancellationToken.None).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> LocalStartAsync(CancellationToken ct) {

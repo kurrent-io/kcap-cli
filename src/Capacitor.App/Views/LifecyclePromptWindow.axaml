@@ -59,6 +59,15 @@
                     <Border Margin="0,16,0,0" Padding="12,9" CornerRadius="8" BorderThickness="1"
                             Background="{StaticResource KcapWarningDimBrush}"
                             BorderBrush="{StaticResource KcapWarningBrush}"
+                            IsVisible="{Binding Warning, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding Warning}" TextWrapping="Wrap" Width="374"
+                                   FontSize="12.5" LineHeight="19"
+                                   Foreground="{StaticResource KcapWarningBrush}" />
+                    </Border>
+
+                    <Border Margin="0,16,0,0" Padding="12,9" CornerRadius="8" BorderThickness="1"
+                            Background="{StaticResource KcapWarningDimBrush}"
+                            BorderBrush="{StaticResource KcapWarningBrush}"
                             IsVisible="{Binding DegradedPathText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
                         <TextBlock Text="{Binding DegradedPathText}" TextWrapping="Wrap" Width="374"
                                    FontSize="12.5" LineHeight="19"

@@ -101,7 +101,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     string? _reportedMismatch; // under _lock: the identity mismatch last reported, so a reattach does not repeat it
     bool _mismatchWaitsForIdle; // under _lock: the last report was held back by running agents
     int  _latestActiveAgents;
+    DaemonActivity? _latestActivity;
     readonly BehaviorSubject<string?> _identityReport = new(null);
+
+    /// The attached daemon's latest reported activity; null until a snapshot arrives and whenever the attach drops.
+    public DaemonActivity? LatestActivity => Volatile.Read(ref _latestActivity);
 
     /// The standing report about the attached daemon's identity, null while it matches. A state, not an event:
     /// a banner that resets on connect returns to it rather than losing it to however the two are ordered.
@@ -183,6 +187,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             _latestActiveAgents = snap.Daemon.ActiveAgents;
             var busy = snap.Busy ?? (snap.Daemon.ActiveAgents > 0 || snap.Pending is { Count: > 0 });
             _latestBusy = busy;
+            Volatile.Write(ref _latestActivity, new DaemonActivity(snap.Daemon.ActiveAgents, busy));
             Volatile.Write(ref _latestDaemon, snap.Daemon);
             bool idleNow;
             lock (_lock) idleNow = _mismatchWaitsForIdle && !busy;
@@ -206,6 +211,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     // is a daemon that went away, and gets the same ensure.
     void OnAttachStatus(AttachStatus status) {
         bool isFirstTerminalOutcome;
+
+        if (status.State != AttachState.Connected) Volatile.Write(ref _latestActivity, null);
 
         lock (_lock) {
             _generation++;

@@ -109,10 +109,7 @@ public sealed class PathShimInstaller(
     // next switch, taking the link with it; only folders that outlive that are candidates.
     HashSet<string> StableFolders() {
         var folders = new HashSet<string>(StringComparer.Ordinal) { "/opt/homebrew/bin", Path.GetDirectoryName(destination)! };
-        if (home is not null) {
-            folders.Add(Path.Combine(home.Path, ".local", "bin"));
-            folders.Add(Path.Combine(home.Path, "bin"));
-        }
+        if (home is not null) folders.UnionWith(KcapLinkFolders.For(home));
         return folders;
     }
 

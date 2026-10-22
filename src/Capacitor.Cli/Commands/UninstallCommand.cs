@@ -12,12 +12,15 @@ using Capacitor.Cli.Core.Harness.Kiro;
 using Capacitor.Cli.Core.Harness.Muse;
 using Capacitor.Cli.Core.Harness.OpenCode;
 using Capacitor.Cli.Core.Harness.Pi;
+using Capacitor.Cli.Core.LocalEdition;
 using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.LocalEdition;
 
 namespace Capacitor.Cli.Commands;
 
 /// <summary>
-/// Completely removes kcap from the local machine: stops daemons, kills
+/// Completely removes kcap from the local machine: removes the local server
+/// (purging its data unless <c>--keep-config</c>), stops daemons, kills
 /// watcher processes, strips kcap entries from user-level Claude / Codex /
 /// Cursor / Gemini hook files, deletes the kcap-owned Copilot hooks file, the
 /// kcap Kiro agent (~/.kiro/agents/kcap.json) — restoring the default agent it
@@ -31,14 +34,17 @@ namespace Capacitor.Cli.Commands;
 /// Per-agent selective cleanup is intentionally out of scope here; this command
 /// covers all known agents.
 /// </summary>
-public sealed class UninstallCommand(
-        DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
-        HarnessRegistry harnesses, BinaryProbe binaries, AgentsPaths agents, WatcherManager watchers,
-        WorkingDirectory workdir, TimeProvider time) {
+sealed class UninstallCommand(
+        DaemonStore store, ConfigRoot config, UserHome home, HarnessRegistry harnesses, BinaryProbe binaries,
+        AgentsPaths agents, WorkingDirectory workdir, IOutgoingRecorders recorders, ILocalStackFactory stacks,
+        KcapLinkRemover links) {
     public async Task<int> HandleAsync(string[] args) {
         var skipPrompt     = args.Contains("--yes") || args.Contains("-y");
         var keepConfig     = args.Contains("--keep-config");
         var includeProject = args.Contains("--project");
+        var force          = args.Contains("--force");
+        var purgeLocal     = args.Contains("--purge-local");
+        var keepPathLinks  = args.Contains("--keep-path-links");
 
         string? projectRoot = null;
 
@@ -55,10 +61,81 @@ public sealed class UninstallCommand(
             }
         }
 
+        LocalStack?     local       = null;
+        LocalStackState localState  = LocalStackState.NotInstalled.Instance;
+        var             localFailed = false;
+
+        try {
+            local      = stacks.Create();
+            localState = local.Read();
+        } catch (LocalInstallFailure ex) when (ex.Code == LocalInstallFailureCode.UnsupportedPlatform) {
+            // No local edition runs on this platform, so there is none to remove.
+        } catch (LocalInstallFailure ex) {
+            await Console.Error.WriteLineAsync($"Could not read the local server: {ex.Message}");
+            localFailed = true;
+        }
+
+        if (localState is LocalStackState.Unreadable(var unreadablePath, var unreadableReason)) {
+            await Console.Error.WriteLineAsync(
+                $"{unreadablePath} cannot be read ({unreadableReason}), so the local server is left as it is and the config directory is kept.");
+            localFailed = true;
+        }
+
+        // An interrupted setup may finish as an installation, so it needs the same consent as one.
+        var removeLocal = localState is LocalStackState.Installed or LocalStackState.Interrupted;
+
+        // Recovery always finishes an interrupted purge, so --keep-config cannot keep that data.
+        var interruptedPurge = localState is LocalStackState.Interrupted(LocalPurgeJournal.Operation, _);
+
+        if (interruptedPurge && skipPrompt && !purgeLocal) {
+            await Console.Error.WriteLineAsync(
+                $"An interrupted purge of the local server in {local!.Root.Directory} is pending; recovering it would finish deleting the local server's data, whatever --keep-config says. Pass --purge-local to delete it. Nothing was changed.");
+
+            return 1;
+        }
+
+        if (removeLocal && skipPrompt && !purgeLocal && !keepConfig) {
+            var subject = localState is LocalStackState.Installed { Installation.ServerUrl: var installedUrl }
+                ? $"A local server is installed at {installedUrl}"
+                : $"An interrupted change to the local server in {local!.Root.Directory} is pending";
+
+            await Console.Error.WriteLineAsync(
+                $"{subject}; kcap uninstall would delete every session it recorded. Pass --purge-local to delete it, or --keep-config to keep its data.");
+
+            return 1;
+        }
+
+        if (!force) {
+            var busy = await recorders.BusyAsync();
+
+            if (busy.Count > 0) {
+                foreach (var line in busy) await Console.Error.WriteLineAsync(line);
+
+                await Console.Error.WriteLineAsync("Stop them, or pass --force to end them. Nothing was changed.");
+
+                return 1;
+            }
+        }
+
         var configDir = config.Directory;
 
         await Console.Out.WriteLineAsync("This will remove kcap from your machine:");
         await Console.Out.WriteLineAsync("  • Stop any running daemons and watcher processes");
+
+        switch (localState) {
+            case LocalStackState.Installed { Installation.ServerUrl: var url }:
+                await Console.Out.WriteLineAsync(keepConfig
+                    ? $"  • Remove the local server at {url}, keeping its data"
+                    : $"  • Delete the local server at {url} and every session it recorded");
+                break;
+            case LocalStackState.Interrupted(var operation, _):
+                // An interrupted purge is always finished, whatever --keep-config says.
+                await Console.Out.WriteLineAsync(keepConfig && operation != LocalPurgeJournal.Operation
+                    ? $"  • Finish an interrupted {operation} of the local server in {local!.Root.Directory}, then remove it, keeping its data"
+                    : $"  • Finish an interrupted {operation} of the local server in {local!.Root.Directory}, then delete it and every session it recorded");
+                break;
+        }
+
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<ClaudeHarness>().Paths.UserSettings}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CodexHarness>().Paths.UserHooksJson}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<CursorHarness>().Paths.UserHooksJson}");
@@ -70,6 +147,11 @@ public sealed class UninstallCommand(
         await Console.Out.WriteLineAsync($"  • Remove the kcap plugin from {harnesses.Of<AntigravityHarness>().Paths.PluginDir}");
         await Console.Out.WriteLineAsync($"  • Remove kcap entries from {harnesses.Of<MuseHarness>().Paths.SettingsJson}");
         await Console.Out.WriteLineAsync($"  • Remove agent skills under {agents.UserSkillsDir}");
+
+        var pathLinks = !keepPathLinks && !OperatingSystem.IsWindows() ? links.Find() : [];
+
+        foreach (var link in pathLinks)
+            await Console.Out.WriteLineAsync($"  • Remove the kcap command link at {link}");
 
         if (projectRoot is not null) {
             await Console.Out.WriteLineAsync(
@@ -107,11 +189,15 @@ public sealed class UninstallCommand(
         // (so the user can re-run rather than losing local state on a partial
         // removal). Individual remove commands keep printing their own output
         // — this flag captures the boolean for the final decision only.
-        var hadFailures = false;
+        var hadFailures = localFailed;
+
+        // First, while nothing else has changed: the local root lives in the config directory by default.
+        if (removeLocal && !await RemoveLocalServerAsync(local!, purge: !keepConfig, force))
+            hadFailures = true;
 
         // Daemons hold lock files inside the config dir we're about to delete; one still running leaves the
         // config dir in place.
-        if (!await new OutgoingRecorders(store, config, profiles, home, harnesses, binaries, watchers, time).StopAsync())
+        if (!await recorders.StopAsync())
             hadFailures = true;
 
         var accountStore  = AccountStore.Beside(store);
@@ -173,6 +259,14 @@ public sealed class UninstallCommand(
         // Same for legacy ~/.codex/skills/.
         if (!SweepCapacitorPrefixedDirs(agents.UserSkillsDir))            hadFailures = true;
         if (!SweepCapacitorPrefixedDirs(harnesses.Of<CodexHarness>().Paths.SkillsDir)) hadFailures = true;
+
+        if (pathLinks.Count > 0) {
+            foreach (var failure in links.Remove()) {
+                await Console.Error.WriteLineAsync($"Could not remove {failure.Path}: {failure.Reason}");
+                await Console.Error.WriteLineAsync($"Remove it yourself: sudo rm {ShellQuote(failure.Path)}");
+                hadFailures = true;
+            }
+        }
 
         if (projectRoot is not null) {
             var claudeProject = Path.Combine(projectRoot, ".claude", "settings.local.json");
@@ -265,6 +359,34 @@ public sealed class UninstallCommand(
 
         return 0;
     }
+
+    async Task<bool> RemoveLocalServerAsync(LocalStack local, bool purge, bool force) {
+        var uninstall = new LocalUninstall(local.Service, home, recorders);
+        var root      = local.Root.Directory;
+
+        LocalUninstallOutcome outcome;
+
+        try {
+            outcome = await local.RunAsync(new SyncProgress<LocalInstallEvent>(LocalCommand.RenderRecovery),
+                (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None, force);
+        } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure or IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync($"Could not remove the local server: {ex.Message}");
+            return false;
+        }
+
+        switch (outcome) {
+            case LocalUninstallOutcome.Purged:
+                await Console.Out.WriteLineAsync($"Purged the local server in {root}.");
+                break;
+            case LocalUninstallOutcome.Uninstalled:
+                await Console.Out.WriteLineAsync($"Uninstalled the local server. Its data in {root} is kept.");
+                break;
+        }
+
+        return true;
+    }
+
+    static string ShellQuote(string value) => "'" + value.Replace("'", "'\\''") + "'";
 
     static bool PathsEqual(string a, string b) =>
         string.Equals(Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar), Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
