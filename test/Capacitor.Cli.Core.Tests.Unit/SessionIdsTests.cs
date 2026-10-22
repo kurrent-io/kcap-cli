@@ -13,6 +13,7 @@ public class SessionIdsTests {
     [Arguments("sess-1", "sess-1", true)]
     [Arguments("8bc7255f24534efda7330af4b6ae9f20", "8BC7255F-2453-4EFD-A733-0AF4B6AE9F20", true)]
     [Arguments("senc1vptdh45epitvqf2ovpurmdnpg3c", "sess-1", true)]
+    [Arguments("senc1vptdh45epitvqf2ovpurmdnpg3c", " sess-1 ", true)]
     [Arguments("senc1vptdh45epitvqf2ovpurmdnpg3c", "sess-2", false)]
     [Arguments("sess-2", "sess-1", false)]
     [Arguments(null, "sess-1", false)]

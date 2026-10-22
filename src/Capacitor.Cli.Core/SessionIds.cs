@@ -16,7 +16,7 @@ public static class SessionIds {
     /// Whether the session id a server reported names the session sent as <paramref name="sent"/>. A server
     /// with ACP id encoding on files a hyphenated opaque id under a token of it, and reports that token.
     public static bool SameSession(string? reported, string? sent) =>
-        Canonical(reported) is { } id && (id == Canonical(sent) || sent is not null && id == ServerToken(sent));
+        Canonical(reported) is { } id && Canonical(sent) is { } own && (id == own || id == ServerToken(own));
 
     /// Must match the server's encoding byte for byte: `senc1` and the first 27 lowercase base32 characters
     /// of the id's SHA-256.
