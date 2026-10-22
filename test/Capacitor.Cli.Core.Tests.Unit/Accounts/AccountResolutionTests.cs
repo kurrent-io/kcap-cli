@@ -63,6 +63,23 @@ public class AccountResolutionTests {
         await Assert.That(outcome.Account.Label).IsEqualTo(".codex");
     }
 
+    /// The bad entries come first, so a resolution that stopped at them could not reach the default's.
+    [Test]
+    public async Task Default_lookup_skips_a_hand_edited_entry_that_is_not_a_path() {
+        var registry = new AccountRegistry {
+            Accounts = [
+                new VendorAccount("bad-empty", HarnessId.Claude, "", "Empty", DateTimeOffset.UnixEpoch),
+                new VendorAccount("bad-nul", HarnessId.Claude, "a\0b", "Nul", DateTimeOffset.UnixEpoch),
+                .. Registry().Accounts
+            ]
+        };
+
+        var outcome = AccountResolution.Resolve(registry, HarnessId.Claude, null, Personal);
+
+        await Assert.That(outcome.Refused).IsFalse();
+        await Assert.That(outcome.Account!.AccountId).IsEqualTo(PersId);
+    }
+
     [Test]
     public async Task Registered_id_resolves_to_its_own_directory_and_label() {
         var outcome = AccountResolution.Resolve(Registry(), HarnessId.Claude, WorkId, Personal);

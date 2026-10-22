@@ -59,16 +59,27 @@ public static class AccountResolution {
     static VendorAccount? ForDirectory(AccountRegistry? registry, HarnessId vendor, string directory) {
         var key = DirectoryKey.Of(directory);
 
-        return registry?.Accounts.FirstOrDefault(a => a.Vendor == vendor && DirectoryKey.Of(a.Directory) == key);
+        return registry?.Accounts.FirstOrDefault(a => a.Vendor == vendor && KeyOrNull(a.Directory) == key);
+    }
+
+    // A hand-edited registry entry may hold anything; it must not throw out of a launch's resolution.
+    static string? KeyOrNull(string directory) {
+        try {
+            return DirectoryKey.Of(directory);
+        } catch (Exception ex) when (IsNotAPath(ex)) {
+            return null;
+        }
     }
 
     static bool SameDirectory(string registered, string argument) {
         try {
             return AccountDirectory.Same(registered, argument);
-        } catch (Exception ex) when (ex is ArgumentException or NotSupportedException or IOException) {
+        } catch (Exception ex) when (IsNotAPath(ex)) {
             return false;
         }
     }
+
+    static bool IsNotAPath(Exception ex) => ex is ArgumentException or NotSupportedException or IOException;
 
     static AccountResolutionOutcome Accepted(string directory, VendorAccount? entry) =>
         new(new ResolvedAccount(directory, entry?.Id, entry?.Label ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))), null);
