@@ -64,7 +64,6 @@ public class DoneStepViewModelTests {
         await Assert.That(unit).IsEqualTo("/ 100");
     }
 
-    /// A run still in flight shows what has landed so far and how far through the selection it is.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_running_import_shows_sessions_as_they_land() {

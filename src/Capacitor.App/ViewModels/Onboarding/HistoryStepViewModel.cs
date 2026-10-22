@@ -305,7 +305,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
                 Private: level == ImportLevel.OnlyMe, SkipTitle: skip));
         }
 
-        var expected = selected.Sum(r => r.SessionsSince(window.Since) ?? 0);
+        var counts   = selected.Select(r => r.SessionsSince(window.Since)).ToList();
+        var expected = counts.Any(c => c is null) ? 0 : counts.Sum(c => c!.Value);
         var caption  = window.Since is null ? "from your whole history" : $"from the {window.Label.ToLowerInvariant()}";
         var run      = new HistoryImportRun(expected, selected.Count, caption, passes.Count, _post);
         Run = run;

@@ -88,7 +88,12 @@ public sealed partial class HistoryImportRun : ReactiveObject {
                 _cts.Token.ThrowIfCancellationRequested();
                 var result = await cli.ImportAsync(pass, OnLine, _cts.Token).ConfigureAwait(false);
                 anyFailed |= result.ExitCode != 0 || result.TimedOut;
-                _post(() => PassesDone++);
+                _post(() => {
+                    // A pass that died before its totals line keeps its live counts; the next pass's totals must not net them out.
+                    _passImported = 0;
+                    _passFailed   = 0;
+                    PassesDone++;
+                });
             }
 
             _cts.Token.ThrowIfCancellationRequested();
@@ -116,19 +121,17 @@ public sealed partial class HistoryImportRun : ReactiveObject {
             return;
         }
 
-        if (SessionLine().Match(text) is not { Success: true } session) return;
+        if (Landed().IsMatch(text)) {
+            _passImported++;
+            Imported = Add(Imported, 1);
+        } else if (Errored().IsMatch(text)) {
+            _passFailed++;
+            Failed = Add(Failed, 1);
+        } else if (!Settled().IsMatch(text)) {
+            return;
+        }
 
         Processed = Add(Processed, 1);
-        switch (session.Groups[1].Value) {
-            case "Loading":
-                _passImported++;
-                Imported = Add(Imported, 1);
-                break;
-            case "Failed":
-                _passFailed++;
-                Failed = Add(Failed, 1);
-                break;
-        }
     });
 
     static int Add(int total, int delta) => (int)Math.Clamp((long)total + delta, 0, int.MaxValue);
@@ -137,7 +140,14 @@ public sealed partial class HistoryImportRun : ReactiveObject {
     [GeneratedRegex(@"^(\d+) imported · (\d+) skipped · (\d+) failed$")]
     private static partial Regex Totals();
 
-    // One line per session as it settles, printed by the redirected-output import loop.
-    [GeneratedRegex(@"^(Loading|Skipping|Failed|Already loaded|Refreshed) [^\s()]+(?: \(.*\))?$")]
-    private static partial Regex SessionLine();
+    // The per-session lines of redirected output: file-backed sources (Claude, Codex) report through the chain
+    // worker's "Loading <id>... <n> lines [..]" and "Skipping <id> [reason]"; the rest through the routed loop's forms.
+    [GeneratedRegex(@"^Loading [^\s()]+(?:\.\.\. \d+ lines \[.*\]| \(.*\))$")]
+    private static partial Regex Landed();
+
+    [GeneratedRegex(@"^(?:Failed [^\s()]+|Skipping [^\s()\[\]]+ \[.*\])$")]
+    private static partial Regex Errored();
+
+    [GeneratedRegex(@"^(?:Skipping|Already loaded|Refreshed) [^\s()]+ \(.*\)$")]
+    private static partial Regex Settled();
 }

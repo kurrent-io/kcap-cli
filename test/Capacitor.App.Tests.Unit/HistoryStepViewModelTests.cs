@@ -158,15 +158,15 @@ public class HistoryStepViewModelTests {
         var h = new Harness(Report());
         (int Imported, int Failed, int Processed)? midway = null;
         h.Cli.ImportBehavior = (_, onLine, _) => {
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Loading 1a2b (claude)"));
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Loading 3c4d (codex)"));
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Skipping 5e6f (already current)"));
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Already loaded 7a8b (no new content)"));
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Failed 9c0d"));
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Failed to reach the server"));
+            foreach (var text in (string[]) [
+                         "Loading 1a2b... 120 lines [new]", "Loading 3c4d (cursor)", "Skipping 5e6f (already current)",
+                         "Already loaded 7a8b (no new content)", "Failed 9c0d", "Skipping 1e2f [transcript unreadable]",
+                         "Failed to reach the server", "↳ imported subagent 3a4b (12 lines)",
+                     ])
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, $"  {text}"));
             var run = h.Vm.Run!;
             midway ??= (run.Imported, run.Failed, run.Processed);
-            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  3 imported · 2 skipped · 2 failed"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  3 imported · 2 skipped · 3 failed"));
             return Task.FromResult(new StreamingResult(0, false, []));
         };
         await h.EnterAsync();
@@ -175,10 +175,50 @@ public class HistoryStepViewModelTests {
         await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
         await h.Vm.Run!.Completion;
 
-        await Assert.That(midway).IsEqualTo((2, 1, 5));
+        await Assert.That(midway).IsEqualTo((2, 2, 6));
         await Assert.That(h.Vm.Run!.Imported).IsEqualTo(6);
-        await Assert.That(h.Vm.Run!.Failed).IsEqualTo(4);
-        await Assert.That(h.Vm.Run!.Processed).IsEqualTo(10);
+        await Assert.That(h.Vm.Run!.Failed).IsEqualTo(6);
+        await Assert.That(h.Vm.Run!.Processed).IsEqualTo(12);
+    }
+
+    /// A pass that dies before its totals line keeps what it counted, and the next pass's totals add to it.
+    [Test]
+    public async Task A_pass_without_totals_keeps_its_live_counts() {
+        var h = new Harness(Report());
+        var pass = 0;
+        h.Cli.ImportBehavior = (_, onLine, _) => {
+            if (pass++ == 0) {
+                for (var i = 0; i < 5; i++) onLine(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i}... 10 lines [new]"));
+                return Task.FromResult(new StreamingResult(1, false, []));
+            }
+
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Loading t0... 10 lines [new]"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  1 imported · 0 skipped · 0 failed"));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+        await h.EnterAsync();
+        h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Run!.Imported).IsEqualTo(6);
+    }
+
+    /// A repository the report did not count makes the whole selection's count unknown, not a smaller one.
+    [Test]
+    public async Task An_uncounted_repository_leaves_the_expected_count_unknown() {
+        var h = new Harness(new ImportDiscoveryReport([
+            Repo("acme", "web", 40, 20, 5, 30),
+            new ImportDiscoveryRepo("solo", "notes", 3, null, null),
+        ], 0, [new(D30, 5), new(D90, 20), new(null, 43)]));
+        await h.EnterAsync();
+        h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Run!.Expected).IsEqualTo(0);
     }
 
     [Test]
