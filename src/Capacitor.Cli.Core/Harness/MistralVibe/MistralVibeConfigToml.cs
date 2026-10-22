@@ -28,7 +28,7 @@ public static class MistralVibeConfigToml {
     }
 
     public static TomlConfigFile.Outcome UnregisterKcapMcpServers(string configPath) =>
-        TomlConfigFile.Edit(configPath, RemoveMutate);
+        File.Exists(configPath) ? TomlConfigFile.Edit(configPath, RemoveMutate) : TomlConfigFile.Outcome.Unchanged;
 
     /// <summary>The model Vibe is configured to run: <c>active_model</c> resolved through the
     /// <c>[[models]]</c> table that defines its alias. Null when unset or not defined there, since

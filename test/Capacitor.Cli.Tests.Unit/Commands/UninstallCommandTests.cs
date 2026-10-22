@@ -146,8 +146,7 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(userSkill)).IsTrue();
 
         // Config dir fully deleted.
-        await Assert.That(Directory.EnumerateFileSystemEntries(fixture.ConfigDir).Select(path => Path.GetFileName(path)!).ToArray())
-            .IsEquivalentTo(new[] { "local" });
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsFalse();
     }
 
     [Test]
@@ -847,6 +846,7 @@ public class UninstallCommandTests {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
         await File.WriteAllTextAsync(local.Root.RegistryPath, "{ not json");
+        var kcapTs = fixture.Temp.CreateFile(".pi/agent/extensions/kcap.ts", "export default function(pi){}");
 
         var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
 
@@ -854,6 +854,7 @@ public class UninstallCommandTests {
         await Assert.That(errors).Contains(local.Root.RegistryPath);
         await Assert.That(local.Log).DoesNotContain("uninstall");
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+        await Assert.That(File.Exists(kcapTs)).IsFalse();
     }
 
     [Test, NotInParallel, ExcludeOn(OS.Windows)]
@@ -928,8 +929,8 @@ public class UninstallCommandTests {
         var exit = await NewCommand(fixture, recorders: new FakeOutgoingRecorders([])).HandleAsync(["uninstall", "--yes"]);
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(Directory.EnumerateFileSystemEntries(fixture.ConfigDir).Select(path => Path.GetFileName(path)!).ToArray())
-            .IsEquivalentTo(new[] { "local" });
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsFalse();
+        await Assert.That(Directory.Exists(Path.Combine(fixture.Home, ".vibe"))).IsFalse();
     }
 
     [Test, NotInParallel]
@@ -1192,6 +1193,22 @@ public class UninstallCommandTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(Directory.Exists(arrived!.Dir("data"))).IsTrue();
         await Assert.That(File.Exists(arrived.Root.RegistryPath)).IsTrue();
+    }
+
+    /// <summary>Keeping data is consent to remove only the server the prompt named, not one that arrived after it.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task A_setup_after_inspection_is_not_removed_under_keep_config() {
+        await using var fixture = await Fixture.CreateAsync();
+        LocalServer? arrived = null;
+        var recorders = new ArrivingSetup(() => {
+            arrived = InstallLocalServer(fixture);
+            return Task.FromResult<IReadOnlyList<string>>([]);
+        });
+
+        var exit = await NewCommand(fixture, recorders: recorders).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(arrived!.Service.IsInstalled(arrived.Unit)).IsTrue();
     }
 
     [Test, NotInParallel, ExcludeOn(OS.Windows)]

@@ -98,7 +98,8 @@ public class MacAppRemovalTests {
         var bundle = Bundle();
         var home = new UserHome(Tmp.GetResolvedPath("home"));
         var packages = Tmp.CreateDir("home/Library/Caches/velopack/kcap/packages");
-        var scratch = Tmp.CreateDir("temp/kcap");
+        var scratch = Tmp.CreateDir("temp/velopack/kcap");
+        var otherScratch = Tmp.CreateDir("temp/velopack/other");
         var log = Tmp.CreateFile("home/Library/Logs/velopack_kcap.log", "log");
         var tempLog = Tmp.CreateFile("temp/velopack_kcap.log", "log");
         var other = Tmp.CreateFile("home/Library/Caches/velopack/other/packages/release.nupkg", "keep");
@@ -114,6 +115,7 @@ public class MacAppRemovalTests {
 
         await Assert.That(Directory.Exists(Path.GetDirectoryName(packages))).IsFalse();
         await Assert.That(Directory.Exists(scratch)).IsFalse();
+        await Assert.That(Directory.Exists(otherScratch)).IsTrue();
         await Assert.That(File.Exists(log)).IsFalse();
         await Assert.That(File.Exists(tempLog)).IsFalse();
         await Assert.That(File.Exists(other)).IsTrue();

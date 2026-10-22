@@ -87,7 +87,6 @@ sealed class UninstallCommand(
         // An interrupted setup may finish as an installation, so it needs the same consent as one.
         var removeLocal = localState is LocalStackState.Installed or LocalStackState.Interrupted;
 
-        if (localFailed) return 1;
         if (LocalConsentError(localState, local?.Root.Directory ?? "", skipPrompt, purgeLocal, keepConfig) is { } refusal) {
             await Console.Error.WriteLineAsync(refusal);
             return 1;
@@ -151,7 +150,9 @@ sealed class UninstallCommand(
         }
 
         if (!keepConfig) {
-            await Console.Out.WriteLineAsync($"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)");
+            await Console.Out.WriteLineAsync(local is not null && Directory.Exists(local.Root.Directory)
+                ? $"  • Remove kcap configuration from {configDir} (local lifecycle safety metadata is kept)"
+                : $"  • Delete the kcap config directory ({configDir})");
         }
 
         // KCAP_CONFIG_DIR never moves it, so the config-directory delete does not cover it.
@@ -174,7 +175,13 @@ sealed class UninstallCommand(
             }
         }
 
-        if (local is null) return await CleanupAsync(null);
+        // An unreadable registry leaves the local server alone and keeps the config directory, but
+        // integrations still go: nothing about them depends on the local server.
+        if (localFailed) return await CleanupAsync(local?.Root.Directory, hadFailures: true);
+        // Taking the lease creates the root, so a machine where no setup has started is cleaned without it.
+        if (local is null || !Directory.Exists(local.Root.Directory)) return await CleanupAsync(null);
+
+        var cleanupStarted = false;
         try {
             return await local.RunAsync(new SyncProgress<LocalInstallEvent>(LocalCommand.RenderRecovery), async (lease, state, ct) => {
                 if (CanonicalPath.IsWithin(config.Directory, local.Root.Directory))
@@ -201,29 +208,34 @@ sealed class UninstallCommand(
                     await Console.Error.WriteLineAsync($"Could not remove the local server: {ex.Message}");
                     removalFailed = true;
                 }
+                cleanupStarted = true;
                 return await CleanupAsync(local.Root.Directory, removalFailed);
             }, CancellationToken.None, force, beforeRecovery: state => {
                 if (LocalConsentError(state, local.Root.Directory, skipPrompt, purgeLocal, keepConfig) is { } error)
                     throw new LocalLifecycleException(error);
-                if (!purgeLocal && state is LocalStackState.Interrupted(LocalPurgeJournal.Operation, _)
-                    && localState is not LocalStackState.Interrupted(LocalPurgeJournal.Operation, _))
+                if (purgeLocal) return;
+
+                var purgeAppeared = state is LocalStackState.Interrupted(LocalPurgeJournal.Operation, _)
+                    && localState is not LocalStackState.Interrupted(LocalPurgeJournal.Operation, _);
+                if (purgeAppeared)
                     throw new LocalLifecycleException("A local purge appeared after confirmation. Run uninstall again to review its data deletion.");
-                if (!keepConfig && !purgeLocal && (state is LocalStackState.Installed or LocalStackState.Interrupted)
-                    && (!removeLocal || state is LocalStackState.Installed current && localState is LocalStackState.Installed previous
-                        && current.Installation.Id != previous.Installation.Id))
-                    throw new LocalLifecycleException("The local installation changed after confirmation. Run uninstall again to review its data deletion.");
+
+                var appeared = !removeLocal && state is LocalStackState.Installed or LocalStackState.Interrupted;
+                var replaced = state is LocalStackState.Installed current && localState is LocalStackState.Installed previous
+                    && current.Installation.Id != previous.Installation.Id;
+                if (appeared || replaced)
+                    throw new LocalLifecycleException("The local installation changed after confirmation. Run uninstall again to review it.");
             });
         } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure or IOException or UnauthorizedAccessException) {
-            await Console.Error.WriteLineAsync($"Could not remove the local server: {ex.Message}");
+            // Past the local removal the config directory is not yet deleted, so a re-run can finish.
+            await Console.Error.WriteLineAsync(cleanupStarted
+                ? $"kcap uninstall stopped: {ex.Message}. Re-run `kcap uninstall` to finish."
+                : $"Could not remove the local server: {ex.Message}");
             return 1;
         }
 
         async Task<int> CleanupAsync(string? localRoot, bool hadFailures = false) {
-            // Track every step's success so we can surface failures in the exit
-            // code AND keep ~/.config/kcap in place when something went wrong
-            // (so the user can re-run rather than losing local state on a partial
-            // removal). Individual remove commands keep printing their own output
-            // — this flag captures the boolean for the final decision only.
+            // Any failure keeps the config directory, so a re-run can finish.
 
             // Daemons hold lock files inside the config dir we're about to delete; one still running leaves the
             // config dir in place.
@@ -267,20 +279,9 @@ sealed class UninstallCommand(
                 hadFailures = true;
             }
 
-            // Belt-and-braces marker cleanup. These hooks installers delete their
-            // marker only when JSON entries changed; if the user manually pruned the
-            // entries earlier (or installed via a pre-marker build that later
-            // wrote a marker on first refresh), the marker survives and IsInstalled
-            // still reports kcap as installed. uninstall promises a full
-            // wipe, so always nuke the markers regardless of what the JSON state
-            // looked like going in.
-            //
-            // The Cursor MCP marker is intentionally NOT swept here: `plugin remove
-            // --cursor` above owns it via JsonMcpConfigWriter.Unregister, which clears
-            // it on any non-Failed outcome (including hand-pruned entries) but
-            // deliberately RETAINS it when the unregister fails, so a retry can still
-            // identify the kcap-owned entries. An unconditional clear here would
-            // defeat that recovery path.
+            // These installers drop their marker only when they changed the JSON, so a marker beside
+            // hand-pruned entries would still read as installed. The Cursor MCP marker is not swept:
+            // `plugin remove --cursor` keeps it on a failed unregister so a retry can find kcap's entries.
             ClaudePluginInstaller.DeleteMarker(harnesses.Of<ClaudeHarness>().Paths.UserSettings);
             CodexHooksInstaller.DeleteMarker(harnesses.Of<CodexHarness>().Paths.UserHooksJson);
             CursorHooksInstaller.DeleteMarker(harnesses.Of<CursorHarness>().Paths.UserHooksJson);

@@ -33,9 +33,9 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
     public bool Refresh() => Entry() is { } entry && (entry == Expected() || Write());
 
     public bool Remove() {
-        // git exits 128 when no section exists. Distinguish that idempotent case from a
-        // failed write; a failed read must never turn an incomplete uninstall into success.
-        if (!File.Exists(ConfigFile())) return true;
+        // No git reads an entry when none runs, so there is nothing to remove. With a working git, a
+        // config it cannot read is a failure: --remove-section on a missing section fails the same way.
+        if (!File.Exists(ConfigFile()) || InstalledGitVersion() is null) return true;
         if (Git("--list") is null) return false;
         return Entry() is null || Git("--remove-section", Section) is not null;
     }
