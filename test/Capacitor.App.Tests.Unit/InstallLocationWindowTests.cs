@@ -9,7 +9,7 @@ namespace Capacitor.App.Tests.Unit;
 public class InstallLocationWindowTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_shared_install_defaults_to_Applications_and_can_retry_for_the_current_user() {
+    public async Task A_denied_shared_install_offers_a_per_user_retry() {
         await AvaloniaSession.DispatchAsync(async () => {
             const string userApps = "/Users/example/Applications";
             var chosen = "/Applications";
@@ -21,23 +21,23 @@ public class InstallLocationWindowTests {
                     return Task.FromResult(chosen == "/Applications"
                         ? new MoveOutcome(false, null, "Permission denied", PermissionDenied: true)
                         : new MoveOutcome(true, chosen + "/kcap.app", null));
-                }, () => { }, plan: Plan(chosen), destinations: ["/Applications", userApps],
+                }, () => { }, plan: Plan(chosen),
                 selectDestination: path => { chosen = path; return Plan(path); },
-                defaultDestination: "/Applications", userApplicationsDirectory: userApps);
+                userApplicationsDirectory: userApps);
             window.Show();
             try {
                 var button = window.FindControl<Button>("MoveButton")!;
-                var picker = window.FindControl<ComboBox>("DestinationPicker")!;
-                await Assert.That(picker.SelectedIndex).IsEqualTo(0);
-                await Assert.That(button.IsEnabled).IsTrue();
+                await Assert.That(window.FindControl<StackPanel>("DestinationPanel")!.IsVisible).IsFalse();
+                await Assert.That(button.Content).IsEqualTo("Install and open");
+
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Dispatcher.UIThread.RunJobs();
-                await Assert.That(window.FindControl<SelectableTextBlock>("ErrorText")!.Text).Contains("Install for me only");
-
-                picker.SelectedIndex = 1;
                 await Assert.That(chosen).IsEqualTo(userApps);
-                await Assert.That(window.FindControl<Border>("ErrorPanel")!.IsVisible).IsFalse();
+                await Assert.That(window.FindControl<SelectableTextBlock>("ErrorText")!.Text).Contains("cannot write to /Applications");
                 await Assert.That(window.FindControl<TextBlock>("Explanation")!.Text).Contains(userApps + "/kcap.app");
+                await Assert.That(button.Content).IsEqualTo("Install for me only");
+                await Assert.That(button.IsEnabled).IsTrue();
+
                 button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(attempts.SequenceEqual(["/Applications", userApps])).IsTrue();

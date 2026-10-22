@@ -494,8 +494,7 @@ public partial class App : Application {
                 return outcome;
             },
             quit: Quit, plan: plan,
-            destinations: directories.Count > 1 ? directories : directories.Concat([userApps]).Distinct().ToArray(),
-            defaultDestination: directories.Count == 1 ? directories[0] : null,
+            destinations: directories.Count > 1 ? directories : null,
             userApplicationsDirectory: userApps,
             selectDestination: directory => {
                 mover = Mover(directory);
@@ -520,7 +519,7 @@ public partial class App : Application {
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
             Func<string, ApplicationsInstallPlan>? selectDestination = null,
-            string? defaultDestination = null, string? userApplicationsDirectory = null) {
+            string? userApplicationsDirectory = null) {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
             InstallLocationKind.Translocated => "kcap is running from a temporary location.",
@@ -529,7 +528,7 @@ public partial class App : Application {
             _                                => "kcap is not in your Applications folder.",
         };
         return new InstallLocationWindow(where, move, quit, plan, destinations, selectDestination,
-            defaultDestination, userApplicationsDirectory);
+            userApplicationsDirectory);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the
