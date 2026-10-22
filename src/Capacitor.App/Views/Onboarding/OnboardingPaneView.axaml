@@ -130,7 +130,7 @@
                 BorderBrush="{StaticResource OnboardingDividerBrush}" BorderThickness="0,1,0,0">
                 <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="10">
                     <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="12">
-                        <Button x:Name="BackButton" Classes="onboardingSecondary" Content="Back"
+                        <Button x:Name="BackButton" Classes="onboardingQuiet" Content="Back"
                                 Command="{Binding BackCommand}" IsVisible="{Binding BackVisible}" />
                         <Button Grid.Column="2" x:Name="SkipButton" Classes="onboardingSecondary" Command="{Binding SkipCommand}"
                                 Content="{Binding SkipLabel}"

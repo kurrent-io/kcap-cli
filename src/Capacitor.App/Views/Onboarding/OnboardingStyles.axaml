@@ -361,9 +361,9 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- The wash and the filled ring mark the choice; an outline on top of both is one signal too many. -->
     <Style Selector="RadioButton.onboardingOption:checked">
         <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
     </Style>
     <Style Selector="RadioButton.onboardingOption:checked /template/ Ellipse#Ring">
         <Setter Property="Stroke" Value="{StaticResource OnboardingAccentBrush}" />
