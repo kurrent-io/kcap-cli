@@ -30,7 +30,7 @@ internal sealed partial class AccountsPublisher(
 
     /// <summary>Raised under the rebuild gate so handlers see revisions in order. A handler must not
     /// throw, block, or wait on <see cref="RebuildAsync"/>; one that throws is logged and the rest still
-    /// run. The snapshot built at start is not announced.</summary>
+    /// run. The first snapshot is not announced; one that replaces it is, even when start builds it.</summary>
     public event Action<AccountsSnapshotDto>? Changed;
 
     // Seam: tests substitute a failing read.
@@ -45,7 +45,7 @@ internal sealed partial class AccountsPublisher(
 
     public override async Task StartAsync(CancellationToken cancellationToken) {
         if (config.Accounts is not null) {
-            await PollAsync(force: true, announce: false, cancellationToken);
+            await PollAsync(force: true, announce: Current is not null, cancellationToken);
             _timer = new PeriodicTimer(PollInterval, time);
         }
 

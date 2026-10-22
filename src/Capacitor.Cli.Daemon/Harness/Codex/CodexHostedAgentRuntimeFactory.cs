@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Diagnostics;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Services;
@@ -74,20 +75,34 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     public IReviewerModelResolver? ReviewerModelResolver               => _pty.ReviewerModelResolver;
     public bool             SupportsModelSelection                      => _pty.SupportsModelSelection;
 
-    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) {
-        var dir = CodexModelCatalogProbe.DirectoryFor(_config.Store.StateDirectory(_config.Name));
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) => ProbeModelsAsync(null, ct);
 
-        return CodexModelCatalogProbe.RunAsync(
+    /// <summary>A null directory probes under the daemon's own environment; an account's probe gets that
+    /// account's <c>CODEX_HOME</c>, removed for the built-in directory, as its launches do.</summary>
+    public Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) =>
+        CodexModelCatalogProbe.RunAsync(
             () => {
+                var stateDir = _config.Store.StateDirectory(_config.Name);
+                var env      = new Dictionary<string, string>();
+                var (dir, remove) = configDirectory is null
+                    ? (CodexModelCatalogProbe.DirectoryFor(stateDir), FrozenSet<string>.Empty)
+                    : (CodexModelCatalogProbe.DirectoryFor(stateDir, DirectoryKey.Of(configDirectory)),
+                       VendorHomeEnv.Apply(env, Vendor, configDirectory, _config.Home));
                 Directory.CreateDirectory(dir);
-                return _spawnFactory(_pty.CliPath, [], null, dir, new Dictionary<string, string>(), FrozenSet<string>.Empty, _config, _loggerFactory);
+                return _spawnFactory(_pty.CliPath, [], null, dir, env, remove, _config, _loggerFactory);
             },
             string.IsNullOrEmpty(_config.Version) ? "0.0.0" : _config.Version, _time, _logger, ct);
-    }
 
     /// <summary>Codex rewrites its cached catalog when it refetches it, and its auth file when the
     /// account changes; either can change the models this account may launch.</summary>
     public IReadOnlyList<string> CatalogFingerprintPaths => [_launcher.Paths.ModelsCache, _launcher.Paths.AuthJson];
+
+    public IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) {
+        if (configDirectory is null) return CatalogFingerprintPaths;
+
+        var paths = AccountLayouts.Codex(_config.Home, configDirectory);
+        return [paths.ModelsCache, paths.AuthJson];
+    }
 
     // A default-kind launch is the only Codex shape that accepts a follow-up while running, so it is
     // the only one whose fetch happens alongside a live, write-contained process: the store keeps

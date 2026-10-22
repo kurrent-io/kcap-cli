@@ -129,8 +129,18 @@ internal interface IHostedAgentRuntimeFactory {
     Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<VendorModelOption>?>(null);
 
+    /// <summary>The catalog of the account whose config directory is <paramref name="configDirectory"/>;
+    /// null is the daemon's own default. A vendor whose catalog does not depend on the account answers
+    /// its one catalog.</summary>
+    Task<IReadOnlyList<VendorModelOption>?> ProbeModelsAsync(string? configDirectory, CancellationToken ct) =>
+        ProbeModelsAsync(ct);
+
     /// <summary>Files whose fingerprint change means the catalog may have changed. Statted, never read.</summary>
     IReadOnlyList<string> CatalogFingerprintPaths => [];
+
+    /// <summary><see cref="CatalogFingerprintPaths"/> for the account whose config directory is
+    /// <paramref name="configDirectory"/>; null is the daemon's own default.</summary>
+    IReadOnlyList<string> CatalogFingerprintPathsFor(string? configDirectory) => CatalogFingerprintPaths;
 
     /// <summary>Where this runtime's attachments land for a launch of <paramref name="kind"/>. The
     /// question is whether the process can be running, write-contained, while a fetch for it happens:

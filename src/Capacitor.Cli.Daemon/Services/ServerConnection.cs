@@ -738,6 +738,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports,
             EvalProtocolVersion: 2,
             VendorModels: _config.VendorModels,
+            VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
             ResumingAgents: GetResumingAgents?.Invoke());

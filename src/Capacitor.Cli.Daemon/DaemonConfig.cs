@@ -181,6 +181,11 @@ public class DaemonConfig {
     /// instance.</summary>
     public Dictionary<string, VendorModelOption[]>? VendorModels { get; set; }
 
+    /// <summary>Each registered Codex account's launchable models, keyed by registry id. An unregistered
+    /// default has no id, so its catalog is only in <see cref="VendorModels"/>. Replaced by reference,
+    /// like <see cref="VendorModels"/>.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModelsByAccount { get; set; }
+
     /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe; the
     /// vendor CLI watcher's starting point for them.</summary>
     public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }

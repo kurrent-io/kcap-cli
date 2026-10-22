@@ -699,13 +699,16 @@ public static partial class DaemonRunner {
         // Every advertised vendor is recorded, since a catalog-only vendor is watched too.
         config.UnattendedVendorBaselines =
             FingerprintUnattendedVendors(config.Binaries, runtimeFactories, config.SupportedVendors);
-        config.VendorCatalogBaselines =
-            VendorModelCatalogs.FingerprintCatalogPaths(runtimeFactories, config.SupportedVendors);
         config.UnattendedVendorCapabilities =
             ComputeUnattendedVendorCapabilities(runtimeFactories, config, config.UnattendedVendors);
-        config.VendorModels =
-            await VendorModelCatalogs.ProbeAsync(runtimeFactories, config.SupportedVendors, CancellationToken.None);
-        foreach (var (vendor, models) in config.VendorModels) LogVendorModels(logger, vendor, models.Length);
+
+        // Built before the host starts, so the per-account probe and the vendor watcher's first watch
+        // set read the same accounts.
+        var accounts = host.Services.GetRequiredService<AccountsPublisher>();
+        await accounts.RebuildAsync(CancellationToken.None);
+        await ProbeVendorCatalogsAsync(config, runtimeFactories, accounts.Current, CancellationToken.None);
+        foreach (var (vendor, models) in config.VendorModels!) LogVendorModels(logger, vendor, models.Length);
+        foreach (var (id, models) in config.VendorModelsByAccount!) LogVendorModels(logger, VendorModelCatalogs.AccountKey(id), models.Length);
         LogStartupPhase(logger, "vendors probed");
 
         // Which build of each unattended vendor was installed when this daemon started. Recorded at
@@ -1632,6 +1635,26 @@ public static partial class DaemonRunner {
                     : null));
         }
         return capabilities;
+    }
+
+    /// <summary>Fingerprints, then probes, each advertised vendor's catalog and, under its own directory,
+    /// each registered account's whose catalog depends on the account.</summary>
+    internal static async Task ProbeVendorCatalogsAsync(
+            DaemonConfig config, IReadOnlyList<IHostedAgentRuntimeFactory> factories,
+            Core.Accounts.AccountsSnapshotDto? accounts, CancellationToken ct) {
+        var supported      = config.SupportedVendors ?? [];
+        var accountFactory = VendorModelCatalogs.AccountFactory(factories, supported);
+        var perAccount     = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(accounts);
+
+        config.VendorCatalogBaselines = VendorModelCatalogs.FingerprintCatalogPaths(factories, supported, accountFactory, perAccount);
+        var vendorProbe  = VendorModelCatalogs.ProbeAsync(factories, supported, ct);
+        var accountProbe = accountFactory is null
+            ? Task.FromResult(new Dictionary<string, VendorModelOption[]>(StringComparer.Ordinal))
+            : VendorModelCatalogs.ProbeByAccountAsync(accountFactory, perAccount, ct);
+        await Task.WhenAll(vendorProbe, accountProbe);
+
+        config.VendorModels          = await vendorProbe;
+        config.VendorModelsByAccount = await accountProbe;
     }
 
     /// <summary>Fingerprints each advertised vendor's binary through the factory that launches it —

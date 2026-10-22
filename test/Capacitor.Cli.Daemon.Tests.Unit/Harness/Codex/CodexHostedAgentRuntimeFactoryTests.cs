@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
@@ -512,6 +514,50 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
         await Assert.That(child["CODEX_HOME"]).IsEqualTo(other);
         await Assert.That(Environment.GetEnvironmentVariable("CODEX_HOME")).IsEqualTo(CodexDaemonDefault);
+    }
+
+    /// The built-in directory is reached by removing the daemon's inherited variable and a custom one by
+    /// naming it; each account's probe runs in a working directory of its own, and its answer lands
+    /// under its own id.
+    [Test]
+    public async Task Probe_runs_once_per_codex_account_with_its_home_in_the_environment() {
+        using var daemons = new TempDaemonStore();
+        var builtIn = Home.PathTo(".codex");
+        var work    = Home.PathTo(".codex-work");
+        var spawns  = new ConcurrentQueue<(string Cwd, IReadOnlyDictionary<string, string> Env, IReadOnlyCollection<string> Remove)>();
+        var fakes   = new ConcurrentQueue<FakeCodexAppServer>();
+
+        CodexAppServerSpawnFactory seam = (_, _, _, cwd, env, removeEnv, _, _) => {
+            spawns.Enqueue((cwd, env, removeEnv));
+            var named = env.TryGetValue("CODEX_HOME", out var codexHome) ? Path.GetFileName(codexHome) : "built-in";
+            var fake  = new FakeCodexAppServer {
+                ModelPages = [new JsonArray(new JsonObject { ["id"] = named, ["model"] = named, ["displayName"] = named, ["hidden"] = false })],
+            };
+            fakes.Enqueue(fake);
+            return Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        };
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), new RecordingPtyFactory(),
+            new DaemonConfig { Name = "test", Store = daemons.Store, Version = "0.146.0", Home = Home },
+            NullLoggerFactory.Instance, TimeProvider.System, seam);
+
+        try {
+            var byAccount = await VendorModelCatalogs.ProbeByAccountAsync(
+                factory, [("acct-personal", builtIn), ("acct-work", work)], CancellationToken.None).WaitAsync(HangGuard);
+
+            await Assert.That(spawns.Count).IsEqualTo(2);
+            var personal = spawns.Single(s => !s.Env.ContainsKey("CODEX_HOME"));
+            var custom   = spawns.Single(s => s.Env.ContainsKey("CODEX_HOME"));
+            await Assert.That(personal.Remove).Contains("CODEX_HOME");
+            await Assert.That(custom.Env["CODEX_HOME"]).IsEqualTo(work);
+            await Assert.That(custom.Remove).DoesNotContain("CODEX_HOME");
+            await Assert.That(personal.Cwd).IsNotEqualTo(custom.Cwd);
+
+            await Assert.That(byAccount["acct-personal"].Single().Value).IsEqualTo("built-in");
+            await Assert.That(byAccount["acct-work"].Single().Value).IsEqualTo(".codex-work");
+        } finally {
+            foreach (var fake in fakes) await fake.DisposeAsync();
+        }
     }
 
     [Test]

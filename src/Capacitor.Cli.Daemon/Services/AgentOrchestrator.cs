@@ -815,8 +815,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PolicySnapshotProvider?                           policySnapshots = null,
             // Null outside DaemonRunner: a private fence over this daemon's own marker path. DaemonRunner
             // passes the singleton the control socket fences.
-            AdmissionFence?                                   admissionFence = null
+            AdmissionFence?                                   admissionFence = null,
+            // Null outside DaemonRunner: no accounts, so no catalog is probed per account.
+            AccountsPublisher?                                accounts = null
         ) {
+        AccountsSnapshot = accounts is null ? static () => null : () => accounts.Current;
         _admission = admissionFence ?? new AdmissionFence(
             config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AdmissionFence>.Instance);
@@ -1558,18 +1561,34 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
                     DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
 
-                var previousCatalog = _config.VendorModels;
-                var supported       = _config.SupportedVendors ?? [];
-                var catalogVendors  = !probeCatalog ? [] : _runtimeFactories.Values
+                var previousCatalog   = _config.VendorModels;
+                var previousByAccount = _config.VendorModelsByAccount;
+                var supported         = _config.SupportedVendors ?? [];
+                var catalogVendors    = !probeCatalog ? [] : _runtimeFactories.Values
                     .Where(f => supported.Contains(f.Vendor, StringComparer.Ordinal))
                     .Where(f => f.CatalogFingerprintPaths.Count > 0 || (previousCatalog?.ContainsKey(f.Vendor) ?? false))
                     .Select(f => f.Vendor)
                     .ToArray();
-                var mergedCatalog = catalogVendors.Length == 0
+                var accountFactory = probeCatalog ? VendorModelCatalogs.AccountFactory(_runtimeFactories.Values, supported) : null;
+                var accounts       = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(AccountsSnapshot());
+
+                var vendorProbe = catalogVendors.Length == 0
+                    ? null
+                    : VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token);
+                var accountProbe = accounts.Count == 0
+                    ? null
+                    : VendorModelCatalogs.ProbeByAccountAsync(accountFactory!, accounts, _shutdownCts.Token);
+                await Task.WhenAll(vendorProbe ?? Task.CompletedTask, accountProbe ?? Task.CompletedTask);
+
+                var mergedCatalog = vendorProbe is null
                     ? previousCatalog
-                    : VendorModelCatalogs.Merge(previousCatalog,
-                        await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token));
-                var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+                    : VendorModelCatalogs.Merge(previousCatalog, await vendorProbe);
+                // Read after the probes: an account removed while its probe ran is not advertised.
+                var live = VendorModelCatalogs.AccountsIn(AccountsSnapshot()).Select(a => a.AccountId).ToHashSet(StringComparer.Ordinal);
+                var mergedByAccount = VendorModelCatalogs.MergeByAccount(
+                    previousByAccount, accountProbe is null ? new Dictionary<string, VendorModelOption[]>() : await accountProbe, live);
+                var catalogChanged  = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog)
+                                   || !VendorModelCatalogs.Equal(previousByAccount, mergedByAccount);
 
                 if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
 
@@ -1577,7 +1596,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // One reference swap: status serializers on other threads may be enumerating the old one.
                 // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
                 if (catalogChanged) {
-                    _config.VendorModels = mergedCatalog;
+                    _config.VendorModels          = mergedCatalog;
+                    _config.VendorModelsByAccount = mergedByAccount;
                     _statusNotifier.Pulse();
                 }
                 LogReAdvertising(_logger, reason,
@@ -1590,6 +1610,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
+
+    /// <summary>The host's accounts as last published; the per-account catalogs follow it.</summary>
+    internal Func<AccountsSnapshotDto?> AccountsSnapshot { get; set; }
 
     /// <summary>
     /// Re-sends the registration on the current connection so the server's copy of a connect

@@ -90,6 +90,28 @@ public class AccountsPublisherTests {
         }
     }
 
+    /// The daemon reads a snapshot before its host starts the publisher; a registry change in between
+    /// replaces one a reader already has, so start announces it.
+    [Test]
+    public async Task Start_announces_a_snapshot_that_replaces_one_built_before_it() {
+        var store = Store();
+        Add(store, "work");
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        var announced = new List<long>();
+        publisher.Changed += s => { lock (announced) announced.Add(s.Revision); };
+        Add(store, "spare");
+
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            long[] revisions;
+            lock (announced) revisions = [.. announced];
+            await Assert.That(revisions).IsEquivalentTo([2L]);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Test]
     public async Task A_burst_of_rewrites_yields_one_snapshot() {
         var store = Store();

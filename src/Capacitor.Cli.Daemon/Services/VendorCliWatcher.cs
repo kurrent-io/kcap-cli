@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -19,8 +20,11 @@ public readonly record struct CliBinaryStat(string ResolvedPath, long Size, long
 internal sealed partial class VendorCliWatcher : BackgroundService {
     readonly DaemonConfig?                                             _config;
     readonly IReadOnlyDictionary<string, IHostedAgentRuntimeFactory>? _factories;
+    readonly Func<AccountsSnapshotDto?>                                _accounts = static () => null;
     readonly ILogger                                                   _logger;
     readonly TimeProvider                                              _time;
+
+    int _rebuildRequested;
 
     // Seams (assigned from DI in the production ctor; overridden directly in tests).
     internal Func<string, CliBinaryStat?>   StatBinary;
@@ -41,15 +45,17 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
 
     public VendorCliWatcher(
             DaemonConfig config, AgentOrchestrator orchestrator,
-            IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> factories,
+            IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> factories, AccountsPublisher accounts,
             ILogger<VendorCliWatcher> logger, TimeProvider time) {
         _config    = config;
         _time      = time;
         _factories = factories;
+        _accounts  = () => accounts.Current;
         _logger    = logger;
         Refresh    = reason => orchestrator.RefreshAdvertisedCapabilities(reason);
         StatBinary = path => StatCliBinary(config.Binaries, path);
         Watched    = [];
+        accounts.Changed += _ => OnAccountsChanged();
     }
 
     VendorCliWatcher(IReadOnlyList<(string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)> watched,
@@ -76,35 +82,68 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         new(watched, refresh, stat, time, baselines, statCatalog, catalogBaselines);
 
     /// <summary>Unattended vendors, plus every vendor that publishes a model catalog: one with
-    /// catalog files to fingerprint, or one that answered the startup probe.</summary>
+    /// catalog files to fingerprint, or one that answered the startup probe. Each account a refresh
+    /// probes on its own is an entry of its own, keyed by <see cref="VendorModelCatalogs.AccountKey"/>,
+    /// with no binary.</summary>
     internal static IReadOnlyList<(string Vendor, string CliPath, IReadOnlyList<string> CatalogPaths)> WatchSet(
-            DaemonConfig config, IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> factories) {
+            DaemonConfig config, IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> factories,
+            AccountsSnapshotDto? accounts = null) {
         var vendors = new HashSet<string>(config.UnattendedVendors ?? [], StringComparer.Ordinal);
         foreach (var f in factories.Values)
             if (f.CatalogFingerprintPaths.Count > 0 || (config.VendorModels?.ContainsKey(f.Vendor) ?? false))
                 vendors.Add(f.Vendor);
 
+        var perAccount = VendorModelCatalogs.AccountFactory(factories.Values, config.SupportedVendors ?? []) is { } accountFactory
+            ? VendorModelCatalogs.AccountsIn(accounts).Select(a =>
+                (Vendor: VendorModelCatalogs.AccountKey(a.AccountId), CliPath: "", CatalogPaths: accountFactory.CatalogFingerprintPathsFor(a.Directory)))
+            : [];
+
         return vendors.Where(factories.ContainsKey)
             .Select(v => (Vendor: v, factories[v].CliPath, CatalogPaths: factories[v].CatalogFingerprintPaths))
+            .Concat(perAccount)
             .Where(w => !string.IsNullOrEmpty(w.CliPath) || w.CatalogPaths.Count > 0)
             .OrderBy(w => w.Vendor, StringComparer.Ordinal)
             .ToArray();
     }
 
+    /// <summary>Gives each watched entry without a baseline its first one and forgets entries no longer
+    /// watched. An entry that already has one keeps it, so a rebuild cannot absorb a change the next
+    /// tick has yet to see; the recorded fingerprints serve only the first call.</summary>
     internal void PrimeBaselines() {
+        var watched = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (vendor, cliPath, catalogPaths) in Watched) {
-            _baselines[vendor] = _recorded is { } recorded && recorded.TryGetValue(vendor, out var baseline)
-                ? baseline
-                : StatCli(cliPath);
-            _catalogBaselines[vendor] = _recordedCatalogs is { } recordedCatalogs && recordedCatalogs.TryGetValue(vendor, out var catalog)
-                ? catalog
-                : StatCatalogs(catalogPaths);
+            watched.Add(vendor);
+            if (!_baselines.ContainsKey(vendor))
+                _baselines[vendor] = _recorded is { } recorded && recorded.TryGetValue(vendor, out var baseline)
+                    ? baseline
+                    : StatCli(cliPath);
+            if (!_catalogBaselines.ContainsKey(vendor))
+                _catalogBaselines[vendor] = _recordedCatalogs is { } recordedCatalogs && recordedCatalogs.TryGetValue(vendor, out var catalog)
+                    ? catalog
+                    : StatCatalogs(catalogPaths);
         }
+
+        foreach (var gone in _baselines.Keys.Where(k => !watched.Contains(k)).ToArray()) _baselines.Remove(gone);
+        foreach (var gone in _catalogBaselines.Keys.Where(k => !watched.Contains(k)).ToArray()) _catalogBaselines.Remove(gone);
+        _recorded         = null;
+        _recordedCatalogs = null;
+    }
+
+    /// <summary>The publisher's handler, which must not block: the watch set is rebuilt by the next tick,
+    /// and the refresh is a trigger.</summary>
+    internal void OnAccountsChanged() {
+        Interlocked.Exchange(ref _rebuildRequested, 1);
+        Refresh("accounts changed");
     }
 
     /// <summary>One poll iteration (timer-driven; also the unit-test entry point). All vendors
     /// that changed since the last tick share one refresh, since a refresh re-probes them all.</summary>
     internal void Tick() {
+        if (Interlocked.Exchange(ref _rebuildRequested, 0) == 1 && _config is not null && _factories is not null) {
+            Watched = WatchSet(_config, _factories, _accounts());
+            PrimeBaselines();
+        }
+
         List<string>? changed = null;
         foreach (var (vendor, cliPath, catalogPaths) in Watched) {
             var current        = StatCli(cliPath);
@@ -151,7 +190,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         if (_config is not null && _factories is not null) {
             _recorded         = _config.UnattendedVendorBaselines;
             _recordedCatalogs = _config.VendorCatalogBaselines;
-            Watched           = WatchSet(_config, _factories);
+            Watched           = WatchSet(_config, _factories, _accounts());
         }
         PrimeBaselines();
 

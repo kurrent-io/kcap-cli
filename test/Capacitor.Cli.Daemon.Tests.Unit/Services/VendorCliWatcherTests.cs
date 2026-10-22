@@ -1,5 +1,11 @@
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -272,5 +278,67 @@ public class VendorCliWatcherTests {
 
         await Assert.That(set.Select(w => w.Vendor)).IsEquivalentTo(["claude", "pi", "silent"]);
         await Assert.That(set.Single(w => w.Vendor == "pi").CatalogPaths).IsEquivalentTo(["/a"]);
+    }
+
+    static VendorAccount AddCodexAccount(AccountStore store, string directory) {
+        var account = new VendorAccount(Guid.NewGuid().ToString("N"), HarnessId.Codex,
+            AccountDirectory.Normalize(directory), Path.GetFileName(directory), DateTimeOffset.UnixEpoch);
+        store.Mutate(r => (r with { Accounts = [.. r.Accounts, account] }, 0));
+        return account;
+    }
+
+    /// Driven through the real publisher and orchestrator: the announcement both re-probes, which puts
+    /// the new account in the map, and rebuilds the watch set, so a later write to that account's
+    /// auth file asks for another refresh.
+    [Test]
+    public async Task Adding_an_account_probes_it_and_extends_the_watch_set() {
+        using var home = new TempHome();
+        var store = new AccountStore(home.PathTo("accounts"));
+        AddCodexAccount(store, home.PathTo(".codex-work"));
+        var codex = new StubCatalogFactory("codex", [new("gpt-default", "Default")], paths: [home.PathTo(".codex", "auth.json")]) {
+            ProbeDirectory = dir => Task.FromResult<IReadOnlyList<VendorModelOption>?>([new(Path.GetFileName(dir), Path.GetFileName(dir))]),
+            PathsFor       = dir => [Path.Combine(dir, "auth.json")],
+        };
+        DaemonConfig? config = null;
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            extraRuntimeFactories: [codex],
+            configure: c => {
+                c.SupportedVendors             = ["codex"];
+                c.UnattendedVendors            = [];
+                c.UnattendedVendorCapabilities = [];
+                config = c;
+            });
+        using var publisher = new AccountsPublisher(
+            new DaemonConfig { Accounts = store }, home, new FakeTimeProvider(), NullLogger<AccountsPublisher>.Instance);
+        await publisher.StartAsync(CancellationToken.None);
+        orch.AccountsSnapshot = () => publisher.Current;
+        var factories = new Dictionary<string, IHostedAgentRuntimeFactory>(StringComparer.Ordinal) { ["codex"] = codex };
+        using var watcher = new VendorCliWatcher(config!, orch, factories, publisher, NullLogger<VendorCliWatcher>.Instance, new FakeTimeProvider());
+        watcher.StatBinary = _ => null;
+        await watcher.StartAsync(CancellationToken.None);
+        try {
+            var spare = AddCodexAccount(store, home.PathTo(".codex-spare"));
+            await publisher.RebuildAsync(CancellationToken.None);
+            await orch.CapabilityRefreshForTest.WaitAsync(TimeSpan.FromSeconds(10));
+
+            await Assert.That(codex.ProbedDirectories).Contains(spare.Directory);
+            await Assert.That(config!.VendorModelsByAccount![spare.Id].Single().Value).IsEqualTo(".codex-spare");
+
+            var refreshes = new List<string>();
+            watcher.Refresh = refreshes.Add;
+            watcher.Tick();
+            await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
+            await Assert.That(refreshes).IsEmpty();
+
+            home.CreateFile([".codex-spare", "auth.json"], "{}");
+            watcher.Tick();
+
+            await Assert.That(refreshes.Count).IsEqualTo(1);
+            await Assert.That(refreshes[0]).Contains(spare.Id);
+        } finally {
+            await watcher.StopAsync(CancellationToken.None);
+            await publisher.StopAsync(CancellationToken.None);
+        }
     }
 }
