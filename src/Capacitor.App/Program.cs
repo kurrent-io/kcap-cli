@@ -33,10 +33,14 @@ internal static class Program
         velopack.Run();
         Uninstall = UninstallMode.Parse(args);
 
-        var crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => {
-            if (e.ExceptionObject is Exception ex) crashLog.Record("unhandled", ex);
-        };
+        // The uninstall deletes the config directory, which a crash log would recreate.
+        AppCrashLog? crashLog = null;
+        if (Uninstall is null) {
+            var log = crashLog = new AppCrashLog(ConfigRoot.FromEnvironment(), TimeProvider.System);
+            AppDomain.CurrentDomain.UnhandledException += (_, e) => {
+                if (e.ExceptionObject is Exception ex) log.Record("unhandled", ex);
+            };
+        }
 
         if (DesktopHost.Start(args, updateRelaunch) is not { } host) return;
         Host = host;
@@ -49,7 +53,7 @@ internal static class Program
         try {
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
         } catch (Exception ex) {
-            crashLog.Record("ui-thread", ex);
+            crashLog?.Record("ui-thread", ex);
             throw;
         }
     }
