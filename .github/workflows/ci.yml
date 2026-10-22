@@ -42,6 +42,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # GetMac VMs leave TMPDIR empty, and dotnet's named mutexes then fail on first run. The suite's
+      # socket paths need a short, symlink-free root, so not runner.temp.
+      - name: Set TMPDIR
+        if: runner.os == 'macOS'
+        run: '[ -n "${TMPDIR:-}" ] || echo "TMPDIR=/private/tmp" >> "$GITHUB_ENV"'
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
