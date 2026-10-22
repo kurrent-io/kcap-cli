@@ -15,6 +15,42 @@ namespace Capacitor.App.Tests.Unit;
 [NotInParallel("AvaloniaSession")]
 public class PullRequestContextViewModelTests {
     [Test]
+    public Task An_empty_list_keeps_its_empty_state_while_polling_until_a_PR_is_found() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.Links = [];
+            h.Source.ListGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists > 0, what: "initial discovery started");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.SectionMeta).IsEmpty();
+
+            h.Source.ListGate.SetResult();
+            await WaitUntilAsync(() => h.Vm.HasListed && !h.Vm.IsReading, what: "empty discovery settled");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.HasNotice).IsTrue();
+
+            h.Source.ListGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            var lists = h.Source.Lists;
+            h.Time.Advance(TimeSpan.FromSeconds(30));
+            await WaitUntilAsync(() => h.Source.Lists > lists, what: "background poll started");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.SectionMeta).IsEmpty();
+            await Assert.That(h.Vm.ShowsRefreshing).IsFalse();
+
+            h.Source.Links = [Link(1)];
+            h.Source.ListGate.SetResult();
+            await WaitUntilAsync(() => h.Vm.HasPullRequest && !h.Vm.IsReading, what: "PR discovered");
+            await Assert.That(h.Vm.Notice).IsEmpty();
+            await Assert.That(h.Vm.SectionMeta).IsEqualTo("1");
+        } finally {
+            h.Source.ListGate?.TrySetResult();
+            await h.Dispose();
+        }
+    });
+
+    [Test]
     public Task Link_changes_notify_the_rail_for_initial_discovery_attachments_and_removals() => RunOnUiAsync(async () => {
         var notifications = new List<string>();
         var h = new Harness(linksChanged: notifications.Add);
@@ -46,6 +82,8 @@ public class PullRequestContextViewModelTests {
             h.Time.Advance(TimeSpan.FromSeconds(3));
             h.Vm.Refresh();
             await WaitUntilAsync(() => !h.Vm.HasPullRequest && !h.Vm.IsReading, what: "removal discovered by manual refresh");
+            await Assert.That(h.Vm.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(h.Vm.SectionMeta).IsEmpty();
             await Assert.That(notifications).IsEquivalentTo(new[] { "session", "session", "session", "session" });
         } finally { await h.Dispose(); }
     });

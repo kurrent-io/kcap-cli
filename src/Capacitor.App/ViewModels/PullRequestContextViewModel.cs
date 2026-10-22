@@ -207,7 +207,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
-            SetNotice(snapshot is null ? "Loading pull requests…" : "");
+            SetNotice(snapshot is null ? "No pull requests yet." : "");
             if (snapshot is not null) Seed(snapshot);
             RequestRefresh();
         }).DisposeWith(_subscriptions);
