@@ -654,7 +654,7 @@ public class UninstallCommandTests {
         return account;
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     [NotInParallel]
     public async Task Uninstall_removes_its_own_link() {
         await using var fixture = await Fixture.CreateAsync();
@@ -670,7 +670,7 @@ public class UninstallCommandTests {
         await Assert.That(output.GetCapturedOutput()).Contains($"Remove the kcap command link at {link}");
     }
 
-    [Test]
+    [Test, ExcludeOn(OS.Windows)]
     [NotInParallel]
     public async Task Keep_path_links_leaves_it() {
         await using var fixture = await Fixture.CreateAsync();
