@@ -117,7 +117,8 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(commands!.Single().Name).IsEqualTo("review");
     }
 
-    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.</summary>
+    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.
+    /// Its stop still reaches the server as a status report, which is all that frees its slot there.</summary>
     [Test]
     public async Task A_refused_launch_keeps_running_and_sends_nothing_more_for_its_id() {
         using var repoPath = GitRepo.CreateWithCommit();
@@ -140,6 +141,7 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(server.RunEvents.Any(e => e.AgentId == "refused-launch")).IsFalse();
         await Assert.That(server.LaunchFailedCalls).IsEmpty();
         await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
+        await Assert.That(server.StatusReports[^1].ActiveCount).IsEqualTo(0);
     }
 
     // A PTY codex runtime reports "pty" on AgentRegistered — the transport rides the runtime TYPE,

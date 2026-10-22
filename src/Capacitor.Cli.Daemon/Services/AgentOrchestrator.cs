@@ -6058,6 +6058,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
+        } else if (!_shutdownCts.IsCancellationRequested) {
+            // The server still counts a server-silent agent's slot, and no unregister will free it.
+            await SendStatusReportNowAsync();
         }
     }
 
