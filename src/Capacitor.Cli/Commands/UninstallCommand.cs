@@ -84,6 +84,16 @@ sealed class UninstallCommand(
         // An interrupted setup may finish as an installation, so it needs the same consent as one.
         var removeLocal = localState is LocalStackState.Installed or LocalStackState.Interrupted;
 
+        // Recovery always finishes an interrupted purge, so --keep-config cannot keep that data.
+        var interruptedPurge = localState is LocalStackState.Interrupted(LocalPurgeJournal.Operation, _);
+
+        if (interruptedPurge && skipPrompt && !purgeLocal) {
+            await Console.Error.WriteLineAsync(
+                $"An interrupted purge of the local server in {local!.Root.Directory} is pending; recovering it would finish deleting the local server's data, whatever --keep-config says. Pass --purge-local to delete it. Nothing was changed.");
+
+            return 1;
+        }
+
         if (removeLocal && skipPrompt && !purgeLocal && !keepConfig) {
             var subject = localState is LocalStackState.Installed { Installation.ServerUrl: var installedUrl }
                 ? $"A local server is installed at {installedUrl}"

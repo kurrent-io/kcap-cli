@@ -884,6 +884,23 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task Keep_config_still_refuses_an_interrupted_purge_without_purge_local() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+        LocalStateFiles.WriteJournal(local.Root, new(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, null, DateTimeOffset.UtcNow, new Dictionary<string, string>()));
+
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--keep-config");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(errors).Contains("finish deleting the local server's data");
+        await Assert.That(errors).Contains("--purge-local");
+        await Assert.That(local.Service.IsInstalled(local.Unit)).IsTrue();
+        await Assert.That(Directory.Exists(local.Dir("data"))).IsTrue();
+        await Assert.That(local.Log).DoesNotContain("recorders:stop");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
     [Test, NotInParallel]
     public async Task No_local_server_needs_no_purge_flag() {
         await using var fixture = await Fixture.CreateAsync();

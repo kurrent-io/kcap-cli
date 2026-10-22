@@ -27,7 +27,9 @@ Options:
                       A local server is removed but its data is kept.
   --purge-local       With --yes, consent to deleting the local server's data:
                       every session it recorded. Without it (or --keep-config),
-                      --yes refuses when a local server is installed.
+                      --yes refuses when a local server is installed. An
+                      interrupted purge needs it even with --keep-config, since
+                      recovery finishes deleting the data.
   --force             Uninstall even while a daemon is running or starting
                       agents; they are ended. Without it, uninstall refuses
                       and changes nothing.

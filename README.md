@@ -2661,7 +2661,7 @@ kcap uninstall --project --yes  # also strip project-scope hooks in cwd's repo
 kcap uninstall --keep-config    # remove integrations, keep ~/.config/kcap
 ```
 
-When a local server is installed (`kcap setup --local`), `uninstall` removes it first, as `kcap local uninstall --purge` does: its service, binaries, data and logs go, with every session it recorded. The prompt names the server and the deletion; `--yes` alone is not consent to it, so a non-interactive run refuses unless you pass `--purge-local` (or `--keep-config`, which removes the server but keeps its data). If the local server cannot be removed, or its registry cannot be read, `~/.config/kcap/` is kept and the uninstall reported incomplete, so a re-run can finish.
+When a local server is installed (`kcap setup --local`), `uninstall` removes it first, as `kcap local uninstall --purge` does: its service, binaries, data and logs go, with every session it recorded. The prompt names the server and the deletion; `--yes` alone is not consent to it, so a non-interactive run refuses unless you pass `--purge-local` (or `--keep-config`, which removes the server but keeps its data). An interrupted purge needs `--purge-local` even with `--keep-config`: recovering it finishes deleting the data. If the local server cannot be removed, or its registry cannot be read, `~/.config/kcap/` is kept and the uninstall reported incomplete, so a re-run can finish.
 
 `uninstall` also removes the `kcap` command links on your PATH that point at this install (macOS and Linux). A link it cannot delete, such as one in a root-owned folder, is reported with a `sudo rm <path>` command to run yourself, and the uninstall counts as incomplete.
 
