@@ -3,8 +3,8 @@
 A daemon restart (self-update, `kcap daemon restart`, `stop --keep-agents`) resumes interactive
 hosted agents under their own ids. A review-flow reviewer, or any other `LaunchKind.ReviewFlow`
 participant, does not: unless it is a Codex app-server reviewer, it is killed and its flow loses the
-context of every round it reviewed. This design resumes it in place through the same resume ledger,
-for every vendor that can reopen its own session, and leaves the rest as they are.
+context of every round it reviewed. This design resumes it in place through the resume ledger, for
+each reviewer launch shape proven to reopen its session, and says what every other shape does.
 
 Builds on `2026-10-17-daemon-restart-agent-resume-design.md`, whose §6 kept flow participants out of
 the ledger.
@@ -32,87 +32,212 @@ that row for every transport, plus a worktree that outlives the park: Claude `--
 
 ## Shape: flow participants take the resume ledger
 
-A flow participant whose vendor can reopen its session gets a ledger entry like an interactive
-agent. On a keep-agents shutdown it is stopped for resume (worktree, MCP config, pid record and
-entry kept); the successor relaunches it under the same agent id with the vendor's native resume.
-No server change is required:
+A flow participant whose launch shape can reopen its session gets a ledger entry. On a keep-agents
+shutdown it is stopped for resume (worktree, snapshot, MCP config, pid record and entry kept); the
+successor relaunches it under the same agent id with the vendor's native resume.
 
-- A `ResumingAgentClaim` carries no kind restriction; the claimed participant survives the reconnect
-  reap.
-- Re-registering the same id is accepted as a duplicate registration and keeps the flow pin; the
-  role is still assigned to that agent id and not stopped, so `submit_review_result` and round
-  delivery work as before.
-- The old-epoch absence proof ignores claims. The successor therefore reports `StartupReapComplete =
-  false` while any participant resume is pending (seconds, bounded by the readiness window). Once the
-  resumed agent is live it is in `LiveAgents`; once a resume fails it is gone and the proof records
-  the death, which is the fallback below.
-- The server's activity monitor latches an agent `Regressed` when its `ActivitySeq` goes backwards.
-  The entry stores the last seq at stop, and the resumed agent's clock starts above it.
+What the server already does, unchanged (read from kcap-server source):
 
-Codex app-server reviewers keep the park path: it is proven end to end and the server already
-resumes them. A participant that is not resumable keeps today's end.
+- A `ResumingAgentClaim` carries no kind restriction; the claimed participant survives the
+  reconnect reap for up to 15 minutes.
+- Re-registering the same id is a duplicate registration that keeps the flow pin, provided the
+  participant was not recorded stopped meanwhile; `submit_review_result` checks only that the role is
+  assigned to this agent id and not stopped.
+- Daemon input drops carry a reason; `unknown_agent` is per-id absence proof.
+- The old-epoch absence proof ignores claims: once the daemon reports `StartupReapComplete`, an
+  old-epoch flow incarnation not in `LiveAgents`, `Quarantined` or `UnresolvedStartupCandidates` is
+  recorded dead.
+- The activity monitor latches an agent `Regressed` when its `ActivitySeq` goes backwards, and ends
+  a round whose reports stop for longer than its bound (at least 3 minutes).
+
+Each of these is a constraint below. Codex app-server reviewers keep the park path, which is proven
+end to end. A participant that is not resumable keeps today's end.
+
+### Which participants are eligible
+
+Only participants stopped by a planned keep-agents shutdown. The entry is written `Running` at
+launch like an interactive one, but a successor resumes a participant entry only when it is
+`Resuming` (written by that stop) and its `ResumingAt` is within the claim lifetime (15 minutes).
+Any other participant entry — `Running` after a crash, older than the claim, written before an
+intermediate daemon ran — is discarded at boot (see *When a resume fails*). A crash leaves no
+stop-time activity high-water mark and the server has already reaped the participant, so there is
+nothing to continue.
 
 ### Per vendor
 
-A new factory predicate, `SupportsReviewerRestartResume(transport)`, default false, says a vendor's
+A new factory predicate, `SupportsReviewerRestartResume(transport, work)`, default false, says a
 reviewer launch shape reopens its session. It is separate from `SupportsRestartResume` because a
-reviewer runs under a different launch shape: strict MCP config, an isolated HOME, a borrowed
-snapshot.
+reviewer runs under a different shape: strict MCP config, isolated config or HOME, a borrowed
+snapshot. It is set true for a shape only once a live probe of that exact shape, recorded under
+`docs/probes/`, has shown: the session reopens after the daemon's stop, it recalls context from an
+earlier round, and it submits a result through the freshly minted result channel and tools.
 
-| Vendor | Across a restart | Why |
+| Shape | Across a restart | Why |
 |---|---|---|
-| Codex app-server | parks; server resumes on the next round | unchanged |
-| Codex PTY | ledger, `codex resume` | rollouts are global, path-independent |
-| Claude | ledger, `--resume <session>` | same worktree path kept; reviewer is owned-worktree only |
-| Cursor, Copilot, OpenCode | ledger, `session/load` | passed the graceful-stop probe (2026-10-19); the ACP factory's review-flow refusal is lifted for them |
-| Pi, Muse | ledger if the reviewer's session store survives the stop; verified during implementation, else not resumable | |
-| Antigravity | ends as today | a reviewer runs under a per-launch HOME, so its conversation store does not survive |
+| Codex app-server | parks; the server resumes it on the next round | unchanged |
+| Claude, owned worktree | ledger, `--resume <session>`, subject to its probe | session store is `~/.claude/projects/<cwd>`, and the worktree path is kept; a Claude reviewer is owned-only |
+| Cursor, owned and borrowed snapshot | ledger, `session/load`, subject to its probe | keeps its own HOME, so its store survives; restart-resume probe passed for the interactive shape |
+| OpenCode, owned | ledger, `session/load`, subject to its probe | the reviewer's isolated config dir is keyed by daemon epoch; the probe decides whether the session store lives outside it, else not resumable |
+| Copilot | ends as today | a borrowed reviewer's session store sits in the per-launch sandbox HOME, which the launch owns; keeping and re-binding it is a follow-up |
+| Codex PTY | ends as today | `CodexHostedAgentRuntimeFactory` refuses a reviewer resume off the app-server route; reviewers route to app-server |
+| Pi | ends as today | its session file lives in the per-launch reviewer dir, which disposal and the successor's early sweep delete |
+| Muse | ends as today | `session/resume` cannot carry the reviewer's read-only profile, approval mode and MCP servers |
+| Antigravity | ends as today | a reviewer runs under a per-launch HOME |
 | Gemini, Grok, Kiro | ends as today | no verified native resume; kcap continue starts a new agent id the flow does not know |
 
-What the flow sees for a vendor that ends: `participant_died` on the round in flight, and a fresh
-reviewer with no earlier context on the next submit.
+A shape whose probe fails is "ends as today". What the flow sees then: `participant_died` on the
+round in flight, and a fresh reviewer with no earlier context on the next submit.
 
-### Borrowed snapshots (Cursor, Copilot)
+### What the entry records
 
-Containment must exist again before the vendor runs. The entry records the snapshot source; the
-resume re-runs `BorrowAuthorizer` on it (the ledger is daemon-owned, but the borrow allowlist may
-have changed), re-syncs the kept snapshot from the source, and mints a fresh reviewer token,
-review-context capability and brokered result channel through the ordinary launch path. Copilot's OS
-sandbox profile and brokered credential are built as for a fresh launch. Any refusal fails the
-resume.
+Beyond the interactive descriptor: launch kind; MCP allowlist; tools; the reviewer certification
+requirement without its connection id; the borrowed shape (below); the activity seq and logical age
+at stop; whether a turn was in flight at stop; and the last round input delivered, with its time.
 
-### What the resumed reviewer is told
+### Borrowed snapshots
 
-The first turn is a reviewer nudge, not the interactive one: the daemon restarted; if a review round
-was in progress and its result was not yet submitted with `submit_review_result`, finish it and
-submit; otherwise wait for the next round and do nothing. It is sent whether or not a turn was in
-flight, because a PTY vendor never reports `TurnInFlight`. Between rounds this costs one short turn.
+Containment must exist again, by the same code, before the vendor runs. The entry records the
+borrowed flag, the canonical borrowed cwd and git root, the snapshot root, the git-relative cwd and
+the review-context root. The resume command carries `Borrowed = true` and the borrowed cwd, so
+`snapshotBorrow`, the sandbox, result brokering and capability minting take their ordinary
+branches. Before that, the resume:
 
-### Mid-round, and past the wait bound
+1. re-runs `BorrowAuthorizer` on the recorded cwd and requires the canonical cwd and git root it
+   returns to equal the recorded ones (a retargeted symlink fails);
+2. re-runs the capture-scope refusal;
+3. re-syncs the kept snapshot from the source, publishing a new review-context generation, and
+   points `WorktreeInfo` at the recorded snapshot root, context root and relative cwd.
 
-The restart still waits up to `RestartTurnWait` for participants to finish their round. Past the
-bound, a resumable participant is stopped mid-turn and resumed. The server's round stays in flight:
-the gap is seconds, well under its silence bound (at least 3 minutes), and the nudge has the reviewer
-finish and submit. If the vendor's session lost the unfinished turn, the reviewer redoes the round
-from its context.
+Missing metadata, a mismatch, a refusal or an unavailable sandbox or brokered credential fails the
+resume before spawn.
+
+### Certification
+
+A resume re-evaluates the recorded requirement with `EvaluateReviewerCertification`'s terminal arms:
+vendor, required launcher policy against the successor's own, and the vendor CLI's freshly probed
+version against the allowed range. The connection-id and advertisement-swap arms are skipped: they
+guard an advertisement, and the successor has not used one. A failure fails the resume before spawn.
+
+### What the resumed reviewer is sent
+
+- Idle at stop (`AwaitingInput`, or no turn in flight): nothing. The session reopens and waits for
+  the next round, which arrives as ordinary input.
+- Mid-turn at stop: a reviewer nudge (the daemon restarted while you were working on a round; if you
+  already submitted its result, do nothing; if `submit_review_result` refuses the token, the round
+  has ended, so stop) followed by the last round input, repeated verbatim. The vendor may not have
+  persisted that input, and only it carries the round token. A reviewer that had already submitted
+  before the stop is told not to submit again; a duplicate is refused by its stale token.
+
+### Input that arrives during recovery
+
+The successor connects before its resume lane runs, so the server can dispatch a round to a
+participant that is still a candidate, queued or handshaking. `HandleSendInput` must not answer
+`unknown_agent` for it, which the server would take as absence proof. Input for a pending
+participant candidate is held in order (bounded; overflow drops with `queue_full`) and delivered
+after publication and after the nudge. If the attempt ends without publishing, the held input is
+dropped with `unknown_agent`, which is then true. A server stop of a pending candidate withdraws it.
+
+### Startup completeness
+
+While any participant candidate is pending, `ComputeStartupReapComplete` is false, so the server
+proves nothing absent mid-resume. This also delays proof for unrelated dead old-epoch participants,
+so it is bounded:
+
+- participant candidates run ahead of interactive ones on the resume lane;
+- one recovery deadline covers them all from daemon start (my call: 90 s, including queueing,
+  preparation, handshake and readiness); at the deadline every unpublished participant attempt is
+  withdrawn and ended as a failed resume;
+- the status report reads the live agents and the completeness flag in one snapshot under the
+  ledger lock, so the first `true` report lists every participant published before it.
+
+No new `UnresolvedStartupCandidate` reason is introduced; the wire enum is closed.
+
+### Mid-round, and when server timers expire
+
+The restart still waits up to `RestartTurnWait` for participants to finish their round. Past it, a
+resumable participant is stopped mid-turn and resumed as above. Continuity is guaranteed only while
+the server's timers hold: the restart and resume complete within the claim lifetime, and within the
+round's remaining silence budget, which a long round may have nearly spent before the stop. When
+either expires the server stops the role, and a re-registration no longer carries the flow pin. The
+daemon cannot see that today: the resumed reviewer is orphaned, its submissions are refused, and the
+daemon's idle reaper ends it. A server change (below) refuses that registration so the resume fails
+at once.
+
+### Predecessor session ends
+
+The predecessor's vendor process ending must not end the participant. `ResumeEndSuppression` holds
+an end only while the entry is `Resuming`, and `TryPublishResumed` rewrites it `Running`, so a
+delayed Claude end hook, a watcher's final end or a spooled `parent_exited` from the old process can
+still land after publication and reach the server's `HostedAgentDeathBridge`. The child env already
+carries the daemon epoch it was launched under; the entry records the epoch of its current run. An
+end is suppressed when the entry exists and the ending process's epoch differs from the entry's, and
+the decision is made where the end is produced (hook, watcher, spool sweep), so a spooled end never
+carries an undecided one. A genuine exit of the resumed process carries the matching epoch and posts.
+This also closes the same window for interactive resumes.
 
 ### When a resume fails
 
-No kcap continue for a participant, and no `interrupted` entry kept for `kcap agent resume`: the
-entry, its worktree and its snapshot are removed, `resume_failed:<reason>` is reported as the agent's
-end, and the server records the death. The flow then behaves as it does today.
+No kcap continue for a participant, and no entry kept for `kcap agent resume`. Boot-time
+ineligibility (auto-resume off, stale, not planned, missing worktree or session, newer schema), a
+failed native resume, the recovery deadline and an exception all take one path: the agent's end is
+reported as `resume_failed:<reason>`, so the server records the death and the flow heals as today.
+Its resources are removed only once its predecessor process is proven gone; while the orphan reaper
+holds it unresolved, the entry stays as a non-resumable tombstone that keeps the pid record,
+worktree and snapshot, and is cleaned when the reaper resolves it.
+
+### Local control
+
+Ledger rows report the entry's own kind, not `Default`, so `kcap agent ls` shows a resuming reviewer
+as one, and local stop applies its review-flow protection before any discard: an unforced stop of a
+pending participant is refused as it is for a live one; `--force`, a server stop and an end-agents
+shutdown withdraw it so it can never publish later. `stop --all` covers pending participants under
+the same rule.
+
+### Clocks
+
+The resumed agent's activity clock starts above the recorded seq, before any pending-launch or stage
+report can expose it, and its age starts at the recorded age, so the reviewer lifetime backstop
+counts the whole run rather than restarting at every resume.
 
 ### Ledger compatibility
 
-Participant entries carry their launch kind, MCP allowlist, snapshot source and last activity seq,
-and are written at a bumped schema version. A daemon too old to know them marks them
-`ledger_newer_than_daemon` instead of resuming a reviewer as an interactive agent.
+Participant entries live in their own subdirectory of the ledger, which a daemon without this change
+never reads: it claims nothing for them, and the server reaps them as it does today. Interactive
+entries are unaffected in both directions. A newer daemon booting after such a daemon finds the
+participant entries older than the claim lifetime or the server's role gone, and discards them.
+
+## Server changes (kcap-server issue, not required to ship)
+
+- The absence proof honours `ResumingAgents`, so the daemon need not hold `StartupReapComplete`.
+- A registration of a flow participant whose role is stopped or whose run is closed is refused with
+  a new `AgentRegistrationRefusal`, so a resume past a server timer fails at once instead of leaving
+  an orphan for the idle reaper. An older server accepts it, which is the orphan case above.
 
 ## Out of scope
 
 - `LaunchKind.Review` (PR review agents): unchanged.
-- Server hardening: the absence proof could honour `ResumingAgents` so the daemon need not hold
-  `StartupReapComplete`. Filed as a kcap-server issue, not required here.
-- Reviewer certification: a resume runs under the successor's launcher policy without re-checking
-  the server's certification block, whose connection id belongs to the predecessor. A vendor the
-  successor no longer certifies refuses in its factory and the resume fails.
+- Copilot, Pi and Codex PTY reviewer resume: follow-ups, each needing its store or route kept.
+
+## Acceptance
+
+- Claude, Cursor (owned and borrowed) and OpenCode reviewers, each its probe passing: a restart
+  between rounds and one mid-round past `RestartTurnWait` both end with the next round answered by
+  the same agent id with earlier-round context.
+- Round dispatched while the candidate waits for the lane, during handshake, and right after
+  publication: delivered once, after the nudge.
+- A stalled participant resume beside an unrelated dead old-epoch participant: completeness turns
+  true at the deadline, the stalled one is reported failed, and the dead one is proven absent.
+- Predecessor end delivered before and after successor registration: role stays live; a genuine exit
+  of the resumed process still ends it.
+- Nested-cwd borrowed Cursor snapshot: the resumed process's boundary and result channel match a
+  fresh launch's; a retargeted source, missing metadata or unavailable sandbox fails before spawn.
+- Claude CLI swapped for an out-of-range build: resume refused before spawn.
+- Last round input lost by the vendor: the repeat lets it finish; a result accepted just before the
+  stop is not submitted twice.
+- A participant entry with an unresolved predecessor process: reported failed, resources kept until
+  resolved, never offered to `kcap agent resume` or kcap continue.
+- New → old → new daemon: no cleared reviewer is revived.
+- Unforced local stop leaves a pending participant's recovery intact; forced stop and end-agents
+  shutdown prevent a later publish.
+- First post-restart activity report is above the last pre-restart one; a reviewer near its lifetime
+  limit is not given a fresh lifetime.
