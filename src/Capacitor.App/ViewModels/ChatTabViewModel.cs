@@ -450,6 +450,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// Small title on assistant prose: the harness name once the session has one, else a role.
     public string AssistantTitle => string.IsNullOrEmpty(_vendorLabel) ? "Assistant" : _vendorLabel;
 
+    public string UserTitle => _origin == AgentOrigin.Local ? "You" : "User";
+
     string _modelLabel = "default";
     public string ModelLabel { get => _modelLabel; private set => this.RaiseAndSetIfChanged(ref _modelLabel, value); }
 
