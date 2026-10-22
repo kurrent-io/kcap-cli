@@ -23,6 +23,8 @@ public sealed record ChatSessionInfo(
     /// Both daemon lanes refuse attachments to anything but a plain agent.
     public bool TakesAttachments { get; init; } = true;
 
+    public bool IsOwnedByCurrentUser { get; init; }
+
     /// The daemon dropped the agent before this pane ever saw it.
     public static readonly ChatSessionInfo Gone = new("Completed", "Completed", "", null, null, null, true, "", null);
 
