@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.App.Platform.Mac;
+using Capacitor.App.Services;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -116,6 +117,70 @@ public class ApplicationsMoverTests {
         } finally {
             File.SetUnixFileMode(apps, mode);
         }
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Native_rename_permission_denial_after_staging_allows_a_per_user_retry(bool update) {
+        if (!OperatingSystem.IsMacOS()) return;
+        var apps = Tmp.CreateDir("Applications");
+        var installed = Path.Combine(apps, "kcap.app");
+        if (update) CompleteBundle(installed);
+        var source = Tmp.PathTo("Downloads/kcap.app");
+        CompleteBundle(source, "1.1.0");
+        var mode = File.GetUnixFileMode(apps);
+        bool Rename(string from, string to) {
+            if (!OperatingSystem.IsMacOS()) throw new PlatformNotSupportedException();
+            try {
+                File.SetUnixFileMode(apps, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+                return update ? ApplicationsMover.SwapAtomic(from, to) : ApplicationsMover.PromoteExclusive(from, to);
+            } finally {
+                File.SetUnixFileMode(apps, mode);
+            }
+        }
+        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")), Rename, apps, Rename);
+
+        var outcome = await mover.MoveAsync(source, CancellationToken.None);
+
+        await Assert.That(outcome.Moved).IsFalse();
+        await Assert.That(outcome.PermissionDenied).IsTrue();
+        await Assert.That(Directory.Exists(source)).IsTrue();
+        await Assert.That(Directory.GetDirectories(apps).Length).IsEqualTo(update ? 1 : 0);
+        if (update)
+            await Assert.That(File.ReadAllText(Path.Combine(installed, "Contents", "Info.plist"))).Contains("1.0.0");
+    }
+
+    sealed class DeniedReferences(bool duringApply) : IApplicationReferences {
+        public Task PrepareAsync(IReadOnlyList<string> oldRoots, string target, CancellationToken ct) =>
+            duringApply ? Task.CompletedTask : throw new UnauthorizedAccessException("Cannot read LaunchAgents service file.");
+        public Task ApplyAsync(CancellationToken ct) => throw new UnauthorizedAccessException("Cannot write LaunchAgents service file.");
+        public Task RollbackAsync(Action restoreBundles) {
+            restoreBundles();
+            return Task.CompletedTask;
+        }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Service_permission_errors_preserve_the_error_without_suggesting_a_destination_retry(bool duringApply) {
+        var apps = Tmp.CreateDir("Applications");
+        var installed = Path.Combine(apps, "kcap.app");
+        CompleteBundle(installed);
+        var source = Tmp.PathTo("Downloads/kcap.app");
+        CompleteBundle(source, "1.1.0");
+        var mover = new ApplicationsMover(new FakeDitto(root => CompleteBundle(root, "1.1.0")), MovePromote, apps, MoveSwap,
+            migrateReferences: () => new DeniedReferences(duringApply));
+
+        var outcome = await mover.MoveAsync(source, CancellationToken.None);
+
+        await Assert.That(outcome.Moved).IsFalse();
+        await Assert.That(outcome.PermissionDenied).IsFalse();
+        await Assert.That(outcome.Error).Contains("LaunchAgents service file");
+        await Assert.That(File.ReadAllText(Path.Combine(installed, "Contents", "Info.plist"))).Contains("1.0.0");
+        await Assert.That(Directory.GetDirectories(apps).Length).IsEqualTo(1);
     }
 
     [Test]
