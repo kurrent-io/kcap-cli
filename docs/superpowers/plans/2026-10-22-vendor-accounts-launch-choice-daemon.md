@@ -422,7 +422,7 @@ Daemon_without_accounts_capability_is_refused_before_spawn()
 - [ ] **Step 1:** `dotnet build src/Capacitor.Cli/Capacitor.Cli.csproj` — 0 warnings.
 - [ ] **Step 2:** `dotnet test --solution Capacitor.slnx` — green (daemon timing flakes rerun alone per the project memory).
 - [ ] **Step 3:** `dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}'` — no output.
-- [ ] **Step 4:** Live check on this Mac: `kcap accounts --json` shows the revision; `kcap agent start claude --account <prefix> -d` spawns and `kcap agent ls` names the account; the local snapshot frame lists both Claude directories with the daemon's default keyed to one of them.
+- [ ] **Step 4:** Live check on this Mac: `kcap accounts --json` shows the revision; `kcap agent start claude --account <prefix> -d` spawns, and the agent's row in the daemon's status snapshot (the `StatusSubscribe` frame the app reads; `kcap daemon status --json` reports the service, not agents) carries the account's `account_directory`, `account_id` and `account_label`, with its `transcript_path` under that directory; the daemon log shows the agent's spawn and session link and no `account_unavailable` refusal (it names no account, so the account is read from the snapshot); the local snapshot frame lists both Claude directories with the daemon's default keyed to one of them.
 
 ### Task 17: Session discovery and the model report read the launch's layout
 
