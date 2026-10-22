@@ -263,10 +263,10 @@ public sealed partial class PullRequestContextViewModel {
             if (selected is { IsAvailable: false }) {
                 CancelReads(); ClearProtected(); SetNotice("This pull request is no longer linked or visible. Select another PR or retry.");
             }
-            else if (selected is null) { ClearProtected(); SetNotice("No pull requests yet."); }
+            else if (selected is null) { ClearProtected(); SetNotice(NoPullRequestsNote); }
             else if (_legacy) { ClearProtected(); SetNotice("Open on GitHub. Native PR reading requires a compatible server and app."); }
             else {
-                if (_notice == "No pull requests yet.") _notice = "";
+                if (_notice == NoPullRequestsNote) _notice = "";
                 RequestOverview();
             }
         }

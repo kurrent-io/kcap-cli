@@ -399,6 +399,27 @@ public class PullRequestContextViewModelTests {
         await h.Dispose();
     });
 
+    /// A PR pinned before discovery settles is the card's subject, so the empty message never sits beside it.
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public Task A_menu_choice_pinned_during_discovery_hides_the_empty_message(bool beforePresence) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.ListGate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (!beforePresence) h.Push();
+            h.Vm.SelectSubject(PullRequestWire.Subject(FakePullRequestSource.Link(1)));
+            if (beforePresence) h.Push();
+            h.Vm.SetForeground(true);
+            await WaitUntilAsync(() => h.Source.Lists > 0, what: "initial discovery started");
+            await Assert.That(h.Vm.Selected!.Subject.Number).IsEqualTo(1);
+            await Assert.That(h.Vm.Notice).IsEmpty();
+        } finally {
+            h.Source.ListGate?.TrySetResult();
+            await h.Dispose();
+        }
+    });
+
     [Test]
     public Task A_menu_choice_removed_from_the_list_does_not_open_another_pr() => RunOnUiAsync(async () => {
         var h = new Harness();
