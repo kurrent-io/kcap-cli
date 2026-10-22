@@ -497,7 +497,7 @@ internal partial class AgentOrchestrator {
 
             spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
             var pty     = _ptyFactory.Spawn(launcher.CliPath, built.Args, worktree.Path, env, cols, rows);
-            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time);
+            var runtime = new PtyHostedAgentRuntime(vendor, pty, _time, logger: _logger);
 
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 

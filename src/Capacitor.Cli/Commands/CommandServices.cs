@@ -103,6 +103,7 @@ public static class CommandServices {
         services.AddTransient<ArtefactCommand>();
         services.AddTransient<DaemonCommands>();
         services.AddTransient<ErrorsCommand>();
+        services.AddTransient<SetTitleCommand>();
         services.AddTransient<EvalCommand>();
         services.AddTransient<FeedbackCommand>();
         services.AddTransient<HarnessCommand>();

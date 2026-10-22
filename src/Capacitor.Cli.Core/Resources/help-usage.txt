@@ -78,7 +78,7 @@ Session:
   generate-whats-done [--codex] <id>  Generate what's-done summary (--codex uses `codex exec`)
   import [vendor-filters] [options]   Import local sessions (Claude, Codex, Cursor, Copilot, Gemini, Kiro, Pi, OpenCode, Antigravity)
   muse-assistant ingest|scope|sweep  Record Muse Assistant chats (run by Muse's own cron on its VM)
-  set-title <title>                Set session title
+  set-title [--auto] <title>       Rename the current session
   disable                          Stop recording and delete session data
   hide                             Hide session (owner-only visibility)
   review <pr>                      Launch Claude with PR review context
