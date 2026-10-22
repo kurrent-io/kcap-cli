@@ -443,7 +443,7 @@ internal partial class AgentOrchestrator {
     }
 
     async Task HandleAdmittedLocalSpawnAsync(LocalFrame spawn, Stream stream, CancellationToken ct) {
-        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle, _) = FrameCodec.Spawn(spawn);
+        var (vendor, work, isPrivate, cwd, args, cols, rows, startTitle, accountId) = FrameCodec.Spawn(spawn);
 
         if (!_launchers.TryGetValue(vendor, out var launcher)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Unknown vendor: {vendor}"), ct);
@@ -452,6 +452,13 @@ internal partial class AgentOrchestrator {
 
         if (!Directory.Exists(cwd)) {
             await FrameCodec.WriteAsync(stream, LocalFrame.Error($"Directory does not exist: {cwd}"), ct);
+            return;
+        }
+
+        var resolution = ResolveAccount(vendor, accountId);
+
+        if (resolution.Refusal is { } refusal) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(refusal), ct);
             return;
         }
 
@@ -467,7 +474,8 @@ internal partial class AgentOrchestrator {
 
             var ctx = new LauncherContext(
                 agentId, cwd, worktree, Prompt: null, Model: "", Effort: null,
-                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null
+                Tools: null, IsReview: false, IsReviewFlow: false, Review: null, ReviewLaunch: null,
+                Account: resolution.Account
             ) {
                 Work = work
             };
@@ -501,7 +509,7 @@ internal partial class AgentOrchestrator {
 
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource()) {
+            agent = new AgentInstance(agentId, null, "", null, cwd, vendor, runtime, worktree, new CancellationTokenSource(), resolution.Account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Every launch path must go through CreateActivityClock() so the stage-advance report
                 // wiring is attached by construction. Inert here today (a local spawn is PTY-only and

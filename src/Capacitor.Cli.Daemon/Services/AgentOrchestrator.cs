@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -60,7 +61,8 @@ internal record AgentInstance(
         string                  Vendor,
         IHostedAgentRuntime     Runtime,
         WorktreeInfo            Worktree,
-        CancellationTokenSource ReadCts
+        CancellationTokenSource ReadCts,
+        ResolvedAccount?        Account = null
     ) {
     public string?              SessionId         { get; set; }
 
@@ -2327,6 +2329,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
     }
 
+    /// <summary>The account a launch runs under. A vendor without a default directory has no accounts:
+    /// it carries none and is never refused.</summary>
+    internal AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId) =>
+        HarnessId.From(vendorToken) is { } vendor && _config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory)
+            ? AccountResolution.Resolve(_config.Accounts?.TryLoad(), vendor, accountId, defaultDirectory)
+            : new AccountResolutionOutcome(null, null);
+
     /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
     internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
         !string.IsNullOrWhiteSpace(cmd.Title)
@@ -2335,8 +2344,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
-    /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
-    /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
+    /// <c>semantic</c>) alongside its LaunchFailed; an account refusal, or a spawn or registration failure
+    /// that was cleaned up, is <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(
             LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
         var agentId = cmd.AgentId;
@@ -2508,8 +2517,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        WorktreeInfo? worktree      = null;
-        string?       mcpConfigPath = null;
+        WorktreeInfo?    worktree      = null;
+        string?          mcpConfigPath = null;
+        ResolvedAccount? account       = null;
 
         // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
@@ -2612,6 +2622,17 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
+
+            var resolution = ResolveAccount(cmd.Vendor, cmd.AccountId);
+
+            // A failure, not a rejection: the refusal reaches the caller by name, never as a generic rejection.
+            if (resolution.Refusal is { } refusal) {
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, refusal);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+            }
+
+            account = resolution.Account;
 
             LogLaunching(agentId, repoPath, cmd.Vendor, effort ?? "default", effectiveModel);
 
@@ -2855,7 +2876,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 FlowRole: isReviewFlow ? cmd.FlowRole : null,
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
-                RequestedTransport: resume?.Entry.Transport
+                RequestedTransport: resume?.Entry.Transport,
+                Account: account
             );
 
             HostedRuntimeStart start;
@@ -2965,7 +2987,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // server and the rail report.
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts, account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
@@ -3207,7 +3229,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             cmd.Vendor,
                             new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance, _time),
                             worktree,
-                            new CancellationTokenSource()
+                            new CancellationTokenSource(),
+                            account
                         ) {
                             CreatedAt     = _time.GetUtcNow().UtcDateTime,
                             LastOutputAt  = _time.GetUtcNow().UtcDateTime,

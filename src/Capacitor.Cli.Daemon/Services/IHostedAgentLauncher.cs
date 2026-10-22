@@ -1,4 +1,5 @@
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -111,7 +112,8 @@ internal sealed record LauncherContext(
         bool                              IsReview,
         bool                              IsReviewFlow,
         ReviewLaunchInfo?                 Review,
-        ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch
+        ReviewLaunchBuilder.ReviewLaunch? ReviewLaunch,
+        ResolvedAccount?                  Account = null
     ) {
     /// <summary>Owned worktree (daemon-created) vs borrowed cwd (the user's own checkout).
     /// Borrowed-cwd launches skip repo-mutating <c>Prepare()</c> steps.</summary>

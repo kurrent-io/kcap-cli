@@ -12,10 +12,13 @@ sealed class SpyHostedAgentLauncher(string vendor, string cliPath) : IHostedAgen
     public int        CleanupCalls   { get; private set; }
     public Exception? PrepareThrow   { get; init; }
 
+    public LauncherContext? LastContext { get; private set; }
+
     public bool IsAvailable() => true;
 
     public void Prepare(LauncherContext ctx) {
         PrepareCalls++;
+        LastContext = ctx;
 
         if (PrepareThrow is not null) throw PrepareThrow;
     }

@@ -204,7 +204,8 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         Review:         ctx.Review,
         // App-server review flows carry no PR-review MCP launch (ctx.IsReview is false); the
         // flow-result + allowlist servers are spliced by BuildAppServerLaunchArgs from IsReviewFlow.
-        ReviewLaunch:   null) {
+        ReviewLaunch:   null,
+        Account:        ctx.Account) {
         McpAllowlist = ctx.McpAllowlist,
         Work         = ctx.Work,
         CodexPosture = ctx.CodexPosture,

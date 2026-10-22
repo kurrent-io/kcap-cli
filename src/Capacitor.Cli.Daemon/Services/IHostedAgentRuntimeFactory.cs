@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Acp;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
@@ -290,5 +291,7 @@ internal sealed record RuntimeStartContext(
         string?             PinnedSessionId = null,
         // The transport a resumed or continued agent ran on, from its ledger entry; a factory with
         // more than one transport starts it on that one. Null for a fresh launch.
-        string?             RequestedTransport = null
+        string?             RequestedTransport = null,
+        // Null for a vendor without accounts.
+        ResolvedAccount?    Account = null
     );
