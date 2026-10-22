@@ -2420,6 +2420,8 @@ kcap accounts remove <id|dir>                  # remove kcap's recording and for
 
 `<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`. For a Codex account, `add` and `rewire` also enable Codex sandbox network access for your server(s), as `kcap plugin install --codex` does; pass `--skip-codex-network-access` to leave that home's `config.toml` network keys untouched.
 
+`add`, `remove`, `rename` and `rewire` accept `--json`: stdout then carries exactly one JSON line (`action`, `account_id`, `succeeded`, `steps` with `name`/`succeeded`/`detail`, `revision`, `error`) and errors still go to stderr. `revision` is the account registry revision the command committed after its wiring attempt (`null` when it committed nothing), so a reader that sees a snapshot at or past it knows the snapshot follows that attempt. `add` and `rewire` commit one even when wiring finds nothing to change, and an `add` whose wiring fails still registers the account and records the failure. The exit code is 0 only when `succeeded` is true. `list` ignores the flag.
+
 ### Profiles
 
 Profiles let you work with multiple kcap servers — for example, a company server for work repos and a separate one for open-source projects. Each profile stores its own server URL, visibility settings, and daemon configuration.
