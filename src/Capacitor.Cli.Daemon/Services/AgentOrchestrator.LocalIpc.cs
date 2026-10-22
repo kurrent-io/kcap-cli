@@ -99,12 +99,32 @@ internal partial class AgentOrchestrator {
     static string? SessionOf(AgentInstance agent) =>
         agent.SessionId ?? SessionIds.Canonical((agent.Runtime as IAcpTranscriptSource)?.AcpSessionId);
 
+    /// <summary>How long a session query waits for a launching agent's session to be bound on the server.
+    /// An ACP agent's first turn is queued before the agent is published and bound, so its first tool
+    /// call can arrive inside that window.</summary>
+    internal static readonly TimeSpan AgentSessionBindWait = TimeSpan.FromSeconds(10);
+
+    static readonly TimeSpan AgentSessionBindPoll = TimeSpan.FromMilliseconds(100);
+
     /// <summary>Answers a hosted agent's own kcap MCP servers, which start before the agent's session
     /// exists and so cannot be handed it in their environment. An empty reply means no such agent, or no
     /// session yet.</summary>
-    public Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) =>
-        FrameCodec.WriteAsync(
+    public async Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) {
+        var started = _time.GetTimestamp();
+        while (!AgentSessionSettled(agentId) && _time.GetElapsedTime(started) < AgentSessionBindWait)
+            await Task.Delay(AgentSessionBindPoll, _time, ct);
+
+        await FrameCodec.WriteAsync(
             stream, LocalFrame.AgentSessionReply(_agents.TryGetValue(agentId, out var agent) ? SessionOf(agent) : null), ct);
+    }
+
+    /// <summary>False while the agent is still launching, or its transcript is not yet bound: the server
+    /// does not hold that session yet, so a tool call naming it would be refused.</summary>
+    bool AgentSessionSettled(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+            ? agent.IsServerSilent || agent.Runtime is not IAcpTranscriptSource || agent.AcpForwarder is not null
+              || agent.Status is not ("Starting" or "Running")
+            : !_pendingLaunches.ContainsKey(agentId);
 
     internal static string TranscriptFormatOf(AgentInstance agent) =>
         agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;

@@ -230,7 +230,8 @@ public class LocalControlHelloTests {
     [Test]
     public async Task An_agent_session_query_is_advertised_routed_and_answered() {
         await RunAsync("hello-session", async (h, ct) => {
-            AgentOrchestratorHarness.SeedAcpAgent(h.Orchestrator, "agent-7", new FakeAcpRuntime { AcpSessionId = "ses_01JC7QY3VZ8K" });
+            AgentOrchestratorHarness.BindTranscript(
+                AgentOrchestratorHarness.SeedAcpAgent(h.Orchestrator, "agent-7", new FakeAcpRuntime { AcpSessionId = "ses_01JC7QY3VZ8K" }));
 
             var bound   = await AgentSessionIpc.QueryAsync(h.Daemons.Store, h.Config.Name, "agent-7", TimeProvider.System, TimeSpan.FromSeconds(10), ct);
             var unknown = await AgentSessionIpc.QueryAsync(h.Daemons.Store, h.Config.Name, "nobody", TimeProvider.System, TimeSpan.FromSeconds(10), ct);

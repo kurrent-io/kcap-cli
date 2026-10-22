@@ -8,8 +8,8 @@ namespace Capacitor.Cli;
 /// servers start before its session exists, so an empty answer is asked again on the next call; a
 /// session, once known, is kept for the life of this process.</summary>
 sealed class HostedAgentSessions(Func<string, string?> askDaemon) {
-    /// <summary>The daemon answers from memory; anything slower is a daemon that is not answering.</summary>
-    static readonly TimeSpan QueryBudget = TimeSpan.FromSeconds(2);
+    /// <summary>Above the daemon's own wait for a launching agent to be bound, so its answer is not cut off.</summary>
+    static readonly TimeSpan QueryBudget = TimeSpan.FromSeconds(15);
 
     /// <summary>Asks the daemon <c>KCAP_DAEMON_NAME</c> selects, resolved as every kcap command resolves
     /// it, in the daemons directory this process inherited.</summary>
