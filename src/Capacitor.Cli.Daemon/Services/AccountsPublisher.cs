@@ -26,6 +26,7 @@ internal sealed partial class AccountsPublisher(
     bool                       _settled;
     bool                       _loadWarned;
     bool                       _hostWarned;
+    bool                       _pollWarned;
 
     readonly Lock _sendLock = new();
     ITimer?       _trailingSend;
@@ -69,8 +70,16 @@ internal sealed partial class AccountsPublisher(
 
         using (timer) {
             try {
-                while (await timer.WaitForNextTickAsync(stoppingToken))
-                    await PollAsync(force: false, stoppingToken);
+                while (await timer.WaitForNextTickAsync(stoppingToken)) {
+                    // The host stops the daemon when this method throws.
+                    try {
+                        await PollAsync(force: false, stoppingToken);
+                        _pollWarned = false;
+                    } catch (Exception ex) when (ex is not OperationCanceledException) {
+                        if (!_pollWarned) LogPollFailed(logger, ex);
+                        _pollWarned = true;
+                    }
+                }
             } catch (OperationCanceledException) { /* shutdown */ }
         }
     }
@@ -92,7 +101,12 @@ internal sealed partial class AccountsPublisher(
             if (!unchanged) _loadWarned = false;
             _stat = stat;
 
-            if (!Publish(store, hostId)) _settled = false;
+            var read = false;
+            try {
+                read = Publish(store, hostId);
+            } finally {
+                if (!read) _settled = false;
+            }
         } finally {
             _gate.Release();
         }
@@ -197,6 +211,9 @@ internal sealed partial class AccountsPublisher(
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "{Path} could not be read; keeping the last accounts snapshot")]
     static partial void LogRegistryUnreadable(ILogger logger, string path, Exception ex);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Polling the accounts registry failed; retrying on the next tick")]
+    static partial void LogPollFailed(ILogger logger, Exception ex);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "The host id could not be read; accounts are not published until it can")]
     static partial void LogHostIdUnavailable(ILogger logger, Exception ex);

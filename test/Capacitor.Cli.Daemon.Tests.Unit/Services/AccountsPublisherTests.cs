@@ -244,6 +244,38 @@ public class AccountsPublisherTests {
         }
     }
 
+    /// <summary>A throw the read does not expect lands on the change tick and again on the settle read: it
+    /// must neither end the service nor leave the stat trusted.</summary>
+    [Test]
+    public async Task An_unexpected_poll_failure_does_not_end_the_service_and_the_next_tick_polls() {
+        var store = Store();
+        Add(store, "work");
+        var time     = new FakeTimeProvider();
+        var warnings = new Warnings();
+        using var publisher = Publisher(store, time, logger: warnings);
+        var changed = new TaskCompletionSource<AccountsSnapshotDto>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await publisher.StartAsync(CancellationToken.None);
+        publisher.Changed += s => changed.TrySetResult(s);
+        var loads = 0;
+        publisher.LoadRegistry = s =>
+            Interlocked.Increment(ref loads) <= 2 ? throw new InvalidOperationException("bug") : s.Load();
+        try {
+            Add(store, "spare");
+            time.Advance(Poll);
+            await WaitUntil(() => Volatile.Read(ref loads) == 1);
+            time.Advance(Poll);
+            await WaitUntil(() => Volatile.Read(ref loads) == 2);
+            time.Advance(Poll);
+
+            var snapshot = await changed.Task.WaitAsync(Timeout);
+            await Assert.That(snapshot.Revision).IsEqualTo(2L);
+            await Assert.That(publisher.ExecuteTask!.IsCompleted).IsFalse();
+            await Assert.That(warnings.Captured.Warnings.Count).IsEqualTo(1);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
     /// <summary>The failure lands on the change tick and again on the settle read, the case that would
     /// otherwise mark the stat trusted and skip every later tick until the next write.</summary>
     [Test]
