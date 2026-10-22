@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
@@ -15,9 +16,10 @@ internal sealed partial class CodexLauncher(
         HarnessRegistry        harnesses,
         ILogger<CodexLauncher> logger
     ) : IHostedAgentLauncher {
-    readonly CodexPaths _paths = harnesses.Of<CodexHarness>().Paths;
+    internal CodexPaths Paths => harnesses.Of<CodexHarness>().Paths;
 
-    internal CodexPaths Paths => _paths;
+    internal CodexPaths PathsFor(ResolvedAccount? account) =>
+        account is null ? Paths : AccountLayouts.Codex(config.Home, account.Directory);
 
     public string Vendor  => "codex";
     public string CliPath => config.CodexPath;
@@ -90,9 +92,10 @@ internal sealed partial class CodexLauncher(
         // launch and turns it into an actionable LaunchFailed instead of a spawn error.
         if (!WindowsVersionSupported) throw new CodexUnsupportedWindowsException(UnsupportedWindowsMessage);
 
-        // A borrowed cwd is the user's own repo: skip the repo-mutating steps (overlay,
-        // ~/.codex trust write). Only the read-only hooks preflight runs for it.
+        // A borrowed cwd is the user's own repo: skip the repo-mutating steps (overlay, trust
+        // write). Only the read-only hooks preflight runs for it.
         var owned = ctx.Work == WorkLocation.OwnedWorktree;
+        var paths = PathsFor(ctx.Account);
 
         if (owned) {
             // Step 1: overlay source/.codex into worktree FIRST so project-scope
@@ -113,7 +116,7 @@ internal sealed partial class CodexLauncher(
                     // Re-running the neutralizer is preferred over teaching the overlay an exclusion list:
                     // it reuses the one canonical path list, and the overlay's actual purpose is
                     // `.codex/hooks.json` (project-scope hooks; MCP servers are registered in the
-                    // USER-scope ~/.codex/config.toml), so nothing this launcher needs is lost.
+                    // user-scope config.toml), so nothing this launcher needs is lost.
                     WorktreeManager.NeutralizeWorkspaceMcpConfig(ctx.Worktree.Path);
                 }
             } catch (Exception ex) {
@@ -121,11 +124,11 @@ internal sealed partial class CodexLauncher(
             }
         }
 
-        // Step 2: hook preflight (fail-fast, read-only). Either worktree/cwd-scope OR
-        // user-scope is sufficient. Runs for borrowed cwd too — it only reads.
+        // Step 2: hook preflight (fail-fast, read-only). Either worktree/cwd-scope OR the launch
+        // account's user scope is sufficient. Runs for borrowed cwd too — it only reads.
         var worktreeHooks = Path.Combine(ctx.Worktree.Path, ".codex", "hooks.json");
 
-        if (!HooksInstalledIn(worktreeHooks) && !HooksInstalledIn(_paths.UserHooksJson)) {
+        if (!HooksInstalledIn(worktreeHooks) && !HooksInstalledIn(paths.UserHooksJson)) {
             throw new CodexHooksNotInstalledException(
                 "Codex hooks not installed. Run `kcap plugin install --codex` " +
                 "(user scope) or `kcap plugin install --codex --project` "      +
@@ -134,9 +137,9 @@ internal sealed partial class CodexLauncher(
         }
 
         if (owned) {
-            // Step 3: pre-trust the worktree in ~/.codex/config.toml. Best-effort.
+            // Step 3: pre-trust the worktree in the launch account's config.toml. Best-effort.
             try {
-                CodexConfigWriter.TrustWorktree(ctx.Worktree.Path, _paths, logger);
+                CodexConfigWriter.TrustWorktree(ctx.Worktree.Path, paths, logger);
             } catch (Exception ex) {
                 LogTrustFailed(ex, ctx.AgentId);
             }
@@ -424,7 +427,7 @@ internal sealed partial class CodexLauncher(
     /// dispatch; passing it to Codex verbatim — as PTY `-m default`, or as the app-server
     /// thread/turn `model` param — is rejected on a ChatGPT account ("The 'default' model is not
     /// supported when using Codex with a ChatGPT account") and yields a failed/empty turn. Omitting it
-    /// makes Codex resolve the model from ~/.codex/config.toml (mirrors the effort=="auto" case). Shared
+    /// makes Codex resolve the model from its config.toml (mirrors the effort=="auto" case). Shared
     /// by the PTY launch args AND <c>CodexAppServerHostedAgentRuntime</c>'s thread/turn params so the
     /// sentinel is honored on every Codex transport.
     internal static bool IsConcreteModel(string? model) =>
@@ -441,7 +444,7 @@ internal sealed partial class CodexLauncher(
         // substituted model would carry an authority it does not have. A reviewer that parks on the
         // migration dialog instead is reaped by its first-output deadline, which is the visible
         // failure this trade prefers.
-        args.Add(ctx.IsReviewFlow || ctx.IsReview ? ctx.Model! : MigratedModel(ctx.Model!, ctx.AgentId));
+        args.Add(ctx.IsReviewFlow || ctx.IsReview ? ctx.Model! : MigratedModel(ctx.Model!, ctx));
     }
 
     /// <summary>The slug Codex would end up on anyway, when its own
@@ -451,15 +454,15 @@ internal sealed partial class CodexLauncher(
     /// on "Waiting for session to start…" until something answers it. Read from the operator's own
     /// acknowledged map, never a table of ours — Codex owns which model replaces which, and an
     /// unacknowledged migration is not in there to read.</summary>
-    string MigratedModel(string model, string agentId) {
-        var migrations = CodexConfigToml.ReadModelMigrations(_paths.ConfigToml);
+    string MigratedModel(string model, LauncherContext ctx) {
+        var migrations = CodexConfigToml.ReadModelMigrations(PathsFor(ctx.Account).ConfigToml);
 
         if (!migrations.TryGetValue(model, out var migrated)
          || string.IsNullOrWhiteSpace(migrated)
          || string.Equals(migrated, model, StringComparison.Ordinal))
             return model;
 
-        LogModelMigrated(agentId, model, migrated);
+        LogModelMigrated(ctx.AgentId, model, migrated);
 
         return migrated;
     }
@@ -538,7 +541,7 @@ internal sealed partial class CodexLauncher(
     }
 
     public void Cleanup(AgentInstance agent) {
-        // No-op: ~/.codex/config.toml trust entries are intentionally persistent.
+        // No-op: config.toml trust entries are intentionally persistent.
     }
 
     static bool HooksInstalledIn(string hooksPath) {

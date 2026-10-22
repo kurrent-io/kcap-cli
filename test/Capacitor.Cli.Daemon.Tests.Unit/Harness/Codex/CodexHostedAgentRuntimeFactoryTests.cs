@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
@@ -59,7 +61,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     CodexLauncher NewLauncher() =>
-        new(new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example" },
+        new(new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example", Home = Home },
             TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance) {
             ReadInheritedMcpServers = static () => [],
         };
@@ -397,6 +399,35 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
         await Assert.ThrowsAsync<CodexHooksNotInstalledException>(
             () => factory.StartAsync(Ctx(isReviewFlow: true, wt.Path), CancellationToken.None));
+    }
+
+    /// Hooks exist only in the account directory, so the start passes the preflight only when the
+    /// launcher ran against the launch's account; the trust entry shows where it wrote.
+    [Test]
+    public async Task AppServer_factory_prepares_with_the_launch_account() {
+        var worktree   = Home.CreateDir("wt");
+        var accountDir = Home.CreateDir("codex-work");
+        accountDir.CreateFile("hooks.json", """
+            {"hooks":{
+                "SessionStart":[{"hooks":[{"type":"command","command":"kcap hook --codex"}]}],
+                "Stop":[{"hooks":[{"type":"command","command":"kcap hook --codex"}]}],
+                "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap hook --codex"}]}]
+            }}
+            """);
+        await using var fake = new FakeCodexAppServer();
+
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+            Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam, appServerInteractive: true);
+        var ctx     = Ctx(isReviewFlow: false, worktree) with { Account = new ResolvedAccount(accountDir, "acct-1", "Work") };
+
+        var start = await factory.StartAsync(ctx, CancellationToken.None).WaitAsync(HangGuard);
+        await start.Runtime.DisposeAsync();
+
+        await Assert.That(fake.ReceivedMethods).Contains("thread/start");
+        await Assert.That(File.ReadAllText(AccountLayouts.Codex(Home, accountDir).ConfigToml))
+            .Contains($"\"{CodexPaths.NormalizeProjectKey(worktree).Replace("\\", "\\\\")}\"");
+        await Assert.That(File.Exists(Home.PathTo(".codex", "config.toml"))).IsFalse();
     }
 
     [Test]
