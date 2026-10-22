@@ -36,13 +36,17 @@ internal sealed class SessionsApi(ICapacitorHttpClient http, CapacitorServer ser
                 return answer?.Bool("applied") switch {
                     true  => new SetTitleResult.Applied(),
                     false => new SetTitleResult.NotApplied(answer.Value.Str("title")),
-                    null  => new SetTitleResult.Unconfirmed()
+                    null  => throw new CapacitorApiException((int)response.StatusCode, "Server answered the title request with an unreadable response")
                 };
             }
 
             if (response.StatusCode != HttpStatusCode.NotFound) throw await FailureAsync(response);
 
-            if ((await ReadObjectAsync(response, ct))?.Str("error") != "session_not_found") return await SetTitleOnOlderServerAsync(sessionId, title, ct);
+            // Only an uncoded 404 means a server without the route; another coded 404 is a refusal.
+            switch ((await ReadObjectAsync(response, ct))?.Str("error")) {
+                case null:                    return await SetTitleOnOlderServerAsync(sessionId, title, ct);
+                case not "session_not_found": throw await FailureAsync(response);
+            }
 
             // A session the first prompt titles can still be on its way into the read model the ownership check reads.
             if (attempt == SessionNotFoundAttempts) return new SetTitleResult.SessionNotFound();

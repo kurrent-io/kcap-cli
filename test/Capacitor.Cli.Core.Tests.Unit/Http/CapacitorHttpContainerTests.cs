@@ -159,6 +159,36 @@ public class CapacitorHttpContainerTests : IDisposable {
         await Assert.That(result).IsEqualTo(new SetTitleResult.NotApplied("Chosen at start"));
     }
 
+    [Test]
+    public async Task An_unreadable_title_answer_is_a_failure_rather_than_an_older_server() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody("ok"));
+
+        using var sp  = Container();
+        var       api = sp.GetRequiredService<ISessionsApi>();
+
+        await Assert.That(async () => await api.SetSessionTitleAsync("sess-3", "T", rename: true)).Throws<CapacitorApiException>();
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title")).Count).IsEqualTo(0);
+    }
+
+    /// <summary>Only an uncoded 404 means a server without the route; a coded one is a refusal and is not retried
+    /// on the older route.</summary>
+    [Test]
+    public async Task A_coded_404_other_than_session_not_found_is_a_failure() {
+        StubProvider(AuthProvider.None);
+        _server.Given(Request.Create().WithPath("/hooks/agent-title").UsingPost())
+            .RespondWith(Response.Create().WithStatusCode(404).WithBody("""{"error":"something_else"}"""));
+
+        using var sp  = Container();
+        var       api = sp.GetRequiredService<ISessionsApi>();
+
+        var ex = await Assert.That(async () => await api.SetSessionTitleAsync("sess-3", "T", rename: true)).Throws<CapacitorApiException>();
+
+        await Assert.That(ex!.Status).IsEqualTo(404);
+        await Assert.That(_server.FindLogEntries(Request.Create().WithPath("/hooks/set-title")).Count).IsEqualTo(0);
+    }
+
     /// <summary>A session titled on its first prompt can still be on its way into the read model the server checks
     /// ownership against, so a coded 404 is asked again before it is final.</summary>
     [Test]
