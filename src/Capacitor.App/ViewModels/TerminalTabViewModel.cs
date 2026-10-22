@@ -310,15 +310,17 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             _surfaceShown = value;
             if (value) {
                 FeedHeld();
-                ResizeShownSurface();
+                ResizeSurface();
             }
         }
     }
 
-    // Resizing prompts a PTY redraw, which can clear the daemon's silence-based idle verdict.
-    // A connection used only by the chat composer must leave the agent's terminal size alone.
-    void ResizeShownSurface() {
-        if (!SurfaceShown || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }
+    bool AgentIsWaiting => _lastDto is { Status: "Running", AwaitingInput: true };
+
+    // Idle chat viewers must not provoke redraws. Active and unknown turns retain terminal
+    // negotiation: a buffered query can still be waiting for its first answer.
+    void ResizeSurface() {
+        if ((!SurfaceShown && AgentIsWaiting) || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }
             || Surface is not { } surface || _client is not { } client) return;
         var (cols, rows) = surface.CurrentSize;
         _ = client.ResizeAsync(cols, rows);
@@ -428,6 +430,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     void HandleDtoObserved(AgentStatusDto dto) {
         var previous = _lastDto?.Status;
+        var wasWaiting = AgentIsWaiting;
         _lastDto = dto;
         // Claim pending → dto-won, or recover timeout-won → dto-won when a late agent row lands
         // after NotFound. A concurrent TeardownAsync's disposed state loses neither CAS.
@@ -451,7 +454,10 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             // teardown removes them.
             if (state != ResolveDtoWon) return;
             if (SessionStatusDots.IsTerminal(dto.Status)) HandleAgentEnded();
-            else ReconcileResumeStatus(previous, dto);
+            else {
+                ReconcileResumeStatus(previous, dto);
+                if (wasWaiting && !AgentIsWaiting) ResizeSurface();
+            }
             return;
         }
     }
@@ -608,7 +614,6 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 return; // retired before the swap even finished
             }
 
-            // Desktop clients defer resizing until a writable terminal is actually shown.
             var (cols, rows) = surface.CurrentSize;
 
             // Suspension point 2 (the one most likely to straddle a concurrent TeardownAsync):
@@ -655,7 +660,8 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             _ = client.SendInputAsync(bytes);
         };
         surface.Resized += (cols, rows) => {
-            if (Retired(generation) || !SurfaceShown || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }) return;
+            if (Retired(generation) || (!SurfaceShown && AgentIsWaiting)
+                || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }) return;
             _ = client.ResizeAsync(cols, rows);
         };
     }
@@ -673,9 +679,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 _resumeDeadline = null;
                 _attachedIncarnation = incarnation;
             }
-            Deliver(generation, surface, pieces, replay: true);
+            Deliver(generation, surface, pieces, replay: AgentIsWaiting);
             Publish(TerminalSessionState.Attached(ack.ReadOnlyReason), openingToken);
-            ResizeShownSurface();
+            ResizeSurface();
         }, DispatcherPriority.Default, ct);
     }
 

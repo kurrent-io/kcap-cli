@@ -223,7 +223,7 @@ public class TerminalTabViewModelTests {
             var surface = new FakeTerminalSurface { CurrentSize = (137, 41) };
             var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
             vm.SurfaceShown = false;
-            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { AwaitingInput = true });
             Dispatcher.UIThread.RunJobs();
             await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
             var client = factory.Created.Single();
@@ -260,17 +260,82 @@ public class TerminalTabViewModelTests {
             var surface = new XtermTerminalSurface(80, 24);
             var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
             vm.SurfaceShown = shown;
-            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { AwaitingInput = true });
             Dispatcher.UIThread.RunJobs();
             await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
             var client = factory.Created.Single();
             await client.TriggerAttached(System.Text.Encoding.ASCII.GetBytes("hello\u001b[6n"));
+            await client.TriggerOutput("!"u8.ToArray());
             time.Advance(TerminalTabViewModel.HiddenFeedInterval);
             await Assert.That(client.SentInput).IsEmpty();
 
             await client.TriggerOutput(System.Text.Encoding.ASCII.GetBytes("\u001b[6n"));
             time.Advance(TerminalTabViewModel.HiddenFeedInterval);
-            await Assert.That(client.SentInput.Single()).IsEquivalentTo(System.Text.Encoding.ASCII.GetBytes("\u001b[1;6R"));
+            await Assert.That(client.SentInput.Single()).IsEquivalentTo(System.Text.Encoding.ASCII.GetBytes("\u001b[1;7R"));
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false, false, "claude")]
+    [Arguments(null, false, "codex")]
+    [Arguments(false, true, "codex")]
+    [Arguments(null, true, "claude")]
+    public async Task An_active_or_unknown_turn_answers_pending_queries_on_attach_and_reconnect(
+            bool? awaitingInput, bool shown, string vendor) {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var vm = Build(daemon, factory, time, surfaceFactory: () => new XtermTerminalSurface(80, 24));
+            vm.SurfaceShown = shown;
+            daemon.Agents.AddOrUpdate(Agent("a1", vendor, hasTerminal: true) with { AwaitingInput = awaitingInput });
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var first = factory.Created.Single();
+            await first.TriggerAttached("\u001b[6n"u8.ToArray());
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(first.SentInput.Single()).IsEquivalentTo("\u001b[1;1R"u8.ToArray());
+
+            first.Result.SetResult(new AttachOutcome.ConnectionLost());
+            await vm.CurrentRunForTesting!;
+            await vm.ReattachCommand.Execute();
+            var second = factory.Created.Last();
+            await second.TriggerAttached("active\u001b[6n"u8.ToArray());
+            await second.TriggerOutput("\u001b["u8.ToArray());
+            await second.TriggerOutput("6n"u8.ToArray());
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(second.SentInput.Count).IsEqualTo(2);
+            foreach (var reply in second.SentInput)
+                await Assert.That(reply).IsEquivalentTo("\u001b[1;7R"u8.ToArray());
+            await Assert.That(vm.CanAcceptText).IsTrue();
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_hidden_idle_terminal_resumes_sizing_when_a_turn_starts() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var surface = new FakeTerminalSurface { CurrentSize = (125, 33) };
+            var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
+            vm.SurfaceShown = false;
+            var idle = Agent("a1", "claude", hasTerminal: true) with { AwaitingInput = true };
+            daemon.Agents.AddOrUpdate(idle);
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = factory.Created.Single();
+            await client.TriggerAttached([]);
+            await Assert.That(client.Resizes).IsEmpty();
+
+            daemon.Agents.AddOrUpdate(idle with { AwaitingInput = false });
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (125, 33) });
+            surface.RaiseResize(110, 30);
+            await Assert.That(client.Resizes.Last()).IsEqualTo((110, 30));
             await vm.TeardownAsync();
         });
     }
