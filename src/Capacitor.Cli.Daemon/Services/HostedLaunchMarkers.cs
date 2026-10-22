@@ -7,11 +7,12 @@ namespace Capacitor.Cli.Daemon.Services;
 /// <see cref="HostedAgent.DaemonLookupMarkers"/>, by which its kcap MCP servers find its session. A
 /// private agent carries no lookup markers: nothing may tie its session to the agent.</summary>
 internal static class HostedLaunchMarkers {
-    /// <summary>For an environment seeded from the daemon's own: a role or agent inherited from it would
-    /// outlive a launch that names none.</summary>
+    /// <summary>For an environment seeded from the daemon's own: a role, agent or session inherited from it
+    /// would outlive a launch that names none.</summary>
     public static void Apply(IDictionary<string, string?> env, RuntimeStartContext ctx) {
         env.Remove(HostedAgent.FlowRoleVar);
         env.Remove(HostedAgent.DaemonAgentIdVar);
+        InheritedHarnessSessions.Remove(env);
         foreach (var (key, value) in Markers(ctx)) env[key] = value;
     }
 
