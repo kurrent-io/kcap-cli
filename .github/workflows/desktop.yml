@@ -21,8 +21,7 @@ on:
 jobs:
   build:
     name: Build
-    # GetMac is a third-party runner: a release build loads the Apple signing secrets, so it stays on GitHub's.
-    runs-on: ${{ startsWith(inputs.rid, 'osx-') && (inputs.release && 'macos-latest' || 'getmac') || startsWith(inputs.rid, 'win-') && 'windows-latest' || 'ubuntu-latest' }}
+    runs-on: ${{ startsWith(inputs.rid, 'osx-') && 'macos-latest' || startsWith(inputs.rid, 'win-') && 'windows-latest' || 'ubuntu-latest' }}
     timeout-minutes: ${{ startsWith(inputs.rid, 'osx-') && 90 || 60 }}
     env:
       # vpk is a framework-dependent global tool built for an older runtime than the pinned SDK.
@@ -35,11 +34,6 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-
-      # GetMac VMs leave TMPDIR empty, and dotnet's named mutexes then fail on first run.
-      - name: Set TMPDIR
-        if: runner.os == 'macOS'
-        run: '[ -n "${TMPDIR:-}" ] || echo "TMPDIR=/private/tmp" >> "$GITHUB_ENV"'
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6

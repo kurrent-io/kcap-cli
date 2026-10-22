@@ -52,8 +52,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    # GetMac is a third-party runner: a job that loads the Apple signing secrets stays on GitHub's.
-    runs-on: ${{ matrix.os == 'macos-latest' && !inputs.sign && 'getmac' || matrix.os }}
+    runs-on: ${{ matrix.os }}
     container: ${{ matrix.container || '' }}
     env:
       VERSION: ${{ inputs.version }}
@@ -81,11 +80,6 @@ jobs:
         run: musl-gcc --version
 
       - uses: actions/checkout@v7
-
-      # GetMac VMs leave TMPDIR empty, and dotnet's named mutexes then fail on first run.
-      - name: Set TMPDIR
-        if: runner.os == 'macOS'
-        run: '[ -n "${TMPDIR:-}" ] || echo "TMPDIR=/private/tmp" >> "$GITHUB_ENV"'
 
       # No cache: RUNNER_OS keying collapses Linux legs that need different RID packages.
       - name: Setup .NET
