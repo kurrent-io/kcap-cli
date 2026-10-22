@@ -197,6 +197,23 @@ public class HomeAttachmentsTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_harness_withdrawn_during_the_upload_is_not_launched() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var rig = new Rig();
+
+            await LaunchWithDraftAsync(rig, path, _ => {
+                rig.Daemon.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap(connection: "connected", supportedVendors: []));
+                return Task.CompletedTask;
+            });
+
+            await Assert.That(rig.Launch.Last).IsNull();
+            await Assert.That(rig.Vm.StartError).IsEqualTo(HomeViewModel.NoHarnessesNotice(null));
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Empty_goal_with_files_launches() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
