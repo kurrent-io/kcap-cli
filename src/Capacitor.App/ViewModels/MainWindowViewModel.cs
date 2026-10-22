@@ -257,7 +257,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> StartDaemonCommand { get; }
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
-    readonly TimeProvider _time;
+    public TimeProvider Time { get; }
 
     /// <param name="shutdownToken">
     /// Abandons StartDaemonAsync's WAIT (never the spawned daemon) on app shutdown. Must be linked
@@ -339,7 +339,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
         _service = service;
-        _time = time;
+        Time = time;
         Activity = activity;
         Home = home;
         _navigation = navigation ?? new NavigationGate();

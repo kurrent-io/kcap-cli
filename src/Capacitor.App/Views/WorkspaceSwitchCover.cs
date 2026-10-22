@@ -32,7 +32,7 @@ public sealed class WorkspaceSwitchCover {
             if (e.PropertyName == nameof(MainWindowViewModel.CurrentWorkspace)) Capture();
         }
         vm.PropertyChanging += OnChanging;
-        var swaps = vm.WhenAnyValue(x => x.CurrentWorkspace).Skip(1).Subscribe(Hold);
+        var swaps = vm.WhenAnyValue(x => x.CurrentWorkspace).Skip(1).Subscribe(workspace => Hold(workspace, vm.Time));
         return Disposable.Create(() => {
             vm.PropertyChanging -= OnChanging;
             swaps.Dispose();
@@ -51,15 +51,19 @@ public sealed class WorkspaceSwitchCover {
         _cover.IsVisible = true;
     }
 
-    void Hold(ISessionWorkspace? workspace) {
+    void Hold(ISessionWorkspace? workspace, TimeProvider time) {
         if (workspace is null || !_cover.IsVisible) {
             Lift();
             return;
         }
         var generation = ++_generation;
-        var timeout = DispatcherTimer.RunOnce(Lift, MaxHold);
+        var timeout = time.CreateTimer(_ => Dispatcher.UIThread.Post(() => LiftIfHeld(generation)), null, MaxHold, Timeout.InfiniteTimeSpan);
         var painted = Painted(workspace).Where(p => p).Take(1).Subscribe(_ => AfterLayout(generation));
         _hold.Disposable = new CompositeDisposable(painted, timeout);
+    }
+
+    void LiftIfHeld(int generation) {
+        if (generation == _generation) Lift();
     }
 
     // Two frames: the first lays out the new rows, the second the scroll to their tail.
@@ -68,9 +72,7 @@ public sealed class WorkspaceSwitchCover {
             Lift();
             return;
         }
-        top.RequestAnimationFrame(_ => top.RequestAnimationFrame(_ => {
-            if (generation == _generation) Lift();
-        }));
+        top.RequestAnimationFrame(_ => top.RequestAnimationFrame(_ => LiftIfHeld(generation)));
     }
 
     void Lift() {
