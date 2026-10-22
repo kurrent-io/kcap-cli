@@ -88,6 +88,13 @@ running notes file that every PR edits.
   `Process.Kill(bool)` is banned in the daemon assembly, and a daemon with no terminal on any
   standard stream ignores SIGHUP outright — there is nothing to hang up, and exiting 0 on it is an
   exit launchd never restarts.
+- **The Windows service never runs user-controlled code as SYSTEM.** `kcap-service.exe` is the only
+  SYSTEM code, and it runs from `%ProgramFiles%\kcap\service\`, a directory it sets administrator-only
+  rather than trusting inheritance. Everything it starts — each user's daemon from their own Velopack
+  install, the user's `kcap daemon stop --direct` — runs with that user's token, and anything it opens
+  from a profile it opens while impersonating that user. Its only elevation is the UAC prompt in front of
+  `kcap-service.exe install`; a Velopack MSI cannot stand in for it, because its install hook runs
+  without admin rights and its silent per-machine install lands in a user-writable folder.
 - **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
   command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
   contains its pattern. The PTY launch spawns the agent without its prompt and pastes it into the
