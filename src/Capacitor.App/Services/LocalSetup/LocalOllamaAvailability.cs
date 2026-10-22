@@ -4,7 +4,10 @@ namespace Capacitor.App.Services.LocalSetup;
 
 /// Only checks whether Ollama answers, or is on disk; never starts it or downloads a model.
 public static class LocalOllamaAvailability {
-    static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
+    // The installer's Ollama client takes no proxy and follows no redirect; the probe must reach what it reaches.
+    static readonly HttpClient Http = new(new HttpClientHandler { UseProxy = false, AllowAutoRedirect = false }) {
+        Timeout = TimeSpan.FromSeconds(3),
+    };
 
     // A GUI app's PATH leaves out Homebrew and /usr/local, so the CLI's usual homes are named outright.
     static readonly string[] InstallPaths = ["/Applications/Ollama.app", "/opt/homebrew/bin/ollama", "/usr/local/bin/ollama"];
