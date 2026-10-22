@@ -20,7 +20,7 @@ namespace Capacitor.Cli.Core;
 /// </list>
 /// </summary>
 public static class DaemonNameResolver {
-    /// <summary>Also exported into an ACP agent the daemon hosts, so a kcap inside the agent addresses
+    /// <summary>Also exported into every agent the daemon hosts, so a kcap inside the agent addresses
     /// that daemon.</summary>
     public const string NameVar = "KCAP_DAEMON_NAME";
 

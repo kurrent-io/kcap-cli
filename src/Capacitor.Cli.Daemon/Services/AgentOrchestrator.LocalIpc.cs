@@ -503,7 +503,7 @@ internal partial class AgentOrchestrator {
                 // through the daemon bridge. --private omits all of this.
                 env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
                 env[HostedAgent.AgentIdVar]  = agentId;
-                HostedLaunchMarkers.Apply(env, isFlowParticipant: false, flowRole: null);
+                HostedLaunchMarkers.ApplyLocal(env, agentId, _config.Name);
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 

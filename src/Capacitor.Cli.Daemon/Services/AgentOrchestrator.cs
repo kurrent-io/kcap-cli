@@ -2842,6 +2842,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Work: work,
                 DaemonId: _daemonId,       // Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
                 DaemonEpoch: _daemonEpoch,
+                DaemonName: _config.Name,
                 IsBorrowedSnapshot: snapshotBorrow,
                 ReviewContextCapabilityUrl: reviewContextCapabilityUrl,
                 FlowResultCapabilityUrl: flowResultCapabilityUrl,

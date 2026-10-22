@@ -229,20 +229,22 @@ public class HarnessRequesterContextTests {
 
     public static IEnumerable<Func<(string Row, string? Nearest, Dictionary<string, string?> Env, string? Bound, string? Expected)>> HostedAgentRows() {
         yield return () => ("a bound agent resolves to its session", "opencode",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId }, BoundSession, BoundSession);
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId }, BoundSession, BoundSession);
+        yield return () => ("the agent id hooks read is not the lookup's", "opencode",
+            new() { ["KCAP_AGENT_ID"] = HostedAgentId }, BoundSession, null);
         yield return () => ("an unbound agent or an unreachable daemon resolves to nothing", "opencode",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId }, null, null);
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId }, null, null);
         yield return () => ("the agent's session wins over an inherited KCAP_SESSION_ID", "opencode",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId, ["KCAP_SESSION_ID"] = InheritedParentSession }, BoundSession, BoundSession);
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["KCAP_SESSION_ID"] = InheritedParentSession }, BoundSession, BoundSession);
         yield return () => ("an unbound agent keeps the inherited KCAP_SESSION_ID", "opencode",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId, ["KCAP_SESSION_ID"] = InheritedParentSession }, null, InheritedParentSession);
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["KCAP_SESSION_ID"] = InheritedParentSession }, null, InheritedParentSession);
         yield return () => ("Claude's own session wins over the agent's", "claude",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId, ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession }, BoundSession,
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["CLAUDE_CODE_SESSION_ID"] = RunningDriverSession }, BoundSession,
             "11111111111111111111111111111111");
         yield return () => ("Codex's own session wins over the agent's", "codex",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId, ["CODEX_THREAD_ID"] = "thread-1" }, BoundSession, "thread-1");
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["CODEX_THREAD_ID"] = "thread-1" }, BoundSession, "thread-1");
         yield return () => ("Grok's own session wins over the agent's", "grok",
-            new() { ["KCAP_AGENT_ID"] = HostedAgentId, ["GROK_SESSION_ID"] = GrokSession }, BoundSession,
+            new() { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId, ["GROK_SESSION_ID"] = GrokSession }, BoundSession,
             "01a1378da97a742088e065e6248fe6d2");
     }
 
@@ -264,7 +266,7 @@ public class HarnessRequesterContextTests {
         var answers  = new Queue<string?>([null, BoundSession, "ses_never_asked"]);
         var asks     = 0;
         var sessions = new HostedAgentSessions(_ => { asks++; return answers.Dequeue(); });
-        var env      = new Dictionary<string, string?> { ["KCAP_AGENT_ID"] = HostedAgentId };
+        var env      = new Dictionary<string, string?> { ["KCAP_DAEMON_AGENT_ID"] = HostedAgentId };
 
         string? Call() => ResolveUnder("opencode", env, daemon: sessions.For).SessionId;
 

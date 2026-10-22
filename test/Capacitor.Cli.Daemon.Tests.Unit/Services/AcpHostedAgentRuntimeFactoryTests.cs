@@ -808,44 +808,37 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         select (Func<(string, bool)>)(() => (vendor, isReviewFlow));
 
     /// <summary>kcap's MCP servers inside an ACP child find their session by asking the named daemon
-    /// about the named agent. The inherited session ids are seeded here, so their absence is the
-    /// launch's own doing rather than an environment that never had them.</summary>
+    /// about the named agent, under a variable no hook reads: the daemon already records the session
+    /// from the ACP stream, so a hook must not link one to the agent as well. Another harness's session
+    /// ids are seeded, so their absence is the launch's own doing; Grok's is seeded too and must
+    /// survive, since a Grok child reads its own.</summary>
     [Test, NotInParallel]
     [MethodDataSource(nameof(EveryAcpLaunch))]
     public async Task Every_acp_launch_names_its_agent_and_daemon_and_drops_inherited_sessions(string vendor, bool isReviewFlow) {
-        string[] inherited = ["CLAUDE_CODE_SESSION_ID", "KCAP_SESSION_ID", "CODEX_THREAD_ID"];
-        var scopes = inherited.Select(name => EnvScope.Exclusive(name, "inherited-from-the-daemons-shell")).ToList();
+        var descriptor = EveryAcpDescriptor[vendor];
+        Skip.When(OperatingSystem.IsWindows() && isReviewFlow && descriptor.Harness is HarnessId.Kiro or HarnessId.OpenCode,
+            "The Kiro and OpenCode reviewers are POSIX-only: their isolated home cannot be created owner-only on Windows.");
 
-        try {
-            var descriptor = EveryAcpDescriptor[vendor];
-            var config     = new DaemonConfig { Name = "daemon-a", Store = NewPaths(), DaemonEpoch = "epoch-1" };
-            AcpHostedAgentRuntimeFactory.VersionStoreFor(config, descriptor.Vendor).Affirm("99.0.0");
-            var ctx = (isReviewFlow ? ReviewContext() : MakeContext("agent-1")) with {
-                Vendor = vendor, DaemonId = "daemon-id-1", DaemonEpoch = "epoch-1"
-            };
+        using var claude = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", "inherited");
+        using var kcap   = EnvScope.Exclusive("KCAP_SESSION_ID", "inherited");
+        using var codex  = EnvScope.Exclusive("CODEX_THREAD_ID", "inherited");
+        using var grok   = EnvScope.Exclusive("GROK_SESSION_ID", "grok-own");
 
-            var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(descriptor, config, ctx, resolveGeminiVersion: _ => "99.0.0").Environment;
+        var config = new DaemonConfig { Name = "daemon-a", Store = NewPaths(), DaemonEpoch = "epoch-1" };
+        AcpHostedAgentRuntimeFactory.VersionStoreFor(config, descriptor.Vendor).Affirm("99.0.0");
+        var ctx = (isReviewFlow ? ReviewContext() : MakeContext("agent-1")) with { Vendor = vendor, DaemonName = "daemon-a" };
 
-            await Assert.That(env["KCAP_AGENT_ID"]).IsEqualTo("agent-1");
-            await Assert.That(env["KCAP_DAEMON_NAME"]).IsEqualTo("daemon-a");
-            await Assert.That(env["KCAP_DAEMON_ID"]).IsEqualTo("daemon-id-1");
-            await Assert.That(env["KCAP_DAEMON_EPOCH"]).IsEqualTo("epoch-1");
-            foreach (var name in inherited) await Assert.That(env.ContainsKey(name)).IsFalse().Because(name);
-        } finally {
-            foreach (var scope in scopes) scope.Dispose();
-        }
-    }
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(descriptor, config, ctx, resolveGeminiVersion: _ => "99.0.0").Environment;
 
-    /// <summary>A private agent carries nothing that ties its session to the agent, as a PTY launch's
-    /// does not — not even an agent id the daemon itself inherited.</summary>
-    [Test, NotInParallel]
-    public async Task A_private_acp_launch_carries_no_agent_id() {
-        using var inheritedAgent = EnvScope.Exclusive("KCAP_AGENT_ID", "outer-agent");
+        string? Carried(string name) => env.TryGetValue(name, out var value) ? value : null;
 
-        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
-            AcpVendorDescriptors.Cursor, BareConfig(), MakeContext("agent-1") with { IsPrivate = true }).Environment;
-
-        await Assert.That(env.ContainsKey("KCAP_AGENT_ID")).IsFalse();
+        await Assert.That(Carried("KCAP_DAEMON_AGENT_ID")).IsEqualTo("agent-1");
+        await Assert.That(Carried("KCAP_DAEMON_NAME")).IsEqualTo("daemon-a");
+        await Assert.That(Carried("KCAP_AGENT_ID")).IsNotEqualTo("agent-1");
+        await Assert.That(Carried("CLAUDE_CODE_SESSION_ID")).IsNotEqualTo("inherited");
+        await Assert.That(Carried("KCAP_SESSION_ID")).IsNotEqualTo("inherited");
+        await Assert.That(Carried("CODEX_THREAD_ID")).IsNotEqualTo("inherited");
+        await Assert.That(Carried("GROK_SESSION_ID")).IsEqualTo("grok-own");
     }
 
     [Test]

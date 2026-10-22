@@ -32,7 +32,7 @@ public class McpWorkItemsServerTests {
         using var dir       = EnvScope.Exclusive(DaemonStore.DaemonsDirEnvVar, daemons.Directory);
         using var name      = EnvScope.Exclusive(DaemonNameResolver.NameVar, "daemon-a");
         // Unique per run: a bound session is kept for the life of the process.
-        using var agent     = EnvScope.Exclusive(HostedAgent.AgentIdVar, $"agent-{Guid.NewGuid():N}");
+        using var agent     = EnvScope.Exclusive(HostedAgent.DaemonAgentIdVar, $"agent-{Guid.NewGuid():N}");
         using var claude    = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", null);
         using var codex     = EnvScope.Exclusive("CODEX_THREAD_ID", null);
         using var grok      = EnvScope.Exclusive("GROK_SESSION_ID", null);

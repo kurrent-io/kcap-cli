@@ -973,7 +973,7 @@ internal sealed partial class AcpHostedAgentRuntimeFactory(
             psi.Environment[ProfileOverrides.UrlVar] = ctx.ServerUrl;
 
         HostedLaunchMarkers.Apply(psi.Environment, ctx);
-        AcpAgentEnvironment.Apply(psi.Environment, ctx, config.Name);
+        AcpInheritedSessions.Remove(psi.Environment);
 
         // The isolated home is what suppresses the operator's GLOBAL MCP servers — the flows server
         // among them, which would let a reviewer start nested review flows. Created here rather than

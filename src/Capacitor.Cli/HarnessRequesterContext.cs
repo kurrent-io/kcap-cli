@@ -38,7 +38,7 @@ namespace Capacitor.Cli;
 /// ambient signals rather than relocating the requester into the OUTER harness's checkout.</para>
 ///
 /// <para>A daemon-hosted agent whose harness names no session of its own carries
-/// <c>KCAP_AGENT_ID</c> instead, and its daemon is asked which session that agent is bound to.</para>
+/// <c>KCAP_DAEMON_AGENT_ID</c> instead, and its daemon is asked which session that agent is bound to.</para>
 /// </summary>
 static class HarnessRequesterContext {
     /// <summary>Set by the running Claude Code process in every child process's environment.</summary>
@@ -103,7 +103,7 @@ static class HarnessRequesterContext {
         if (string.IsNullOrWhiteSpace(harnessSessionId) || !string.IsNullOrWhiteSpace(nestedHarness)) {
             // A hosted agent's session outranks a KCAP_SESSION_ID inherited from whatever shell started
             // its daemon. A Codex thread id is that harness's own session, so it outranks the daemon.
-            var hosted = string.IsNullOrWhiteSpace(nestedHarness) && getEnv(HostedAgent.AgentIdVar) is { Length: > 0 } agentId
+            var hosted = string.IsNullOrWhiteSpace(nestedHarness) && getEnv(HostedAgent.DaemonAgentIdVar) is { Length: > 0 } agentId
                 ? SessionIds.Canonical(hostedAgentSession(agentId))
                 : null;
 

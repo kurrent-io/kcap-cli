@@ -34,7 +34,8 @@ public class PtyEnvScrubTests {
             "KCAP_RENDERED_AGENT",
             "KCAP_DAEMON_URL",
             "KCAP_SESSION_KIND",
-            "KCAP_FLOW_ROLE"
+            "KCAP_FLOW_ROLE",
+            "KCAP_DAEMON_AGENT_ID"
         }, CollectionOrdering.Matching);
     }
 }

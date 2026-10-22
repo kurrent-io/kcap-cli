@@ -110,7 +110,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         if (!ctx.IsPrivate) {
             env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
             env[HostedAgent.AgentIdVar]  = ctx.AgentId;
-            HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+            HostedLaunchMarkers.ApplyOverlay(env, ctx);
         }
 
         // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's

@@ -232,7 +232,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
             [HostedAgent.AgentIdVar]  = ctx.AgentId,
         };
-        HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+        HostedLaunchMarkers.ApplyOverlay(env, ctx);
         if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]         = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;

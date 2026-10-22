@@ -24,6 +24,7 @@ internal static class PtyEnvScrub {
         HostedAgent.RenderedVar,
         HostedAgent.BridgeUrlVar,
         HostedAgent.SessionKindVar,
-        HostedAgent.FlowRoleVar
+        HostedAgent.FlowRoleVar,
+        HostedAgent.DaemonAgentIdVar
     ];
 }
