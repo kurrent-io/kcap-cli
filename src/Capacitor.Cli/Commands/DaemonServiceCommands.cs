@@ -91,7 +91,12 @@ sealed class DaemonServiceCommands(
         return await verbs.RefreshStalePathAsync(harnesses);
     }
 
+    /// <summary>Held from reading the unit's PATH to the last write, so a concurrent install's unit is never
+    /// merged into or restored over.</summary>
     async Task<UnitRefresh?> RefreshStalePathAsync(HarnessRegistry harnesses) {
+        using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
+        if (txn is null) return UnitRefresh.Contended;
+
         if (manager.UnitEnvironment(id) is not { } env) return null;
 
         var path = ServicePath.Refreshed(env.GetValueOrDefault("PATH"), Environment.GetEnvironmentVariable("PATH"), harnesses);
@@ -105,9 +110,6 @@ sealed class DaemonServiceCommands(
     async Task<UnitRefresh> RefreshPathAsync(string path) {
         switch (manager) {
             case LaunchdServiceManager launchd: {
-                using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
-                if (txn is null) return UnitRefresh.Contended;
-
                 var started = time.GetTimestamp();
                 try {
                     return launchd.RefreshUnit(
