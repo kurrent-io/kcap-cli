@@ -98,7 +98,7 @@ round in flight, and a fresh reviewer with no earlier context on the next submit
 
 Beyond the interactive descriptor: launch kind; MCP allowlist; tools; the reviewer certification
 requirement without its connection id; the borrowed shape (below); the activity seq and logical age
-at stop; whether a turn was in flight at stop; and the last round input delivered, with its time.
+at stop; and the last round input delivered, with its time.
 
 ### Borrowed snapshots
 
@@ -126,20 +126,15 @@ guard an advertisement, and the successor has not used one. A failure fails the 
 
 ### What the resumed reviewer is sent
 
-Idle needs positive evidence; the runtime turn gate is not it, because a PTY vendor (Claude) never
-raises `TurnInFlight`, and a delivered ACP round can sit queued before its flag rises.
-
-- Idle at stop — `AwaitingInput` true, no input queued or in delivery, and no round input delivered
-  since the agent last became `AwaitingInput`: nothing is sent. The session reopens and waits for the
-  next round, which arrives as ordinary input. A runtime must not arm any first-output watchdog until
-  a first real prompt is dispatched after the resume (the ACP runtime arms one on releasing the first
-  turn even with no prompt, which would reap an idle resumed OpenCode reviewer); the transcript-bind
-  hold stays.
-- Anything else, including unknown, is mid-turn: a reviewer nudge (the daemon restarted while you were working on a round; if you
+The daemon cannot tell whether the last round settled: `AwaitingInput` is a silence heuristic for a
+PTY vendor, an ACP turn can end without a submission, and a direct submission never passes through
+the daemon. So every resumed participant gets the same first turn, and its own restored history
+decides: a reviewer nudge (the daemon restarted while you were working on a round; if you
   already submitted its result, do nothing; if `submit_review_result` refuses the token, the round
   has ended, so stop) followed by the last round input, repeated verbatim. The vendor may not have
   persisted that input, and only it carries the round token. A reviewer that had already submitted
-  before the stop is told not to submit again; a duplicate is refused by its stale token.
+  before the stop is told not to submit again; a duplicate is refused by its stale token. Between
+  rounds this costs one short turn.
 
 ### Input that arrives during recovery
 
@@ -192,10 +187,13 @@ still land after publication and reach the server's `HostedAgentDeathBridge`.
 - After publication an end is also held when the ending process's daemon epoch differs from the
   epoch the entry records for its current run, which `TryPublishResumed` writes. The child env
   already carries the epoch it was launched under; `HostedAgent` reads it.
-- Every decision is made where the end is produced: the hook and the watcher decide before they
-  enqueue, so a suppressed end is never spooled and the drain needs no origin. The exited-session
-  sweep, which runs in another process, reads the epoch from the session's recorded origin, which
-  gains it.
+- The decision is made where the end is produced (hook, watcher) and again where it is delivered.
+  An end the producer let through can sit in the spool across the whole restart — enqueued while the
+  entry was still `Running`, held by a backlog or a failed post, drained after the successor
+  published. So a spooled session end records its origin (agent id and daemon epoch) beside its
+  body, and the drain re-applies both rules before posting it; a held end is discarded. A spooled end
+  without an origin, written by an older kcap, posts as today. The exited-session sweep, which runs
+  in another process, reads the epoch from the session's recorded origin, which gains it.
 
 A genuine exit of the resumed process carries the matching epoch and posts. This also closes the
 same window for interactive resumes.
@@ -253,17 +251,17 @@ entries' predecessor is not its prior instance, and discards them however recent
   the same agent id with earlier-round context.
 - Round dispatched while the candidate waits for the lane, during handshake, and right after
   publication: delivered once, after the nudge.
-- Claude interrupted mid-round (`AwaitingInput` false, `TurnInFlight` false, round unsubmitted), and
-  input queued just before shutdown: both get the nudge and the round input.
-- Idle resumed OpenCode reviewer left past its first-output deadline, then sent a round: answered.
+- A silent Claude round with `AwaitingInput` set by the quiet heuristic, an ACP turn that ended
+  without submitting, and input queued just before shutdown: each is resumed with the nudge and the
+  round input and its round is answered. A reviewer that had submitted does not submit again.
 - A stalled participant resume, published or not, beside an unrelated dead old-epoch participant:
   the recovery hold lifts at the deadline (completeness then follows its other conditions), the
   stalled one is reported failed and cannot publish later, and the dead one is proven absent.
 - A reconnect racing the last candidate's publication or failure: the connect lists it as live or
   claimed, or reports incomplete.
-- Predecessor end delivered before and after successor registration, including one enqueued by the
-  old process and drained by another after publication: role stays live; a genuine exit of the
-  resumed process still ends it.
+- Predecessor end delivered before and after successor registration, including one spooled by the
+  old process while its entry was still `Running` and drained by another process after publication:
+  role stays live; a genuine exit of the resumed process still ends it.
 - A replacement that starts, fails recovery and cannot yet be proven dead: its worktree and snapshot
   stay until it is.
 - Nested-cwd borrowed Cursor snapshot: the resumed process's boundary and result channel match a
