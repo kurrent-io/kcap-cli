@@ -369,7 +369,7 @@ sealed class UninstallCommand(
         try {
             outcome = await local.RunAsync(new SyncProgress<LocalInstallEvent>(LocalCommand.RenderRecovery),
                 (lease, state, ct) => uninstall.RunAsync(lease, state, purge, force, config.Directory, ct), CancellationToken.None, force);
-        } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure) {
+        } catch (Exception ex) when (ex is LocalLifecycleException or LocalInstallFailure or LocalUpgradeFailure or IOException or UnauthorizedAccessException) {
             await Console.Error.WriteLineAsync($"Could not remove the local server: {ex.Message}");
             return false;
         }

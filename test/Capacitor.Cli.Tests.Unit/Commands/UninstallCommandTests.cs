@@ -901,6 +901,23 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
+    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    public async Task A_local_removal_that_throws_an_io_error_still_finishes_the_rest() {
+        await using var fixture = await Fixture.CreateAsync();
+        var local = InstallLocalServer(fixture);
+        using var fault = FaultPoints.Arm(point => {
+            if (point == "purge:after-data") throw new IOException("disk went away");
+        });
+
+        var (exit, output, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(errors).Contains("Could not remove the local server: disk went away");
+        await Assert.That(errors).Contains("kcap uninstall finished with errors");
+        await Assert.That(output).DoesNotContain("kcap uninstalled.");
+        await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
+    }
+
     [Test, NotInParallel]
     public async Task No_local_server_needs_no_purge_flag() {
         await using var fixture = await Fixture.CreateAsync();
