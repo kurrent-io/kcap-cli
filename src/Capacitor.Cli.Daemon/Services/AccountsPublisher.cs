@@ -30,7 +30,8 @@ internal sealed partial class AccountsPublisher(
 
     /// <summary>Raised under the rebuild gate so handlers see revisions in order. A handler must not
     /// throw, block, or wait on <see cref="RebuildAsync"/>; one that throws is logged and the rest still
-    /// run. The first snapshot is not announced; one that replaces it is, even when start builds it.</summary>
+    /// run. Every new snapshot is announced, the one start builds included; a poll that finds the
+    /// revision unchanged announces nothing.</summary>
     public event Action<AccountsSnapshotDto>? Changed;
 
     // Seam: tests substitute a failing read.
@@ -41,11 +42,11 @@ internal sealed partial class AccountsPublisher(
     public Task WaitBeyondAsync(long seen, CancellationToken ct) => _notifier.WaitBeyondAsync(seen, ct);
 
     /// <summary>Reads the registry now, whether or not its file looks changed.</summary>
-    public Task RebuildAsync(CancellationToken ct) => PollAsync(force: true, announce: true, ct);
+    public Task RebuildAsync(CancellationToken ct) => PollAsync(force: true, ct);
 
     public override async Task StartAsync(CancellationToken cancellationToken) {
         if (config.Accounts is not null) {
-            await PollAsync(force: true, announce: Current is not null, cancellationToken);
+            await PollAsync(force: true, cancellationToken);
             _timer = new PeriodicTimer(PollInterval, time);
         }
 
@@ -58,12 +59,12 @@ internal sealed partial class AccountsPublisher(
         using (timer) {
             try {
                 while (await timer.WaitForNextTickAsync(stoppingToken))
-                    await PollAsync(force: false, announce: true, stoppingToken);
+                    await PollAsync(force: false, stoppingToken);
             } catch (OperationCanceledException) { /* shutdown */ }
         }
     }
 
-    async Task PollAsync(bool force, bool announce, CancellationToken ct) {
+    async Task PollAsync(bool force, CancellationToken ct) {
         if (config.Accounts is not { } store) return;
 
         await _gate.WaitAsync(ct);
@@ -80,14 +81,14 @@ internal sealed partial class AccountsPublisher(
             if (!unchanged) _loadWarned = false;
             _stat = stat;
 
-            if (!Publish(store, hostId, announce)) _settled = false;
+            if (!Publish(store, hostId)) _settled = false;
         } finally {
             _gate.Release();
         }
     }
 
     /// <summary>False when the registry could not be read.</summary>
-    bool Publish(AccountStore store, string hostId, bool announce) {
+    bool Publish(AccountStore store, string hostId) {
         AccountRegistry registry;
         try {
             registry = LoadRegistry(store);
@@ -102,7 +103,7 @@ internal sealed partial class AccountsPublisher(
         var next = AccountSnapshotBuilder.Build(registry, hostId, config.DefaultDirectories, home);
         Volatile.Write(ref _current, next);
         _notifier.Pulse();
-        if (announce) Announce(next);
+        Announce(next);
         return true;
     }
 

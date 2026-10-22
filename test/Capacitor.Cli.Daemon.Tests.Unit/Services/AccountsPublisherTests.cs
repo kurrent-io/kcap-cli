@@ -75,8 +75,8 @@ public class AccountsPublisherTests {
         var time = new FakeTimeProvider();
         using var publisher = Publisher(store, time);
         var changed = new TaskCompletionSource<AccountsSnapshotDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        publisher.Changed += s => changed.TrySetResult(s);
         await publisher.StartAsync(CancellationToken.None);
+        publisher.Changed += s => changed.TrySetResult(s);
         try {
             Add(store, "spare");
             time.Advance(Poll);
@@ -112,6 +112,49 @@ public class AccountsPublisherTests {
         }
     }
 
+    /// The rebuild the daemon runs before its host starts can fail; start then builds the first
+    /// snapshot a subscriber sees, and announces it.
+    [Test]
+    public async Task Start_announces_the_first_snapshot_when_the_rebuild_before_it_failed() {
+        var store = Store();
+        Add(store, "work");
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        var loads = 0;
+        publisher.LoadRegistry = s => Interlocked.Increment(ref loads) == 1 ? throw new IOException("sharing violation") : s.Load();
+        await publisher.RebuildAsync(CancellationToken.None);
+        await Assert.That(publisher.Current).IsNull();
+        var announced = new List<long>();
+        publisher.Changed += s => { lock (announced) announced.Add(s.Revision); };
+
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            long[] revisions;
+            lock (announced) revisions = [.. announced];
+            await Assert.That(revisions).IsEquivalentTo([1L]);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
+    /// An unchanged revision is not a change, so the snapshot the daemon read before its host started
+    /// is not announced again.
+    [Test]
+    public async Task Start_does_not_announce_the_snapshot_built_before_it_again() {
+        var store = Store();
+        Add(store, "work");
+        using var publisher = Publisher(store, new FakeTimeProvider());
+        await publisher.RebuildAsync(CancellationToken.None);
+        var announced = 0;
+        publisher.Changed += _ => Interlocked.Increment(ref announced);
+
+        await publisher.StartAsync(CancellationToken.None);
+        try {
+            await Assert.That(Volatile.Read(ref announced)).IsEqualTo(0);
+        } finally {
+            await publisher.StopAsync(CancellationToken.None);
+        }
+    }
+
     [Test]
     public async Task A_burst_of_rewrites_yields_one_snapshot() {
         var store = Store();
@@ -119,11 +162,11 @@ public class AccountsPublisherTests {
         using var publisher = Publisher(store, time);
         var changes = new List<AccountsSnapshotDto>();
         var first   = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await publisher.StartAsync(CancellationToken.None);
         publisher.Changed += s => {
             lock (changes) changes.Add(s);
             first.TrySetResult();
         };
-        await publisher.StartAsync(CancellationToken.None);
         try {
             for (var i = 0; i < 10; i++) {
                 Add(store, $"account-{i}");
@@ -176,9 +219,9 @@ public class AccountsPublisherTests {
         var warnings = new Warnings();
         using var publisher = Publisher(store, time, logger: warnings);
         var seen = new List<long>();
+        await publisher.StartAsync(CancellationToken.None);
         publisher.Changed += _ => throw new InvalidOperationException("subscriber bug");
         publisher.Changed += s => { lock (seen) seen.Add(s.Revision); };
-        await publisher.StartAsync(CancellationToken.None);
         try {
             Add(store, "spare");
             time.Advance(Poll);
@@ -211,8 +254,8 @@ public class AccountsPublisherTests {
         var warnings = new Warnings();
         using var publisher = Publisher(store, time, logger: warnings);
         var changed = new TaskCompletionSource<AccountsSnapshotDto>(TaskCreationOptions.RunContinuationsAsynchronously);
-        publisher.Changed += s => changed.TrySetResult(s);
         await publisher.StartAsync(CancellationToken.None);
+        publisher.Changed += s => changed.TrySetResult(s);
         var loads = 0;
         publisher.LoadRegistry = s =>
             Interlocked.Increment(ref loads) <= 2 ? throw new IOException("sharing violation") : s.Load();
