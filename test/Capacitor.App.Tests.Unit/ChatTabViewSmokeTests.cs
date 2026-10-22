@@ -1003,6 +1003,101 @@ public class ChatTabViewSmokeTests {
     }
 
     [Test]
+    [Arguments(null, 0)]
+    [Arguments(true, 0)]
+    [Arguments(true, 1)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_does_not_reach_a_prompt_without_a_confirmed_foreground_turn(bool? awaitingInput, int liveSubagents) {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-idle.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = awaitingInput, LiveSubagents = liveSubagents,
+                });
+                host.Type("keep this draft");
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+                // A known working turn may be interrupted; the same shortcut goes inert as soon as it ends.
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false,
+                });
+                host.Settle();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = true,
+                });
+                host.Settle();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(host.Terminal.State.Phase).IsEqualTo(TerminalSessionPhase.Attached);
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_child_control_can_consume_Escape_before_the_chat_interrupts() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-child.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false,
+                });
+                host.Type("keep this draft");
+                var consumed = false;
+                host.Composer.KeyDown += (_, e) => {
+                    if (e.Key != Key.Escape) return;
+                    consumed = true;
+                    e.Handled = true;
+                };
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(consumed).IsTrue();
+                await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Escape_dismisses_the_composer_context_menu_before_interrupting_the_turn() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            try {
+                var path = Tmp.CreateFile("escape-menu.jsonl", [UserLine]);
+                var client = await host.AttachAsync(path);
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false,
+                });
+                host.Type("keep this draft");
+                var item = new MenuItem { Header = "Copy" };
+                var menu = new ContextMenu { ItemsSource = new[] { item } };
+                host.Composer.ContextMenu = menu;
+                menu.Open(host.Composer);
+                host.Settle();
+                item.Focus();
+                await Assert.That(menu.IsOpen).IsTrue();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(menu.IsOpen).IsFalse();
+                await Assert.That(client.SentInput).IsEmpty();
+                host.Composer.Focus();
+                host.Press(PhysicalKey.Escape);
+                await Assert.That(client.SentInput).Count().IsEqualTo(1);
+                await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
+                await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
+    [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_queue_banner_shows_sent_text_until_the_transcript_echoes_it() {
         await RunOnUiAsync(async () => {
