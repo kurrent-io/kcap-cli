@@ -7,7 +7,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Platform.Mac;
 
-public sealed record MoveOutcome(bool Moved, string? InstalledPath, string? Error);
+public sealed record MoveOutcome(bool Moved, string? InstalledPath, string? Error, bool PermissionDenied = false);
 
 public sealed partial class ApplicationsMover(
         IProcessRunner runner, Func<string, string, bool> promote, string applicationsDir = "/Applications",
@@ -75,6 +75,7 @@ public sealed partial class ApplicationsMover(
         var swapped = false;
         try {
             Directory.CreateDirectory(applicationsDir);
+            Directory.CreateDirectory(staging);
             var copy = await runner.RunAsync("ditto", [plan.PayloadPath!, staging], new RunOptions(Timeout: CopyTimeout), ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             if (copy.TimedOut) return Fail(staging, "Copying took too long. Try again.");
@@ -124,7 +125,8 @@ public sealed partial class ApplicationsMover(
             } catch (Exception restore) { errors.Add(restore.Message); }
             if (errors.Count == 1) RemoveStaging(staging);
             if (ex is OperationCanceledException && errors.Count == 1) throw;
-            return new(false, plan.Target, string.Join("\n\n", errors));
+            return new(false, plan.Target, string.Join("\n\n", errors),
+                PermissionDenied: ex is UnauthorizedAccessException && errors.Count == 1);
         } finally {
             if (references is not null) await references.DisposeAsync().ConfigureAwait(false);
         }

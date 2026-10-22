@@ -12,7 +12,9 @@ public partial class InstallLocationWindow : Window {
 
     internal InstallLocationWindow(string where, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
-            Func<string, ApplicationsInstallPlan>? selectDestination = null) : this() {
+            Func<string, ApplicationsInstallPlan>? selectDestination = null,
+            string? defaultDestination = null, string? userApplicationsDirectory = null) : this() {
+        var selectedDirectory = defaultDestination;
         void ShowPlan(ApplicationsInstallPlan? selected) {
             Heading.Text = selected?.Title ?? "Install kcap";
             _actionLabel = selected?.ButtonLabel ?? "Install and open";
@@ -29,24 +31,36 @@ public partial class InstallLocationWindow : Window {
         ShowPlan(plan);
         if (destinations is { Count: > 1 }) {
             DestinationPanel.IsVisible = true;
-            DestinationPicker.ItemsSource = destinations;
-            Heading.Text = "Choose an install location";
-            Explanation.Text = "Choose which Applications folder kcap should use. Unrelated apps will stay untouched.";
-            _canMove = false;
-            MoveButton.IsEnabled = false;
+            DestinationPicker.ItemsSource = destinations.Select(directory => new ComboBoxItem {
+                Content = directory == userApplicationsDirectory
+                    ? "Install for me only"
+                    : directory == "/Applications" ? "Install for all users" : directory,
+                Tag = directory,
+            }).ToArray();
+            if (defaultDestination is null) {
+                Heading.Text = "Choose an install location";
+                Explanation.Text = "Choose which Applications folder kcap should use. Unrelated apps will stay untouched.";
+                _canMove = false;
+                MoveButton.IsEnabled = false;
+            }
             DestinationPicker.SelectionChanged += (_, _) => {
-                if (DestinationPicker.SelectedItem is string directory && selectDestination is not null) {
+                if (DestinationPicker.SelectedItem is ComboBoxItem { Tag: string directory } && selectDestination is not null) {
+                    selectedDirectory = directory;
                     ShowPlan(selectDestination(directory));
                     ErrorPanel.IsVisible = false;
                 }
             };
+            DestinationPicker.SelectedIndex = destinations.ToList().IndexOf(defaultDestination!);
         }
 
         MoveButton.Click += async (_, _) => {
             SetMoving(true);
             try {
                 var outcome = await move();
-                if (!outcome.Moved) ShowError(outcome.Error);
+                if (!outcome.Moved) ShowError(outcome.PermissionDenied && userApplicationsDirectory is not null
+                        && selectedDirectory != userApplicationsDirectory
+                    ? $"kcap cannot write to {selectedDirectory}. Choose “Install for me only” and try again."
+                    : outcome.Error);
             } catch (Exception ex) {
                 ShowError(ex.Message);
             } finally {

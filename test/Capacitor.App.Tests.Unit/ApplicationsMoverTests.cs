@@ -84,6 +84,41 @@ public class ApplicationsMoverTests {
     }
 
     [Test]
+    public async Task A_download_reuses_an_existing_per_user_install() {
+        var system = Tmp.CreateDir("SystemApplications");
+        var user = Tmp.CreateDir("UserApplications");
+        var source = Tmp.PathTo("Downloads/kcap.app");
+        CompleteBundle(source, "1.1.0");
+        CompleteBundle(Path.Combine(user, "kcap.app"));
+
+        await Assert.That(ApplicationsMover.ApplicationDirectories(source, user, system).Single()).IsEqualTo(user);
+    }
+
+    [Test]
+    public async Task A_read_only_Applications_folder_reports_permission_denied_before_copying() {
+        if (OperatingSystem.IsWindows()) return;
+        var apps = Tmp.CreateDir("Applications");
+        var source = Tmp.CreateDir("Downloads/kcap.app");
+        CompleteBundle(source);
+        var ditto = new FakeDitto(CompleteBundle);
+        var mover = new ApplicationsMover(ditto, MovePromote, apps);
+        var mode = File.GetUnixFileMode(apps);
+        try {
+            File.SetUnixFileMode(apps, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+            var outcome = await mover.MoveAsync(source, CancellationToken.None);
+
+            await Assert.That(outcome.Moved).IsFalse();
+            await Assert.That(outcome.PermissionDenied).IsTrue();
+            await Assert.That(ditto.Calls).IsEqualTo(0);
+            await Assert.That(Directory.GetFileSystemEntries(apps)).IsEmpty();
+            await Assert.That(Directory.Exists(source)).IsTrue();
+        } finally {
+            File.SetUnixFileMode(apps, mode);
+        }
+    }
+
+    [Test]
     public async Task An_installed_kcap_starts_without_an_install_prompt() {
         var systemApps = Tmp.CreateDir("SystemApplications");
         var userApps = Tmp.CreateDir("UserApplications");
