@@ -134,14 +134,15 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(agent).IsNotNull();
         await Assert.That(agent!.IsServerSilent).IsTrue();
 
+        // The spy process exits at once, so its own cleanup may already be running and this call returns early.
         await orch.CleanupAgentForTest("refused-launch");
+        await WaitHarness.PollUntilAsync(() => server.StatusReports.Any(r => r.ActiveCount == 0));
 
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
         await Assert.That(server.StatusChangedCalls).IsEmpty();
         await Assert.That(server.RunEvents.Any(e => e.AgentId == "refused-launch")).IsFalse();
         await Assert.That(server.LaunchFailedCalls).IsEmpty();
         await Assert.That(server.AgentUnregisteredCalls).IsEmpty();
-        await Assert.That(server.StatusReports[^1].ActiveCount).IsEqualTo(0);
     }
 
     // A PTY codex runtime reports "pty" on AgentRegistered — the transport rides the runtime TYPE,
