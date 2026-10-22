@@ -26,12 +26,14 @@ public static class ChatPipeline {
     /// earlier claimed. The paragraph parser still reads a `[label]: url` line as a definition.
     static MarkdownPipeline PromptPipeline() {
         var builder = new MarkdownPipelineBuilder();
+        var paragraphs = new ParagraphBlockParser { ParseSetexHeadings = false };
+        paragraphs.Closed += BlankLines.RecordLastLine;
         builder.BlockParsers.Clear();
         builder.BlockParsers.AddRange([
             new QuoteBlockParser(),
-            new ListBlockParser(),
+            new RulelessListBlockParser(),
             new FencedCodeBlockParser(),
-            new ParagraphBlockParser { ParseSetexHeadings = false },
+            paragraphs,
         ]);
         builder.InlineParsers.Clear();
         builder.InlineParsers.AddRange([
@@ -47,10 +49,31 @@ public static class ChatPipeline {
             .Build();
     }
 
+    /// Markdig's list parser opens a thematic break itself, ahead of any list item, so leaving the
+    /// thematic break parser out is not enough to keep `---` or `***` as typed.
+    sealed class RulelessListBlockParser : ListBlockParser {
+        public override BlockState TryOpen(BlockProcessor processor) {
+            var rules = ThematicBreakParser.Default;
+            if (rules.HasOpeningCharacter(processor.CurrentChar) && rules.TryOpen(processor).IsBreak()) {
+                processor.NewBlocks.Pop();
+                return BlockState.None;
+            }
+            return base.TryOpen(processor);
+        }
+    }
+
     sealed class BlankLines : IMarkdownExtension {
+        static readonly object LastLineKey = new();
+
         public void Setup(MarkdownPipelineBuilder pipeline) => pipeline.DocumentProcessed += Keep;
 
         public void Setup(MarkdownPipeline pipeline, IMarkdownRenderer renderer) { }
+
+        /// A paragraph's source lines are released once its inlines are parsed, and a code span
+        /// can cross a line without leaving a line break behind, so the last line is taken here.
+        public static void RecordLastLine(BlockProcessor processor, Block block) {
+            if (block is ParagraphBlock paragraph) paragraph.SetData(LastLineKey, paragraph.Line + Math.Max(paragraph.Lines.Count - 1, 0));
+        }
 
         /// Markdown reads any run of blank lines as one paragraph break. Adjacent paragraphs are
         /// joined instead, by a line break for each newline that separated them in the source.
@@ -59,7 +82,7 @@ public static class ChatPipeline {
                 for (var i = container.Count - 1; i > 0; i--) {
                     if (container[i - 1] is not ParagraphBlock { Inline: { } into } before
                         || container[i] is not ParagraphBlock { Inline: { } from } after) continue;
-                    var lastLine = before.Line + into.Descendants<LineBreakInline>().Count();
+                    var lastLine = before.GetData(LastLineKey) as int? ?? before.Line;
                     for (var line = lastLine; line < after.Line; line++) into.AppendChild(new LineBreakInline { IsHard = true });
                     while (from.FirstChild is { } inline) {
                         inline.Remove();

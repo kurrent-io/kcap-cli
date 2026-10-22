@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using Capacitor.App.Views;
 using MarkView.Avalonia;
+using MarkView.Avalonia.Rendering.Inlines;
 using ReactiveUI.Reactive;
 using static Capacitor.App.Tests.Unit.AvaloniaSession;
 using static Capacitor.App.Tests.Unit.MarkdownViewHarness;
@@ -552,10 +553,9 @@ public class MarkdownViewTests {
             var (window, root, opened) = Show(typed, MarkdownFlavor.Prompt);
             try {
                 var paragraph = Paragraphs(root).First();
-                await Assert.That(Reads(paragraph).Split('\n', StringSplitOptions.TrimEntries)).IsEquivalentTo([
+                await Assert.That(Reads(paragraph).ReplaceLineEndings("\n")).IsEqualTo(string.Join('\n',
                     @"C:\Users\me\.config \*", "# not a heading", "underlined", "---", "***",
-                    "&amp; <b>x</b> [label](l.example)", "indented", "bold em struck code https://u.example",
-                ]);
+                    "&amp; <b>x</b> [label](l.example)", "indented", "bold em struck code https://u.example"));
                 await Assert.That(Spans<Bold>(paragraph.Inlines!).Count()).IsEqualTo(1);
                 await Assert.That(Spans<Italic>(paragraph.Inlines!).Count()).IsEqualTo(1);
                 await Assert.That(Spans<Run>(paragraph.Inlines!).Any(r => r.Text == "code" && r.Classes.Contains("markdown-code-inline"))).IsTrue();
@@ -580,13 +580,40 @@ public class MarkdownViewTests {
             const string typed = "one\ntwo\n\n\n\nthree";
             var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
             try {
-                var paragraph = Paragraphs(root).Single();
-                await Assert.That(Reads(paragraph).Split('\n', StringSplitOptions.TrimEntries)).IsEquivalentTo(["one", "two", "", "", "", "three"]);
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo(typed);
             } finally { window.Close(); }
 
             (window, root, _) = Show(typed);
             try {
-                await Assert.That(Paragraphs(root).Select(Reads)).IsEquivalentTo(["one two", "three"]);
+                await Assert.That(string.Join('|', Paragraphs(root).Select(Reads))).IsEqualTo("one two|three");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins the paragraph's last line for a code span that crosses a newline: the blank line after
+    /// it is counted from where the span ends, not from the line it starts on.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_counts_blank_lines_after_a_code_span_that_crosses_a_line() {
+        await RunOnUiAsync(async () => {
+            var (window, root, _) = Show("`x\ny`\n\nz", MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo("x y\n\nz");
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins that a rule standing on its own line stays text: Markdig's list parser opens one itself,
+    /// apart from the thematic break parser the prompt leaves out.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_shows_a_standalone_rule_as_typed() {
+        await RunOnUiAsync(async () => {
+            const string typed = "---\n\n- - -\n\n***\n\n___";
+            var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                await Assert.That(All<Separator>(root).Any(s => s.Classes.Contains("markdown-thematic-break"))).IsFalse();
+                await Assert.That(Reads(Paragraphs(root).Single()).ReplaceLineEndings("\n")).IsEqualTo(typed);
             } finally { window.Close(); }
         });
     }
