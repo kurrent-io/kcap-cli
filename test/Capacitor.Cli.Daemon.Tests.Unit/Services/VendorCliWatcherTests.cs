@@ -288,8 +288,9 @@ public class VendorCliWatcherTests {
     }
 
     /// Driven through the real publisher and orchestrator: the announcement both re-probes, which puts
-    /// the new account in the map, and rebuilds the watch set, so a later write to that account's
-    /// auth file asks for another refresh.
+    /// the new account in the map, and rebuilds the watch set from the fingerprint taken before that
+    /// probe, so a write to the account's auth file between the probe and the rebuilding tick still
+    /// asks for a refresh.
     [Test]
     public async Task Adding_an_account_probes_it_and_extends_the_watch_set() {
         using var home = new TempHome();
@@ -327,15 +328,15 @@ public class VendorCliWatcherTests {
 
             var refreshes = new List<string>();
             watcher.Refresh = refreshes.Add;
-            watcher.Tick();
-            await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
-            await Assert.That(refreshes).IsEmpty();
-
             home.CreateFile([".codex-spare", "auth.json"], "{}");
             watcher.Tick();
 
+            await Assert.That(watcher.Watched.SelectMany(w => w.CatalogPaths)).Contains(home.PathTo(".codex-spare", "auth.json"));
             await Assert.That(refreshes.Count).IsEqualTo(1);
             await Assert.That(refreshes[0]).Contains(spare.Id);
+
+            watcher.Tick();
+            await Assert.That(refreshes.Count).IsEqualTo(1);
         } finally {
             await watcher.StopAsync(CancellationToken.None);
             await publisher.StopAsync(CancellationToken.None);

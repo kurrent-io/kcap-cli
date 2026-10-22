@@ -37,9 +37,10 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
 
     /// <summary>Fingerprints recorded when the advertisement was probed. The advertisement
     /// describes the files as they were then, so a vendor that updates before this service starts
-    /// must read as a change on the first tick rather than become the baseline.</summary>
-    IReadOnlyDictionary<string, CliBinaryStat?>?    _recorded;
-    IReadOnlyDictionary<string, CatalogPathStat[]>? _recordedCatalogs;
+    /// must read as a change on the first tick rather than become the baseline. The catalog record is
+    /// read live: a refresh records an added account's files before probing it.</summary>
+    IReadOnlyDictionary<string, CliBinaryStat?>?                   _recorded;
+    readonly Func<IReadOnlyDictionary<string, CatalogPathStat[]>?> _recordedCatalogs = static () => null;
 
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
 
@@ -52,6 +53,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         _factories = factories;
         _accounts  = () => accounts.Current;
         _logger    = logger;
+        _recordedCatalogs = () => config.VendorCatalogBaselines;
         Refresh    = reason => orchestrator.RefreshAdvertisedCapabilities(reason);
         StatBinary = path => StatCliBinary(config.Binaries, path);
         Watched    = [];
@@ -66,7 +68,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
         _logger           = NullLogger.Instance;
         _time             = time;
         _recorded         = baselines;
-        _recordedCatalogs = catalogBaselines;
+        _recordedCatalogs = () => catalogBaselines;
         Watched           = watched;
         Refresh           = refresh;
         StatBinary        = stat;
@@ -106,11 +108,13 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
             .ToArray();
     }
 
-    /// <summary>Gives each watched entry without a baseline its first one and forgets entries no longer
-    /// watched. An entry that already has one keeps it, so a rebuild cannot absorb a change the next
-    /// tick has yet to see; the recorded fingerprints serve only the first call.</summary>
+    /// <summary>Gives each watched entry without a baseline its first one, the recorded fingerprint when
+    /// there is one, and forgets entries no longer watched. An entry that already has one keeps it, so
+    /// a rebuild cannot absorb a change the next tick has yet to see; the recorded binary fingerprints
+    /// serve only the first call.</summary>
     internal void PrimeBaselines() {
-        var watched = new HashSet<string>(StringComparer.Ordinal);
+        var watched          = new HashSet<string>(StringComparer.Ordinal);
+        var recordedCatalogs = _recordedCatalogs();
         foreach (var (vendor, cliPath, catalogPaths) in Watched) {
             watched.Add(vendor);
             if (!_baselines.ContainsKey(vendor))
@@ -118,15 +122,14 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
                     ? baseline
                     : StatCli(cliPath);
             if (!_catalogBaselines.ContainsKey(vendor))
-                _catalogBaselines[vendor] = _recordedCatalogs is { } recordedCatalogs && recordedCatalogs.TryGetValue(vendor, out var catalog)
+                _catalogBaselines[vendor] = recordedCatalogs is not null && recordedCatalogs.TryGetValue(vendor, out var catalog)
                     ? catalog
                     : StatCatalogs(catalogPaths);
         }
 
         foreach (var gone in _baselines.Keys.Where(k => !watched.Contains(k)).ToArray()) _baselines.Remove(gone);
         foreach (var gone in _catalogBaselines.Keys.Where(k => !watched.Contains(k)).ToArray()) _catalogBaselines.Remove(gone);
-        _recorded         = null;
-        _recordedCatalogs = null;
+        _recorded = null;
     }
 
     /// <summary>The publisher's handler, which must not block: the watch set is rebuilt by the next tick,
@@ -188,9 +191,8 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
 
     protected override async Task ExecuteAsync(CancellationToken ct) {
         if (_config is not null && _factories is not null) {
-            _recorded         = _config.UnattendedVendorBaselines;
-            _recordedCatalogs = _config.VendorCatalogBaselines;
-            Watched           = WatchSet(_config, _factories, _accounts());
+            _recorded = _config.UnattendedVendorBaselines;
+            Watched   = WatchSet(_config, _factories, _accounts());
         }
         PrimeBaselines();
 

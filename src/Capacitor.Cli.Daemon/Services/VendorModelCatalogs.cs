@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
@@ -35,6 +36,8 @@ internal static class VendorModelCatalogs {
     /// The one vendor whose catalog depends on the account: a ChatGPT-plan and an API account can
     /// launch different models.
     internal static readonly string AccountVendor = HarnessId.Codex.VendorId;
+
+    static readonly string AccountKeyPrefix = AccountKey("");
 
     /// The runtime factory that probes per account, when its vendor is advertised.
     internal static IHostedAgentRuntimeFactory? AccountFactory(
@@ -96,9 +99,20 @@ internal static class VendorModelCatalogs {
             v => v,
             v => byVendor.TryGetValue(v, out var f) ? f.CatalogFingerprintPaths.Select(CatalogPathStat.Of).ToArray() : [],
             StringComparer.Ordinal);
-        if (accountFactory is not null)
-            foreach (var (id, directory) in accounts ?? [])
-                result[AccountKey(id)] = [.. accountFactory.CatalogFingerprintPathsFor(directory).Select(CatalogPathStat.Of)];
+        return accountFactory is null ? result : WithAccountBaselines(result, accountFactory, accounts ?? []);
+    }
+
+    /// <paramref name="baselines"/> with its account entries replaced by fingerprints of
+    /// <paramref name="accounts"/>' catalog files taken now. A new dictionary, since the watcher may be
+    /// reading the old one.
+    internal static IReadOnlyDictionary<string, CatalogPathStat[]> WithAccountBaselines(
+            IReadOnlyDictionary<string, CatalogPathStat[]>? baselines, IHostedAgentRuntimeFactory accountFactory,
+            IReadOnlyList<(string AccountId, string Directory)> accounts) {
+        var result = new Dictionary<string, CatalogPathStat[]>(StringComparer.Ordinal);
+        foreach (var (key, stats) in baselines ?? FrozenDictionary<string, CatalogPathStat[]>.Empty)
+            if (!key.StartsWith(AccountKeyPrefix, StringComparison.Ordinal)) result[key] = stats;
+        foreach (var (id, directory) in accounts)
+            result[AccountKey(id)] = [.. accountFactory.CatalogFingerprintPathsFor(directory).Select(CatalogPathStat.Of)];
         return result;
     }
 }

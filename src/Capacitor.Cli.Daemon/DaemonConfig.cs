@@ -186,8 +186,9 @@ public class DaemonConfig {
     /// like <see cref="VendorModels"/>.</summary>
     public Dictionary<string, VendorModelOption[]>? VendorModelsByAccount { get; set; }
 
-    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe; the
-    /// vendor CLI watcher's starting point for them.</summary>
+    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe, and of each
+    /// account's, taken before its latest probe; the vendor CLI watcher's starting point for an entry
+    /// it begins watching. Replaced by reference.</summary>
     public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }
 
     /// <summary>

@@ -1571,6 +1571,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                     .ToArray();
                 var accountFactory = probeCatalog ? VendorModelCatalogs.AccountFactory(_runtimeFactories.Values, supported) : null;
                 var accounts       = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(AccountsSnapshot());
+                // Fingerprinted before the probe, as at startup: the watcher starts watching an added
+                // account from this, so a write between the probe and that start still reads as a change.
+                if (accountFactory is not null)
+                    _config.VendorCatalogBaselines = VendorModelCatalogs.WithAccountBaselines(_config.VendorCatalogBaselines, accountFactory, accounts);
 
                 var vendorProbe = catalogVendors.Length == 0
                     ? null
