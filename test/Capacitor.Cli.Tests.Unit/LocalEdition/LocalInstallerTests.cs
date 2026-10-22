@@ -494,6 +494,21 @@ public class LocalInstallerTests {
     }
 
     [Test]
+    public async Task An_install_without_ollama_commits_without_a_model_download() {
+        using var ollama = new FakeOllama();
+        var committed = await Install(YesWithOllama, ollama: ollama);
+
+        await Assert.That(committed).IsNotNull();
+        await Assert.That(Service.Installed!.EmbeddingModel).IsNull();
+        await Assert.That(ollama.Requests("/api/pull")).IsEqualTo(0);
+        await Assert.That(ollama.Requests("/api/embed")).IsEqualTo(0);
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code)
+            .IsEqualTo(LocalEmbeddingSkipCode.OllamaNotFound);
+        await Assert.That(EventAt<LocalInstallEvent.Downloading>()).IsLessThan(EventAt<LocalInstallEvent.EmbeddingsSkipped>());
+        await Assert.That(EventAt<LocalInstallEvent.EmbeddingsSkipped>()).IsLessThan(EventAt<LocalInstallEvent.Committed>());
+    }
+
+    [Test]
     public async Task An_install_records_the_embedding_model_before_the_unit_first_starts() {
         using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
 

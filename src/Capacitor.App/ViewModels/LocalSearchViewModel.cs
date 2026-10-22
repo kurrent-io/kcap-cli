@@ -46,7 +46,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         _readScheduler = readScheduler ?? RxSchedulers.TaskpoolScheduler;
         _read.DisposeWith(_disposables);
 
-        Choice = new SearchChoiceViewModel();
+        Choice = new SearchChoiceViewModel { Reconfiguring = true };
         ReadSetting();
 
         Observable.Switch(search.WhenAnyValue(x => x.Progress)

@@ -96,8 +96,9 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        MinWidth  = UiScale.Minimum(Onboarding is null ? WindowSizeMemory.MinWidth : 640, _scale, available?.Width);
-        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
+        var onboarding = Onboarding is not null;
+        MinWidth  = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinWidth : WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinHeight = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinHeight : WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.

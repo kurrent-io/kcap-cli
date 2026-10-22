@@ -163,12 +163,13 @@
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentHoverBrush}" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
     </Style>
+    <!-- A faded accent fill blends its label into the canvas; a disabled primary reads as an outline instead. -->
     <Style Selector="Button.onboardingPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
-        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
     </Style>
-    <Style Selector="Button.onboardingPrimary:disabled, Button.onboardingSecondary:disabled, Button.onboardingQuiet:disabled, Button.onboardingLink:disabled">
+    <Style Selector="Button.onboardingSecondary:disabled, Button.onboardingQuiet:disabled, Button.onboardingLink:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
     <Style Selector="Button.onboardingSecondary">
@@ -348,7 +349,7 @@
                         BorderThickness="{TemplateBinding BorderThickness}"
                         CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                        <Panel Width="15" Height="15" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <Panel Width="15" Height="15" VerticalAlignment="Top" Margin="0,1,0,0">
                             <Ellipse Name="Ring" Width="15" Height="15" StrokeThickness="1"
                                      Stroke="{StaticResource OnboardingDimBrush}" Fill="Transparent" />
                             <Ellipse Name="Dot" Width="7" Height="7" Fill="{StaticResource OnboardingAccentBrush}" IsVisible="False" />

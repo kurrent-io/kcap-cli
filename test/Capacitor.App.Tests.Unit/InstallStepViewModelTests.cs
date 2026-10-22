@@ -19,7 +19,7 @@ public class InstallStepViewModelTests {
 
     static async Task EnterAndInstallAsync(InstallStepViewModel install) {
         await install.OnEnterAsync(CancellationToken.None);
-        await install.InstallCommand.Execute().ToTask();
+        await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
     }
 
     static LocalInstallController Controller(FakeKcapCli cli, LocalRoot root, TelemetryProbe probe, Action<Action>? post = null) =>
@@ -41,7 +41,7 @@ public class InstallStepViewModelTests {
             await vm.PendingEnterForTesting;
 
             await vm.NextCommand.Execute().ToTask();
-            await install.InstallCommand.Execute().ToTask();
+            await vm.NextCommand.Execute().ToTask();
             await vm.PendingAdvanceForTesting;
 
             return (vm.Current.Id, advances);
@@ -74,7 +74,7 @@ public class InstallStepViewModelTests {
             ]);
             await vm.PendingEnterForTesting;
             await vm.NextCommand.Execute().ToTask();
-            await install.InstallCommand.Execute().ToTask();
+            await vm.NextCommand.Execute().ToTask();
             var before = vm.Current.Id;
 
             var settled = new TaskCompletionSource();
@@ -359,7 +359,7 @@ public class InstallStepViewModelTests {
             ]);
             await vm.PendingEnterForTesting;
             await vm.NextCommand.Execute().ToTask();
-            await install.InstallCommand.Execute().ToTask();
+            await vm.NextCommand.Execute().ToTask();
             var running = vm.BackVisible;
 
             exit.SetResult(new StreamingResult(1, false, []));
@@ -383,7 +383,7 @@ public class InstallStepViewModelTests {
             var shown = (install.ChoiceVisible, install.ProgressVisible, cli.SetupLocalCallCount);
 
             install.Search.UseKeyword = true;
-            await install.InstallCommand.Execute().ToTask();
+            await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
             return shown;
         });
@@ -478,10 +478,11 @@ public class InstallStepViewModelTests {
         var (canInstall, error) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
             await install.OnEnterAsync(CancellationToken.None);
+            install.Search.UseMeaning = true;
             install.Search.UseOther   = true;
             install.Search.OtherModel = name;
 
-            return (await install.InstallCommand.CanExecute.FirstAsync().ToTask(), install.Search.OtherModelError);
+            return (install.CanContinue, install.Search.OtherModelError);
         });
 
         await Assert.That(canInstall).IsFalse();

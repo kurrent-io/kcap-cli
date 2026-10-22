@@ -48,7 +48,7 @@ public class WizardCompositionLocalPathTests {
 
             await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
             await graph.ViewModel.PendingAdvanceForTesting;
-            await graph.Steps.OfType<InstallStepViewModel>().Single().InstallCommand.Execute().ToTask();
+            await graph.ViewModel.NextCommand.Execute().ToTask();
             var during = (graph.ViewModel.Current.Id, harness.Lane.Requests.Count, harness.Cli.StatusCallCount);
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
@@ -94,7 +94,7 @@ public class WizardCompositionLocalPathTests {
 
             await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
             await graph.ViewModel.PendingAdvanceForTesting;
-            await graph.Steps.OfType<InstallStepViewModel>().Single().InstallCommand.Execute().ToTask();
+            await graph.ViewModel.NextCommand.Execute().ToTask();
             var during = installer.Targets.Count;
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));
@@ -309,7 +309,7 @@ public class WizardCompositionLocalPathTests {
 
             await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
             await graph.ViewModel.PendingAdvanceForTesting;
-            await graph.Steps.OfType<InstallStepViewModel>().Single().InstallCommand.Execute().ToTask();
+            await graph.ViewModel.NextCommand.Execute().ToTask();
             var during = await finishLater.CanExecute.FirstAsync();
 
             print!(new StreamedLine(ProcessStreamKind.Stdout, LocalSetupScript.Committed));

@@ -34,7 +34,9 @@ static class LocalEmbeddingStep {
         var url   = ollama.BaseUrl.ToString().TrimEnd('/');
 
         if (await ollama.VersionAsync(ct) is not { } version)
-            return Skipped(progress, LocalEmbeddingSkipCode.OllamaNotFound, $"No Ollama answers on {url}", current);
+            return Skipped(progress, LocalEmbeddingSkipCode.OllamaNotFound,
+                $"Ollama is not responding on {url}. Install Ollama if needed, then start it. " +
+                "Run kcap setup --local again to enable search by meaning. The kcap server installation can continue", current);
 
         progress.Report(new LocalInstallEvent.EmbeddingOllamaFound(url, version));
 
