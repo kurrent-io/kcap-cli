@@ -112,6 +112,9 @@ internal record AgentInstance(
             is (int)ReopenedTranscript.Pending or (int)ReopenedTranscript.Refused;
 
     public string               Status            { get; set; } = "Starting";
+    // The orchestrator's active count version at this agent's latest start or stop of counting toward
+    // ActiveCount; the server orders its register and unregister against status reports by it.
+    public long                 ActiveCountVersion { get; set; }
     public required DateTime    CreatedAt         { get; init; }
     public required DateTime    LastOutputAt      { get; set; }
     public bool                 HasReceivedOutput { get; set; }
@@ -1060,19 +1063,36 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// helpers are the only writers of agent status and registry membership, so the ordering
     /// cannot be forgotten at a call site.
     internal void SetAgentStatus(AgentInstance agent, string status) {
-        lock (_membership) agent.Status = status;
+        lock (_membership) {
+            var wasCounted = IsCounted(agent);
+            agent.Status = status;
+            if (IsCounted(agent) != wasCounted) agent.ActiveCountVersion = ++_activeCountVersion;
+        }
         _statusNotifier.Pulse();
     }
 
     internal void PublishAgent(AgentInstance agent) {
-        lock (_membership) _agents[agent.Id] = agent;
+        lock (_membership) {
+            _agents[agent.Id] = agent;
+            if (IsCounted(agent)) agent.ActiveCountVersion = ++_activeCountVersion;
+        }
         _statusNotifier.Pulse();
     }
 
     internal void UnpublishAgent(string agentId) {
-        lock (_membership) _agents.TryRemove(agentId, out _);
+        lock (_membership) {
+            if (_agents.TryRemove(agentId, out var agent) && agent.Status is "Starting" or "Running")
+                agent.ActiveCountVersion = ++_activeCountVersion;
+        }
         _statusNotifier.Pulse();
     }
+
+    bool IsCounted(AgentInstance agent) =>
+        agent.Status is "Starting" or "Running" && _agents.TryGetValue(agent.Id, out var published) && ReferenceEquals(published, agent);
+
+    /// <summary>Advances under <see cref="_membership"/> each time an agent starts or stops counting
+    /// toward <see cref="ActiveCount"/>, and is reported beside it.</summary>
+    long _activeCountVersion;
 
     /// <summary>Held by every change of agent status, agent membership and pending launches, and by
     /// <see cref="BusyForStatus"/>, so that count is one consistent observation however launches overlap.</summary>
@@ -1420,8 +1440,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Phase B (D2): the daemon's self-report snapshot — its authoritative
     /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
-    internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) =>
-        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
+    internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) {
+        int activeCount;
+        long activeCountVersion;
+        lock (_membership) (activeCount, activeCountVersion) = (ActiveCount, _activeCountVersion);
+
+        return new(activeCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
             // candidates ledger on every self-report until the server prunes it per-entry via
             // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch.
@@ -1447,7 +1471,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // send refreshes it); the server raises the "installed but not configured" notification from it.
             HarnessInventory: CurrentHarnessInventory(),
             EchoNonce: echoNonce,
+            ActiveCountVersion: activeCountVersion,
             ResumingAgents: ResumingClaims());
+    }
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
     /// roll-up. A blocked known-id candidate (pending_marker / legacy_unresolvable /
@@ -5076,7 +5102,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.ActiveCountVersion, agent.StartTitle);
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5569,7 +5595,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.ActiveCountVersion, agent.StartTitle);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the
@@ -6033,7 +6059,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // catch covers the residual race where shutdown fires mid-call.
         // PrivateLocal agents were never registered, so never unregister them (deny-all).
         if (!agent.IsServerSilent && !_shutdownCts.IsCancellationRequested) {
-            try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
+            try { await _server.AgentUnregisteredAsync(agentId, agent.ActiveCountVersion, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
         }

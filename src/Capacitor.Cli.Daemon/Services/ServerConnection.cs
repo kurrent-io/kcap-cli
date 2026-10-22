@@ -955,10 +955,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
+            string? runtimeTransport = null, string? vendor = null, long? activeCountVersion = null, AgentStartTitle? title = null) {
         var registration = new AgentRegistered(
             agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-            title?.Text, title?.Derived ?? false, vendor);
+            title?.Text, title?.Derived ?? false, activeCountVersion, vendor);
         var connection = CurrentConnectionId ?? "";
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
@@ -1060,8 +1060,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
-    public virtual Task AgentUnregisteredAsync(string agentId, string? stopReason = null)
-        => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, stopReason), cancellationToken: _ct);
+    public virtual Task AgentUnregisteredAsync(string agentId, long? activeCountVersion = null, string? stopReason = null)
+        => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, activeCountVersion, stopReason), cancellationToken: _ct);
 
     /// <summary>Tells the server this daemon dropped a dispatched input rather than delivering it.
     /// Without it a drop is visible only in this log, while the sender is shown a message that was
@@ -1108,7 +1108,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             agentId, "session-end");
 
         await SafeShutdownStepAsync(
-            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, reason), cancellationToken: ct),
+            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, StopReason: reason), cancellationToken: ct),
             agentId, "unregister");
     }
 

@@ -132,7 +132,7 @@ sealed class CaptureServerConnection() : ServerConnection(
     public override async Task<AgentRegisteredResponse> AgentRegisteredAsync(
         string  agentId,              string? prompt, string? model, string? effort, string? repoPath,
         string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-        string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
+        string? runtimeTransport = null, string? vendor = null, long? activeCountVersion = null, AgentStartTitle? title = null) {
         AgentRegisteredCallCount++;
         lock (AgentRegisteredTitles) AgentRegisteredTitles.Add((agentId, title));
         lock (AcpCallOrder) AcpCallOrder.Add($"register:{agentId}");
@@ -347,7 +347,7 @@ sealed class CaptureServerConnection() : ServerConnection(
         return Task.CompletedTask;
     }
 
-    public override Task AgentUnregisteredAsync(string agentId, string? stopReason = null) {
+    public override Task AgentUnregisteredAsync(string agentId, long? activeCountVersion = null, string? stopReason = null) {
         lock (AgentUnregisteredCalls) {
             AgentUnregisteredCalls.Add(agentId);
             AgentUnregisteredStopReasons[agentId] = stopReason;
