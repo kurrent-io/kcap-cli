@@ -863,7 +863,7 @@ public class AppStartupTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Startup_failure_closes_the_main_window_and_disables_approval_menus() {
-        await AvaloniaSession.DispatchAsync(async () => {
+        await AvaloniaSession.RunOnUiAsync(async () => {
             var (desktop, fake) = FakeClassicDesktopLifetime.Create();
             var (coordinator, _) = NewCoordinator();
             coordinator.ShowMainWindow();
@@ -873,16 +873,17 @@ public class AppStartupTests {
             bar.SetLaunchApprovalsAction(() => { });
             var originalMenu = bar.Build(main);
             var approvals = ((NativeMenuItem)originalMenu.Items[0]).Menu!.Items
-                .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals");
+                .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
             await Assert.That(approvals.IsEnabled).IsTrue();
-            coordinator.QuitInProgress = true;
-
             using var shutdown = new CancellationTokenSource();
             await AppUnderTest.HandleStartupFailureAsync(
-                desktop, new InvalidOperationException("boom"), service: null, shutdown, [], menuBar: bar);
+                desktop, new InvalidOperationException("boom"), service: null, shutdown, [], menuBar: bar, coordinator: coordinator);
             Dispatcher.UIThread.RunJobs();
 
             try {
+                await Assert.That(coordinator.Window).IsNull();
+                await Assert.That((object?)AppUnderTest.MainWindowAction(coordinator)).IsNull();
+                coordinator.ShowMainWindow();
                 await Assert.That(coordinator.Window).IsNull();
                 await Assert.That(main.IsVisible).IsFalse();
                 await Assert.That(approvals.IsEnabled).IsFalse();
@@ -890,8 +891,37 @@ public class AppStartupTests {
                 await Assert.That(fake.MainWindow!.IsVisible).IsTrue();
                 var errorMenu = bar.Build(fake.MainWindow);
                 var errorApprovals = ((NativeMenuItem)errorMenu.Items[0]).Menu!.Items
-                    .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals");
+                    .OfType<NativeMenuItem>().Single(i => i.Header == "Launch approvals…");
                 await Assert.That(errorApprovals.IsEnabled).IsFalse();
+            } finally {
+                fake.MainWindow?.Close();
+                Dispatcher.UIThread.RunJobs();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Startup_failure_closes_the_wizard_without_requesting_handover() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            var (desktop, fake) = FakeClassicDesktopLifetime.Create();
+            using var shutdown = new CancellationTokenSource();
+            var wizard = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], shutdown.Token);
+            await wizard.PendingEnterForTesting;
+            var window = AppUnderTest.ShowWizardWindow(desktop, wizard,
+                shuttingDown: () => shutdown.IsCancellationRequested);
+            var closed = false;
+            window.Closed += (_, _) => closed = true;
+
+            await AppUnderTest.HandleStartupFailureAsync(
+                desktop, new InvalidOperationException("boom"), service: null, shutdown, []);
+
+            try {
+                await Assert.That(shutdown.IsCancellationRequested).IsTrue();
+                await Assert.That(closed).IsTrue();
+                await Assert.That(wizard.Closed).IsFalse();
+                await Assert.That(fake.MainWindow).IsNotSameReferenceAs(window);
+                await Assert.That(fake.MainWindow!.IsVisible).IsTrue();
             } finally {
                 fake.MainWindow?.Close();
                 Dispatcher.UIThread.RunJobs();

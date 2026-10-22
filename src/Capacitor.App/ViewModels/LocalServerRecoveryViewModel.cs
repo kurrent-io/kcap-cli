@@ -71,7 +71,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
         private set => this.RaiseAndSetIfChanged(ref _isStarting, value);
     }
 
-    /// The CLI's own output from the last failed start; null once a start succeeds or a new one begins.
+    /// The last start or reconnect failure; cleared when a new start begins.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
@@ -101,6 +101,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
                 } catch (Exception) when (_shutdown.IsCancellationRequested) {
                 } catch (Exception ex) {
                     Message = $"The local server started, but reconnecting failed: {ex.Message}";
+                    return false;
                 }
                 return !_shutdown.IsCancellationRequested;
             }

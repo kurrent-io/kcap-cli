@@ -16,8 +16,7 @@ public sealed class WebWorkspaceViewModel : ReactiveObject, IDisposable {
 
     public WebWorkspaceViewModel(string? serverUrl, IUrlOpener opener, Action<string> notify,
             CancellationToken shutdown, LocalServerRecoveryViewModel? local = null) {
-        _url = Uri.TryCreate(serverUrl, UriKind.Absolute, out var uri)
-            && uri.Scheme is "http" or "https" ? serverUrl : null;
+        _url = LinkPolicy.IsOpenable(serverUrl) ? serverUrl : null;
         _opener = opener;
         _notify = notify;
         _shutdown = shutdown;
@@ -36,14 +35,20 @@ public sealed class WebWorkspaceViewModel : ReactiveObject, IDisposable {
 
     public bool IsVisible => _url is not null;
     public string Label => _local is { IsStarting: true } ? "Starting server…"
-        : _local is { ServerDown: true } ? "Start server and open dashboard" : "Open dashboard";
+        : _local is { ServerDown: true, Visible: true } ? "Start server and open dashboard" : "Open dashboard";
     public string Tooltip => $"Open {_url} in your browser";
     public ReactiveCommand<Unit, Unit> OpenCommand { get; }
 
     async Task OpenAsync() {
         if (_url is null || _shutdown.IsCancellationRequested) return;
-        if (_local is { ServerDown: true } local
-            && (!local.Visible || !await local.StartAsync())) return;
+        if (_local is { ServerDown: true } local) {
+            if (!local.Visible) return;
+            if (!await local.StartAsync()) {
+                if (!_shutdown.IsCancellationRequested)
+                    _notify(local.Message ?? "The local server could not be started.");
+                return;
+            }
+        }
         if (_shutdown.IsCancellationRequested) return;
         try { _opener.Open(_url); }
         catch (Exception ex) { _notify($"Couldn't open the browser: {ex.Message}"); }

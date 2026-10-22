@@ -357,29 +357,24 @@ public partial class App : Application {
             _wizardWindow = null;
             _wizardAuth = null;
         } catch (Exception ex) {
-            // BEFORE any await: a shutdown request can arrive while cleanup below is still
-            // awaiting (or if the helper itself throws), and the deferred path reads this.
+            // A quit during cleanup must retain the startup failure's exit code.
             _exitCode = 1;
-            // Also before any await, and for the same reason: if the main window was already up
-            // when the failure hit, no tray will ever exist to bring it back, so hide-on-close
-            // must not intercept anything from here on — every close on this path is a real one.
+            _shutdown.Cancel();
+            // Block window recreation and hide-on-close before cleanup can yield.
             if (_coordinator is not null) _coordinator.QuitInProgress = true;
-            // Also before any await, and the same reasoning as the shutdown path's: a workspace the
-            // user opened before the failure landed must release its attach here, not survive into
-            // the error window.
             LatchNavigation();
-            // No orphan wizard beside the error window: it is a dead shell once startup has failed,
-            // and its own close path (the handoff) is exactly what did not run.
             if (_wizardWindow is { IsVisible: true } wizard) wizard.Close();
             if (TakeAdoptableWindow() is { } adoptable) adoptable.Window.Close();
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall,
+                lifecycle: null, lane: null, QuiesceShutdownCap, _time);
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar);
+                _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -411,10 +406,8 @@ public partial class App : Application {
             _home = null;
             _localServer = null;
             _rail = null;
-            _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
-            if (_historyImport is { } history) await history.CancelActiveRunAsync();
+            _wizardAuth = null;
             _historyImport = null;
-            if (_localInstall is { } install) await install.SettleAsync();
             _localInstall = null;
             _wizardWindow = null;
         }
@@ -1334,7 +1327,9 @@ public partial class App : Application {
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
         void OnClosing(object? sender, WindowClosingEventArgs e) {
-            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false } && shuttingDown?.Invoke() != true;
+            // Teardown settles setup itself; requesting handover here would race that cleanup.
+            if (shuttingDown?.Invoke() == true) return;
+            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false };
             if (WizardWindowClosing(wizard, install, userClose)) e.Cancel = true;
         }
         window.Closing += OnClosing;
@@ -1419,9 +1414,10 @@ public partial class App : Application {
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
             DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null,
-            LocalSearchController? search = null, AppMenuBar? menuBar = null) {
+            LocalSearchController? search = null, AppMenuBar? menuBar = null, MainWindowCoordinator? coordinator = null) {
         menuBar?.SetLaunchApprovalsAction(null);
-        desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        if (coordinator is not null) coordinator.QuitInProgress = true;
+        shutdown.Cancel();
         desktop.MainWindow?.Close();
         desktop.MainWindow = null;
 
@@ -1437,7 +1433,6 @@ public partial class App : Application {
             }
         }
         if (service is not null) {
-            shutdown.Cancel();
             try {
                 await service.DisposeAsync();
             } catch (Exception disposeEx) {

@@ -60,10 +60,12 @@ public class WebWorkspaceViewModelTests {
             _ => Task.FromResult(new ProcessResult(1, "", "start failed", false)),
             () => Task.CompletedTask, CancellationToken.None);
         var opener = new RecordingOpener();
-        using var vm = new WebWorkspaceViewModel("http://localhost:5050", opener, _ => { }, CancellationToken.None, recovery);
+        var notifications = new List<string>();
+        using var vm = new WebWorkspaceViewModel("http://localhost:5050", opener, notifications.Add, CancellationToken.None, recovery);
         await vm.OpenCommand.Execute().ToTask();
         await Assert.That(opener.Opened).IsEmpty();
         await Assert.That(recovery.Message!).Contains("start failed");
+        await Assert.That(notifications.Single()).Contains("start failed");
     });
 
     [Test]
@@ -74,8 +76,10 @@ public class WebWorkspaceViewModelTests {
             _ => Task.FromResult(new ProcessResult(0, "", "", false)), () => Task.CompletedTask, CancellationToken.None, busy);
         using var vm = new WebWorkspaceViewModel("http://localhost:5050", new RecordingOpener(), _ => { }, CancellationToken.None, recovery);
         await Assert.That(await vm.OpenCommand.CanExecute.FirstAsync()).IsFalse();
+        await Assert.That(vm.Label).IsEqualTo("Open dashboard");
         busy.OnNext(false);
         await Assert.That(await vm.OpenCommand.CanExecute.FirstAsync()).IsTrue();
+        await Assert.That(vm.Label).IsEqualTo("Start server and open dashboard");
     });
 
     [Test]
@@ -92,16 +96,18 @@ public class WebWorkspaceViewModelTests {
         await Assert.That(opener.Opened.Single()).IsEqualTo("https://team.example");
     });
     [Test]
-    public Task Successful_start_opens_the_dashboard_even_if_app_reconnect_fails() => AvaloniaSession.WithImmediateRxScheduler(async () => {
+    public Task Failed_reconnect_reports_the_partial_failure_without_opening_the_dashboard() => AvaloniaSession.WithImmediateRxScheduler(async () => {
         using var status = new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Retrying));
         using var recovery = new LocalServerRecoveryViewModel(status, true,
             _ => Task.FromResult(new ProcessResult(0, "", "", false)),
             () => throw new IOException("reconnect failed"), CancellationToken.None);
         var opener = new RecordingOpener();
-        using var vm = new WebWorkspaceViewModel("http://localhost:5050", opener, _ => { }, CancellationToken.None, recovery);
+        var notifications = new List<string>();
+        using var vm = new WebWorkspaceViewModel("http://localhost:5050", opener, notifications.Add, CancellationToken.None, recovery);
         await vm.OpenCommand.Execute().ToTask();
-        await Assert.That(opener.Opened.Single()).IsEqualTo("http://localhost:5050");
+        await Assert.That(opener.Opened).IsEmpty();
         await Assert.That(recovery.Message!).Contains("reconnect failed");
+        await Assert.That(notifications.Single()).Contains("The local server started, but reconnecting failed");
     });
 
 }

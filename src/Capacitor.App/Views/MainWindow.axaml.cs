@@ -245,6 +245,7 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             || change.Property == WindowStateProperty) UpdateWorkspaceVisibility();
     }
 
+    // Visibility, never keyboard focus, keeps a PR reader's access lease renewed beside another app.
     void UpdateWorkspaceVisibility() {
         if (DataContext is MainWindowViewModel vm) {
             var pullRequests = vm.CurrentWorkspace?.PullRequests;

@@ -198,8 +198,7 @@ public class LocalServerRecoveryViewModelTests {
                 status, isLocalServer: true, _ => Task.FromResult(Started),
                 () => throw new ObjectDisposedException("lane"), CancellationToken.None);
 
-            await vm.StartCommand.Execute().ToTask();
-
+            await Assert.That(await vm.StartAsync()).IsFalse();
             await Assert.That(vm.Message).Contains("reconnecting failed");
         });
     }

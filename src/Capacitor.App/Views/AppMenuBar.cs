@@ -68,7 +68,7 @@ public sealed class AppMenuBar(IUrlOpener opener, Func<IReadOnlyList<Window>> wi
             menu.Add(Item("kcap", show));
         }
 
-        var approvals = Item("Launch approvals", () => _showLaunchApprovals?.Invoke(), enabled: _showLaunchApprovals is not null);
+        var approvals = Item("Launch approvals…", () => _showLaunchApprovals?.Invoke(), enabled: _showLaunchApprovals is not null);
         _launchApprovalItems.Add(approvals);
         window.Closed += (_, _) => _launchApprovalItems.Remove(approvals);
         menu.Add(approvals);
