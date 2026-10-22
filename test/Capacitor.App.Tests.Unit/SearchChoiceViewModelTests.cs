@@ -41,10 +41,9 @@ public class SearchChoiceViewModelTests {
         });
     }
 
-    /// Installed-but-stopped needs a different action from not installed, and a re-check that still
-    /// fails has to say so, or Check again looks like it did nothing.
+    /// Installed-but-stopped needs a different action from not installed.
     [Test]
-    public async Task The_status_names_the_missing_step_and_a_failed_recheck_says_still() {
+    public async Task The_status_names_the_missing_step() {
         await AvaloniaSession.DispatchAsync(async () => {
             var installed = false;
             var vm = new SearchChoiceViewModel(_ => Task.FromResult(false), () => installed);
@@ -53,7 +52,7 @@ public class SearchChoiceViewModelTests {
 
             installed = true;
             await vm.CheckOllamaCommand.Execute().ToTask();
-            await Assert.That(vm.OllamaStatus).IsEqualTo("Still not found. Ollama is installed but not running. Open it, then check again.");
+            await Assert.That(vm.OllamaStatus).StartsWith("Ollama is installed but not running.");
             return true;
         });
     }

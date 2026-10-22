@@ -17,7 +17,6 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     readonly Func<CancellationToken, Task<bool>> _ollamaAvailable;
     readonly Func<bool> _ollamaInstalled;
     bool _useMeaning, _useOther, _checking, _ollamaInstalledNow;
-    int _checks;
     // Until someone picks, or a recorded choice is loaded, the selection follows whether Ollama answers.
     bool _followOllama = true;
     bool? _ollamaRunning;
@@ -84,9 +83,9 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
 
     public string? OllamaStatus => _ollamaRunning switch {
         null when Checking => "Looking for Ollama on this Mac…",
-        false              => (_checks > 1 ? "Still not found. " : "") + (_ollamaInstalledNow
+        false              => _ollamaInstalledNow
             ? "Ollama is installed but not running. Open it, then check again."
-            : "Needs Ollama, a free app that runs AI models on this Mac. Install it from ollama.com, open it, then check again."),
+            : "Needs Ollama, a free app that runs AI models on this Mac. Install it from ollama.com, open it, then check again.",
         _ => null,
     };
 
@@ -99,7 +98,6 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         try {
             _ollamaRunning      = await _ollamaAvailable(ct);
             _ollamaInstalledNow = _ollamaRunning == true || _ollamaInstalled();
-            _checks++;
         } finally {
             Checking = false;
             if (_followOllama && _ollamaRunning is { } running) SelectMeaning(running);
