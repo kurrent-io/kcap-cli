@@ -93,9 +93,12 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
 
         var steps = Guarded(() => AccountWiring.Unwire(account, env.Home));
         if (AccountWiring.HasFatalFailure(steps)) {
-            var error = $"Could not unwire {account.Label}: {AccountWiring.FailureSummary(steps)}. It stays registered.";
+            // A partial unwire changed the account on disk, so the failure is committed like a failed wiring.
+            var summary   = AccountWiring.FailureSummary(steps);
+            var error     = $"Could not unwire {account.Label}: {summary}. It stays registered.";
+            var committed = StampWiring(account, summary);
             await Console.Error.WriteLineAsync(error);
-            return await Finish("remove", account.Id, false, steps, null, error);
+            return await Finish("remove", account.Id, false, steps, committed, error);
         }
 
         var (_, revision) = Registry(() => accounts.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts.Where(a => a.Id != account.Id)] }, 0)));

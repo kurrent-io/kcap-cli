@@ -274,6 +274,32 @@ public class AccountsCommandTests {
     }
 
     [Test]
+    public async Task Remove_whose_unwiring_fails_keeps_the_entry_and_commits_the_failure() {
+        var dir = ClaudeDir();
+        await Quietly("accounts", "add", "claude", dir);
+        var before = Store.Load();
+        File.WriteAllText(Path.Combine(dir, "settings.json"), "not json");
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await Sut().HandleAsync(["accounts", "remove", dir, "--json"]);
+
+        var result  = SingleResult(capture.GetCapturedOutput());
+        var after   = Store.Load();
+        var account = after.Accounts.Single();
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(result.Action).IsEqualTo("remove");
+        await Assert.That(result.AccountId).IsEqualTo(account.Id);
+        await Assert.That(result.Succeeded).IsFalse();
+        await Assert.That(result.Steps.Single(s => !s.Succeeded).Name).IsEqualTo("plugin");
+        await Assert.That(result.Error).Contains("It stays registered.");
+        await Assert.That(result.Revision).IsEqualTo(before.Revision + 1);
+        await Assert.That(after.Revision).IsEqualTo(result.Revision);
+        await Assert.That(account.WiringFailure).Contains("plugin");
+        await Assert.That(account.WiredAt).IsEqualTo(before.Accounts.Single().WiredAt);
+        await Assert.That(capture.GetCapturedError()).Contains("It stays registered.");
+    }
+
+    [Test]
     public async Task Json_flag_reports_a_refused_action_on_stdout_and_stderr() {
         using var capture = ConsoleOutput.StartFullCapture();
 
