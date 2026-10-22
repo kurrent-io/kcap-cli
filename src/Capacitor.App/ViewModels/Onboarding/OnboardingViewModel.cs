@@ -65,6 +65,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
     public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible
         || ShowLifecycleStatus || ShowLifecycleAttention;
+    /// The Done page's own primary action closes setup, so a deferral there has nothing left to defer.
+    public bool FinishLaterVisible => Current.Id != WizardStepId.Done;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -212,6 +214,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(FinishLaterVisible));
         this.RaisePropertyChanged(nameof(FooterVisible));
         this.RaisePropertyChanged(nameof(NextIsPrimary));
         this.RaisePropertyChanged(nameof(NextIsSecondary));

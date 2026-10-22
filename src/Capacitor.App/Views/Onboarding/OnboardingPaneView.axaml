@@ -110,7 +110,7 @@
                 <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
                     <app:ProductWordmark HorizontalAlignment="Left" />
                     <Button Grid.Column="1" Classes="onboardingQuiet" Content="Finish later"
-                            Command="{Binding FinishLaterCommand}"
+                            Command="{Binding FinishLaterCommand}" IsVisible="{Binding FinishLaterVisible}"
                             ToolTip.Tip="Continue setup from Help and support in kcap" />
                 </Grid>
 

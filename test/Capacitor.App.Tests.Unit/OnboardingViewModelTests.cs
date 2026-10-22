@@ -216,6 +216,22 @@ public class OnboardingViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Finish_later_is_hidden_on_the_done_page() {
+        var (onEdition, onDone) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition), new FakeWizardStep(WizardStepId.Done)]);
+            await vm.PendingEnterForTesting;
+
+            var onEdition = vm.FinishLaterVisible;
+            await vm.NextCommand.Execute().ToTask();
+            return (onEdition, vm.FinishLaterVisible);
+        });
+
+        await Assert.That(onEdition).IsTrue();
+        await Assert.That(onDone).IsFalse();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task The_last_step_is_shown_even_when_it_could_pass_through() {
         var current = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new OnboardingViewModel([
