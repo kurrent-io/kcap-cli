@@ -21,6 +21,7 @@ public static class ClaudeCodeExtension {
     /// A user message delivered by a `queued_command` attachment, and the attachment's `commandMode`.
     public const string IsQueued         = "is_queued";
     public const string CommandMode      = "command_mode";
+    public const string LocalCommand     = "local_command";
 
     /// The block for one event, or null when nothing is set so the slug stays absent.
     public static Struct? Flags(bool isSidechain, bool isMeta = false, string? originKind = null, bool isError = false, Struct? toolUseResult = null,
