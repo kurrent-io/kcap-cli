@@ -21,4 +21,10 @@ public class TerminalGlyphSubstitutionTests {
 
         await Assert.That(TerminalGlyphSubstitution.Apply(line)).IsSameReferenceAs(line);
     }
+
+    [Test]
+    public async Task A_slice_comes_back_rewritten_and_alone() {
+        await Assert.That(TerminalGlyphSubstitution.Apply("x⏺ ok⎿y", 1, 5)).IsEqualTo("● ok└");
+        await Assert.That(TerminalGlyphSubstitution.Apply("x plain y", 1, 7)).IsEqualTo(" plain ");
+    }
 }

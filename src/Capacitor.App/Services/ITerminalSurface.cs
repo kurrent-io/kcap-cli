@@ -9,6 +9,10 @@ public interface ITerminalSurface {
     /// split across frames.
     void Feed(string text);
 
+    /// Pieces in order, drawn once: joining a replay's pieces first would be another copy of
+    /// megabytes on the large-object heap.
+    void Feed(IReadOnlyList<string> pieces);
+
     /// Keyboard input AND terminal-generated protocol replies (e.g. a DSR/CPR answer) — both
     /// need to reach the attached PTY, so the VM forwards this to SendInputAsync verbatim.
     event Action<byte[]>? InputProduced;
