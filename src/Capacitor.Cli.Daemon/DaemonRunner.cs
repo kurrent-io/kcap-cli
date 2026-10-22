@@ -98,6 +98,11 @@ public static partial class DaemonRunner {
         // Below the carrier scrub: this reads every vendor's override variable, and the scrub above
         // must run before anything reads the environment.
         var harnesses = Core.Harness.HarnessRegistry.FromEnvironment(userHome, binaries);
+        config.Accounts           = Core.Accounts.AccountStore.Beside(paths);
+        config.DefaultDirectories = new Dictionary<HarnessId, string> {
+            [HarnessId.Claude] = harnesses.Of<Core.Harness.Claude.ClaudeHarness>().Paths.Home,
+            [HarnessId.Codex]  = harnesses.Of<Core.Harness.Codex.CodexHarness>().Paths.Home,
+        }.ToFrozenDictionary();
 
         // Resolve server URL + active profile. The CLI does this in its own
         // Program.cs, but the daemon is a separate process so its statics start
@@ -626,6 +631,10 @@ public static partial class DaemonRunner {
 
         builder.Services.AddSingleton<VendorCliWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VendorCliWatcher>());
+
+        builder.Services.AddSingleton<AccountsPublisher>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AccountsPublisher>());
+        builder.Services.AddSingleton<AccountsIpc>();
 
         builder.Services.AddSingleton<RepoStoreWatcher>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RepoStoreWatcher>());

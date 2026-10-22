@@ -13,7 +13,7 @@ public sealed class AccountStore(string directory) {
 
     public string Directory { get; } = directory;
 
-    string RegistryPath => Path.Combine(Directory, "accounts.json");
+    public string RegistryPath => Path.Combine(Directory, "accounts.json");
     string LockPath     => Path.Combine(Directory, "accounts.lock");
     string HostPath     => Path.Combine(Directory, "host.json");
 

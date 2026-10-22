@@ -82,7 +82,7 @@ public class LocalControlShutdownTests {
             new PermissionIpc(new PermissionPromptBroker(), NullLogger<PermissionIpc>.Instance),
             new DaemonStatusIpc(config, orchestrator, connection, notifier, TimeProvider.System),
             new DaemonSettingsIpc(config, orchestrator, notifier, NullLogger<DaemonSettingsIpc>.Instance),
-            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart, lifetime), NullLogger<LocalControlServer>.Instance);
+            TestFences.Ipc(config, orchestrator), TestShutdown.Ipc(orchestrator, restart, lifetime), TestAccountsIpc.Inert(), NullLogger<LocalControlServer>.Instance);
         await server.StartAsync(cts.Token);
 
         try {
