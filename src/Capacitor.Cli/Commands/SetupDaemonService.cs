@@ -50,6 +50,9 @@ static class SetupDaemonService {
         }
     }
 
+    public static bool IsUp(FirstRunMachineActionResult result) => result.Outcome is
+        FirstRunMachineActionOutcomes.Enabled or FirstRunMachineActionOutcomes.EnabledUnverified or FirstRunMachineActionOutcomes.AlreadyEnabled;
+
     /// <summary>Gives an installed service the search path setup sees when it finds a harness the unit's
     /// path does not. Returns the line to print, or null when nothing changed.</summary>
     /// <param name="refresh">Test seam for the rewrite; production goes through the service manager.</param>

@@ -52,4 +52,29 @@ public class SystemdServiceManagerTests {
         await Assert.That(manager.Uninstall("test", out _)).IsEqualTo(removed);
         await Assert.That(File.Exists(path)).IsEqualTo(!removed);
     }
+
+    [Test]
+    public async Task A_refused_reload_puts_the_previous_unit_back() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (1, "", "denied"));
+
+        await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<InvalidOperationException>();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
+    }
+
+    [Test]
+    public async Task SetEnvironment_returns_the_unit_it_replaced() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (0, "", ""));
+
+        await Assert.That(manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).IsEqualTo(unit);
+        await Assert.That(SystemdUnit.EnvFromUnit(File.ReadAllText(path))["PATH"]).IsEqualTo("/usr/bin:/opt/agents");
+        await Assert.That(manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).IsNull();
+    }
 }

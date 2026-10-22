@@ -93,16 +93,30 @@ sealed class SystemdServiceManager(
     }
 
     /// <summary>Sets one variable in the unit and reloads systemd's copy; the daemon reads it on its next
-    /// start. False when the unit is absent or already carries the value.</summary>
-    public bool SetEnvironment(string serviceId, string key, string value) {
+    /// start. Returns the unit as it was, for <see cref="RestoreUnit"/>; null when the unit is absent or
+    /// already carries the value. A refused reload puts the previous unit back before throwing.</summary>
+    public string? SetEnvironment(string serviceId, string key, string value) {
         var path = SystemdUnit.UnitPath(home, serviceId);
-        if (!File.Exists(path)) return false;
+        if (!File.Exists(path)) return null;
 
-        if (SystemdUnit.WithEnvironmentValue(File.ReadAllText(path), key, value) is not { } rewritten) return false;
+        var previous = File.ReadAllText(path);
+        if (SystemdUnit.WithEnvironmentValue(previous, key, value) is not { } rewritten) return null;
 
         _writeUnit(path, rewritten, null);
+        try {
+            Reload();
+        } catch (InvalidOperationException) {
+            _writeUnit(path, previous, null);
+            Systemctl(SystemdUnit.DaemonReloadArgs());
+            throw;
+        }
+
+        return previous;
+    }
+
+    public void RestoreUnit(string serviceId, string unitText) {
+        _writeUnit(SystemdUnit.UnitPath(home, serviceId), unitText, null);
         Reload();
-        return true;
     }
 
     void Reload() {

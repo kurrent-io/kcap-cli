@@ -101,7 +101,7 @@ sealed class DaemonServiceCommands(
 
     /// <summary>launchd reads a plist only when the job loads, so the rewrite takes a reload that keeps the
     /// daemon's agents for it to resume; systemd reads the unit at the next start, which the daemon is asked
-    /// for once idle, so a daemon that cannot restart yet reads as not loaded.</summary>
+    /// for once idle.</summary>
     async Task<UnitRefresh> RefreshPathAsync(string path) {
         switch (manager) {
             case LaunchdServiceManager launchd: {
@@ -119,14 +119,31 @@ sealed class DaemonServiceCommands(
             }
             case SystemdServiceManager systemd:
                 try {
-                    if (!systemd.SetEnvironment(id, "PATH", path)) return UnitRefresh.Current;
+                    if (systemd.SetEnvironment(id, "PATH", path) is not { } previous) return UnitRefresh.Current;
+                    switch (await RequestRestartAsync("when-idle")) {
+                        case "restarting": return UnitRefresh.Reloaded;
+                        case "queued":     return UnitRefresh.NotLoaded;
+                    }
+                    if (manager.Query(id).State != ServiceState.Running) return UnitRefresh.NotLoaded;
+
+                    // A running daemon that took no restart keeps the old PATH; the unit must say so too, or
+                    // the next run reads the rewrite as applied.
+                    systemd.RestoreUnit(id, previous);
+                    return UnitRefresh.Deferred;
                 } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
                     return UnitRefresh.Failed;
                 }
-
-                return RequestLegacyRestart(id, "when-idle") ? UnitRefresh.Reloaded : UnitRefresh.NotLoaded;
             default:
                 return UnitRefresh.UnitUnsupported;
+        }
+    }
+
+    async Task<string?> RequestRestartAsync(string mode) {
+        try {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5), time);
+            return await DaemonRestartClient.RequestAsync(store, id, mode, cts.Token) is { Type: FrameType.RestartAck } reply ? reply.Text : null;
+        } catch (Exception ex) when (ex is SocketException or IOException or OperationCanceledException) {
+            return null;
         }
     }
 

@@ -224,9 +224,10 @@ sealed partial class LaunchdServiceManager(
         if (target is not null && LaunchdUnit.WithBinary(upgraded ?? original, target) is { } repointed)
             upgraded = repointed;
 
-        // Written only once the job reloads or is not loaded: a loaded job keeps its old copy, and a later
-        // run comparing against the file would read the amendment as already applied.
+        // Kept only once the job reloads or is not loaded: a loaded job keeps its old copy, and a later run
+        // comparing against the file would read the amendment as already applied.
         var amended = amend?.Invoke(upgraded ?? original);
+        var beforeAmend = upgraded ?? original;
 
         // A loaded job still running a version directory keeps it after the plist moves on.
         var loadedProgram = LaunchdUnit.LoadedProgram(printOut);
@@ -244,14 +245,19 @@ sealed partial class LaunchdServiceManager(
         if (!stale) return !requirePositiveSpawnType || SpawnTypes.IsPositive(spawn) ? UnitRefresh.Current : UnitRefresh.Unverified;
         if (timeLeft() < ReloadBudget) return UnitRefresh.Deferred;
 
+        // Before the stop: a write that fails once the daemon has exited would leave it down.
+        if (amended is not null) _writeUnit(path, amended, null);
+
         // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
         var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
-        if (running && !stopForReload()) return UnitRefresh.Deferred;
-
-        if (amended is not null) _writeUnit(path, amended, null);
+        if (running && !stopForReload()) {
+            if (amended is not null) _writeUnit(path, beforeAmend, null);
+            return UnitRefresh.Deferred;
+        }
 
         var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
         if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
+            if (amended is not null) _writeUnit(path, beforeAmend, null);
             error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";
             return UnitRefresh.Failed;
         }

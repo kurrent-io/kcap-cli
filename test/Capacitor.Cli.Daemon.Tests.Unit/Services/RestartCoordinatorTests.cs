@@ -382,4 +382,22 @@ public class RestartCoordinatorTests {
         public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) =>
             throw new NotSupportedException();
     }
+
+    /// <summary>A foreground daemon answers a harness restart with a no-op; an update after it must still
+    /// be detected rather than swallowed by a coordinator left fired.</summary>
+    [Test]
+    public async Task A_no_op_harness_restart_leaves_update_detection_working() {
+        var spy  = new SpyStrategy { Outcome = RestartOutcome.NoOp };
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HarnessInstalled = () => true;
+
+        c.Tick();
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(2);
+    }
 }

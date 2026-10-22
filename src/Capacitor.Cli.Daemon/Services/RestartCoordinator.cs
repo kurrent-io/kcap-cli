@@ -58,6 +58,9 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     bool          _selfDetected;
     // Pending only for a newly installed harness, so an update landing meanwhile still takes over.
     bool          _harnessOnly;
+    // A foreground daemon cannot restart itself; the harness check stops there rather than holding the
+    // coordinator fired, which would swallow every later update and request.
+    bool          _harnessManual;
     DateTimeOffset _pendingSince;
 
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
@@ -174,6 +177,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     /// </summary>
     RestartRequestResult Evaluate() {
         bool fire;
+        bool harnessFire;
 
         lock (_gate) {
             if (_fired) return RestartRequestResult.Restarting; // already in progress
@@ -192,7 +196,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
                 }
             }
 
-            if (!_pending && HarnessInstalled()) {
+            if (!_pending && !_harnessManual && HarnessInstalled()) {
                 _pending     = true;
                 _harnessOnly = true;
                 _whenIdle    = true;
@@ -205,11 +209,17 @@ internal sealed partial class RestartCoordinator : BackgroundService {
             var busy = _force || waitExpired ? IsHardBusy() : _whenIdle ? IsHardBusy() || HasAgents() : IsBusy();
             fire = RestartDecision.ShouldFire(_pending, busy, _force, _selfDetected, AtTurnBoundary(), waitExpired);
             if (fire) _fired = true; // claim before releasing the lock (single-fire)
+            harnessFire = _harnessOnly;
         }
 
         if (!fire) return RestartRequestResult.Queued;
 
         var outcome = Strategy.Restart();
+
+        if (outcome == RestartOutcome.NoOp && harnessFire) {
+            lock (_gate) (_fired, _pending, _harnessOnly, _whenIdle, _harnessManual) = (false, false, false, false, true);
+            return RestartRequestResult.ManualRequired;
+        }
 
         if (outcome == RestartOutcome.Retry) {
             lock (_gate) _fired = false; // un-claim so a later tick/request retries

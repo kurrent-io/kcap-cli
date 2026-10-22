@@ -508,4 +508,40 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Deferred);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
     }
+
+    /// <summary>The loaded job keeps its old environment when bootout fails, so the plist must too.</summary>
+    [Test]
+    public async Task A_bootout_that_leaves_the_job_loaded_drops_the_amendment() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(LaunchdUnit.Plist(Spec()));
+
+        var outcome = Manager([], "daemon (3)", running: true, bootoutExit: 5).RefreshUnit(
+            "test", () => true, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
+
+    /// <summary>A write that failed after the stop would leave the daemon down, so the amendment is
+    /// written before the daemon is asked.</summary>
+    [Test]
+    public async Task A_failed_amendment_write_never_stops_the_daemon() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        Seed(LaunchdUnit.Plist(Spec()));
+        var asked   = false;
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (_, content, _) => {
+                if (content.Contains("/opt/agents", StringComparison.Ordinal)) throw new IOException("disk full");
+            },
+            runBounded: (_, args, _) => args[0] == "print" ? (0, Print("daemon (3)"), "", false) : (0, "", "", false));
+
+        var outcome = manager.RefreshUnit(
+            "test", () => asked = true, Plenty, out var error, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("disk full");
+        await Assert.That(asked).IsFalse();
+    }
 }
