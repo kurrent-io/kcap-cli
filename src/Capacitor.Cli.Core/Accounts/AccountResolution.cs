@@ -23,7 +23,7 @@ public static class AccountResolution {
     public static AccountResolutionOutcome ResolveForResume(
             AccountRegistry? registry, HarnessId vendor, string? accountId, string? directory, string defaultDirectory
         ) {
-        if (directory is null) return Resolve(registry, vendor, null, defaultDirectory);
+        if (string.IsNullOrEmpty(directory)) return Resolve(registry, vendor, accountId, defaultDirectory);
 
         if (string.IsNullOrEmpty(accountId)) {
             return Directory.Exists(directory) ? Accepted(directory, ForDirectory(registry, vendor, directory)) : Missing(directory);

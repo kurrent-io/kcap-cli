@@ -104,11 +104,39 @@ public class AccountResolutionTests {
 
     [Test]
     public async Task Resume_with_null_directory_resolves_as_a_fresh_launch() {
-        var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, "removed", null, Personal);
+        var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, null, null, Personal);
 
         await Assert.That(outcome.Refused).IsFalse();
         await Assert.That(outcome.Account!.Directory).IsEqualTo(Personal);
         await Assert.That(outcome.Account.AccountId).IsEqualTo(PersId);
+    }
+
+    [Test]
+    public async Task Resume_with_an_empty_directory_and_a_null_id_resolves_as_the_default() {
+        var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, null, "", Personal);
+
+        await Assert.That(outcome.Refused).IsFalse();
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(Personal);
+        await Assert.That(outcome.Account.AccountId).IsEqualTo(PersId);
+    }
+
+    [Test]
+    public async Task Resume_with_an_id_but_no_directory_resolves_the_id_against_the_registry() {
+        var registered = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, WorkId, null, Personal);
+
+        await Assert.That(registered.Refused).IsFalse();
+        await Assert.That(registered.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(Work));
+        await Assert.That(registered.Account.AccountId).IsEqualTo(WorkId);
+        await Assert.That(registered.Account.Label).IsEqualTo("Work");
+
+        var emptyDirectory = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, WorkId, "", Personal);
+
+        await Assert.That(emptyDirectory.Account!.AccountId).IsEqualTo(WorkId);
+
+        var removed = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, "removed", null, Personal);
+
+        await Assert.That(removed.Account).IsNull();
+        await Assert.That(removed.Refusal!).StartsWith(AccountResolution.Unavailable);
     }
 
     [Test]
