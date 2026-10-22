@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Capacitor.Cli.Daemon.Pty.Unix;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Pty.Unix;
@@ -22,9 +23,33 @@ public class UnixPtyProcessWriteTests {
     public async Task WriteFully_reports_a_failed_write_instead_of_dropping_the_tail() {
         var calls = 0;
 
-        var act = () => UnixPtyProcess.WriteFully(new byte[] { 1, 2, 3 }, _ => { calls++; return -1; });
+        var act = () => UnixPtyProcess.WriteFully(new byte[] { 1, 2, 3 }, _ => {
+            calls++;
+            Marshal.SetLastPInvokeError(5);
+            return -1;
+        });
 
         await Assert.That(act).Throws<IOException>();
         await Assert.That(calls).IsEqualTo(1);
+    }
+
+    /// <summary>A signal can interrupt the write before any byte goes out; that is a retry, not a
+    /// failure.</summary>
+    [Test]
+    public async Task WriteFully_retries_a_write_interrupted_by_a_signal() {
+        var calls = 0;
+        var seen  = new List<byte>();
+
+        UnixPtyProcess.WriteFully(new byte[] { 1, 2 }, chunk => {
+            if (calls++ == 0) {
+                Marshal.SetLastPInvokeError(UnixPtyInterop.EINTR);
+                return -1;
+            }
+
+            seen.AddRange(chunk.ToArray());
+            return chunk.Length;
+        });
+
+        await Assert.That(seen).IsEquivalentTo(new byte[] { 1, 2 });
     }
 }

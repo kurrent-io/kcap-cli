@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
@@ -240,11 +241,13 @@ public sealed class UnixPtyProcess : IPtyProcess {
         return Task.Run(() => _master.TryUse(fd => WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length))));
     }
 
-    /// <summary>A master write may take only part of the buffer, and a negative count is a failure;
-    /// either would otherwise drop the tail of a paste without a trace.</summary>
+    /// <summary>A master write may take only part of the buffer, a signal may interrupt it before any
+    /// byte goes out, and a negative count otherwise is a failure; the first two would drop the tail
+    /// of a paste without a trace.</summary>
     internal static void WriteFully(ReadOnlyMemory<byte> data, Func<ReadOnlyMemory<byte>, nint> write) {
         while (data.Length > 0) {
             var written = write(data);
+            if (written < 0 && Marshal.GetLastPInvokeError() == UnixPtyInterop.EINTR) continue;
             if (written <= 0) throw new IOException($"The PTY master write returned {written}.");
 
             data = data[(int) written..];

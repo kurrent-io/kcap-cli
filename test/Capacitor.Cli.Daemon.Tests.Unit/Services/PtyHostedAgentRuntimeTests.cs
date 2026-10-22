@@ -300,6 +300,17 @@ public class PtyHostedAgentRuntimeTests {
         await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~one[201~\rtwo[200~three\x1b[201~");
     }
 
+    /// <summary>Dropping only the marker's own ESC would let the ESC before it form a new marker.</summary>
+    [Test]
+    public async Task An_escape_before_a_paste_end_marker_cannot_form_a_new_marker() {
+        var pty     = new RecordingPty();
+        var runtime = new PtyHostedAgentRuntime("claude", pty, TimeProvider.System, approvalsDisabled: false);
+
+        await runtime.SendUserInputAsync("one\x1b\x1b[201~\rtwo");
+
+        await Assert.That(pty.StringWrites[0]).IsEqualTo("\x1b[200~one[201~\rtwo\x1b[201~");
+    }
+
     [Test]
     public async Task An_embedded_paste_end_marker_cannot_end_the_launch_prompt_paste_early() {
         var pty     = new RecordingScriptedPtyProcess();
