@@ -1,6 +1,10 @@
+using System.Globalization;
+using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Core.Harness.Claude;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
@@ -12,7 +16,15 @@ public class AgentOrchestratorAccountTests {
     const string WorkId  = "c1a0de01-work";
     const string CodexId = "c0dec001-codex";
 
+    const string AccountSession     = "0a0a0a0a-1111-4111-8111-000000000001";
+    const string EnvironmentSession = "0e0e0e0e-2222-4222-8222-000000000002";
+
     [TempDir] public required TempDir Tmp { get; init; }
+
+    UserHome? _daemonHome;
+
+    /// <summary>The home the daemon's environment layouts hang off; set by <see cref="Build"/>.</summary>
+    UserHome DaemonHome => _daemonHome!;
 
     string ClaudeDefault => Tmp.CreateDir(".claude");
     string CodexDefault  => Tmp.CreateDir(".codex");
@@ -31,20 +43,21 @@ public class AgentOrchestratorAccountTests {
 
     AgentOrchestrator Build(CaptureServerConnection server, SpyPtyProcessFactory pty, SpyHostedAgentLauncher launcher, string? allowedRepo = null) =>
         AgentOrchestratorHarness.BuildOrchestrator(
-            server, pty, new Dictionary<string, IHostedAgentLauncher> { ["claude"] = launcher },
+            server, pty, new Dictionary<string, IHostedAgentLauncher> { [launcher.Vendor] = launcher },
             allowedRepoPath: allowedRepo,
             configure: c => {
                 c.Accounts           = Store;
                 c.DefaultDirectories = new Dictionary<HarnessId, string> { [HarnessId.Claude] = ClaudeDefault, [HarnessId.Codex] = CodexDefault };
+                _daemonHome          = c.Home;
             });
 
-    static SpyHostedAgentLauncher Spy() => new("claude", cliPath: "spy-claude");
+    static SpyHostedAgentLauncher Spy(string vendor = "claude") => new(vendor, cliPath: $"spy-{vendor}");
 
     static SpyPtyProcessFactory LivePty() => new(new OneChunkThenBlockPtyProcess());
 
-    static LaunchAgentCommand Launch(string agentId, string repoPath, string? accountId) => new(
-        AgentId: agentId, Prompt: "hi", Model: "opus", Effort: null, RepoPath: repoPath,
-        Tools: null, AttachmentIds: null, Vendor: "claude", AccountId: accountId);
+    static LaunchAgentCommand Launch(string agentId, string repoPath, string? accountId, string vendor = "claude", string model = "opus") => new(
+        AgentId: agentId, Prompt: "hi", Model: model, Effort: null, RepoPath: repoPath,
+        Tools: null, AttachmentIds: null, Vendor: vendor, AccountId: accountId);
 
     [Test]
     public async Task Null_account_id_launches_under_the_daemon_default_directory() {
@@ -165,6 +178,79 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(server.LaunchFailedCalls[0].Reason).IsEqualTo(RefusalFor(WorkId));
         await Assert.That(launcher.PrepareCalls).IsEqualTo(1);
         await Assert.That(launcher.LastContext!.Account).IsEqualTo(new ResolvedAccount(ClaudeDefault, null, ".claude"));
+    }
+
+    /// <summary>Both layouts hold a transcript for the agent's worktree, so the one detection links
+    /// says which layout it searched.</summary>
+    [Test]
+    public async Task Codex_session_detection_searches_the_account_sessions_directory() {
+        var work = Register(CodexId, HarnessId.Codex, Tmp.CreateDir(".codex-work"), "Codex work");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy("codex"), repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-codex-session", repo, CodexId, vendor: "codex"));
+
+        var agent    = orch.GetAgentForTest("acct-codex-session")!;
+        var worktree = agent.Worktree.Path;
+        StageRollout(new CodexPaths(DaemonHome, null).Sessions, EnvironmentSession, worktree);
+        var rollout = StageRollout(AccountLayouts.Codex(DaemonHome, work).Sessions, AccountSession, worktree);
+
+        await WaitHarness.PollUntilAsync(() => agent.TranscriptPath is not null);
+
+        await Assert.That(agent.SessionId).IsEqualTo(Dashless(AccountSession));
+        await Assert.That(agent.TranscriptPath).IsEqualTo(rollout);
+    }
+
+    /// <inheritdoc cref="Codex_session_detection_searches_the_account_sessions_directory"/>
+    [Test]
+    public async Task Claude_session_detection_searches_the_account_projects_directory() {
+        var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-claude-session", repo, WorkId));
+
+        // A Claude launch pins its session id, so both transcripts carry that name and only the path differs.
+        var agent    = orch.GetAgentForTest("acct-claude-session")!;
+        var worktree = agent.Worktree.Path;
+        StageTranscript(new ClaudePaths(DaemonHome, null).ProjectDir(worktree), agent.SessionId!, worktree);
+        var transcript = StageTranscript(AccountLayouts.Claude(DaemonHome, work).ProjectDir(worktree), agent.SessionId!, worktree);
+
+        await WaitHarness.PollUntilAsync(() => agent.TranscriptPath is not null);
+
+        await Assert.That(agent.TranscriptPath).IsEqualTo(transcript);
+    }
+
+    [Test]
+    public async Task Codex_resolved_model_report_reads_the_account_config_toml() {
+        var work = Tmp.CreateDir(".codex-work");
+        Register(CodexId, HarnessId.Codex, work, "Codex work");
+        using var repo   = GitRepo.CreateWithCommit();
+        var       server = new CaptureServerConnection();
+        await using var orch = Build(server, LivePty(), Spy("codex"), repo);
+        new TempDirHandle(new CodexPaths(DaemonHome, null).Home).CreateFile("config.toml", "model = \"gpt-environment\"\n");
+        work.CreateFile("config.toml", "model = \"gpt-account\"\n");
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-codex-model", repo, CodexId, vendor: "codex", model: "default"));
+
+        await Assert.That(server.ReportAgentResolvedModelCalls).IsEquivalentTo([("acct-codex-model", "gpt-account")]);
+    }
+
+    static string Dashless(string sessionId) => sessionId.Replace("-", "");
+
+    static string StageTranscript(string projectDir, string sessionId, string cwd) =>
+        new TempDirHandle(projectDir).CreateFile($"{sessionId}.jsonl", new JsonObject { ["type"] = "user", ["cwd"] = cwd }.ToJsonString() + "\n");
+
+    // Codex names the day folders and the rollout by local time.
+    static string StageRollout(string sessionsRoot, string sessionId, string cwd) {
+        var now  = TimeProvider.System.GetLocalNow();
+        var meta = new JsonObject { ["type"] = "session_meta", ["payload"] = new JsonObject { ["id"] = sessionId, ["cwd"] = cwd } };
+
+        return new TempDirHandle(sessionsRoot).CreateFile(
+            [Stamp("yyyy"), Stamp("MM"), Stamp("dd"), $"rollout-{Stamp("yyyy-MM-dd")}T{Stamp("HH-mm-ss")}-{sessionId}.jsonl"],
+            meta.ToJsonString() + "\n");
+
+        string Stamp(string format) => now.ToString(format, CultureInfo.InvariantCulture);
     }
 
     static async Task<List<LocalFrame>> SpawnAsync(AgentOrchestrator orch, string cwd, string accountId) {

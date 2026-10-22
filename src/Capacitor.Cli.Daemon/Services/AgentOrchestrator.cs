@@ -3166,17 +3166,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Report the resolved model so the server can display / validate the real model the agent
             // is running. Best-effort: never let a report failure break the launch.
             if (!agent.IsServerSilent && cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
-                // Task 8: a protocol-v3 explicit-model reviewer launch reports the CONCRETE
-                // resolved model via the dedicated ReportExplicitReviewerModelResolved channel, keyed by
-                // the durable LaunchAttemptId, so the server's one-shot waiter can validate + re-price it.
+                // An explicit-model reviewer reports the concrete model on its own channel, keyed by the
+                // LaunchAttemptId, so the server's one-shot waiter can validate and re-price it.
                 ReportExplicitReviewerModel(agentId, cmd.Vendor, explicitReviewerModel, runtimeFactory);
             } else if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
-                // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
-                // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
-                // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
                 // updateLocal only on the PTY path: an app-server Codex (Transcript present) already
                 // registered its confirmed handshake model, which must not be overwritten locally.
-                ReportResolvedModel(agentId, cmd.Vendor, model, updateLocal: start.Transcript is null);
+                ReportResolvedModel(agentId, cmd.Vendor, model, agent.Account, updateLocal: start.Transcript is null);
             }
 
             // Phase B2-b (sequenced-settlement design §4.2.2): the launch executed — the agent is registered.
@@ -3302,15 +3298,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// (ReportAgentResolvedModel) and the config resolution are Codex-specific, so the caller
     /// gates this on <c>vendor == "codex"</c>. The dispatched <paramref name="model"/> may be
     /// the "default" no-override sentinel (or empty), in which case Codex resolves the model from
-    /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
+    /// the launch's <c>config.toml</c> — we resolve the same value here. Never throws: a resolve/report
     /// failure must not break launch.
     /// </summary>
-    void ReportResolvedModel(string agentId, string vendor, string model, bool updateLocal) {
+    void ReportResolvedModel(string agentId, string vendor, string model, ResolvedAccount? account, bool updateLocal) {
         try {
             var isDefault = string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase);
 
             var resolved = isDefault && string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase)
-                ? CodexResolvedModel(model)
+                ? CodexResolvedModel(model, account)
                 : model;
 
             if (string.IsNullOrEmpty(resolved)) return;
@@ -3388,15 +3384,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Reads the top-level <c>model = "…"</c> from <c>~/.codex/config.toml</c> (honouring
-    /// <c>CODEX_HOME</c> via <see cref="CodexPaths"/>); falls back to <paramref name="fallback"/>
-    /// when the file is missing/unreadable or has no top-level model key.
+    /// Reads the top-level <c>model = "…"</c> from the launch layout's <c>config.toml</c>; falls back
+    /// to <paramref name="fallback"/> when the file is missing/unreadable or has no top-level model key.
     /// </summary>
-    string CodexResolvedModel(string fallback) {
-        var fromConfig = CodexConfigToml.ReadTopLevelModel(_harnesses.Of<CodexHarness>().Paths.ConfigToml);
+    string CodexResolvedModel(string fallback, ResolvedAccount? account) {
+        var fromConfig = CodexConfigToml.ReadTopLevelModel(CodexPathsFor(account).ConfigToml);
 
         return string.IsNullOrWhiteSpace(fromConfig) ? fallback : fromConfig;
     }
+
+    ClaudePaths ClaudePathsFor(ResolvedAccount? account) =>
+        account is null ? _harnesses.Of<ClaudeHarness>().Paths : AccountLayouts.Claude(_config.Home, account.Directory);
+
+    CodexPaths CodexPathsFor(ResolvedAccount? account) =>
+        account is null ? _harnesses.Of<CodexHarness>().Paths : AccountLayouts.Codex(_config.Home, account.Directory);
 
     static readonly TimeSpan GitGuardTimeout = TimeSpan.FromSeconds(10);
 
@@ -5722,9 +5723,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
             "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
-                _harnesses.Of<ClaudeHarness>().Paths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
+                ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
-                _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+                CodexPathsFor(agent.Account).Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
                 _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime),
                 (agent.Runtime as MuseMspHostedAgentRuntime)?.Session),
