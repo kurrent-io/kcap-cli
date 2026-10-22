@@ -3,7 +3,7 @@ using System.Text;
 namespace Capacitor.Cli.Services;
 
 /// <summary>Which OS service backend a manager targets.</summary>
-enum ServicePlatform { Launchd, Systemd, WindowsScheduledTask }
+enum ServicePlatform { Launchd, Systemd, WindowsScheduledTask, WindowsService }
 
 /// <summary>Lifecycle state of an installed service for one id.</summary>
 enum ServiceState { NotInstalled, Installed, Running }

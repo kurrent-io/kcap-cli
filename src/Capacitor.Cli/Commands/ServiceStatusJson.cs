@@ -16,7 +16,10 @@ public sealed record ServiceStatusJson(
     string? InstallBinaryPath, int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive,
     string? UnitProfile = null, string? UnitServerUrl = null,
     string? UnitExpectedServer = null, string? UnitConsentSeed = null,
-    string? LoadedSpawnType = null);
+    string? LoadedSpawnType = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Supervisor = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? ServiceUpgradeAvailable = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] bool? WindowsServiceInstallable = null);
 
 /// <summary>Machine-readable outcome for <c>kcap daemon service ensure</c> — what the ladder did, and
 /// (on a refusal) which recovery surface the flow should offer. <see cref="Recovery"/> is non-null on
@@ -52,7 +55,8 @@ internal static class ServiceStatusRender {
     public static (string? Json, int ExitCode) Render(
             ServiceQuery q, string serviceId, string? installBinaryPath, int? daemonPid, bool txnMarker, bool txnActive,
             string? unitProfile = null, string? unitServerUrl = null,
-            string? unitExpectedServer = null, string? unitConsentSeed = null) {
+            string? unitExpectedServer = null, string? unitConsentSeed = null,
+            string? supervisor = null, bool? serviceUpgradeAvailable = null, bool? windowsServiceInstallable = null) {
         if (q.Probe == LabelProbe.Unknown) return (null, 1);
 
         var state = q.State switch {
@@ -66,7 +70,7 @@ internal static class ServiceStatusRender {
             serviceId, q.UnitPresent, state, q.BinaryPath,
             installBinaryPath, q.JobPid, daemonPid, txnMarker, txnActive,
             unitProfile, unitServerUrl, unitExpectedServer, unitConsentSeed,
-            q.LoadedSpawnType);
+            q.LoadedSpawnType, supervisor, serviceUpgradeAvailable, windowsServiceInstallable);
 
         return (JsonSerializer.Serialize(dto, ServiceJsonContext.Default.ServiceStatusJson), 0);
     }
