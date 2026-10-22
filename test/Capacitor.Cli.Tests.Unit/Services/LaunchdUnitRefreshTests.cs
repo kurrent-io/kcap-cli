@@ -464,4 +464,48 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(error).Contains("still reports spawn type");
     }
+
+    /// <summary>The job's spawn type is current, so only the amendment can make it stale.</summary>
+    [Test]
+    public async Task An_amended_plist_reloads_a_current_job() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path  = Seed(LaunchdUnit.Plist(Spec()));
+        var calls = new List<string[]>();
+
+        var outcome = Manager(calls, "daemon (3)").RefreshUnit(
+            "test", () => true, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/usr/bin:/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Reloaded);
+        await Assert.That(LaunchdUnit.EnvFromPlist(File.ReadAllText(path))["PATH"]).IsEqualTo("/usr/bin:/opt/agents");
+        await Assert.That(calls.Select(c => c[0]).ToArray()).IsEquivalentTo(["print", "bootout", "bootstrap", "print"]);
+    }
+
+    [Test]
+    public async Task An_amendment_that_changes_nothing_leaves_a_current_job_alone() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        Seed(LaunchdUnit.Plist(Spec()));
+        var asked = false;
+
+        var outcome = Manager([], "daemon (3)").RefreshUnit("test", () => asked = true, Plenty, out _, amend: _ => null);
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Current);
+        await Assert.That(asked).IsFalse();
+    }
+
+    /// <summary>launchd keeps the copy it loaded, so a plist that already carried the amendment would make
+    /// the next run believe it applied.</summary>
+    [Test]
+    public async Task A_deferred_reload_leaves_the_amendment_unwritten() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(LaunchdUnit.Plist(Spec()));
+
+        var outcome = Manager([], "daemon (3)").RefreshUnit(
+            "test", () => false, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Deferred);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
 }

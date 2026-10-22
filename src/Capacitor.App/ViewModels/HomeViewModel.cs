@@ -98,10 +98,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
 
-    /// The daemon detects harnesses once at startup, so installing one takes a daemon restart.
+    /// A service-run daemon restarts itself to advertise a harness installed after it started.
     internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
-        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent, then restart the daemon."
-        : $"No coding agents were found on {remoteMachine}. Install one there, then restart its daemon.";
+        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent and the daemon picks it up."
+        : $"No coding agents were found on {remoteMachine}. Install one there and its daemon picks it up.";
 
     internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
 

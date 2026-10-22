@@ -1,6 +1,8 @@
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
+using Capacitor.Cli.Core.Harness;
+using Capacitor.Cli.Services;
 using Spectre.Console;
 
 namespace Capacitor.Cli.Commands;
@@ -47,6 +49,38 @@ static class SetupDaemonService {
             return (new FirstRunMachineActionResult(FirstRunMachineActionOutcomes.Failed, null), null);
         }
     }
+
+    /// <summary>Gives an installed service the search path setup sees when it finds a harness the unit's
+    /// path does not. Returns the line to print, or null when nothing changed.</summary>
+    /// <param name="refresh">Test seam for the rewrite; production goes through the service manager.</param>
+    public static async Task<string?> RefreshPathAsync(
+            ConfigRoot                   root,
+            ProfileContext               saved,
+            UserHome                     home,
+            TimeProvider                 time,
+            HarnessRegistry              harnesses,
+            Func<Task<UnitRefresh?>>?    refresh = null) {
+        try {
+            var run = refresh ?? (() => DaemonServiceCommands.FlowRefreshPathAsync(root, saved, home, time, harnesses));
+
+            return PathLine(await run());
+        } catch (Exception) {
+            return PathLine(UnitRefresh.Failed);
+        }
+    }
+
+    internal static string? PathLine(UnitRefresh? outcome) => outcome switch {
+        null or UnitRefresh.Current => null,
+        UnitRefresh.Reloaded =>
+            "  [dim]Restarted the daemon service with your current PATH, so it finds the harnesses setup found.[/]",
+        UnitRefresh.NotLoaded =>
+            "  [dim]The daemon service now has your current PATH; the daemon picks up the harnesses setup found when it next starts.[/]",
+        UnitRefresh.Deferred =>
+            "  [yellow]![/] The daemon was busy, so it keeps its old PATH and may not find every harness setup found. Run setup again once it is idle.",
+        _ =>
+            "  [yellow]![/] The daemon service could not be given your current PATH, so it may not find every harness setup found. "
+          + "Reinstall it with [cyan]kcap daemon service install --replace --verify[/]",
+    };
 
     static string? RenameLine(FlowEnsure outcome) => outcome switch {
         { Retired: { } retired } when FlowEnsure.IsUp(outcome.Result) =>

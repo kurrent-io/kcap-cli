@@ -2,6 +2,9 @@ using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.FirstRun;
+using Capacitor.Cli.Services;
+using Capacitor.Cli.Core.Setup;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -204,4 +207,30 @@ public class SetupDaemonServiceTests {
 
         await Assert.That(channel.Reports.Count).IsEqualTo(3);
     }
+
+    [Test]
+    public async Task A_path_refresh_that_changed_nothing_prints_nothing() {
+        await Assert.That(await RefreshPathAsync(() => Task.FromResult<UnitRefresh?>(null))).IsNull();
+    }
+
+    [Test]
+    public async Task A_path_refresh_that_threw_says_the_daemon_may_not_find_every_harness() {
+        var line = await RefreshPathAsync(() => throw new IOException("unreadable plist"));
+
+        await Assert.That(line).Contains("may not find every harness");
+    }
+
+    [Test]
+    public async Task A_reloaded_service_says_it_was_restarted() {
+        await Assert.That(await RefreshPathAsync(() => Task.FromResult<UnitRefresh?>(UnitRefresh.Reloaded))).Contains("Restarted");
+    }
+
+    static Task<string?> RefreshPathAsync(Func<Task<UnitRefresh?>> refresh) =>
+        SetupDaemonService.RefreshPathAsync(
+            new ConfigRoot("/nonexistent-config-root"),
+            new ProfileContext(new(ServerUrl, "default", null, null), new ProfileConfig()),
+            new UserHome("/nonexistent-home"),
+            TimeProvider.System,
+            HarnessRegistry.Over(BinaryProbe.Searching(null)),
+            refresh);
 }

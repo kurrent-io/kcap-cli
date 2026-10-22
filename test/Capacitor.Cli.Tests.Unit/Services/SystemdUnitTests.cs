@@ -73,4 +73,31 @@ public class SystemdUnitTests {
         await Assert.That(SystemdUnit.StatusFrom("inactive", 0)).IsEqualTo(ServiceState.Installed);
         await Assert.That(SystemdUnit.StatusFrom("inactive", 1)).IsEqualTo(ServiceState.NotInstalled);
     }
+
+    [Test]
+    public async Task WithEnvironmentValue_replaces_the_assignment_in_place() {
+        var rewritten = SystemdUnit.WithEnvironmentValue(SystemdUnit.Unit(Spec()), "PATH", "/usr/bin:/a b");
+
+        await Assert.That(rewritten).IsNotNull();
+        await Assert.That(SystemdUnit.EnvFromUnit(rewritten!)["PATH"]).IsEqualTo("/usr/bin:/a b");
+        await Assert.That(SystemdUnit.EnvFromUnit(rewritten!)["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(SystemdUnit.BinaryFromUnit(rewritten!)).IsEqualTo("/opt/kcap/kcap-daemon");
+    }
+
+    [Test]
+    public async Task WithEnvironmentValue_adds_a_missing_assignment_ahead_of_ExecStart() {
+        var unit = SystemdUnit.Unit(Spec() with { Environment = new Dictionary<string, string> { ["KCAP_PROFILE"] = "work" } });
+
+        var rewritten = SystemdUnit.WithEnvironmentValue(unit, "PATH", "/usr/bin");
+        var lines     = rewritten!.Split('\n').ToList();
+
+        await Assert.That(SystemdUnit.EnvFromUnit(rewritten)["PATH"]).IsEqualTo("/usr/bin");
+        await Assert.That(lines.IndexOf("Environment=PATH=/usr/bin"))
+            .IsLessThan(lines.FindIndex(l => l.StartsWith("ExecStart=", StringComparison.Ordinal)));
+    }
+
+    [Test]
+    public async Task WithEnvironmentValue_is_null_when_the_value_is_already_set() {
+        await Assert.That(SystemdUnit.WithEnvironmentValue(SystemdUnit.Unit(Spec()), "PATH", "/usr/bin")).IsNull();
+    }
 }

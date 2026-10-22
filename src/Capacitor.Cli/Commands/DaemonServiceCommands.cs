@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Install;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Services;
@@ -70,6 +71,63 @@ sealed class DaemonServiceCommands(
         }
 
         return await verbs.EvaluateFlowEnsureAsync(profiles.Resolution.ProfileName, previousName);
+    }
+
+    /// <summary>
+    /// Gives the flow's service unit the search path this process sees when a harness CLI is found on it
+    /// but not on the unit's, so the daemon finds what setup just found. Null when nothing needed it or the
+    /// platform has no service manager this can rewrite.
+    /// </summary>
+    internal static async Task<UnitRefresh?> FlowRefreshPathAsync(
+            ConfigRoot root, ProfileContext profiles, UserHome home, TimeProvider time, HarnessRegistry harnesses) {
+        DaemonServiceCommands verbs;
+
+        try {
+            verbs = ForFlow(root, profiles, home, time);
+        } catch (PlatformNotSupportedException) {
+            return null;
+        }
+
+        return await verbs.RefreshStalePathAsync(harnesses);
+    }
+
+    async Task<UnitRefresh?> RefreshStalePathAsync(HarnessRegistry harnesses) {
+        if (manager.UnitEnvironment(id) is not { } env) return null;
+
+        var path = ServicePath.Refreshed(env.GetValueOrDefault("PATH"), Environment.GetEnvironmentVariable("PATH"), harnesses);
+
+        return path is null ? null : await RefreshPathAsync(path);
+    }
+
+    /// <summary>launchd reads a plist only when the job loads, so the rewrite takes a reload that keeps the
+    /// daemon's agents for it to resume; systemd reads the unit at the next start, which the daemon is asked
+    /// for once idle, so a daemon that cannot restart yet reads as not loaded.</summary>
+    async Task<UnitRefresh> RefreshPathAsync(string path) {
+        switch (manager) {
+            case LaunchdServiceManager launchd: {
+                using var txn = await ServiceTxnLock.TryAcquireAsync(store, id, ForcedLockWait, time);
+                if (txn is null) return UnitRefresh.Contended;
+
+                var started = time.GetTimestamp();
+                try {
+                    return launchd.RefreshUnit(
+                        id, () => Proceeds(StopForReload(id, "now", whenIdle: true)), () => RefreshDeadline - time.GetElapsedTime(started),
+                        out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", path));
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return UnitRefresh.Failed;
+                }
+            }
+            case SystemdServiceManager systemd:
+                try {
+                    if (!systemd.SetEnvironment(id, "PATH", path)) return UnitRefresh.Current;
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException) {
+                    return UnitRefresh.Failed;
+                }
+
+                return RequestLegacyRestart(id, "when-idle") ? UnitRefresh.Reloaded : UnitRefresh.NotLoaded;
+            default:
+                return UnitRefresh.UnitUnsupported;
+        }
     }
 
     Task<FlowEnsure> EvaluateFlowEnsureAsync(string? profileName, string? previousName) =>

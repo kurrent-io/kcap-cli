@@ -320,4 +320,66 @@ public class RestartCoordinatorTests {
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task A_harness_installed_after_startup_restarts_once_no_agents_remain() {
+        var spy       = new SpyStrategy();
+        var installed = false;
+        var agents    = true;
+        var c         = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.HasAgents        = () => agents;
+        c.HarnessInstalled = () => installed;
+
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        installed = true;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        agents = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>An update needs only a turn boundary, so a harness restart already waiting for every
+    /// agent to finish must not hold it back.</summary>
+    [Test]
+    public async Task An_update_landing_behind_a_harness_restart_fires_at_the_turn_boundary() {
+        var spy  = new SpyStrategy();
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HasAgents        = () => true;
+        c.HarnessInstalled = () => true;
+
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Only_an_unadvertised_vendor_that_now_finds_its_CLI_counts_as_installed() {
+        IHostedAgentRuntimeFactory[] advertisedOnly = [new FakeFactory("claude", available: true)];
+        IHostedAgentRuntimeFactory[] stillMissing   = [new FakeFactory("claude", available: true), new FakeFactory("codex", available: false)];
+        IHostedAgentRuntimeFactory[] nowInstalled   = [new FakeFactory("claude", available: true), new FakeFactory("codex", available: true)];
+
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(["claude"], advertisedOnly)).IsFalse();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(["claude"], stillMissing)).IsFalse();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(["claude"], nowInstalled)).IsTrue();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable([], nowInstalled)).IsTrue();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(null, nowInstalled)).IsFalse();
+    }
+
+    sealed class FakeFactory(string vendor, bool available) : IHostedAgentRuntimeFactory {
+        public string CliPath            => vendor;
+        public string Vendor             => vendor;
+        public bool   SupportsUnattended => false;
+        public bool   IsAvailable()      => available;
+
+        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) =>
+            throw new NotSupportedException();
+    }
 }

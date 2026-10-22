@@ -23,8 +23,9 @@ internal enum RestartRequestResult {
 /// fires the chosen <see cref="IRestartStrategy"/> the moment the daemon is idle
 /// (no in-flight eval, launch in admission or mid-turn flow participant, and interactive agents at a turn
 /// boundary). Also handles explicit requests from the control socket; a when-idle request waits for no
-/// agents at all. On Windows self-detection covers script installs only; the explicit request path works
-/// anywhere.
+/// agents at all. A vendor CLI installed after startup queues a when-idle restart too: what the daemon can
+/// host is decided once at boot, so only a restart can advertise it. On Windows self-detection covers
+/// script installs only; the explicit request path works anywhere.
 /// </summary>
 internal sealed partial class RestartCoordinator : BackgroundService {
     readonly TimeProvider _time;
@@ -41,6 +42,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     internal Func<bool>        IsHardBusy = static () => false;
     internal Func<bool>        HasAgents  = static () => false;
     internal Func<bool>        AtTurnBoundary = static () => true;
+    internal Func<bool>        HarnessInstalled = static () => false;
     internal TimeSpan          TurnWait   = TimeSpan.FromMinutes(5);
     internal IRestartStrategy  Strategy;
 
@@ -54,6 +56,8 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     bool          _whenIdle;
     bool          _fired;
     bool          _selfDetected;
+    // Pending only for a newly installed harness, so an update landing meanwhile still takes over.
+    bool          _harnessOnly;
     DateTimeOffset _pendingSince;
 
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
@@ -61,6 +65,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     // Production constructor (DI).
     public RestartCoordinator(
             DaemonConfig config, AgentOrchestrator orchestrator, EvalContextCache evalCache,
+            IReadOnlyDictionary<string, IHostedAgentRuntimeFactory> factories,
             IRestartStrategy strategy, ILogger<RestartCoordinator> logger, TimeProvider time) {
         _time      = time;
         TurnWait   = config.RestartTurnWait;
@@ -71,7 +76,14 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         Strategy   = strategy;
         WireGate(orchestrator, evalCache);
         StatBinary = StatProcessBinary;
+        HarnessInstalled = () => UnadvertisedNowAvailable(config.SupportedVendors, factories.Values);
     }
+
+    /// <summary>Whether a factory the daemon did not advertise now finds its CLI. Null advertisement means
+    /// startup has not probed yet, so nothing can have been installed since.</summary>
+    internal static bool UnadvertisedNowAvailable(string[]? advertised, IEnumerable<IHostedAgentRuntimeFactory> factories) =>
+        advertised is not null
+     && factories.Any(f => !advertised.Contains(f.Vendor, StringComparer.Ordinal) && f.IsAvailable());
 
     RestartCoordinator(
             DaemonStore store, string daemonName, string version, IRestartStrategy strategy, ILogger logger,
@@ -138,6 +150,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         lock (_gate) {
             _pending      = true;
             _selfDetected = false;
+            _harnessOnly  = false;
             _whenIdle     = whenIdle;
             if (force) _force = true;
 
@@ -165,16 +178,25 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         lock (_gate) {
             if (_fired) return RestartRequestResult.Restarting; // already in progress
 
-            if (!_pending) {
+            if (!_pending || _harnessOnly) {
                 var current = StatBinary();
                 if (RestartDecision.BinaryChanged(_baseline, current)) {
                     _pending      = true;
                     _selfDetected = true;
+                    _harnessOnly  = false;
+                    _whenIdle     = false;
                     _pendingSince = _time.GetUtcNow();
                     _baseline     = current;
                     DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "self-detected", _time.GetUtcNow()));
                     LogQueued(_logger, "self-detected");
                 }
+            }
+
+            if (!_pending && HarnessInstalled()) {
+                _pending     = true;
+                _harnessOnly = true;
+                _whenIdle    = true;
+                LogHarnessInstalled(_logger);
             }
 
             var waitExpired = _selfDetected && _time.GetUtcNow() - _pendingSince >= TurnWait;
@@ -213,4 +235,7 @@ internal sealed partial class RestartCoordinator : BackgroundService {
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Restart-after-update queued ({Reason}); will apply when idle")]
     static partial void LogQueued(ILogger logger, string reason);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "A coding agent CLI was installed; restart queued to advertise it once no agents are running")]
+    static partial void LogHarnessInstalled(ILogger logger);
 }

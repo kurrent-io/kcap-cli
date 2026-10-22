@@ -117,6 +117,48 @@ static class LaunchdUnit {
         return BinaryFromPlist(rewritten) == binary ? rewritten : null;
     }
 
+    /// <summary>
+    /// The plist with <paramref name="key"/> in its <c>EnvironmentVariables</c> set to <paramref name="value"/>,
+    /// or null when it already is or the plist is not shaped the way this writer writes it. Text-level, like
+    /// <see cref="WithBinary"/>.
+    /// </summary>
+    public static string? WithEnvironmentValue(string plistXml, string key, string value) {
+        IReadOnlyDictionary<string, string> before;
+        try { before = EnvFromPlist(plistXml); }
+        catch (Exception ex) when (ex is System.Xml.XmlException or InvalidDataException) { return null; }
+
+        if (before.TryGetValue(key, out var current) && current == value) return null;
+
+        const string open = "<key>EnvironmentVariables</key><dict>";
+        var start = plistXml.IndexOf(open, StringComparison.Ordinal);
+        if (start < 0) return null;
+        start += open.Length;
+        var end = plistXml.IndexOf("</dict>", start, StringComparison.Ordinal);
+        if (end < 0) return null;
+
+        ServiceText.RequireValidEnvName(key);
+        ServiceText.RequireXmlRepresentableValue(key, value);
+        var element = $"<key>{ServiceText.Xml(key)}</key><string>{ServiceText.Xml(value)}</string>";
+
+        string rewritten;
+        if (current is null) {
+            rewritten = string.Concat(plistXml.AsSpan(0, start), $"\n    {element}", plistXml.AsSpan(start));
+        } else {
+            var oldElement = $"<key>{ServiceText.Xml(key)}</key><string>{ServiceText.Xml(current)}</string>";
+            var at = plistXml.IndexOf(oldElement, start, end - start, StringComparison.Ordinal);
+            if (at < 0) return null;
+            rewritten = string.Concat(plistXml.AsSpan(0, at), element, plistXml.AsSpan(at + oldElement.Length));
+        }
+
+        var after = EnvFromPlist(rewritten);
+        var others = before.Where(kv => kv.Key != key);
+
+        return after.TryGetValue(key, out var written) && written == value && after.Count == before.Count + (current is null ? 1 : 0)
+            && others.All(kv => after.TryGetValue(kv.Key, out var v) && v == kv.Value)
+            ? rewritten
+            : null;
+    }
+
     /// <summary>The program <c>launchctl print</c> shows the loaded job running, or null when it shows none.
     /// launchd reads the plist only when the job loads, so this lags a rewritten plist until a reload.</summary>
     public static string? LoadedProgram(string printStdout) {
