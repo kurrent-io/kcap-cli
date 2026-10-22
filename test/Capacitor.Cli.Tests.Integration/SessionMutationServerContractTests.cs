@@ -184,15 +184,40 @@ public class SessionMutationServerContractTests : IDisposable {
 
     /// <summary>The server answering that another title stands is not success: the agent must not report a rename.</summary>
     [Test]
-    public async Task Set_title_reports_a_title_the_server_did_not_apply() {
+    public async Task Set_title_reports_a_rename_the_server_did_not_apply() {
         StubAuthConfig();
-        StubAgentTitle(applied: false, "Chosen at start");
+        StubAgentTitle(applied: false, "Renamed in the dashboard");
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Refit");
+
+        await Assert.That(run.ExitCode).IsEqualTo(3);
+        await Assert.That(run.Stderr).Contains("Title not applied: the session keeps \"Renamed in the dashboard\".");
+    }
+
+    /// <summary>A chosen title outranking the first-prompt title is the intended outcome, so it is reported without
+    /// failing the command the hook asks the agent to run silently.</summary>
+    [Test]
+    public async Task Set_title_auto_that_loses_says_so_and_succeeds() {
+        StubAuthConfig();
+        StubAgentTitle(applied: false, shown: null);
 
         var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "--auto", "Refit");
 
-        await Assert.That(run.ExitCode).IsEqualTo(3);
-        await Assert.That(run.Stderr).Contains("Title not applied");
-        await Assert.That(run.Stderr).Contains("\"Chosen at start\"");
+        await Assert.That(run.ExitCode).IsEqualTo(0);
+        await Assert.That(run.Stderr).Contains("Title not applied: the session keeps its current title.");
+    }
+
+    [Test]
+    public async Task Set_title_reads_auto_later_in_the_title_as_a_word() {
+        StubAuthConfig();
+        StubAgentTitle(applied: true, "Explain the --auto flag");
+
+        var run = await RunAsync(_server.Url!, sessionIdEnv: SessionId, "set-title", "Explain", "the", "--auto", "flag");
+
+        await Assert.That(run.ExitCode).IsEqualTo(0);
+        var body = SingleAgentTitleBody();
+        await Assert.That(body["title"]?.GetValue<string>()).IsEqualTo("Explain the --auto flag");
+        await Assert.That(body["rename"]?.GetValue<bool>()).IsTrue();
     }
 
     /// <summary>An older server has no agent-title route (a bare 404): the title goes to set-title, which only fills

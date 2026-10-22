@@ -645,7 +645,7 @@ kcap set-title "Fix the checkout regression"         # rename the session
 kcap set-title --auto "Fix the checkout regression"  # name it, unless someone already chose a title
 ```
 
-A plain title is a rename: it ranks with a rename made in the dashboard, and the later of the two wins. `--auto` is the title the first-prompt hook asks for: it replaces a placeholder or a generated title, but never a title chosen when the agent was started or a rename. The command exits `0` when the session shows the title, and `3` when the server kept another one — it prints the title the session keeps — or is too old to say, in which case the title only lands on a session that has none yet.
+A plain title is a rename: it ranks with a rename made in the dashboard, and the later of the two wins. `--auto` is the title the first-prompt hook asks for: it replaces a placeholder or a generated title, but never a title chosen when the agent was started or a rename. `--auto` must come first. A rename exits `0` when the session shows it, and `3` when the server kept another title — it prints the title the session keeps — or is too old to say, in which case the title only lands on a session that has none yet. An `--auto` title that loses prints the same note but exits `0`, since a title someone chose outranking it is the intended outcome.
 
 ### Disable recording
 

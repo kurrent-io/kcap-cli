@@ -894,7 +894,7 @@ switch (command) {
 
         return await Run<CopilotFinalizeDrainCommand>().Run(cfSessionId, cfPath);
     }
-    case "set-title" when args.Skip(1).All(a => a == SetTitleCommand.AutoFlag):
+    case "set-title" when args.Length < 2 || args is [_, SetTitleCommand.AutoFlag]:
         Console.Error.WriteLine("Usage: kcap set-title [--auto] <title>");
 
         return 1;
@@ -908,10 +908,11 @@ switch (command) {
             return 1;
         }
 
-        var auto = args.Contains(SetTitleCommand.AutoFlag);
+        // Only the first argument is the flag: an unquoted title may itself contain "--auto".
+        var auto = args[1] == SetTitleCommand.AutoFlag;
 
         // Join all remaining args as the title (supports unquoted multi-word titles)
-        var title = string.Join(' ', args.Skip(1).Where(a => a != SetTitleCommand.AutoFlag)).Trim();
+        var title = string.Join(' ', args.Skip(auto ? 2 : 1)).Trim();
 
         if (string.IsNullOrWhiteSpace(title)) {
             Console.Error.WriteLine("Title cannot be empty");
