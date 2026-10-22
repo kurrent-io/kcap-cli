@@ -9,6 +9,24 @@
             <Setter Property="TextWrapping" Value="Wrap" />
             <Setter Property="Foreground" Value="{StaticResource KcapMutedBrush}" />
         </Style>
+        <!-- A link inside a sentence: underlined text, no button chrome on hover or press. -->
+        <Style Selector="Button.inlineLink">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.inlineLink /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.inlineLink:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.inlineLink:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapTextBrush}" />
+        </Style>
+        <Style Selector="Button.inlineLink TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextDecorations" Value="Underline" />
+        </Style>
         <Style Selector="RadioButton">
             <Setter Property="FontSize" Value="13" />
         </Style>
@@ -34,7 +52,13 @@
                  margin lines it up with the option's text (border, padding, ring and gap). -->
             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" Margin="35,0,11,0"
                   IsVisible="{Binding OllamaStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                <TextBlock x:Name="OllamaStatusText" Classes="detail" VerticalAlignment="Center" Text="{Binding OllamaStatus}" />
+                <WrapPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="OllamaStatusText" Classes="detail" Text="{Binding OllamaStatus}" Margin="0,0,4,0" />
+                    <Button x:Name="OllamaSiteLink" Classes="inlineLink" Command="{Binding OpenOllamaSiteCommand}"
+                            IsVisible="{Binding OllamaLinkVisible}" ToolTip.Tip="{x:Static vm:SearchChoiceViewModel.OllamaDownloadUrl}">
+                        <TextBlock Text="Get it free at ollama.com" />
+                    </Button>
+                </WrapPanel>
                 <Button Grid.Column="1" x:Name="CheckOllamaButton" Classes="kcapChip" Content="{Binding CheckLabel}"
                         VerticalAlignment="Center" Command="{Binding CheckOllamaCommand}" IsVisible="{Binding OllamaMissing}" />
             </Grid>

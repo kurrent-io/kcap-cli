@@ -1,4 +1,5 @@
 using System.Reactive;
+using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core.LocalEdition;
 using ReactiveUI.Reactive;
@@ -12,20 +13,25 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later from kcap local in the sidebar.";
     public const string DefaultLabel = $"{LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
     public const string DefaultDetail = "Downloaded into Ollama if it is not there yet.";
+    public const string OllamaDownloadUrl = "https://ollama.com/download";
     public const string ModelChangeDetail = "Changing the model rebuilds the search index in the background. Your saved information is kept.";
 
     readonly Func<CancellationToken, Task<bool>> _ollamaAvailable;
     readonly Func<bool> _ollamaInstalled;
+    readonly IUrlOpener _opener;
     bool _useMeaning, _useOther, _checking, _ollamaInstalledNow;
     // Until someone picks, or a recorded choice is loaded, the selection follows whether Ollama answers.
     bool _followOllama = true;
     bool? _ollamaRunning;
     string _otherModel = "";
 
-    public SearchChoiceViewModel(Func<CancellationToken, Task<bool>>? ollamaAvailable = null, Func<bool>? ollamaInstalled = null) {
+    public SearchChoiceViewModel(
+            Func<CancellationToken, Task<bool>>? ollamaAvailable = null, Func<bool>? ollamaInstalled = null, IUrlOpener? opener = null) {
         _ollamaAvailable = ollamaAvailable ?? LocalOllamaAvailability.CheckAsync;
         _ollamaInstalled = ollamaInstalled ?? LocalOllamaAvailability.Installed;
-        CheckOllamaCommand = ReactiveCommand.CreateFromTask(CheckOllamaAsync);
+        _opener          = opener ?? new ShellUrlOpener();
+        CheckOllamaCommand     = ReactiveCommand.CreateFromTask(CheckOllamaAsync);
+        OpenOllamaSiteCommand  = ReactiveCommand.Create(() => _opener.Open(OllamaDownloadUrl));
     }
 
     /// Changing an installation's search, where a new model rebuilds an index that already exists.
@@ -81,13 +87,16 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
 
     public string CheckLabel => Checking ? "Checking…" : "Check again";
 
+    /// The state beside Check again; what search by meaning needs stays in the option's own description.
     public string? OllamaStatus => _ollamaRunning switch {
-        null when Checking => "Looking for Ollama on this Mac…",
-        false              => _ollamaInstalledNow
-            ? "Ollama is installed but not running. Open it, then check again."
-            : "Needs Ollama, a free app that runs AI models on this Mac. Install it from ollama.com, open it, then check again.",
+        null when Checking => "Looking for Ollama…",
+        false              => _ollamaInstalledNow ? "Ollama is installed but not running. Open it." : "Ollama isn't installed.",
         _ => null,
     };
+
+    public bool OllamaLinkVisible => OllamaMissing && !_ollamaInstalledNow;
+
+    public ReactiveCommand<Unit, Unit> OpenOllamaSiteCommand { get; }
 
     public ReactiveCommand<Unit, Unit> CheckOllamaCommand { get; }
 
@@ -163,6 +172,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(OllamaMissing));
         this.RaisePropertyChanged(nameof(CheckLabel));
         this.RaisePropertyChanged(nameof(OllamaStatus));
+        this.RaisePropertyChanged(nameof(OllamaLinkVisible));
         this.RaisePropertyChanged(nameof(MeaningEnabled));
         this.RaisePropertyChanged(nameof(ModelChoiceVisible));
     }

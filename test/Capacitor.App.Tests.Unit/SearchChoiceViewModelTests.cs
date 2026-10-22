@@ -46,13 +46,18 @@ public class SearchChoiceViewModelTests {
     public async Task The_status_names_the_missing_step() {
         await AvaloniaSession.DispatchAsync(async () => {
             var installed = false;
-            var vm = new SearchChoiceViewModel(_ => Task.FromResult(false), () => installed);
+            var opener = new RecordingOpener();
+            var vm = new SearchChoiceViewModel(_ => Task.FromResult(false), () => installed, opener);
             await vm.CheckOllamaCommand.Execute().ToTask();
-            await Assert.That(vm.OllamaStatus).StartsWith("Needs Ollama");
+            await Assert.That(vm.OllamaStatus).IsEqualTo("Ollama isn't installed.");
+            await Assert.That(vm.OllamaLinkVisible).IsTrue();
+            await vm.OpenOllamaSiteCommand.Execute().ToTask();
+            await Assert.That(opener.Opened).IsEquivalentTo([SearchChoiceViewModel.OllamaDownloadUrl]);
 
             installed = true;
             await vm.CheckOllamaCommand.Execute().ToTask();
-            await Assert.That(vm.OllamaStatus).StartsWith("Ollama is installed but not running.");
+            await Assert.That(vm.OllamaStatus).IsEqualTo("Ollama is installed but not running. Open it.");
+            await Assert.That(vm.OllamaLinkVisible).IsFalse();
             return true;
         });
     }
