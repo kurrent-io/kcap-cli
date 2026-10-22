@@ -25,7 +25,7 @@ before starting, which account has room.
 | Where in the launcher | Inside the Agent chip's panel, above the model rows, shown only when the vendor has two or more rows on the target machine. No new chip. |
 | Default | Per vendor and per daemon: the directory the daemon's own environment points at. Derived, never written to the registry; published by each daemon as its own fact, apart from the host's registry. |
 | Resolved account | The daemon resolves every launch to a directory before the process starts and keeps that, not the request, on the agent. |
-| Contract | One optional account id appended to the launch request on each hop. Null means the default. An explicit id is honoured or refused at every hop; no hop and no screen substitutes the default for it. |
+| Contract | One optional account id appended to the launch request on each hop, and to the local Spawn frame for `kcap agent start --account`. Null means the default. An explicit id is honoured or refused at every hop; no hop and no screen substitutes the default for it. |
 | Support gate | A daemon advertises account launches; the server reports that per listed daemon and refuses an explicit id for a daemon without it; the app offers, restores and sends an explicit selection only for a target the server reports as supporting them, and holds Start while that support or the target's snapshot is unknown. |
 | Memory | Per repository, vendor and host, read only from a complete snapshot. No memory means the default, never what another repository used. |
 | Managing accounts | A tab in the Settings window, this machine only. Remote machines are read-only in the launcher. |
@@ -98,6 +98,15 @@ collapsed into a generic rejection. The daemon never substitutes the default for
 honour: the person chose the account to spend, and a silent swap spends the wrong one.
 
 A launch with no id, including every review-flow and PR-review launch, resolves to the default.
+
+`kcap agent start` takes `--account <id-prefix | directory>`, resolved the way `kcap accounts`
+resolves its arguments: a unique id prefix or a registered directory. A directory that is not
+registered is refused by the CLI with the `kcap accounts add` remedy; nothing registers it. The
+resolved id is appended to the local Spawn frame's payload after the title, under that frame's
+trailing-bytes rule, and the daemon applies the same resolution and refusal as for a server launch.
+An older daemon would ignore the trailing bytes and spend the default, so the CLI sends the flag
+only to a daemon whose local capability list carries `accounts/1` and refuses otherwise. The flag
+combines with `--private`; the resolved account is kept on the agent as in 4.2 either way.
 
 ### 4.2 Per-launch layouts in the daemon
 
@@ -384,7 +393,8 @@ correctness: the gates of Section 4.1 hold for every mixed pairing of app, serve
    resolved account, per-launch layouts and the child-environment rule, the resume ledger field
    and resume policy, agent status fields, per-account Codex catalogs with their lifecycle, the
    registry watcher, the local snapshot frames, the `accounts/1` advertisement, publishing to the
-   server behind its capability, and the CLI's post-wiring revisions and machine-readable results.
+   server behind its capability, the CLI's post-wiring revisions and machine-readable results, and
+   `kcap agent start --account` with its help text and README lines.
 2. **kcap-server.** Section 4.1's pass-through and refusal, `accounts/1` on the listed daemon, the
    agent row's account, the per-account catalog on the listed daemon, and the accounts store of
    Section 5.2 with its split between host registry and daemon defaults.
@@ -425,7 +435,9 @@ README and `help-*.txt` change with the PR that changes user-facing behaviour.
   auth or cache change on a non-default account republishes the map alone.
 - **CLI:** each verb commits a post-wiring revision, including an unchanged rewire and an add whose
   wiring failed; the result names each step's outcome and that revision; a failed step reports
-  failure with exit 1 even when the registry already holds the requested state.
+  failure with exit 1 even when the registry already holds the requested state; `kcap agent start
+  --account` resolves an id prefix and a registered directory, refuses an unregistered directory and
+  a daemon without `accounts/1`, and the daemon spawns under the resolved directory.
 - **Server:** old daemon with new server and the reverse; the id reaches a daemon with `accounts/1`
   unchanged and is refused, named, for one without; the agent row carries the resolved account; the
   per-account catalog rides beside the per-vendor one for an older app; registry snapshots with
@@ -463,8 +475,6 @@ README and `help-*.txt` change with the PR that changes user-facing behaviour.
 
 - Switching the account of a running session, or choosing one again when a limit hits.
 - A reviewer account per vendor.
-- An account flag on `kcap agent start`, which launches over the local Spawn frame; it keeps the
-  default account.
 - Reading, copying or brokering any vendor credential, as before.
 - Changing a remote machine's accounts from the app.
 - A standalone Accounts page or a host switcher.
