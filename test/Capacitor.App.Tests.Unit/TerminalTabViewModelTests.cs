@@ -197,27 +197,81 @@ public class TerminalTabViewModelTests {
         });
     }
 
-    /// A post-attach resend fired from inside OnAttachedAsync is structurally defeated: Core's own
-    /// post-attach repaint nudge (AgentAttachClient.RunCoreAsync, right after a read-write
-    /// Attached) writes at whatever size RunAsync started with and follows any same-callback
-    /// resend on the wire; the daemon applies resizes in stream order with last-write-wins, so the
-    /// resend never survives. So the run itself starts at the surface's real size (TryStartAttemptAsync reads CurrentSize
-    /// right after the UI swap dispatch, before calling RunAsync) -- committed before any Attach
-    /// reply, so it holds regardless of whether the attach turns out read-write or read-only.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Attach_starts_the_run_at_the_surfaces_real_current_size() {
+    public async Task Visible_attach_resizes_to_the_surfaces_current_size_only_when_writable() {
         await RunOnUiAsync(async () => {
             var (_, _, _, _, client) = await BuildConnectingAsync(
                 surfaceFactory: () => new FakeTerminalSurface { CurrentSize = (137, 41) });
-
-            await Assert.That((client.Cols, client.Rows)).IsEqualTo((137, 41));
+            await client.TriggerAttached([]);
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (137, 41) });
 
             var (_, _, _, _, client2) = await BuildConnectingAsync(
                 agentId: "a2", surfaceFactory: () => new FakeTerminalSurface { CurrentSize = (137, 41) });
-            await client2.TriggerAttached([], reason: "review");   // read-only: same RunAsync argument either way
+            await client2.TriggerAttached([], reason: "review");
+            await Assert.That(client2.Resizes).IsEmpty();
+        });
+    }
 
-            await Assert.That((client2.Cols, client2.Rows)).IsEqualTo((137, 41));
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Chat_only_attach_defers_resize_until_the_terminal_is_shown_and_keeps_input_available() {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var surface = new FakeTerminalSurface { CurrentSize = (137, 41) };
+            var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
+            vm.SurfaceShown = false;
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = factory.Created.Single();
+            await client.TriggerAttached([]);
+            surface.RaiseResize(100, 30);
+
+            await Assert.That(client.Resizes).IsEmpty();
+            await Assert.That(vm.CanAcceptText).IsTrue();
+
+            vm.SurfaceShown = true;
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (137, 41) });
+            surface.RaiseResize(120, 40);
+            await Assert.That(client.Resizes).IsEquivalentTo(new[] { (137, 41), (120, 40) });
+
+            vm.SurfaceShown = false;
+            surface.CurrentSize = (110, 35);
+            surface.RaiseResize(110, 35);
+            await Assert.That(client.Resizes.Count).IsEqualTo(2);
+            vm.SurfaceShown = true;
+            await Assert.That(client.Resizes.Last()).IsEqualTo((110, 35));
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task Replayed_terminal_queries_send_no_input_but_live_queries_still_get_answers(bool shown) {
+        await RunOnUiAsync(async () => {
+            var daemon = new FakeDaemonClientService();
+            var factory = new FakeTerminalAttachClientFactory();
+            var time = new FakeTimeProvider();
+            var surface = new XtermTerminalSurface(80, 24);
+            var vm = Build(daemon, factory, time, surfaceFactory: () => surface);
+            vm.SurfaceShown = shown;
+            daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true));
+            Dispatcher.UIThread.RunJobs();
+            await (vm.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = factory.Created.Single();
+            await client.TriggerAttached(System.Text.Encoding.ASCII.GetBytes("hello\u001b[6n"));
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(client.SentInput).IsEmpty();
+
+            await client.TriggerOutput(System.Text.Encoding.ASCII.GetBytes("\u001b[6n"));
+            time.Advance(TerminalTabViewModel.HiddenFeedInterval);
+            await Assert.That(client.SentInput.Single()).IsEquivalentTo(System.Text.Encoding.ASCII.GetBytes("\u001b[1;6R"));
+            await vm.TeardownAsync();
         });
     }
 

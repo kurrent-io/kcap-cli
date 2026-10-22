@@ -308,12 +308,25 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         set {
             if (_surfaceShown == value) return;
             _surfaceShown = value;
-            if (value) FeedHeld();
+            if (value) {
+                FeedHeld();
+                ResizeShownSurface();
+            }
         }
+    }
+
+    // Resizing prompts a PTY redraw, which can clear the daemon's silence-based idle verdict.
+    // A connection used only by the chat composer must leave the agent's terminal size alone.
+    void ResizeShownSurface() {
+        if (!SurfaceShown || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }
+            || Surface is not { } surface || _client is not { } client) return;
+        var (cols, rows) = surface.CurrentSize;
+        _ = client.ResizeAsync(cols, rows);
     }
 
     // Held ring replays are megabytes; kept as the pieces they arrived in so holding them adds no copy.
     readonly List<string> _held = [];
+    IReadOnlyList<string>? _heldSnapshot;
     ITerminalSurface? _heldSurface;
     int _heldGeneration;
     ITimer? _heldTimer;
@@ -321,17 +334,19 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     void Deliver(int generation, ITerminalSurface surface, string text) => Deliver(generation, surface, [text]);
 
-    void Deliver(int generation, ITerminalSurface surface, IReadOnlyList<string> pieces) {
+    void Deliver(int generation, ITerminalSurface surface, IReadOnlyList<string> pieces, bool replay = false) {
         if (_surfaceShown) {
-            surface.Feed(pieces);
+            surface.Feed(pieces, replay);
             return;
         }
         if (!ReferenceEquals(_heldSurface, surface)) {
             _held.Clear();
+            _heldSnapshot = null;
             _heldSurface = surface;
             _heldGeneration = generation;
         }
-        _held.AddRange(pieces);
+        if (replay) _heldSnapshot = pieces;
+        else _held.AddRange(pieces);
         if (_heldArmed) return;
         _heldArmed = true;
         // Off-thread in production, synchronous under a fake clock: the scheduler keeps the feed
@@ -342,11 +357,14 @@ public sealed class TerminalTabViewModel : ReactiveObject {
 
     void FeedHeld() {
         _heldArmed = false;
-        if (_held.Count == 0) return;
+        if (_held.Count == 0 && _heldSnapshot is null) return;
+        var snapshot = _heldSnapshot;
+        _heldSnapshot = null;
         var pieces = _held.ToArray();
         _held.Clear();
         if (_heldSurface is not { } surface || Retired(_heldGeneration)) return;
-        surface.Feed(pieces);
+        if (snapshot is not null) surface.Feed(snapshot, replay: true);
+        if (pieces.Length > 0) surface.Feed(pieces);
     }
 
     public ReactiveCommand<Unit, Unit> ReattachCommand { get; }
@@ -590,12 +608,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 return; // retired before the swap even finished
             }
 
-            // The dispatched swap has run the view's Model binding and the control's synchronous
-            // resize, so CurrentSize is the real pane size. Read it before RunAsync starts rather
-            // than resending after Attached: the client's post-attach nudge writes at RunAsync's
-            // size and last write wins, so a resend from OnAttachedAsync is a no-op. A
-            // never-laid-out first open reads the surface's constructor size; WireSurface's Resized
-            // lane corrects it once the control is measured.
+            // Desktop clients defer resizing until a writable terminal is actually shown.
             var (cols, rows) = surface.CurrentSize;
 
             // Suspension point 2 (the one most likely to straddle a concurrent TeardownAsync):
@@ -642,7 +655,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             _ = client.SendInputAsync(bytes);
         };
         surface.Resized += (cols, rows) => {
-            if (Retired(generation) || State.ReadOnly) return;
+            if (Retired(generation) || !SurfaceShown || State is not { Phase: TerminalSessionPhase.Attached, ReadOnly: false }) return;
             _ = client.ResizeAsync(cols, rows);
         };
     }
@@ -660,8 +673,9 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 _resumeDeadline = null;
                 _attachedIncarnation = incarnation;
             }
-            Deliver(generation, surface, pieces);
+            Deliver(generation, surface, pieces, replay: true);
             Publish(TerminalSessionState.Attached(ack.ReadOnlyReason), openingToken);
+            ResizeShownSurface();
         }, DispatcherPriority.Default, ct);
     }
 
@@ -934,6 +948,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         _heldTimer?.Dispose();
         _heldTimer = null;
         _held.Clear();
+        _heldSnapshot = null;
 
         Interlocked.Increment(ref _attemptGeneration);
 
