@@ -104,7 +104,7 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     DaemonActivity? _latestActivity;
     readonly BehaviorSubject<string?> _identityReport = new(null);
 
-    /// The daemon's latest reported activity; null until the first snapshot arrives.
+    /// The attached daemon's latest reported activity; null until a snapshot arrives and whenever the attach drops.
     public DaemonActivity? LatestActivity => Volatile.Read(ref _latestActivity);
 
     /// The standing report about the attached daemon's identity, null while it matches. A state, not an event:
@@ -211,6 +211,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     // is a daemon that went away, and gets the same ensure.
     void OnAttachStatus(AttachStatus status) {
         bool isFirstTerminalOutcome;
+
+        if (status.State != AttachState.Connected) Volatile.Write(ref _latestActivity, null);
 
         lock (_lock) {
             _generation++;

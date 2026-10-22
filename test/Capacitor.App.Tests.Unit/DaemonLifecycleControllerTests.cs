@@ -1599,6 +1599,21 @@ public class DaemonLifecycleControllerTests {
         await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindRepair);
     }
 
+    [Test]
+    public async Task Activity_is_cleared_when_the_attach_drops() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(state: "running", jobPid: 100, daemonPid: 100));
+        h.Start();
+        h.PushConnected();
+        h.PushSnapshot(2);
+
+        await Assert.That(h.Controller.LatestActivity).IsEqualTo(new DaemonActivity(2, true));
+
+        h.PushUnreachable();
+
+        await Assert.That(h.Controller.LatestActivity).IsNull();
+    }
+
     /// A mismatch the daemon no longer has is taken back from wherever the report still shows, the tray included.
     [Test]
     public async Task A_resolved_mismatch_withdraws_its_report() {
