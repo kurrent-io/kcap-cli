@@ -434,6 +434,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly ObservableAsPropertyHelper<bool> _showsInterrupt;
     public bool ShowsInterrupt => _showsInterrupt.Value;
 
+    // Running alone, or background work while the parent waits, does not make Escape safe at its prompt.
+    public bool CanInterruptWithEscape => ShowsInterrupt && _awaitingInput == false;
+
+    readonly ObservableAsPropertyHelper<string> _interruptLabel;
+    public string InterruptLabel => _interruptLabel.Value;
+
     string _vendor = "";
     IReadOnlyList<HarnessOption> _options = HostedHarnessCatalog.Build(null);
 
@@ -746,6 +752,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             .ToProperty(this, x => x.ShowsInterrupt,
                 initialValue: _input.CanInterrupt && !IsReadOnlyParticipant && !HasTerminalMenu
                     && (AgentStatus.Kind == AgentStatusKind.Working || AgentStatus.IsRunningUnknownTurn))
+            .DisposeWith(_disposables);
+
+        _interruptLabel = this.WhenAnyValue(x => x.ShowsInterrupt, x => x.AgentStatus,
+                (_, _) => CanInterruptWithEscape ? "Interrupt (Esc)" : "Interrupt")
+            .ToProperty(this, x => x.InterruptLabel, initialValue: "Interrupt")
             .DisposeWith(_disposables);
 
         // The banner carries the read-only explanation for a flow participant, so the hint

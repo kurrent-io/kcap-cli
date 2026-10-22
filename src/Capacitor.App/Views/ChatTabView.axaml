@@ -473,7 +473,7 @@
                             </Button>
                             <TextBlock Grid.Column="1" Text="{Binding ComposerHint}" FontSize="12.5" Foreground="{StaticResource KcapFaintBrush}"
                                        VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                            <Button x:Name="InterruptButton" Grid.Column="2" Classes="kcapChip" Content="Interrupt (Esc)"
+                            <Button x:Name="InterruptButton" Grid.Column="2" Classes="kcapChip" Content="{Binding InterruptLabel}"
                                     Command="{Binding InterruptCommand}" IsVisible="{Binding ShowsInterrupt}"
                                     ToolTip.Tip="Interrupt the current turn without ending the session" Margin="12,0,0,0"
                                     BorderThickness="1" Height="24" Padding="10,0" VerticalContentAlignment="Center"

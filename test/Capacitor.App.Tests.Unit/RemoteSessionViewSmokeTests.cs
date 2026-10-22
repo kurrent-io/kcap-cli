@@ -332,9 +332,7 @@ public class RemoteSessionViewSmokeTests {
     }
 
     [Test]
-    [Arguments(false)]
-    [Arguments(true)]
-    public async Task A_remote_running_turn_without_turn_details_can_be_interrupted_until_idle_or_disconnected(bool button) {
+    public async Task A_remote_running_turn_without_turn_details_can_be_interrupted_explicitly_until_idle_or_disconnected() {
         await AvaloniaSession.DispatchAsync(async () => {
             using var host = new Host();
             try {
@@ -349,11 +347,14 @@ public class RemoteSessionViewSmokeTests {
                 composer.Focus();
                 host.Window.KeyTextInput("keep this draft");
                 host.Settle();
-                if (button) {
-                    var point = interrupt.TranslatePoint(new Point(interrupt.Bounds.Width / 2, interrupt.Bounds.Height / 2), host.Window)!.Value;
-                    host.Window.MouseDown(point, MouseButton.Left);
-                    host.Window.MouseUp(point, MouseButton.Left);
-                } else host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                // Unknown turn state keeps the explicit action, but a casual Escape must not reach the PTY.
+                host.Window.KeyPressQwerty(PhysicalKey.Escape, RawInputModifiers.None);
+                host.Settle();
+                await Assert.That(host.Lane.SpecialKeys).IsEmpty();
+                await Assert.That(interrupt.Content).IsEqualTo("Interrupt");
+                var point = interrupt.TranslatePoint(new Point(interrupt.Bounds.Width / 2, interrupt.Bounds.Height / 2), host.Window)!.Value;
+                host.Window.MouseDown(point, MouseButton.Left);
+                host.Window.MouseUp(point, MouseButton.Left);
                 await host.SettleUntilAsync(() => host.Lane.SpecialKeys.Count == 1, "interrupt delivered");
                 await Assert.That(host.Lane.SpecialKeys).IsEquivalentTo(new[] { ("a1", SpecialKeys.Escape) });
                 await Assert.That(composer.Text).IsEqualTo("keep this draft");
