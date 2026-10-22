@@ -64,6 +64,43 @@ public class DoneStepViewModelTests {
         await Assert.That(unit).IsEqualTo("/ 100");
     }
 
+    /// A run still in flight shows what has landed so far and how far through the selection it is.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_import_shows_sessions_as_they_land() {
+        var (before, landed, activity, progress, running, after) = await AvaloniaSession.DispatchAsync(async () => {
+            var gate = new TaskCompletionSource<StreamingResult>();
+            Action<StreamedLine>? emit = null;
+            var cli = new FakeKcapCli {
+                ImportBehavior = (_, onLine, _) => {
+                    emit = onLine;
+                    return gate.Task;
+                },
+            };
+            var run = new HistoryImportRun(100, 2, "from the last 90 days", 1, action => action());
+            run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"])]);
+            var vm = new DoneStepViewModel(() => Facts(import: run));
+            await vm.OnEnterAsync(CancellationToken.None);
+            var waiting = vm.ActivityLine;
+
+            for (var i = 0; i < 20; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i} (claude)"));
+            for (var i = 0; i < 5; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Skipping k{i} (already current)"));
+            var snapshot = (vm.LandedValue, vm.ActivityLine, vm.ProgressValue, vm.Running);
+
+            gate.SetResult(new StreamingResult(0, false, []));
+            await run.Completion;
+
+            return (waiting, snapshot.LandedValue, snapshot.ActivityLine, snapshot.ProgressValue, snapshot.Running, vm.Running);
+        });
+
+        await Assert.That(before).IsEqualTo("Looking through your history…");
+        await Assert.That(landed).IsEqualTo("20");
+        await Assert.That(activity).IsEqualTo("25 of 100 sessions checked");
+        await Assert.That(progress).IsEqualTo(25.0);
+        await Assert.That(running).IsTrue();
+        await Assert.That(after).IsFalse();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_facts_are_read_again_on_every_entry() {

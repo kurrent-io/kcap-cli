@@ -152,6 +152,35 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.Run!.State).IsEqualTo(ImportRunState.Failed);
     }
 
+    /// The figures move as each session settles, and the closing line still settles the totals.
+    [Test]
+    public async Task The_run_counts_sessions_as_they_land() {
+        var h = new Harness(Report());
+        (int Imported, int Failed, int Processed)? midway = null;
+        h.Cli.ImportBehavior = (_, onLine, _) => {
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Loading 1a2b (claude)"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Loading 3c4d (codex)"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Skipping 5e6f (already current)"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Already loaded 7a8b (no new content)"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Failed 9c0d"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Failed to reach the server"));
+            var run = h.Vm.Run!;
+            midway ??= (run.Imported, run.Failed, run.Processed);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  3 imported · 2 skipped · 2 failed"));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+        await h.EnterAsync();
+        h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(midway).IsEqualTo((2, 1, 5));
+        await Assert.That(h.Vm.Run!.Imported).IsEqualTo(6);
+        await Assert.That(h.Vm.Run!.Failed).IsEqualTo(4);
+        await Assert.That(h.Vm.Run!.Processed).IsEqualTo(10);
+    }
+
     [Test]
     public async Task Not_now_imports_nothing() {
         var h = new Harness(Report());

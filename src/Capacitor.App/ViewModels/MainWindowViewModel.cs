@@ -232,6 +232,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool CanOpenSetup { get; }
     public HistoryImportRun? HistoryImport { get; }
     public bool HistoryImportVisible => HistoryImport is not null;
+    public bool HistoryImportRunning => HistoryImport is { Running: true };
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
         : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
@@ -417,7 +418,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             if (historyImport is not null)
                 historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
                     .ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .Subscribe(_ => {
+                        this.RaisePropertyChanged(nameof(HistoryImportStatus));
+                        this.RaisePropertyChanged(nameof(HistoryImportRunning));
+                    })
                     .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
