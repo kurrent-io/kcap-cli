@@ -2332,9 +2332,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>The account a launch runs under. A vendor without a default directory has no accounts:
     /// it carries none and is never refused.</summary>
     internal AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId) =>
-        HarnessId.From(vendorToken) is { } vendor && _config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory)
-            ? AccountResolution.Resolve(_config.Accounts?.TryLoad(), vendor, accountId, defaultDirectory)
-            : new AccountResolutionOutcome(null, null);
+        ResolveAccount(vendorToken, accountId, resumed: null);
+
+    /// <summary>A resume resolves the account its ledger entry <paramref name="resumed"/> recorded, and
+    /// ignores <paramref name="accountId"/>.</summary>
+    AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId, ResumeLaunchDescriptor? resumed) {
+        if (HarnessId.From(vendorToken) is not { } vendor || !_config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory))
+            return new AccountResolutionOutcome(null, null);
+
+        var registry = _config.Accounts?.TryLoad();
+
+        return resumed is null
+            ? AccountResolution.Resolve(registry, vendor, accountId, defaultDirectory)
+            : AccountResolution.ResolveForResume(registry, vendor, resumed.AccountId, resumed.AccountDirectory, defaultDirectory);
+    }
 
     /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
     internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
@@ -2623,10 +2634,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
-            var resolution = ResolveAccount(cmd.Vendor, cmd.AccountId);
+            var resolution = ResolveAccount(cmd.Vendor, cmd.AccountId, resume?.Entry.Launch);
 
             // A failure, not a rejection: the refusal reaches the caller by name, never as a generic rejection.
             if (resolution.Refusal is { } refusal) {
+                if (resume is not null) resume.AccountRefusal = refusal;
                 await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, refusal);
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
@@ -2887,7 +2899,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId);
+            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId, account);
 
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
