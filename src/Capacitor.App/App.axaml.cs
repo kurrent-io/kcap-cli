@@ -379,7 +379,7 @@ public partial class App : Application {
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane, _localUpgrade, _localSearch);
+                _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -1413,19 +1413,18 @@ public partial class App : Application {
         return result;
     }
 
-    // Split out of the catch so a test can drive "dispose-then-show-error" against a real
-    // DaemonClientService (constructed with fakes, disposal observable) and the same fake
-    // IClassicDesktopStyleApplicationLifetime AppStartupTests already uses for ShowStartupError.
-    // Ordering matters: dispose WHILE WE STILL CAN. `service` may already be live (Start()
-    // called, socket/IPC pump running) if the failure happened later in StartAsync (e.g.
-    // BuildAndShowMainWindow throwing) — and the error window's own close handler force-shuts-
-    // down via desktop.Shutdown(1), which bypasses OnShutdownRequested/DisposeAndShutdownAsync
-    // entirely, so nothing else would ever run this cleanup.
+    // The error window shuts down directly, bypassing normal teardown, so all live services
+    // and windows must be released before showing it.
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
             DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null,
-            LocalSearchController? search = null) {
+            LocalSearchController? search = null, AppMenuBar? menuBar = null) {
+        menuBar?.SetLaunchApprovalsAction(null);
+        desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        desktop.MainWindow?.Close();
+        desktop.MainWindow = null;
+
         // The dependent goes first (it subscribes to service's streams) — same ordering rule as
         // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
         // token and waits out any mutation it started; that wait is unbounded here on purpose — a

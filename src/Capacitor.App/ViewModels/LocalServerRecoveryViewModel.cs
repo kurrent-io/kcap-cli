@@ -55,7 +55,8 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.Visible, initialValue: false)
             .DisposeWith(_disposables);
 
-        StartCommand = ReactiveCommand.CreateFromTask(async () => { await StartAsync(); });
+        StartCommand = ReactiveCommand.CreateFromTask(async () => { await StartAsync(); },
+            this.WhenAnyValue(x => x.IsStarting).Select(starting => !starting));
     }
 
     public bool IsLocalServer { get; }
