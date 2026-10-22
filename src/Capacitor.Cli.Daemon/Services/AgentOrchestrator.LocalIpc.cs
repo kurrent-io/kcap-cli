@@ -108,21 +108,28 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Answers a hosted agent's own kcap MCP servers, which start before the agent's session
     /// exists and so cannot be handed it in their environment. An empty reply means no such agent, or no
-    /// session yet.</summary>
+    /// session the server holds yet; the caller asks again on its next call.</summary>
     public async Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) {
         var started = _time.GetTimestamp();
         while (!AgentSessionSettled(agentId) && _time.GetElapsedTime(started) < AgentSessionBindWait)
             await Task.Delay(AgentSessionBindPoll, _time, ct);
 
-        await FrameCodec.WriteAsync(
-            stream, LocalFrame.AgentSessionReply(_agents.TryGetValue(agentId, out var agent) ? SessionOf(agent) : null), ct);
+        await FrameCodec.WriteAsync(stream, LocalFrame.AgentSessionReply(HeldSessionOf(agentId)), ct);
     }
 
-    /// <summary>False while the agent is still launching, or its transcript is not yet bound: the server
-    /// does not hold that session yet, so a tool call naming it would be refused.</summary>
+    /// <summary>The agent's session once the server holds it. A transcript's session is held only once its
+    /// bind succeeded: answering it before, or after a failed bind, would have the caller keep an id the
+    /// server refuses for good.</summary>
+    string? HeldSessionOf(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+     && (agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is true)
+            ? SessionOf(agent)
+            : null;
+
+    /// <summary>False while the agent is still launching, or its transcript's bind is still in flight.</summary>
     bool AgentSessionSettled(string agentId) =>
         _agents.TryGetValue(agentId, out var agent)
-            ? agent.IsServerSilent || agent.Runtime is not IAcpTranscriptSource || agent.AcpForwarder is not null
+            ? agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is not null
               || agent.Status is not ("Starting" or "Running")
             : !_pendingLaunches.ContainsKey(agentId);
 

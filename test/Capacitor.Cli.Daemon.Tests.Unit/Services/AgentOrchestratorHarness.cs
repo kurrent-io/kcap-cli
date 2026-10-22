@@ -261,6 +261,7 @@ internal static class AgentOrchestratorHarness {
                 System.Threading.Channels.Channel.CreateUnbounded<AcpEventEnvelope>().Reader, NullLogger.Instance, TimeProvider.System,
                 resumeFromSeq: 0),
             Task.CompletedTask);
+        agent.TranscriptBound = true;
 
         return agent;
     }

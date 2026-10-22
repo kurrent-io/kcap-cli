@@ -27,7 +27,7 @@ public class LocalAgentSessionTests {
 
     static async Task<string> Ask(AgentOrchestrator orch, string agentId) {
         using var ms = new MemoryStream();
-        await orch.HandleLocalAgentSessionAsync(agentId, ms, CancellationToken.None);
+        await orch.HandleLocalAgentSessionAsync(agentId, ms, CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(10));
 
         return await Read(ms);
     }
@@ -92,9 +92,9 @@ public class LocalAgentSessionTests {
     }
 
     /// <summary>A bind that never comes, as in a server outage, holds the tool call no longer than the
-    /// wait.</summary>
+    /// wait, and names no session the caller would then keep; it asks again on its next call.</summary>
     [Test]
-    public async Task An_agent_never_bound_is_answered_when_the_wait_runs_out() {
+    public async Task An_agent_never_bound_is_answered_nothing_when_the_wait_runs_out() {
         await using var orch = Build();
         AgentOrchestratorHarness.SeedAcpAgent(orch, "unbound", new FakeAcpRuntime { AcpSessionId = "ses_01JC7QY3VZ8K" });
         using var ms = new MemoryStream();
@@ -103,6 +103,17 @@ public class LocalAgentSessionTests {
         await Drive(answer, AgentOrchestrator.AgentSessionBindWait + TimeSpan.FromSeconds(1));
 
         await Assert.That(answer.IsCompleted).IsTrue();
-        await Assert.That(await Read(ms)).IsEqualTo("ses_01JC7QY3VZ8K");
+        await Assert.That(await Read(ms)).IsEmpty();
+    }
+
+    /// <summary>A failed or refused bind settles the question at once: the server will not hold that
+    /// session, so the answer is nothing, without waiting.</summary>
+    [Test]
+    public async Task A_failed_bind_is_answered_nothing_at_once() {
+        await using var orch = Build();
+        var agent = AgentOrchestratorHarness.SeedAcpAgent(orch, "failed", new FakeAcpRuntime { AcpSessionId = "ses_01JC7QY3VZ8K" });
+        agent.TranscriptBound = false;
+
+        await Assert.That(await Ask(orch, "failed")).IsEmpty();
     }
 }
