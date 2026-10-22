@@ -12,7 +12,8 @@ namespace Capacitor.App.Services;
 /// CLI predates the field; read it through SpawnTypes.
 public sealed record ServiceSnapshot(
     string ServiceId, bool UnitPresent, string State, string? BinaryPath, string? InstallBinaryPath,
-    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null);
+    int? JobPid, int? DaemonPid, bool TxnMarker, bool TxnActive, string? LoadedSpawnType = null,
+    string? Supervisor = null, bool? ServiceUpgradeAvailable = null, bool? WindowsServiceInstallable = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(ServiceSnapshot))]
@@ -70,6 +71,10 @@ public interface IKcapCli {
 
     Task<ProcessResult> ServiceInstallVerifiedAsync(bool replace, CancellationToken ct, string? retireServiceId = null);
 
+    /// `daemon service install --system --verify`: installs or updates the machine's Windows service behind the
+    /// UAC prompt, then hands this daemon to it. Bounded by the time a person may take to answer the prompt.
+    Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct);
+
     /// <c>daemon start -d --name &lt;name&gt;</c>, bounded + ProcessOnly-kill, stamped with a boot-attempt id
     /// for the daemon's own boot-carrier correlation — the lane always mints a fresh one per action.
     Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct);
@@ -110,6 +115,9 @@ public interface IKcapCli {
 public sealed class KcapCli : IKcapCli {
     // Covers forward/rollback budgets, lock wait, crash recovery and the manual-owner kill wait.
     static readonly TimeSpan MutationTimeout = TimeSpan.FromSeconds(60);
+
+    /// The UAC prompt waits on a person; past this the install is reported unconfirmed, not failed.
+    static readonly TimeSpan ElevationTimeout = TimeSpan.FromMinutes(10);
     /// The forced refresh may wait 10 s for the service transaction lock before its own 85 s deadline starts.
     static readonly TimeSpan ReloadTimeout = TimeSpan.FromSeconds(105);
     // Discovery reads every vendor's history off disk; a large Claude projects tree takes seconds.
@@ -235,6 +243,15 @@ public sealed class KcapCli : IKcapCli {
         var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
         return await Run(cliPath, args.ToArray(), new RunOptions(EnvOverlay: env,
             Timeout: retireServiceId is null ? MutationTimeout : RenameTimeout), ct).ConfigureAwait(false);
+    }
+
+    public async Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) {
+        var mutation = MutationEnv();
+        if (CliPath is not { } cliPath) return await NoCliResult().ConfigureAwait(false);
+
+        string[] args = ["daemon", "service", "install", "--system", "--name", _daemonName, "--profile", _profileName, "--verify"];
+        var env = await EnvWithTerminalPathAsync(mutation, ct).ConfigureAwait(false);
+        return await Run(cliPath, args, new RunOptions(EnvOverlay: env, Timeout: ElevationTimeout), ct).ConfigureAwait(false);
     }
 
     public async Task<ProcessResult> DetachedStartAsync(string bootAttemptId, CancellationToken ct) {

@@ -953,7 +953,7 @@ public partial class App : Application {
 
         Action<bool>? openSettingsOn = profiles?.Resolution is { ProfileName: { Length: > 0 } profileName, ServerUrl: { Length: > 0 } serverUrl }
             ? showSearch => OpenSettings(desktop, new SettingsProfileStore(_config, profileName, serverUrl), service, ops, lane, notifier,
-                lifecycle.PhaseClosed, showSearch)
+                lifecycle.PhaseClosed, lifecycleCli.ServiceStatusAsync, showSearch)
             : null;
         Action? openSettings = openSettingsOn is null ? null : () => openSettingsOn(false);
         _openSearchSettings.OnNext(openSettingsOn is null ? null : () => openSettingsOn(true));
@@ -1055,7 +1055,7 @@ public partial class App : Application {
 
     void OpenSettings(IClassicDesktopStyleApplicationLifetime desktop, SettingsProfileStore settings,
             IDaemonClientService service, ILocalControlOps ops, DaemonMutationLane lane, IAppNotifier notifier, Task startupSettled,
-            bool showSearch = false) {
+            Func<CancellationToken, Task<ServiceSnapshot?>> serviceStatus, bool showSearch = false) {
         if (_shutdownStarted) return;
         if (_settingsWindow is { } open) {
             if (open.WindowState == WindowState.Minimized) open.WindowState = WindowState.Normal;
@@ -1086,7 +1086,7 @@ public partial class App : Application {
                 nameOverridden: Environment.GetEnvironmentVariable("KCAP_DAEMON_NAME") is { Length: > 0 },
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
-                profiles: profilesVm) {
+                profiles: profilesVm, serviceStatus: serviceStatus) {
                 Accounts = _accounts is { } accounts
                     ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
                         discover: () => AccountDiscovery.Find(
@@ -1757,7 +1757,9 @@ public partial class App : Application {
 
         var lifecycle = new DaemonLifecycleController(
             service, cli, probe, surface, () => Task.FromResult(ValidProfileName(profile)), _time,
-            canonicalServer, runMutation, autoActionsPermanentlyClosed, requiresAppRestart);
+            canonicalServer, runMutation, autoActionsPermanentlyClosed, requiresAppRestart,
+            windowsServiceDeclined: async () => (await _appState.LoadAsync().ConfigureAwait(false)).WindowsServiceDeclined,
+            rememberWindowsServiceDeclined: () => _appState.UpdateAsync(s => s with { WindowsServiceDeclined = true }));
 
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off
@@ -2094,6 +2096,7 @@ public partial class App : Application {
         MutationVerb.StartVerified => "verified start",
         MutationVerb.DetachedStart => "daemon start",
         MutationVerb.Reload        => "reload",
+        MutationVerb.InstallWindowsService => "install the Windows service",
         _                          => verb.ToString(),
     };
 

@@ -497,6 +497,7 @@ public sealed class DaemonEnabler : ReactiveObject {
         MutationVerb.Replace       => "replacement",
         MutationVerb.StartVerified => "start",
         MutationVerb.DetachedStart => "start",
+        MutationVerb.InstallWindowsService => "install the Windows service",
         _                          => verb.ToString(),
     };
 }

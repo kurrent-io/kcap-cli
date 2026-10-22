@@ -96,6 +96,22 @@
                                            IsVisible="{Binding AutoResumeMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                             </StackPanel>
                         </Border>
+
+                        <Border x:Name="WindowsServiceCard" Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20" IsVisible="{Binding WindowsServiceVisible}">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Classes="kcapLabel" Text="Run as a Windows service" />
+                                    <TextBlock Classes="kcapHint" TextWrapping="Wrap"
+                                               Text="Starts the daemon whenever you sign in and restarts it if it stops, as you. Windows asks for administrator approval once." />
+                                </StackPanel>
+                                <Button x:Name="WindowsServiceButton" Classes="kcapPrimary" Content="Install the Windows service"
+                                        Command="{Binding WindowsServiceCommand}" HorizontalAlignment="Left" />
+                                <TextBlock x:Name="WindowsServiceMessageText" Classes="kcapHint" Text="{Binding WindowsServiceMessage}"
+                                           TextWrapping="Wrap"
+                                           IsVisible="{Binding WindowsServiceMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
