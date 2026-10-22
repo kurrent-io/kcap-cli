@@ -199,7 +199,7 @@ public class WizardCompositionLocalPathTests {
     }
 
     /// The run's own rollback clears the journal before it fails, so the settle must republish the
-    /// durable state before Back and Finish later are restated, not after.
+    /// durable state before Back is restated, not after. Nothing is connected, so Finish later stays hidden.
     [Test]
     public async Task A_pending_setup_that_rolls_back_and_fails_unlocked_offers_back_to_edition() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
@@ -236,7 +236,7 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(lockedBefore).IsFalse();
         await Assert.That(backVisible).IsTrue();
         await Assert.That(canBack).IsTrue();
-        await Assert.That(canFinishLater).IsTrue();
+        await Assert.That(canFinishLater).IsFalse();
         await Assert.That(afterBack).IsEqualTo(WizardStepId.Edition);
     }
 
@@ -291,8 +291,32 @@ public class WizardCompositionLocalPathTests {
         await Assert.That(harness.Cli.SetupLocalCallCount).IsEqualTo(0);
     }
 
+    /// Before a server is connected the app has nothing to show, so Finish later stays hidden on every page up to
+    /// the install, including the first page after stepping back to it.
     [Test]
-    public async Task Finish_later_is_disabled_until_installed() {
+    public async Task Finish_later_waits_for_a_connected_server_on_every_page() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var (atLaunch, onInstall, backOnEdition) = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options());
+            await graph.ViewModel.PendingEnterForTesting;
+            var atLaunch = graph.ViewModel.FinishLaterVisible;
+
+            await graph.Steps.OfType<EditionStepViewModel>().Single().ChooseLocalCommand.Execute().ToTask();
+            await graph.ViewModel.PendingAdvanceForTesting;
+            var onInstall = (graph.ViewModel.Current.Id, graph.ViewModel.FinishLaterVisible);
+
+            await graph.ViewModel.BackCommand.Execute().ToTask();
+            return (atLaunch, onInstall, (graph.ViewModel.Current.Id, graph.ViewModel.FinishLaterVisible));
+        });
+
+        await Assert.That(atLaunch).IsFalse();
+        await Assert.That(onInstall).IsEqualTo((WizardStepId.Install, false));
+        await Assert.That(backOnEdition).IsEqualTo((WizardStepId.Edition, false));
+    }
+
+    [Test]
+    public async Task Finish_later_appears_once_the_install_connects() {
         using var harness = new WizardFixtures.GraphHarness(Config.Root);
         var exit = new TaskCompletionSource<StreamingResult>();
         Action<StreamedLine>? print = null;
@@ -325,7 +349,7 @@ public class WizardCompositionLocalPathTests {
             return (before, during, await finishLater.CanExecute.FirstAsync(enabled => enabled));
         }).WaitAsync(TimeSpan.FromSeconds(30));
 
-        await Assert.That(before).IsTrue();
+        await Assert.That(before).IsFalse();
         await Assert.That(during).IsFalse();
         await Assert.That(after).IsTrue();
     }
