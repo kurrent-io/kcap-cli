@@ -541,6 +541,56 @@ public class MarkdownViewTests {
         });
     }
 
+    /// Pins the prompt's subset: emphasis, strikethrough, code, lists, quotes and a bare URL
+    /// render, and nothing else markdown would read into typed text does — a heading, a rule, a
+    /// setext underline, HTML, an entity, link syntax, an indented block or a backslash escape.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_renders_only_what_someone_types_on_purpose() {
+        await RunOnUiAsync(async () => {
+            var typed = "C:\\Users\\me\\.config \\*\n# not a heading\nunderlined\n---\n***\n&amp; <b>x</b> [label](l.example)\n    indented\n**bold** *em* ~~struck~~ `code` https://u.example\n\n```\nvar x = 1;\n```\n\n- one\n\n> quoted";
+            var (window, root, opened) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                var paragraph = Paragraphs(root).First();
+                await Assert.That(Reads(paragraph).Split('\n', StringSplitOptions.TrimEntries)).IsEquivalentTo([
+                    @"C:\Users\me\.config \*", "# not a heading", "underlined", "---", "***",
+                    "&amp; <b>x</b> [label](l.example)", "indented", "bold em struck code https://u.example",
+                ]);
+                await Assert.That(Spans<Bold>(paragraph.Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Italic>(paragraph.Inlines!).Count()).IsEqualTo(1);
+                await Assert.That(Spans<Run>(paragraph.Inlines!).Any(r => r.Text == "code" && r.Classes.Contains("markdown-code-inline"))).IsTrue();
+                await Assert.That(Spans<MarkdownHyperlink>(paragraph.Inlines!).Select(l => l.NavigateUri!.ToString()))
+                    .IsEquivalentTo(["https://u.example/"]);
+                await Assert.That(All<Separator>(root).Any(s => s.Classes.Contains("markdown-thematic-break"))).IsFalse();
+                var code = All<Border>(root).Single(b => b.Classes.Contains("markdown-code-block"));
+                await Assert.That(Reads(All<TextBlock>(code).Single())).IsEqualTo("var x = 1;");
+                await Assert.That(All<TextBlock>(root).Count(t => t.Classes.Contains("markdown-list-marker") && t.Text == "•")).IsEqualTo(1);
+                var quote = All<Border>(root).Single(b => b.Classes.Contains("markdown-blockquote"));
+                await Assert.That(Paragraphs(quote).Select(Reads)).IsEquivalentTo(["quoted"]);
+            } finally { window.Close(); }
+        });
+    }
+
+    /// Pins that a prompt keeps its line breaks and its runs of blank lines, where chat joins the
+    /// lines of a paragraph and collapses blank lines to one paragraph gap.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_prompt_keeps_its_newlines_and_blank_lines() {
+        await RunOnUiAsync(async () => {
+            const string typed = "one\ntwo\n\n\n\nthree";
+            var (window, root, _) = Show(typed, MarkdownFlavor.Prompt);
+            try {
+                var paragraph = Paragraphs(root).Single();
+                await Assert.That(Reads(paragraph).Split('\n', StringSplitOptions.TrimEntries)).IsEquivalentTo(["one", "two", "", "", "", "three"]);
+            } finally { window.Close(); }
+
+            (window, root, _) = Show(typed);
+            try {
+                await Assert.That(Paragraphs(root).Select(Reads)).IsEquivalentTo(["one two", "three"]);
+            } finally { window.Close(); }
+        });
+    }
+
     /// Pins the degrade for text Markdig refuses to parse (128 nested quotes): the source as plain
     /// text, in either flavor, and the next parseable text renders as markdown again.
     [Test]
