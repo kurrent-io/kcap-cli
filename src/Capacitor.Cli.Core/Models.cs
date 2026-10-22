@@ -2245,6 +2245,10 @@ public readonly record struct DaemonConnect(
         // cannot see a branch that exists only here.
         bool                                        SupportsBranchBaseRef = false,
         ResumingAgentClaim[]?                       ResumingAgents = null,
+        // ActiveCount and its active count version, read together, so the server orders this daemon's
+        // register and unregister against the connect as it does against a status report.
+        int?                                        ActiveCount = null,
+        long?                                       ActiveCountVersion = null,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
         // Null from a daemon predating the field, which the server reads as explore and edit only.
         string[]?                                   AcpPresets = null

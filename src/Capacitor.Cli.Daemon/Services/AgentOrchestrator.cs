@@ -959,6 +959,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
         _server.GetResumingAgents = ResumingClaims;
+        _server.GetActiveCount = ActiveCountSnapshot;
 
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
@@ -1085,6 +1086,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 agent.ActiveCountVersion = ++_activeCountVersion;
         }
         _statusNotifier.Pulse();
+    }
+
+    internal (int Count, long Version) ActiveCountSnapshot() {
+        lock (_membership) return (ActiveCount, _activeCountVersion);
     }
 
     bool IsCounted(AgentInstance agent) =>
@@ -1441,9 +1446,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
     internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) {
-        int activeCount;
-        long activeCountVersion;
-        lock (_membership) (activeCount, activeCountVersion) = (ActiveCount, _activeCountVersion);
+        var (activeCount, activeCountVersion) = ActiveCountSnapshot();
 
         return new(activeCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-

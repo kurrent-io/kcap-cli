@@ -130,6 +130,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
     public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
 
+    public Func<(int Count, long Version)>? GetActiveCount { get; set; }
+
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
     /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
     /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
@@ -710,8 +712,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
-    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) =>
-        new(
+    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) {
+        var activeCount = GetActiveCount?.Invoke();
+
+        return new(
             _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
             _config.InstanceId, _config.Version, _config.SupportedVendors, new MachineId(_config.ConfigRoot).Get(), liveAgents,
             _config.UnattendedVendors,
@@ -741,7 +745,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModels: _config.VendorModels,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
-            ResumingAgents: GetResumingAgents?.Invoke());
+            ResumingAgents: GetResumingAgents?.Invoke(),
+            ActiveCount: activeCount?.Count,
+            ActiveCountVersion: activeCount?.Version);
+    }
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
