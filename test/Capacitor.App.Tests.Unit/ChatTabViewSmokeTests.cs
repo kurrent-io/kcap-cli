@@ -316,15 +316,10 @@ public class ChatTabViewSmokeTests {
             var watch = System.Diagnostics.Stopwatch.StartNew();
             for (var i = 0; i < 80; i++) {
                 var middle = host.Scroll.Viewport.Height / 2;
-                var inTailReserve = items.ItemsPanelRoot is { } panel
-                    && panel.TranslatePoint(new Point(0, panel.Bounds.Height), host.Scroll) is { } end
-                    && end.Y <= middle;
-                // At the scroll end the tail reserve can leave the middle blank, so read the visible row nearest it.
                 var reading = drag ? null : items.GetRealizedContainers()
                     .Select(container => (container, top: container.TranslatePoint(default, host.Scroll)?.Y))
                     .Where(row => row.top is { } top && top < host.Scroll.Viewport.Height && top + row.container.Bounds.Height > 0
-                        && (inTailReserve
-                            || top <= middle && top + row.container.Bounds.Height > middle))
+                        && top <= middle && top + row.container.Bounds.Height > middle)
                     .OrderBy(row => Math.Max(0, Math.Max(row.top!.Value - middle, middle - row.top.Value - row.container.Bounds.Height)))
                     .Select(row => row.container)
                     .FirstOrDefault();
@@ -637,6 +632,7 @@ public class ChatTabViewSmokeTests {
                 else if (plain is not null) plain.ClearSelection();
                 else markdown.ClearSelection();
                 await Assert.That(markdown.HasSelection).IsFalse();
+                host.Settle();
                 host.Scroll.ScrollToEnd();
                 host.Settle();
                 await host.AppendAndTickAsync(path, 4);
@@ -695,6 +691,10 @@ public class ChatTabViewSmokeTests {
             host.View.DataContext = next.Chat;
             host.Settle();
             await Assert.That(host.AtBottom()).IsTrue();
+            var items = host.View.FindControl<ItemsControl>("ChatItems")!;
+            var last = items.ContainerFromItem(next.Chat.Items[^1])!;
+            var lastBottom = last.TranslatePoint(new Point(0, last.Bounds.Height), host.Scroll)!.Value.Y;
+            await Assert.That(host.Scroll.Viewport.Height - lastBottom).IsLessThan(40);
 
             await next.AppendAndTickAsync(nextPath, 20);
             host.Settle();
