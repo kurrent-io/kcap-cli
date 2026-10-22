@@ -90,9 +90,9 @@ running notes file that every PR edits.
   exit launchd never restarts.
 - **A hosted agent's launch prompt never goes on its command line.** Any local user can read a
   command line through `ps`, and a `pkill -f` from any session matches every agent whose prompt
-  contains its pattern. The PTY launch writes the prompt to an owner-only file under the daemon's
-  state directory and passes a pointer; only a slash command stays inline, because the agent runs
-  one only as the literal first message.
+  contains its pattern. The PTY launch spawns the agent without its prompt and pastes it into the
+  composer once startup output has settled, so the real prompt is the agent's first message; only
+  a slash command stays inline, because the agent runs one only as the literal first message.
 - **The daemon's state directory is owner-only on Windows too, and securing it never blocks a
   boot.** `OwnerOnlyDirectory` gives it a protected DACL (the user and SYSTEM) at every start, so
   what is inside stops inheriting from a relocated `KCAP_DAEMONS_DIR`. A failure warns and boots:

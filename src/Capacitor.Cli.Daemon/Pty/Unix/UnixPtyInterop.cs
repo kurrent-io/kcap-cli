@@ -31,6 +31,10 @@ internal static partial class UnixPtyInterop {
 
     [LibraryImport("libc", SetLastError = true)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    public static partial nint write(int fd, ReadOnlySpan<byte> buf, nint count);
+
+    [LibraryImport("libc", SetLastError = true)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     public static partial int close(int fd);
 
     [LibraryImport("libc", SetLastError = true)]

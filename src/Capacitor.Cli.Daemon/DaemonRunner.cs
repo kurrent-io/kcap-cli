@@ -443,8 +443,7 @@ public static partial class DaemonRunner {
 
         builder.Services.AddHttpClient("Attachments", client => client.BaseAddress = new Uri(config.ServerUrl));
 
-        var promptRoot = Path.Combine(coverageStateDir, "prompts");
-        PromptFile.Sweep(promptRoot);
+        LegacyPromptFiles.Sweep(coverageStateDir);
 
         builder.Services.AddSingleton<IHostedAgentLauncher, ClaudeLauncher>();
         builder.Services.AddSingleton<IHostedAgentLauncher, CodexLauncher>();
@@ -464,8 +463,7 @@ public static partial class DaemonRunner {
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>(),
-                promptRoot
+                sp.GetRequiredService<TimeProvider>()
             )
         );
         // Codex is the ONE vendor with two transports. The composite factory routes review-flow
@@ -479,8 +477,7 @@ public static partial class DaemonRunner {
                 codexLauncher,
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>(),
-                promptRoot);
+                sp.GetRequiredService<TimeProvider>());
             return new Harness.Codex.CodexHostedAgentRuntimeFactory(
                 (Harness.Codex.CodexLauncher) codexLauncher, pty,
                 sp.GetRequiredService<DaemonConfig>(),

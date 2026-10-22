@@ -135,11 +135,6 @@ internal sealed record LauncherContext(
     /// that passed the orchestrator's <c>ClaudePermissionModePolicy</c> guard.</summary>
     public string? PermissionMode { get; init; }
 
-    /// <summary>Set when <see cref="Prompt"/> is kept off the command line: the launcher passes
-    /// <see cref="Services.PromptFile.Pointer"/> to this file in place of the prompt, and lets the agent
-    /// read the file's directory.</summary>
-    public string? PromptFile { get; init; }
-
     /// <summary>The vendor session id a fresh interactive launch is told to use, so the daemon knows it
     /// before the vendor writes anything. Null when the vendor or launch kind is not pinned.</summary>
     public string? PinnedSessionId { get; init; }
