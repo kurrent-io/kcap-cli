@@ -146,6 +146,32 @@ public class AgentOrchestratorResumeAccountTests {
         await Assert.That(orch.ResumingClaims()).IsEmpty();
     }
 
+    /// <summary>With no vendor session the lane goes straight to the continuation, so the account check has
+    /// to come first there too.</summary>
+    [Test]
+    public async Task Resume_without_a_vendor_session_of_a_removed_registered_account_fails_with_account_unavailable() {
+        var work = Register(WorkId, Tmp.CreateDir(".claude-work"), "Work");
+        Store.Mutate(r => (r with { Accounts = [] }, 0));
+        var server = new CaptureServerConnection();
+        await using var orch = Build(server: server);
+        var entry = Resuming(orch, "resume-sessionless", work, WorkId, "Work");
+        orch.ResumeLedger!.Write(entry with { VendorSession = null });
+        var continued = CountContinuations(orch);
+        var refusal   = AccountResolution.ResolveForResume(Store.TryLoad(), HarnessId.Claude, WorkId, work, ClaudeDefault).Refusal!;
+
+        await ResumeAsync(orch);
+
+        var after = orch.ResumeLedger!.TryRead("resume-sessionless")!;
+        await Assert.That(after.State).IsEqualTo(ResumeState.Interrupted);
+        await Assert.That(after.LastError).StartsWith("account_unavailable: ");
+        await Assert.That(after.LastError).IsEqualTo(refusal);
+        await Assert.That(after.Attempts).IsEqualTo(1);
+        await Assert.That(continued()).IsEqualTo(0);
+        await Assert.That(_pty.SpawnCalls).IsEqualTo(0);
+        await Assert.That(server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
+            .Contains(("resume-sessionless", "Failed", $"resume_failed:{refusal}"));
+    }
+
     /// <summary>The resume leaves the registry as it found it: an unregistered default stays unregistered.</summary>
     [Test]
     public async Task Resume_of_an_unregistered_default_uses_its_stored_directory() {

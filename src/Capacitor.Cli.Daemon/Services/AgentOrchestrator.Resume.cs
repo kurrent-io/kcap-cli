@@ -848,6 +848,12 @@ internal partial class AgentOrchestrator {
             if (RecordFailedAttempt(entry, LastErrorOf(reason, exitCode)) is not { } failed) return ResumeOutcome.Stopped;
 
             entry = failed;
+        } else if (ResolveAccount(entry.Vendor, accountId: null, entry.Launch).Refusal is { } refusal) {
+            reason = refusal;
+
+            if (RecordFailedAttempt(entry, reason) is not { } failed) return ResumeOutcome.Stopped;
+
+            entry = failed;
         } else {
             reason = NativeResumeUnsupported;
         }
