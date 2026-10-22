@@ -6,6 +6,7 @@ using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Harness.Claude;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Cli.Daemon.Tests.Unit.Pty;
 
@@ -182,6 +183,103 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(pty.SpawnCalls).IsEqualTo(2);
         await Assert.That(pty.LastEnv!.ContainsKey("CLAUDE_CONFIG_DIR")).IsFalse();
         await Assert.That(pty.LastRemoveEnv!).Contains("CLAUDE_CONFIG_DIR");
+    }
+
+    [Test]
+    public async Task Status_dto_names_the_resolved_account_directory_id_and_label() {
+        var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy(), repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-status", repo, WorkId));
+
+        var row = orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-status");
+        await Assert.That(row.AccountDirectory).IsEqualTo(work);
+        await Assert.That(row.AccountId).IsEqualTo(WorkId);
+        await Assert.That(row.AccountLabel).IsEqualTo("Work");
+    }
+
+    [Test]
+    public async Task Registration_and_live_agent_report_carry_the_resolved_account() {
+        var work   = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        var server = new CaptureServerConnection();
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(server, LivePty(), Spy(), repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-report", repo, WorkId));
+
+        await Assert.That(server.AgentRegisteredAccounts).IsEquivalentTo([("acct-report", (string?)work, (string?)WorkId, (string?)"Work")]);
+
+        var live = orch.BuildLiveAgents().Single(a => a.Id == "acct-report");
+        await Assert.That(live.AccountDirectory).IsEqualTo(work);
+        await Assert.That(live.AccountId).IsEqualTo(WorkId);
+        await Assert.That(live.AccountLabel).IsEqualTo("Work");
+    }
+
+    /// <summary>A reconnect re-registers the agent, and the server has no launch to read the account from.</summary>
+    [Test]
+    public async Task Reconnect_registration_carries_the_resolved_account() {
+        var work   = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        var server = new CaptureServerConnection();
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(server, LivePty(), Spy(), repo);
+        await orch.HandleLaunchAgentForTest(Launch("acct-rereg", repo, WorkId));
+
+        await orch.ReRegisterAgentsForTestAsync();
+
+        var expected = ("acct-rereg", (string?)work, (string?)WorkId, (string?)"Work");
+        await Assert.That(server.AgentRegisteredAccounts).IsEquivalentTo([expected, expected]);
+    }
+
+    [Test]
+    public async Task Unregistered_default_reports_the_directory_and_a_null_id() {
+        var server = new CaptureServerConnection();
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(server, LivePty(), Spy(), repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-unregistered", repo, accountId: null));
+
+        var row = orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-unregistered");
+        await Assert.That(row.AccountDirectory).IsEqualTo(ClaudeDefault);
+        await Assert.That(row.AccountId).IsNull();
+        await Assert.That(row.AccountLabel).IsEqualTo(".claude");
+        await Assert.That(server.AgentRegisteredAccounts).IsEquivalentTo([("acct-unregistered", (string?)ClaudeDefault, (string?)null, (string?)".claude")]);
+
+        var live = orch.BuildLiveAgents().Single(a => a.Id == "acct-unregistered");
+        await Assert.That(live.AccountDirectory).IsEqualTo(ClaudeDefault);
+        await Assert.That(live.AccountId).IsNull();
+        await Assert.That(live.AccountLabel).IsEqualTo(".claude");
+    }
+
+    [Test]
+    public async Task Vendor_without_accounts_reports_no_account() {
+        var server = new CaptureServerConnection();
+        using var repo = GitRepo.CreateWithCommit();
+        await using var orch = Build(server, LivePty(), Spy("gemini"), repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-none", repo, accountId: null, vendor: "gemini"));
+
+        var row = orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-none");
+        await Assert.That((row.AccountDirectory, row.AccountId, row.AccountLabel)).IsEqualTo(((string?)null, (string?)null, (string?)null));
+        await Assert.That(server.AgentRegisteredAccounts).IsEquivalentTo([("acct-none", (string?)null, (string?)null, (string?)null)]);
+
+        var live = orch.BuildLiveAgents().Single(a => a.Id == "acct-none");
+        await Assert.That((live.AccountDirectory, live.AccountId, live.AccountLabel)).IsEqualTo(((string?)null, (string?)null, (string?)null));
+    }
+
+    /// <summary>A resuming or interrupted agent has no process, so its row reads the account its ledger entry recorded.</summary>
+    [Test]
+    public async Task Ledger_only_status_row_reports_the_account_its_entry_recorded() {
+        var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        await using var orch = Build(new CaptureServerConnection(), LivePty(), Spy());
+        var entry = ResumeLedgerEntries.For("acct-ledger", ResumeState.Interrupted);
+        orch.ResumeLedger!.Write(entry with { Launch = entry.Launch with { AccountDirectory = work, AccountId = WorkId, AccountLabel = "Work" } });
+
+        var row = orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-ledger");
+
+        await Assert.That(row.AccountDirectory).IsEqualTo(work);
+        await Assert.That(row.AccountId).IsEqualTo(WorkId);
+        await Assert.That(row.AccountLabel).IsEqualTo("Work");
     }
 
     [Test]

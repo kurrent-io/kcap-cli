@@ -2001,7 +2001,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ActivitySeq:  a.ActivityClock.ActivitySeq,
                 IdleForMs:    a.ActivityClock.IdleForMs,
                 TurnInFlight: a.ActivityClock.TurnInFlight,
-                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null))
+                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null,
+                AccountDirectory: a.Account?.Directory,
+                AccountId:        a.Account?.AccountId,
+                AccountLabel:     a.Account?.Label))
             .ToList();
 
         foreach (var p in _pendingLaunches.Values) {
@@ -2014,7 +2017,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 TurnInFlight: p.ActivityClock.TurnInFlight,
                 // A pending launch IS "Starting" by definition — there is no other status it can hold —
                 // so the Status gate above is satisfied unconditionally here.
-                LaunchStage:  p.ActivityClock.LaunchStage));
+                LaunchStage:  p.ActivityClock.LaunchStage,
+                AccountDirectory: p.Account?.Directory,
+                AccountId:        p.Account?.AccountId,
+                AccountLabel:     p.Account?.Label));
         }
 
         return live;
@@ -2033,7 +2039,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         AgentActivityClock ActivityClock,
         string?            Vendor,
         string?            RepoPath,
-        string?            Title);
+        string?            Title,
+        ResolvedAccount?   Account);
 
     readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
 
@@ -2122,10 +2129,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>_agents</c>.</summary>
     internal IDisposable TrackPendingLaunch(
             string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
-            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
+            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null,
+            ResolvedAccount? account = null) {
         lock (_membership)
             _pendingLaunches[agentId] = new PendingLaunch(
-                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
+                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title, account);
         _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
@@ -2906,7 +2914,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
             using var pendingLaunch = isPrivate ? null : TrackPendingLaunch(
                 agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
-                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
+                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt), account: account);
 
             try {
                 // A resume's start also ends with its attempt, so a stop during the handshake does not wait for the vendor.
@@ -5099,7 +5107,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle,
+            agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5589,7 +5598,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle,
+                        agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the

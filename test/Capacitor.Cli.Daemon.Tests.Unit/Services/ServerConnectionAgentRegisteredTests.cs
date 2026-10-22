@@ -75,6 +75,21 @@ public class ServerConnectionAgentRegisteredTests {
         await Assert.That(conn.LegacyCalls.Single().RuntimeTransport).IsEqualTo("pty");
     }
 
+    [Test]
+    public async Task The_registration_names_the_account_on_both_calls() {
+        var acked  = new TestServerConnection();
+        var legacy = new TestServerConnection { Acked = UnknownMethod };
+
+        await acked.AgentRegisteredAsync("agent-1", "prompt", "model", null, "/repo", accountDirectory: "/home/.claude-work", accountId: "work-id", accountLabel: "Work");
+        await legacy.AgentRegisteredAsync("agent-1", "prompt", "model", null, "/repo", accountDirectory: "/home/.claude", accountLabel: ".claude");
+
+        var named = acked.AckedCalls.Single();
+        await Assert.That((named.AccountDirectory, named.AccountId, named.AccountLabel)).IsEqualTo(((string?)"/home/.claude-work", (string?)"work-id", (string?)"Work"));
+
+        var fallback = legacy.LegacyCalls.Single();
+        await Assert.That((fallback.AccountDirectory, fallback.AccountId, fallback.AccountLabel)).IsEqualTo(((string?)"/home/.claude", (string?)null, (string?)".claude"));
+    }
+
     /// <summary>The missing method is remembered per connection: a reconnect may reach an upgraded server.</summary>
     [Test]
     public async Task The_missing_method_is_not_probed_again_until_the_connection_changes() {
