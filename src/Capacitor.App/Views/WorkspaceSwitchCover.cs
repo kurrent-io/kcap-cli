@@ -57,9 +57,11 @@ public sealed class WorkspaceSwitchCover {
             return;
         }
         var generation = ++_generation;
-        var timeout = time.CreateTimer(_ => Dispatcher.UIThread.Post(() => LiftIfHeld(generation)), null, MaxHold, Timeout.InfiniteTimeSpan);
-        var painted = Painted(workspace).Where(p => p).Take(1).Subscribe(_ => AfterLayout(generation));
-        _hold.Disposable = new CompositeDisposable(painted, timeout);
+        // Installed before subscribing: a workspace already painted lifts during Subscribe, and that lift must find
+        // the hold to dispose. Adding to a disposed hold disposes the addition at once.
+        var hold = new CompositeDisposable(time.CreateTimer(_ => Dispatcher.UIThread.Post(() => LiftIfHeld(generation)), null, MaxHold, Timeout.InfiniteTimeSpan));
+        _hold.Disposable = hold;
+        hold.Add(Painted(workspace).Where(p => p).Take(1).Subscribe(_ => AfterLayout(generation)));
     }
 
     void LiftIfHeld(int generation) {
