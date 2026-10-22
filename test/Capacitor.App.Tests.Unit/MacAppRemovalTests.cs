@@ -4,6 +4,8 @@ using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
 using TUnit.Assertions.Enums;
 using TUnit.Core.Enums;
+using NSubstitute;
+using Velopack.Locators;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -89,6 +91,33 @@ public class MacAppRemovalTests {
         await Assert.That(Directory.Exists(saved)).IsFalse();
         await Assert.That(File.Exists(prefs)).IsFalse();
         await Assert.That(File.Exists(unrelated)).IsTrue();
+    }
+
+    [Test]
+    public async Task Removes_updater_files_for_this_bundle_and_preserves_other_apps() {
+        var bundle = Bundle();
+        var home = new UserHome(Tmp.GetResolvedPath("home"));
+        var packages = Tmp.CreateDir("home/Library/Caches/velopack/kcap/packages");
+        var scratch = Tmp.CreateDir("temp/kcap");
+        var log = Tmp.CreateFile("home/Library/Logs/velopack_kcap.log", "log");
+        var tempLog = Tmp.CreateFile("temp/velopack_kcap.log", "log");
+        var other = Tmp.CreateFile("home/Library/Caches/velopack/other/packages/release.nupkg", "keep");
+        var locator = Substitute.For<IVelopackLocator>();
+        locator.RootAppDir.Returns(bundle);
+        locator.AppId.Returns("kcap");
+        locator.PackagesDir.Returns(packages);
+        locator.AppTempDir.Returns(scratch);
+        var files = MacUpdaterFiles.Resolve(locator, bundle, home, Tmp.PathTo("temp"));
+        var removal = new MacAppRemoval(new NoProcesses(), home, bundle, [], files);
+
+        removal.DeleteSupportFiles();
+
+        await Assert.That(Directory.Exists(Path.GetDirectoryName(packages))).IsFalse();
+        await Assert.That(Directory.Exists(scratch)).IsFalse();
+        await Assert.That(File.Exists(log)).IsFalse();
+        await Assert.That(File.Exists(tempLog)).IsFalse();
+        await Assert.That(File.Exists(other)).IsTrue();
+        await Assert.That(MacUpdaterFiles.Resolve(locator, Tmp.PathTo("other.app"), home, Tmp.PathTo("temp"))).IsNull();
     }
 
     [Test, RunOn(OS.MacOs), UnsupportedOSPlatform("windows")]

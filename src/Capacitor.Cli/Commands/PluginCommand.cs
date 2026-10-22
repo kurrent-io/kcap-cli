@@ -2018,7 +2018,9 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
             // (marker line 2) is gone, so a retry can't recover. Leaving both in
             // place keeps `kcap plugin remove --kiro` retryable.
             var previousDefault = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "kiro_default";
-            if (KiroSettings.ReadDefaultAgent(settingsPath) == KiroAgentName
+            var currentDefault = KiroHooksInstaller.IsInstalled(agentPath) || File.Exists(agentPath)
+                ? KiroSettings.ReadDefaultAgentStrict(settingsPath) : null;
+            if (currentDefault == KiroAgentName
              && !KiroSettings.SetDefaultAgent(settingsPath, previousDefault)) {
                 await env.Stderr.WriteLineAsync(
                     $"Could not restore your default Kiro agent to '{previousDefault}' in {settingsPath}. "

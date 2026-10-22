@@ -32,7 +32,13 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
     /// </summary>
     public bool Refresh() => Entry() is { } entry && (entry == Expected() || Write());
 
-    public void Remove() => Git("--remove-section", Section);
+    public bool Remove() {
+        // git exits 128 when no section exists. Distinguish that idempotent case from a
+        // failed write; a failed read must never turn an incomplete uninstall into success.
+        if (!File.Exists(ConfigFile())) return true;
+        if (Git("--list") is null) return false;
+        return Entry() is null || Git("--remove-section", Section) is not null;
+    }
 
     public bool IsInstalled() => Entry() is not null;
 

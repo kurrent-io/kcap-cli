@@ -10,9 +10,14 @@ kcap Kiro agent (~/.kiro/agents/kcap.json, restoring the default agent it
 replaced), the Pi live-ingest extension (~/.pi/agent/extensions/kcap.ts), and the
 OpenCode plugin (~/.config/opencode/plugins/kcap.ts), removes agent skills (and
 any legacy ~/.codex/skills/kcap-* folders), removes the kcap git hook from
-~/.gitconfig, and deletes the kcap config directory.
+~/.gitconfig, and removes kcap configuration, retaining local lifecycle safety metadata.
 
 Non-kcap entries in shared files (settings.json, hooks.json) are preserved.
+
+Also removes Mistral Vibe hooks/MCP, kcap caches, legacy Cursor pending
+recordings and retired vendor-specific skills. Local lifecycle safety metadata
+(the retired-URL registry and lifecycle lock) stays; it contains no recordings.
+Cleanup holds that lock until configuration removal has finished.
 
 Options:
   --project           Also remove kcap entries from project-scope files

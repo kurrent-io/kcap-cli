@@ -10,9 +10,12 @@ public sealed class LocalLifecycle(LocalRoot root, IEnumerable<ILifecycleRecover
 
     public LocalRoot Root { get; } = root;
 
-    public async Task<T> RunAsync<T>(TimeSpan wait, Func<LifecycleLease, CancellationToken, Task<T>> command, CancellationToken ct) {
+    /// <summary>Runs the optional read-only consent check under the lease before recovery or mutation.</summary>
+    public async Task<T> RunAsync<T>(TimeSpan wait, Func<LifecycleLease, CancellationToken, Task<T>> command, CancellationToken ct,
+        Action<LifecycleLease>? beforeRecovery = null) {
         using var lease = await LifecycleLease.AcquireAsync(Root, wait, time, ct);
 
+        beforeRecovery?.Invoke(lease);
         await RecoverAsync(lease, ct);
 
         return await command(lease, ct);
