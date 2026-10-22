@@ -206,11 +206,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
 
     string? TryNormalize(string path) {
         try {
-            var expanded = path == "~" ? env.Home.Path
-                         : path.StartsWith("~/", StringComparison.Ordinal) ? Path.Combine(env.Home.Path, path[2..])
-                         : path;
-
-            return AccountDirectory.Normalize(expanded);
+            return AccountDirectory.Normalize(AccountDirectory.ExpandHome(path, env.Home));
         } catch (ArgumentException) {
             return null;
         } catch (NotSupportedException) {

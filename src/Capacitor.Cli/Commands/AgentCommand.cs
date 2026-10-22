@@ -1,11 +1,13 @@
 using System.Net.Sockets;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Local;
+using Capacitor.Cli.Services;
 
 namespace Capacitor.Cli.Commands;
 
@@ -24,8 +26,12 @@ internal readonly record struct AgentRow(
 /// terminal over the daemon's local control socket.
 /// </summary>
 internal sealed class AgentCommand(
-        DaemonStore store, ConfigRoot config, ProfileContext profiles, UserHome home,
+        DaemonStore store, AccountStore accounts, ConfigRoot config, ProfileContext profiles, UserHome home,
         HarnessRegistry harnesses, BinaryProbe binaries, WorkingDirectory workdir, TimeProvider time) {
+    const string AccountsCapability = "accounts/1";
+
+    static readonly TimeSpan HelloTimeout = TimeSpan.FromSeconds(5);
+
     internal static readonly string[] KnownSubcommands = ["start", "ls", "stop", "attach", "resume"];
 
     /// Verbs that only ever belonged to the pre-rename `agent` daemon group, minus the
@@ -88,18 +94,60 @@ internal sealed class AgentCommand(
             return 1;
         }
 
+        ResolvedAccount? account = null;
+        if (parsed.Account is not null) {
+            account = await ResolveAccountAsync(parsed);
+            if (account is null) return 1;
+        }
+
         var name = ResolveName(parsed.DaemonName);
         if (!await EnsureDaemonAsync(name)) return 1;
+
+        // An older daemon never reads the account id and would start the agent under its default account.
+        if (account is not null && !await DaemonChoosesAccountsAsync(name)) {
+            await Console.Error.WriteLineAsync("kcap agent start: this daemon does not support choosing an account; update kcap on this machine");
+
+            return 1;
+        }
 
         var sock = store.SocketPath(name);
         var work = parsed.Worktree ? WorkLocation.OwnedWorktree : WorkLocation.BorrowedCwd;
         var (cols, rows) = TermSize();
-        var spawn = FrameCodec.Spawn(parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows, parsed.StartTitle);
+        var spawn = FrameCodec.Spawn(
+            parsed.Vendor, work, parsed.Private, workdir.Path, parsed.Passthrough, cols, rows, parsed.StartTitle, account?.AccountId);
 
         return parsed.Detached
             ? await SpawnDetachedAsync(sock, spawn)
             : await LocalAgentClient.RunAsync(sock, spawn, time, CancellationToken.None);
     }
+
+    /// <summary>Null after printing why the <c>--account</c> value cannot be used.</summary>
+    async Task<ResolvedAccount?> ResolveAccountAsync(AgentStartArgs parsed) {
+        AccountRegistry registry;
+        try {
+            registry = accounts.Load();
+        } catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException) {
+            await Console.Error.WriteLineAsync($"kcap agent start: could not read the kcap account registry in {accounts.Directory}: {ex.Message}");
+
+            return null;
+        }
+
+        if (HarnessNames.From(parsed.Vendor) is not ({ } vendor and (HarnessId.Claude or HarnessId.Codex))) {
+            await Console.Error.WriteLineAsync($"kcap agent start: cannot use --account with {parsed.Vendor}: accounts apply to claude and codex only");
+
+            return null;
+        }
+
+        var outcome = AccountResolution.ResolveArgument(registry, vendor, AccountDirectory.ExpandHome(parsed.Account!, home));
+        if (outcome.Account is not null) return outcome.Account;
+
+        await Console.Error.WriteLineAsync($"kcap agent start: {outcome.Refusal}");
+
+        return null;
+    }
+
+    async Task<bool> DaemonChoosesAccountsAsync(string name) =>
+        (await HelloProbe.RunAsync(store, name, time, HelloTimeout)).Capabilities.Contains(AccountsCapability);
 
     async Task<int> AttachAsync(string[] args) {
         if (args.Length == 0 || args[0].StartsWith('-')) {

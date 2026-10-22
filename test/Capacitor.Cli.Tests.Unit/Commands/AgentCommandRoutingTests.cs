@@ -1,5 +1,6 @@
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.LocalIpc;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
@@ -10,7 +11,7 @@ public class AgentCommandRoutingTests {
     [TempHome]        public required TempHome        Home    { get; init; }
 
     AgentCommand Command() =>
-        new(Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.All(),
+        new(Daemons.Store, AccountStore.Beside(Daemons.Store), Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.All(),
             TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System);
 
     [Test]

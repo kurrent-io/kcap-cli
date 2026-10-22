@@ -158,4 +158,36 @@ public class AgentStartArgsTests {
         await Assert.That(a.Error).IsEqualTo("--title must not be blank");
         await Assert.That(a.Title).IsNull();
     }
+
+    [Test]
+    public async Task Account_flag_with_a_value_parses() {
+        var spaced = AgentStartArgs.Parse(["codex", "--account", "ab12cd", "--private", "--", "fix"]);
+        var joined = AgentStartArgs.Parse(["claude", "--account=~/.claude-work", "-d"]);
+
+        await Assert.That(spaced.Error).IsNull();
+        await Assert.That(spaced.Account).IsEqualTo("ab12cd");
+        await Assert.That(spaced.Private).IsTrue();
+        await Assert.That(spaced.Passthrough).IsEquivalentTo(new[] { "fix" });
+        await Assert.That(joined.Error).IsNull();
+        await Assert.That(joined.Account).IsEqualTo("~/.claude-work");
+        await Assert.That(joined.Detached).IsTrue();
+        await Assert.That(AgentStartArgs.Parse(["claude"]).Account).IsNull();
+    }
+
+    [Test]
+    public async Task Account_flag_without_a_value_is_an_error() {
+        string[][] cases = [
+            ["claude", "--account"],
+            ["claude", "--account", ""],
+            ["claude", "--account", "--private"],
+            ["claude", "--account="],
+        ];
+
+        foreach (var args in cases) {
+            var a = AgentStartArgs.Parse(args);
+
+            await Assert.That(a.Error).IsEqualTo("--account requires a value").Because(string.Join(' ', args));
+            await Assert.That(a.Account).IsNull();
+        }
+    }
 }
