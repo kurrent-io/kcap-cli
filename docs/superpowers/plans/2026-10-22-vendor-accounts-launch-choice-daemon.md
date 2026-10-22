@@ -423,3 +423,32 @@ Daemon_without_accounts_capability_is_refused_before_spawn()
 - [ ] **Step 2:** `dotnet test --solution Capacitor.slnx` — green (daemon timing flakes rerun alone per the project memory).
 - [ ] **Step 3:** `dotnet publish src/Capacitor.Cli/Capacitor.Cli.csproj -c Release 2>&1 | grep -E 'IL[23][01][0-9]{2}'` — no output.
 - [ ] **Step 4:** Live check on this Mac: `kcap accounts --json` shows the revision; `kcap agent start claude --account <prefix> -d` spawns and `kcap agent ls` names the account; the local snapshot frame lists both Claude directories with the daemon's default keyed to one of them.
+
+### Task 17: Session discovery and the model report read the launch's layout
+
+Runs between Task 9 and Task 10. The orchestrator still reads the environment layout in three
+places an account launch must not use: the resolved-model report for Codex reads the environment
+`config.toml`, and both transcript locators search the environment `projects/` (Claude) and
+`sessions/` (Codex). A session started under a custom directory writes its transcript there, so
+detection would never find it and the agent would have no session id and no transcript path.
+
+**Files:**
+- Modify: `src/Capacitor.Cli.Daemon/Services/AgentOrchestrator.cs` (`CodexResolvedModel` about line 3395 takes the launch's `ResolvedAccount?`; the `"claude"` / `"codex"` locator lambdas about lines 5724–5727 use the agent's account layout)
+- Test: `test/Capacitor.Cli.Daemon.Tests.Unit/Services/AgentOrchestratorAccountTests.cs` (extend)
+
+**Interfaces:**
+- Consumes: `AgentInstance.Account`, `AccountLayouts.Claude(home, dir)` / `AccountLayouts.Codex(home, dir)`, `DaemonConfig.Home`.
+- Produces: `ClaudePaths ClaudePathsFor(ResolvedAccount? account)` and `CodexPaths CodexPathsFor(ResolvedAccount? account)` on the orchestrator, the environment layout for a null account (never touching `Home`), else the account's layout; every later orchestrator read of a vendor layout goes through them.
+
+- [ ] **Step 1: Write the failing tests**
+
+```csharp
+Codex_session_detection_searches_the_account_sessions_directory()    // a rollout for the agent's worktree under the account's sessions dir is found; the same file under the environment dir is not
+Claude_session_detection_searches_the_account_projects_directory()   // same for a Claude transcript under the account's projects dir
+Codex_resolved_model_report_reads_the_account_config_toml()          // the account's config.toml names a model; the report carries it, not the environment's
+```
+
+- [ ] **Step 2: Run to verify they fail.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run to verify they pass.**
+- [ ] **Step 5: Commit** — `Find an account launch's transcript under its own directory (#1806)`
