@@ -55,13 +55,19 @@ end to end. A participant that is not resumable keeps today's end.
 
 ### Which participants are eligible
 
-Only participants stopped by a planned keep-agents shutdown. The entry is written `Running` at
-launch like an interactive one, but a successor resumes a participant entry only when it is
-`Resuming` (written by that stop) and its `ResumingAt` is within the claim lifetime (15 minutes).
-Any other participant entry — `Running` after a crash, older than the claim, written before an
-intermediate daemon ran — is discarded at boot (see *When a resume fails*). A crash leaves no
-stop-time activity high-water mark and the server has already reaped the participant, so there is
-nothing to continue.
+Only participants stopped by a planned keep-agents shutdown of the immediately preceding daemon. The
+entry is written `Running` at launch like an interactive one, but a successor resumes a participant
+entry only when all hold:
+
+- it is `Resuming` (written by that stop) and its `ResumingAt` is within the claim lifetime (15
+  minutes);
+- its `PredecessorInstanceId` equals `DaemonLock.PriorInstanceId`, which witnesses the boot just
+  before this one even when that boot was a binary without this change. A null or indeterminate
+  prior instance fails closed.
+
+Any other participant entry — `Running` after a crash, stale, or written before an intermediate
+daemon ran — is discarded at boot (see *When a resume fails*). A crash leaves no stop-time activity
+high-water mark and the server has already reaped the participant, so there is nothing to continue.
 
 ### Per vendor
 
@@ -120,9 +126,16 @@ guard an advertisement, and the successor has not used one. A failure fails the 
 
 ### What the resumed reviewer is sent
 
-- Idle at stop (`AwaitingInput`, or no turn in flight): nothing. The session reopens and waits for
-  the next round, which arrives as ordinary input.
-- Mid-turn at stop: a reviewer nudge (the daemon restarted while you were working on a round; if you
+Idle needs positive evidence; the runtime turn gate is not it, because a PTY vendor (Claude) never
+raises `TurnInFlight`, and a delivered ACP round can sit queued before its flag rises.
+
+- Idle at stop — `AwaitingInput` true, no input queued or in delivery, and no round input delivered
+  since the agent last became `AwaitingInput`: nothing is sent. The session reopens and waits for the
+  next round, which arrives as ordinary input. A runtime must not arm any first-output watchdog until
+  a first real prompt is dispatched after the resume (the ACP runtime arms one on releasing the first
+  turn even with no prompt, which would reap an idle resumed OpenCode reviewer); the transcript-bind
+  hold stays.
+- Anything else, including unknown, is mid-turn: a reviewer nudge (the daemon restarted while you were working on a round; if you
   already submitted its result, do nothing; if `submit_review_result` refuses the token, the round
   has ended, so stop) followed by the last round input, repeated verbatim. The vendor may not have
   persisted that input, and only it carries the round token. A reviewer that had already submitted
@@ -144,13 +157,18 @@ proves nothing absent mid-resume. This also delays proof for unrelated dead old-
 so it is bounded:
 
 - participant candidates run ahead of interactive ones on the resume lane;
-- one recovery deadline covers them all from daemon start (my call: 90 s, including queueing,
-  preparation, handshake and readiness); at the deadline every unpublished participant attempt is
-  withdrawn and ended as a failed resume;
-- the status report reads the live agents and the completeness flag in one snapshot under the
-  ledger lock, so the first `true` report lists every participant published before it.
+- one recovery deadline covers them all from daemon start (my call: 90 s). It bounds every unsettled
+  participant attempt, not only unpublished ones: queueing, preparation, handshake, registration
+  (whose server call takes the attempt's token, not the connection's lifetime token) and readiness.
+  At the deadline each unsettled attempt is cancelled, its process terminated, and a late completion
+  is fenced so it can neither publish nor mark itself resumed; it is ended as a failed resume;
+- `DaemonConnect` and every status report take one immutable recovery snapshot under the ledger
+  lock — live ids, live agent metadata, resuming claims and the completeness flag together — so no
+  message can omit a participant from both its live list and its claims while reporting complete.
 
-No new `UnresolvedStartupCandidate` reason is introduced; the wire enum is closed.
+The hold only adds a condition: completeness stays false, as now, for unresolved orphan records or
+incomplete Linux discovery after the deadline. No new `UnresolvedStartupCandidate` reason is
+introduced; the wire enum is closed.
 
 ### Mid-round, and when server timers expire
 
@@ -168,12 +186,19 @@ at once.
 The predecessor's vendor process ending must not end the participant. `ResumeEndSuppression` holds
 an end only while the entry is `Resuming`, and `TryPublishResumed` rewrites it `Running`, so a
 delayed Claude end hook, a watcher's final end or a spooled `parent_exited` from the old process can
-still land after publication and reach the server's `HostedAgentDeathBridge`. The child env already
-carries the daemon epoch it was launched under; the entry records the epoch of its current run. An
-end is suppressed when the entry exists and the ending process's epoch differs from the entry's, and
-the decision is made where the end is produced (hook, watcher, spool sweep), so a spooled end never
-carries an undecided one. A genuine exit of the resumed process carries the matching epoch and posts.
-This also closes the same window for interactive resumes.
+still land after publication and reach the server's `HostedAgentDeathBridge`.
+
+- Before publication the existing rule stands: the entry is `Resuming`, and an end is held.
+- After publication an end is also held when the ending process's daemon epoch differs from the
+  epoch the entry records for its current run, which `TryPublishResumed` writes. The child env
+  already carries the epoch it was launched under; `HostedAgent` reads it.
+- Every decision is made where the end is produced: the hook and the watcher decide before they
+  enqueue, so a suppressed end is never spooled and the drain needs no origin. The exited-session
+  sweep, which runs in another process, reads the epoch from the session's recorded origin, which
+  gains it.
+
+A genuine exit of the resumed process carries the matching epoch and posts. This also closes the
+same window for interactive resumes.
 
 ### When a resume fails
 
@@ -181,9 +206,12 @@ No kcap continue for a participant, and no entry kept for `kcap agent resume`. B
 ineligibility (auto-resume off, stale, not planned, missing worktree or session, newer schema), a
 failed native resume, the recovery deadline and an exception all take one path: the agent's end is
 reported as `resume_failed:<reason>`, so the server records the death and the flow heals as today.
-Its resources are removed only once its predecessor process is proven gone; while the orphan reaper
-holds it unresolved, the entry stays as a non-resumable tombstone that keeps the pid record,
-worktree and snapshot, and is cleaned when the reaper resolves it.
+Its resources are removed only once every process that could use them is proven gone: the
+predecessor and any replacement the failed attempt spawned. Until then the entry stays as a
+non-resumable tombstone that keeps the worktree and snapshot; an unresolved predecessor keeps its pid
+record for the orphan reaper, and an unresolved replacement goes to the kill quarantine with its
+spawn identity and capacity, as a stuck child does today. The tombstone is cleaned when the last of
+them is confirmed dead.
 
 ### Local control
 
@@ -204,7 +232,7 @@ counts the whole run rather than restarting at every resume.
 Participant entries live in their own subdirectory of the ledger, which a daemon without this change
 never reads: it claims nothing for them, and the server reaps them as it does today. Interactive
 entries are unaffected in both directions. A newer daemon booting after such a daemon finds the
-participant entries older than the claim lifetime or the server's role gone, and discards them.
+entries' predecessor is not its prior instance, and discards them however recent they are.
 
 ## Server changes (kcap-server issue, not required to ship)
 
@@ -225,10 +253,19 @@ participant entries older than the claim lifetime or the server's role gone, and
   the same agent id with earlier-round context.
 - Round dispatched while the candidate waits for the lane, during handshake, and right after
   publication: delivered once, after the nudge.
-- A stalled participant resume beside an unrelated dead old-epoch participant: completeness turns
-  true at the deadline, the stalled one is reported failed, and the dead one is proven absent.
-- Predecessor end delivered before and after successor registration: role stays live; a genuine exit
-  of the resumed process still ends it.
+- Claude interrupted mid-round (`AwaitingInput` false, `TurnInFlight` false, round unsubmitted), and
+  input queued just before shutdown: both get the nudge and the round input.
+- Idle resumed OpenCode reviewer left past its first-output deadline, then sent a round: answered.
+- A stalled participant resume, published or not, beside an unrelated dead old-epoch participant:
+  the recovery hold lifts at the deadline (completeness then follows its other conditions), the
+  stalled one is reported failed and cannot publish later, and the dead one is proven absent.
+- A reconnect racing the last candidate's publication or failure: the connect lists it as live or
+  claimed, or reports incomplete.
+- Predecessor end delivered before and after successor registration, including one enqueued by the
+  old process and drained by another after publication: role stays live; a genuine exit of the
+  resumed process still ends it.
+- A replacement that starts, fails recovery and cannot yet be proven dead: its worktree and snapshot
+  stay until it is.
 - Nested-cwd borrowed Cursor snapshot: the resumed process's boundary and result channel match a
   fresh launch's; a retargeted source, missing metadata or unavailable sandbox fails before spawn.
 - Claude CLI swapped for an out-of-range build: resume refused before spawn.
@@ -236,7 +273,7 @@ participant entries older than the claim lifetime or the server's role gone, and
   stop is not submitted twice.
 - A participant entry with an unresolved predecessor process: reported failed, resources kept until
   resolved, never offered to `kcap agent resume` or kcap continue.
-- New → old → new daemon: no cleared reviewer is revived.
+- New → old → new daemon within the claim lifetime, worktree still present: no reviewer is revived.
 - Unforced local stop leaves a pending participant's recovery intact; forced stop and end-agents
   shutdown prevent a later publish.
 - First post-restart activity report is above the last pre-restart one; a reviewer near its lifetime
