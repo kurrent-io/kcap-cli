@@ -1141,10 +1141,10 @@ public partial class App : Application {
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,
-            ProfileOverride: _serverEnv.Profile);
+            ProfileOverride: _serverEnv.Profile,
+            UsageNotice: _usageNotice);
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
-        graph.ViewModel.UsageNotice = _usageNotice;
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
