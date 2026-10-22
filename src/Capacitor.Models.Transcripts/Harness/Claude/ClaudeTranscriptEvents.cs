@@ -42,7 +42,8 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             // attachments that are anything else are settled here, before the id is read.
             var ctx  = (ClaudeTranscriptContext)context;
             var type = root.Str("type");
-            if (type is not ("user" or "assistant" or "attachment")) {
+            (string Prompt, string Content)? command = type == "system" && root.Str("subtype") == "local_command" ? LocalCommand(root) : null;
+            if (type is not ("user" or "assistant" or "attachment") && command is null) {
                 ctx.PreviousUsage = null;
                 return ProjectionResult.Empty;
             }
@@ -74,6 +75,7 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             return ProjectionResult.Of(type switch {
                 "user"      => ProjectUser(root, record),
                 "assistant" => ProjectAssistant(root, record, ctx),
+                "system"    => ProjectLocalCommand(command!.Value, root, record),
                 _           => ProjectAttachment(queued!.Value, root, record),
             });
         }
@@ -143,6 +145,26 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         if (IsDeferredToolsInjection(joined)) return [];
         emitter.Add(0, UserMessage(joined, record), ClaudeCodeExtension.Flags(record.IsSidechain, isMeta, originKind, isCompactSummary: isCompactSummary, origin: origin),
             attachments);
+        return emitter.Events;
+    }
+
+    // The invocation and output are separate system records. Only commandRun on the result is a receipt.
+    static (string Prompt, string Content)? LocalCommand(JsonElement root) {
+        if (root.Bool("isMeta") == true || root.Bool("isSidechain") == true
+            || root.Obj("origin")?.Str("kind") is not (null or "human")) return null;
+        if (root.Obj("commandRun") is not { } run || run.Str("command") is not { Length: > 0 } name
+            || name.StartsWith('/') || name.Any(char.IsWhiteSpace) || run.Str("args") is not { } args) return null;
+        var prompt = "/" + name + (args.Trim().Length == 0 ? "" : " " + args.Trim());
+        var content = "<command-name>/" + System.Net.WebUtility.HtmlEncode(name) + "</command-name><command-args>"
+            + System.Net.WebUtility.HtmlEncode(args.Trim()) + "</command-args>";
+        return (prompt, content);
+    }
+
+    static IReadOnlyList<CanonicalEvent> ProjectLocalCommand((string Prompt, string Content) command, JsonElement root, Record record) {
+        var flags = ClaudeCodeExtension.Flags(record.IsSidechain, root.Bool("isMeta") == true, root.Obj("origin")?.Str("kind")) ?? new Struct();
+        flags.Fields[ClaudeCodeExtension.LocalCommand] = Value.ForString(command.Prompt);
+        var emitter = new Emitter(record);
+        emitter.Add(0, UserMessage(command.Content, record), flags);
         return emitter.Events;
     }
 
