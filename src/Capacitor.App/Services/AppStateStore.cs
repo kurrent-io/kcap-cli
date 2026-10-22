@@ -20,7 +20,8 @@ public sealed record AppState(
     int? WindowX = null,
     int? WindowY = null,
     bool WindowMaximized = false,
-    double? UiScale = null);
+    double? UiScale = null,
+    bool WindowsServiceDeclined = false);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();

@@ -23,9 +23,11 @@ internal static class VerifyExitCodes {
     public const int StartGate           = 28;
     public const int StartGateDrift      = 29;
     public const int RetireRefused       = 30;
+    public const int ElevationDeclined   = 1223; // Win32 ERROR_CANCELLED: the UAC prompt for the Windows service was declined
     public const int DigestGate          = 43; // not a VerifyExit code (DaemonCommands' own digest gate) — mapped in Token() below like every other coded exit
 
     public static string Token(int exitCode) => exitCode switch {
+        ElevationDeclined   => "elevation_declined",
         Contended           => "verify_contended",
         Viability           => "verify_viability",
         BootoutUnknown      => "verify_bootout_unknown",
@@ -59,6 +61,19 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
     internal const string RenameRestartStatus = "The daemon name changed. Restart this app before managing it.";
 
+    internal const string UnsupervisedAttention =
+        "The daemon is running outside the daemon service, so nothing restarts it after a crash or a restart.";
+
+    internal const string WindowsServiceDisclosure =
+        "kcap installs a Windows service that starts your daemon whenever you sign in and restarts it if it stops. " +
+        "Windows asks for administrator approval once, and the daemon still runs as you. It restarts now; anything it hosts is ended.";
+
+    internal const string WindowsServiceUpdateDisclosure =
+        "This version of kcap ships a newer Windows service. Updating it takes administrator approval; your daemon and its agents keep running.";
+
+    internal const string UnsupervisedDisclosure =
+        "This daemon was started outside the daemon service. The service replaces it and keeps it running from now on; anything it hosts now is ended.";
+
     internal static readonly TimeSpan TxnActiveRequeryDelay = TimeSpan.FromSeconds(2);
 
     /// The shortest gap between two recoveries, so a daemon that dies straight after every start
@@ -84,6 +99,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     // When true, RunStartupBranchAsync never admits; PhaseClosed still resolves, StartActionAsync unaffected.
     readonly bool _autoActionsPermanentlyClosed;
     readonly Func<bool> _requiresAppRestart;
+    readonly Func<Task<bool>> _windowsServiceDeclined;
+    readonly Func<Task> _rememberWindowsServiceDeclined;
 
     readonly SemaphoreSlim _gate = new(1, 1);
     readonly CancellationTokenSource _lifetime = new();
@@ -124,6 +141,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     bool _armClaimed;
     DateTimeOffset? _lastRecovery; // under _lock
     bool _recoveryPending;         // under _lock
+    bool _supervisionOffered;      // under _lock: the unsupervised-daemon offer is made once per run
+    bool _windowsServiceOffered;   // under _lock: the Windows service install or update is offered once per run
     int _recoveriesSinceConnect;   // under _lock
     bool _disposed;
     int _generation;
@@ -133,7 +152,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
             IDaemonClientService client, IKcapCli cli, ILoginShellProbe probe,
             ILifecycleSurface surface, Func<Task<string?>> resolveProfileName, TimeProvider time,
             string? canonicalServer, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
-            bool autoActionsPermanentlyClosed = false, Func<bool>? requiresAppRestart = null) {
+            bool autoActionsPermanentlyClosed = false, Func<bool>? requiresAppRestart = null,
+            Func<Task<bool>>? windowsServiceDeclined = null, Func<Task>? rememberWindowsServiceDeclined = null) {
         _client                        = client;
         _cli                           = cli;
         _probe                         = probe;
@@ -144,6 +164,8 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
         _runMutation                   = runMutation;
         _autoActionsPermanentlyClosed  = autoActionsPermanentlyClosed;
         _requiresAppRestart             = requiresAppRestart ?? (() => false);
+        _windowsServiceDeclined         = windowsServiceDeclined ?? (() => Task.FromResult(false));
+        _rememberWindowsServiceDeclined = rememberWindowsServiceDeclined ?? (() => Task.CompletedTask);
     }
 
     /// Completes permanently on the first terminal attach outcome (Connected /
@@ -397,7 +419,11 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
 
         try {
             var snap = await QueryStatusForActionAsync(_lifetime.Token).ConfigureAwait(false);
-            if (snap is not null) Reconcile(snap, attached, allowTxnActiveRequery: true);
+            if (snap is not null) {
+                Reconcile(snap, attached, allowTxnActiveRequery: true);
+                if (attached && OffersSupervision() && IsUnsupervised(snap)) await OfferSupervisionAsync(snap, _lifetime.Token).ConfigureAwait(false);
+                else if (attached) await OfferWindowsServiceAsync(snap, _lifetime.Token).ConfigureAwait(false);
+            }
         } catch (OperationCanceledException) {
             // shutdown mid-query
         } catch (Exception ex) {
@@ -931,6 +957,72 @@ public sealed class DaemonLifecycleController : IAsyncDisposable {
     }
 
     /// The Start button's one dialog: a manual daemon holds the name, and replacing it is the user's call.
+    /// No service and no unit, yet a daemon answers: started by hand, so nothing brings it back. The
+    /// startup matrix never sees this row, because it only runs when no daemon answers.
+    internal static bool IsUnsupervised(ServiceSnapshot snap) =>
+        ServiceStateClassifier.Parse(snap.State) == ServiceState.NotInstalled && !snap.UnitPresent && snap.DaemonPid is not null;
+
+    /// <summary>Windows only: the takeover it leads to ends a standalone owner only on the Windows CLI</summary>
+    internal Func<bool> OffersSupervision { get; init; } = OperatingSystem.IsWindows;
+
+    /// Asked while the daemon is idle only, since the replacement ends what it hosts; a busy daemon
+    /// keeps the attention line and is offered again on the next run.
+    async Task OfferSupervisionAsync(ServiceSnapshot snap, CancellationToken ct) {
+        lock (_lock) {
+            if (_supervisionOffered) return;
+            _supervisionOffered = true;
+        }
+
+        _surface.Attention(UnsupervisedAttention);
+        if (_latestBusy || await FailingRepairPreconditionAsync(snap).ConfigureAwait(false) is not null) return;
+
+        var terminalPath = await _probe.TerminalPathAsync(ct).ConfigureAwait(false);
+        var prompt = new LifecyclePrompt(LifecyclePrompt.KindTakeover, null, CliVersion, terminalPath is null, UnsupervisedDisclosure);
+        await ConfirmAndReplaceAsync(prompt, ct, requireIdle: true).ConfigureAwait(false);
+
+        if (await QueryStatusForActionAsync(ct).ConfigureAwait(false) is { } after && !IsUnsupervised(after))
+            _surface.Withdraw(UnsupervisedAttention);
+    }
+
+    /// <summary>The task supervising a daemon the bundled Windows service could take over, or an installed
+    /// service older than the bundled one. Asked once per run and only while the daemon is idle; a declined
+    /// install is remembered and not asked again, leaving the explicit action</summary>
+    async Task OfferWindowsServiceAsync(ServiceSnapshot snap, CancellationToken ct) {
+        var install = snap.Supervisor == "windows_scheduled_task" && snap.WindowsServiceInstallable == true;
+        var update  = snap.Supervisor == "windows_service" && snap.ServiceUpgradeAvailable == true;
+        if (!install && !update) return;
+
+        lock (_lock) {
+            if (_windowsServiceOffered) return;
+            _windowsServiceOffered = true;
+        }
+        if (_latestBusy || (install && await _windowsServiceDeclined().ConfigureAwait(false))) return;
+
+        var prompt = new LifecyclePrompt(
+            install ? LifecyclePrompt.KindWindowsService : LifecyclePrompt.KindWindowsServiceUpdate, null, CliVersion, false,
+            install ? WindowsServiceDisclosure : WindowsServiceUpdateDisclosure);
+        if (!await _surface.ConfirmAsync(prompt, ct).ConfigureAwait(false)) {
+            if (install) await _rememberWindowsServiceDeclined().ConfigureAwait(false);
+            return;
+        }
+        await RunLaneMutationAsync(MutationVerb.InstallWindowsService, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>The explicit "run as a Windows service" action, available after a declined offer</summary>
+    public async Task InstallWindowsServiceAsync(CancellationToken ct) {
+        try {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _lifetime.Token);
+            if (!await TryAcquireGateAsync(linked.Token).ConfigureAwait(false)) return;
+            try {
+                await RunLaneMutationAsync(MutationVerb.InstallWindowsService, linked.Token).ConfigureAwait(false);
+            } finally {
+                _gate.Release();
+            }
+        } catch (OperationCanceledException) {
+            // shutdown or a cancelled click — nothing to surface
+        }
+    }
+
     async Task OfferRepairAsync(ServiceSnapshot snap, CancellationToken ct, bool requireIdle = false) {
         var missing = await FailingRepairPreconditionAsync(snap).ConfigureAwait(false);
         if (missing is not null) {
