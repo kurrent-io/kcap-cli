@@ -16,9 +16,13 @@ static class McpSessionId {
     internal static string Resolve(JsonObject? args) => Resolve(args, Environment.GetEnvironmentVariable);
 
     internal static string Resolve(JsonObject? args, Func<string, string?> getEnv) =>
-        Explicit(args) ?? ResolveWithin(args, HarnessRequesterContext.Resolve(getEnv, Directory.Exists).SessionId);
+        Resolve(args, getEnv, HostedAgentSessions.Daemon.For);
 
-    /// <summary>For a server that resolved its harness session once at startup and hands it down:
+    internal static string Resolve(JsonObject? args, Func<string, string?> getEnv, Func<string, string?> hostedAgentSession) =>
+        Explicit(args) ?? ResolveWithin(args, HarnessRequesterContext.Resolve(
+            getEnv, Directory.Exists, ProcessHelpers.NearestCodingAgent, ProcessHelpers.GetProcessCwd, hostedAgentSession).SessionId);
+
+    /// <summary>For a server that resolved its harness session itself and hands it down:
     /// an explicit argument still wins, and the environment is never consulted here.</summary>
     internal static string ResolveWithin(JsonObject? args, string? ambientSessionId) =>
         TryResolveWithin(args, ambientSessionId) ?? throw new ArgumentException(NoSessionIdMessage);

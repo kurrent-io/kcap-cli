@@ -42,6 +42,7 @@ public static class OpenCodeExtensionInstaller {
         //     client and append any new {info,parts} as JSONL lines to that file; the
         //     watcher streams them. The server's OpenCodeTranscriptNormalizer dedupes by
         //     deterministic part id, so re-appending an updated message is safe.
+        //   - tool.execute.before → a kcap MCP call that names no session_id gets the calling session's.
         //
         // Dependency-free (only node: builtins) and fail-safe by default.
 
@@ -90,6 +91,9 @@ public static class OpenCodeExtensionInstaller {
           const coldStarts = new Map<string, number>()
           const TITLE_MAX_SESSIONS = 64
           const lastTitle = new Map<string, string>()   // dedupes session.updated noise per session
+          // kcap's MCP servers whose optional session_id names the CALLING session. On kcap-sessions or
+          // kcap-review it names a session to read, which a default would silently replace.
+          const CALLER_SESSION_SERVERS = ["kcap-workitems", "kcap-plans", "kcap-flows"]
 
           // Bounded like the memory cache: most sessions end without a session.deleted. Re-inserting keeps the most
           // recently titled sessions; an evicted one only writes its title line again.
@@ -509,6 +513,24 @@ public static class OpenCodeExtensionInstaller {
                   writeMessages(file(sid), msgs)
                   await flushSubagents(sid, msgs)
                 }
+              } catch {
+                // never disrupt the OpenCode session
+              }
+            },
+            // OpenCode tells an MCP server nothing about the session calling it, so a kcap call that
+            // names none is stamped with the caller's. A tool reaches the model as `<server>_<tool>`. The
+            // args object is the one OpenCode sends on, so it is mutated in place, never replaced. A
+            // subagent's id names no session the server stores, so its calls are left alone.
+            "tool.execute.before": async (input: any, output: any) => {
+              try {
+                const sid = input?.sessionID
+                const tool = input?.tool
+                const args = output?.args
+                if (!sid || children.has(sid) || typeof tool !== "string") return
+                if (!args || typeof args !== "object") return
+                if (!CALLER_SESSION_SERVERS.some((server) => tool.startsWith(server + "_"))) return
+                if (args.session_id !== undefined && args.session_id !== null && args.session_id !== "") return
+                args.session_id = sid
               } catch {
                 // never disrupt the OpenCode session
               }

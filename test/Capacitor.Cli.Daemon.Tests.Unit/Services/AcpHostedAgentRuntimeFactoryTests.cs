@@ -796,6 +796,58 @@ public class AcpHostedAgentRuntimeFactoryTests : IDisposable {
         await Assert.That(psi.Environment["KCAP_SESSION_KIND"]).IsEqualTo("hosted_agent");
     }
 
+    static readonly IReadOnlyDictionary<string, AcpVendorDescriptor> EveryAcpDescriptor =
+        new[] {
+            AcpVendorDescriptors.Cursor, AcpVendorDescriptors.Copilot, AcpVendorDescriptors.Kiro,
+            AcpVendorDescriptors.OpenCode, AcpVendorDescriptors.Grok, AcpVendorDescriptors.Gemini,
+        }.ToDictionary(d => d.Vendor);
+
+    public static IEnumerable<Func<(string Vendor, bool IsReviewFlow)>> EveryAcpLaunch() =>
+        from vendor in EveryAcpDescriptor.Keys
+        from isReviewFlow in new[] { false, true }
+        select (Func<(string, bool)>)(() => (vendor, isReviewFlow));
+
+    /// <summary>kcap's MCP servers inside an ACP child find their session by asking the named daemon
+    /// about the named agent. The inherited session ids are seeded here, so their absence is the
+    /// launch's own doing rather than an environment that never had them.</summary>
+    [Test, NotInParallel]
+    [MethodDataSource(nameof(EveryAcpLaunch))]
+    public async Task Every_acp_launch_names_its_agent_and_daemon_and_drops_inherited_sessions(string vendor, bool isReviewFlow) {
+        string[] inherited = ["CLAUDE_CODE_SESSION_ID", "KCAP_SESSION_ID", "CODEX_THREAD_ID"];
+        var scopes = inherited.Select(name => EnvScope.Exclusive(name, "inherited-from-the-daemons-shell")).ToList();
+
+        try {
+            var descriptor = EveryAcpDescriptor[vendor];
+            var config     = new DaemonConfig { Name = "daemon-a", Store = NewPaths(), DaemonEpoch = "epoch-1" };
+            AcpHostedAgentRuntimeFactory.VersionStoreFor(config, descriptor.Vendor).Affirm("99.0.0");
+            var ctx = (isReviewFlow ? ReviewContext() : MakeContext("agent-1")) with {
+                Vendor = vendor, DaemonId = "daemon-id-1", DaemonEpoch = "epoch-1"
+            };
+
+            var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(descriptor, config, ctx, resolveGeminiVersion: _ => "99.0.0").Environment;
+
+            await Assert.That(env["KCAP_AGENT_ID"]).IsEqualTo("agent-1");
+            await Assert.That(env["KCAP_DAEMON_NAME"]).IsEqualTo("daemon-a");
+            await Assert.That(env["KCAP_DAEMON_ID"]).IsEqualTo("daemon-id-1");
+            await Assert.That(env["KCAP_DAEMON_EPOCH"]).IsEqualTo("epoch-1");
+            foreach (var name in inherited) await Assert.That(env.ContainsKey(name)).IsFalse().Because(name);
+        } finally {
+            foreach (var scope in scopes) scope.Dispose();
+        }
+    }
+
+    /// <summary>A private agent carries nothing that ties its session to the agent, as a PTY launch's
+    /// does not — not even an agent id the daemon itself inherited.</summary>
+    [Test, NotInParallel]
+    public async Task A_private_acp_launch_carries_no_agent_id() {
+        using var inheritedAgent = EnvScope.Exclusive("KCAP_AGENT_ID", "outer-agent");
+
+        var env = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(
+            AcpVendorDescriptors.Cursor, BareConfig(), MakeContext("agent-1") with { IsPrivate = true }).Environment;
+
+        await Assert.That(env.ContainsKey("KCAP_AGENT_ID")).IsFalse();
+    }
+
     [Test]
     public async Task BuildProcessStartInfo_CursorReviewFlow_UsesCursorZeroPromptFlags() {
         var psi = AcpHostedAgentRuntimeFactory.BuildProcessStartInfo(

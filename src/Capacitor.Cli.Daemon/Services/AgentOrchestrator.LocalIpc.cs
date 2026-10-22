@@ -94,6 +94,18 @@ internal partial class AgentOrchestrator {
         return [.. live, .. ledger.Where(l => !listed.Contains(l.Entry.AgentId)).Select(l => LedgerStatusRow(l.Entry, l.Status))];
     }
 
+    /// <summary>The session the server files the agent under: the one it was launched or resumed into, else
+    /// the ACP session its runtime opened. Null until the agent has one.</summary>
+    static string? SessionOf(AgentInstance agent) =>
+        agent.SessionId ?? SessionIds.Canonical((agent.Runtime as IAcpTranscriptSource)?.AcpSessionId);
+
+    /// <summary>Answers a hosted agent's own kcap MCP servers, which start before the agent's session
+    /// exists and so cannot be handed it in their environment. An empty reply means no such agent, or no
+    /// session yet.</summary>
+    public Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) =>
+        FrameCodec.WriteAsync(
+            stream, LocalFrame.AgentSessionReply(_agents.TryGetValue(agentId, out var agent) ? SessionOf(agent) : null), ct);
+
     internal static string TranscriptFormatOf(AgentInstance agent) =>
         agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;
 
@@ -114,7 +126,7 @@ internal partial class AgentOrchestrator {
                 WorktreePath: a.Checkout.Worktree,
                 WorkLocation: a.Checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
                 BorrowedFrom: a.Checkout.BorrowedFrom,
-                SessionId: a.SessionId ?? SessionIds.Canonical((a.Runtime as IAcpTranscriptSource)?.AcpSessionId),
+                SessionId: SessionOf(a),
                 Branch: string.IsNullOrWhiteSpace(a.Worktree.Branch) ? null : a.Worktree.Branch,
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
