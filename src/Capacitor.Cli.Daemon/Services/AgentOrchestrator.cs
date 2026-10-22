@@ -434,6 +434,15 @@ internal record AgentInstance(
     /// </summary>
     public AcpForwarderHandle? AcpForwarder { get; set; }
 
+    int _transcriptBind;
+
+    /// <summary>Whether the server holds this agent's ACP transcript session: null while the bind is
+    /// still in flight, false when it failed or was refused, or the agent records nothing.</summary>
+    public bool? TranscriptBound {
+        get => Volatile.Read(ref _transcriptBind) switch { 1 => true, 2 => false, _ => null };
+        set => Volatile.Write(ref _transcriptBind, value switch { true => 1, false => 2, null => 0 });
+    }
+
     /// <summary>
     /// Per-agent/per-setup <see cref="CancellationTokenSource"/>, linked to the daemon's shutdown
     /// token, created in <see cref="AgentOrchestrator.HandleLaunchAgent"/> BEFORE the fire-and-forget
@@ -2842,6 +2851,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Work: work,
                 DaemonId: _daemonId,       // Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
                 DaemonEpoch: _daemonEpoch,
+                DaemonName: _config.Name,
                 IsBorrowedSnapshot: snapshotBorrow,
                 ReviewContextCapabilityUrl: reviewContextCapabilityUrl,
                 FlowResultCapabilityUrl: flowResultCapabilityUrl,
@@ -3091,7 +3101,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // A refused agent keeps running with nothing sent, so a held first turn goes out without the claim.
             if (agent.RegistrationRefused && start.Runtime.RequiresSourceClaimBeforeFirstTurn) _ = BeginRefusedFirstTurnAsync(agent, start.Runtime);
 
-            if (agent.IsServerSilent) start.Transcript?.ServerBindSettled(bound: false);
+            if (agent.IsServerSilent && start.Transcript is { } silentTranscript) {
+                agent.TranscriptBound = false;
+                silentTranscript.ServerBindSettled(bound: false);
+            }
 
             if (!agent.IsServerSilent && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
@@ -5188,6 +5201,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var cursor = await _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, [], acpCts.Token);
 
                 if (cursor.Rejected) {
+                    agent.TranscriptBound = false;
                     agent.TryRefuseReopenedTranscript();
                     LogReopenedTranscriptRefused(agent.Id);
 
@@ -5209,11 +5223,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return;
             }
 
+            agent.TranscriptBound = false;
             agent.TryRefuseReopenedTranscript();
             LogReopenedTranscriptRefused(agent.Id);
         } catch (Exception ex) {
             if (reopened) agent.TryRefuseReopenedTranscript();
             LogAcpBindFailed(ex, agent.Id);
+            agent.TranscriptBound = false;
             transcript.ServerBindSettled(bound: false);
         }
     }
@@ -5284,6 +5300,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
         agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
 
+        agent.TranscriptBound = true;
         transcript.ServerBindSettled(bound: true);
     }
 

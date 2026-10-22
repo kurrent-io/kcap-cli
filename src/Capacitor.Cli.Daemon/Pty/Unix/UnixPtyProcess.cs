@@ -81,7 +81,7 @@ public sealed class UnixPtyProcess : IPtyProcess {
         return UnixPtyInterop.access(path, UnixPtyInterop.X_OK) == 0;
     }
 
-    static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {
+    internal static IReadOnlyDictionary<string, string> BuildChildEnv(Dictionary<string, string>? extraEnv, ushort cols, ushort rows) {
         var env = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
             if (entry is { Key: string key, Value: string value }) env[key] = value;
@@ -91,10 +91,10 @@ public sealed class UnixPtyProcess : IPtyProcess {
         env["COLUMNS"] = cols.ToString();
         env["LINES"]   = rows.ToString();
 
-        // Clear any hosted-agent identity/routing (and Claude session vars / daemon supervision
-        // state) the daemon may have inherited BEFORE re-applying extraEnv — matches the OLD
-        // managed child branch's ordering (unsetenv, then extraEnv setenv) exactly.
+        // Clear what the daemon inherited (hosted-agent identity, another harness's session, Claude's
+        // session vars, supervision state) before extraEnv, which re-adds what this launch sets.
         foreach (var key in PtyEnvScrub.ClaudeSessionVars) env.Remove(key);
+        foreach (var key in PtyEnvScrub.InheritedSessionVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.HostedAgentVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.DaemonSupervisionVars) env.Remove(key);
         // Defense in depth: CaptureBootCarriers already clears these from the daemon's
