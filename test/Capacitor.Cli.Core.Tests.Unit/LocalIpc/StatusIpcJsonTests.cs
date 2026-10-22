@@ -4,9 +4,9 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Core.Tests.Unit.LocalIpc;
 
 /// <summary>
-/// Exact-JSON pins for the DaemonStatus payload (spec §4.1): snake_case, every field always
-/// emitted (absent = null, never omitted), field order as declared, ISO-8601 UTC created_at.
-/// Plus the §5 forward-compat pin: unknown members deserialize without error.
+/// Exact-JSON pins for the DaemonStatus payload: snake_case, every field always emitted
+/// (absent = null, never omitted), field order as declared, ISO-8601 UTC created_at.
+/// Plus the forward-compat pin: unknown members deserialize without error.
 /// </summary>
 public class StatusIpcJsonTests {
     [Test]
@@ -34,7 +34,7 @@ public class StatusIpcJsonTests {
 
     [Test]
     public async Task Unknown_members_in_a_payload_deserialize_without_error() {
-        // §5 forward compat: an older client must survive a future additive field.
+        // Forward compat: an older client must survive a future additive field.
         var json =
             """{"daemon":{"name":"m","version":"1","server_url":"u","connection":"connected","max_agents":5,"active_agents":0,"future_field":42},"agents":[{"id":"a","kind":"agent","vendor":"codex","repo_path":null,"status":"Live","flow_run_id":null,"flow_role":null,"requester":null,"created_at":"2026-08-01T00:00:00Z","model":null,"future_field":{"x":1}}],"future_top":true}""";
 

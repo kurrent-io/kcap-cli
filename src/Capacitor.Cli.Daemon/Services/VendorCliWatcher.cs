@@ -40,7 +40,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     /// must read as a change on the first tick rather than become the baseline. The catalog record is
     /// read live: a refresh records an added account's files before probing it.</summary>
     IReadOnlyDictionary<string, CliBinaryStat?>?                   _recorded;
-    readonly Func<IReadOnlyDictionary<string, CatalogPathStat[]>?> _recordedCatalogs = static () => null;
+    readonly Func<IReadOnlyDictionary<string, CatalogPathStat[]>?> _recordedCatalogs;
 
     static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
 

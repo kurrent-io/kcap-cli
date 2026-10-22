@@ -55,7 +55,7 @@ internal sealed partial class ClaudeLauncher(
                 "Claude borrowed review flows are not certified; retry with an owned review worktree.");
         // A borrowed cwd is the user's own, already-trusted, already-configured repo — do
         // NOT overlay settings, write .mcp.json, edit settings.local.json, or write
-        // ~/.claude.json trust into it (local in-place launch). Touch nothing.
+        // .claude.json trust for it (local in-place launch). Touch nothing.
         if (ctx.Work == WorkLocation.BorrowedCwd) return;
 
         var paths = PathsFor(ctx.Account);
@@ -331,9 +331,8 @@ internal sealed partial class ClaudeLauncher(
     }
 
     /// <summary>
-    /// Creates a symlink at ~/.claude/projects/{worktree-path-hash} pointing to
-    /// ~/.claude/projects/{source-path-hash} so project-level permissions, settings,
-    /// and memory are shared with the hosted agent.
+    /// Links the layout's <c>projects/</c> entry for the worktree to the source repository's, so
+    /// project-level permissions, settings and memory are shared with the hosted agent.
     /// </summary>
     static void SymlinkClaudeProjectDir(string sourceRepoPath, string worktreePath, ClaudePaths paths) {
         if (!Directory.Exists(paths.Projects)) {
@@ -364,8 +363,7 @@ internal sealed partial class ClaudeLauncher(
     internal static void CreateJunction(string link, string target) => WindowsJunction.Create(link, target);
 
     /// <summary>
-    /// Removes the ~/.claude/projects/{worktree-path-hash} symlink if it exists.
-    /// Only removes symlinks, never real directories.
+    /// Removes the layout's <c>projects/</c> entry for the worktree when it is a link, never a real directory.
     /// </summary>
     static void RemoveClaudeProjectSymlink(string worktreePath, ClaudePaths paths) {
         var info = new DirectoryInfo(paths.ProjectDir(worktreePath));
@@ -387,17 +385,17 @@ internal sealed partial class ClaudeLauncher(
     }
 
     internal static void TrustWorktreeInClaudeConfig(string worktreePath, ClaudePaths paths) {
-        // Serialize against concurrent agent launches. ~/.claude.json is shared
-        // across the whole user and {worktree}/.claude/settings.local.json is
-        // touched by MergeToolPermissions on the same path; interleaved reads and
-        // writes could drop updates or write truncated JSON.
+        // Serialize against concurrent agent launches. paths.UserConfigJson is shared by every
+        // launch under the layout and {worktree}/.claude/settings.local.json is touched by
+        // MergeToolPermissions on the same path; interleaved reads and writes could drop updates
+        // or write truncated JSON.
         lock (TrustWriteLock) {
             // Workspace trust lives in the layout's .claude.json under projects[path]; the file may
             // not exist yet.
             var claudeJsonPath = paths.UserConfigJson;
 
             // The in-process lock above serializes only THIS daemon; every kcap writer of
-            // ~/.claude.json must also take the shared cross-process lock, or this write can
+            // paths.UserConfigJson must also take the shared cross-process lock, or this write can
             // land between another writer's inside-lock re-read and its rename (e.g. doctor
             // --clean) and be silently overwritten. See ConfigFileLock.
             using var _ = ConfigFileLock.Acquire(claudeJsonPath);
@@ -433,7 +431,7 @@ internal sealed partial class ClaudeLauncher(
 
             // MCP server approval (the "New MCP server found in .mcp.json" dialog)
             // is stored per-project in {worktree}/.claude/settings.local.json, NOT in
-            // ~/.claude.json. Claude requires BOTH fields: the blanket flag AND each
+            // .claude.json. Claude requires BOTH fields: the blanket flag AND each
             // server listed by name (the blanket flag alone still shows a per-server
             // discovery prompt on first encounter).
             var serverNames = ReadMcpJsonServerNames(worktreePath);
@@ -665,7 +663,7 @@ internal sealed partial class ClaudeLauncher(
         // registration.
         var pluginInstalled = ClaudePluginInstaller.IsEffectivelyInstalled(paths.UserSettings);
 
-        // Add servers from ~/.claude.json (don't overwrite repo-committed ones)
+        // Add the layout's .claude.json servers; a repo-committed entry of the same name wins.
         foreach (var (name, value) in servers) {
             // nativeKcapPath comes from DaemonConfig (the CLI binary sibling of this daemon):
             // Environment.ProcessPath here would be kcap-daemon, misclassifying a canonical

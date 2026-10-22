@@ -124,7 +124,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public Func<string[]>? GetLiveAgentIds { get; set; }
 
-    /// <summary>Phase B (D2): richer live-agent metadata (kind + flow identity) sent alongside
+    /// <summary>Richer live-agent metadata (kind + flow identity) sent alongside
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
@@ -135,12 +135,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// goes out through <see cref="AccountsChangedAsync"/>.</summary>
     public Func<AccountsSnapshotDto?>? GetAccountsSnapshot { get; set; }
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
-    /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
-    /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
+    /// <summary>The server prunes the daemon's durable resolved-candidates ledger per-entry (sparse,
+    /// deliver-once). One-way server→daemon receive; the handler (<see cref="AgentOrchestrator"/>) is
+    /// SYNCHRONOUS (the ledger Ack is void).</summary>
     public event Action<AckResolvedCandidates>? OnAckResolvedCandidates;
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2/§5.5): the sequenced-command receive seams.
+    /// <summary>The sequenced-command receive seams.
     /// <see cref="OnStopAgentV2"/> is the Seq'd stop primitive a capability daemon receives instead of the
     /// legacy <c>StopAgent</c>; <see cref="OnAckProcessedPrefix"/> is the server's identity-cache retirement
     /// proof (SYNCHRONOUS — the processor's <c>AckPrefix</c> is void); <see cref="OnRequestStatusReport"/> is
@@ -769,7 +769,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
-        var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
+        var liveAgents = GetLiveAgents?.Invoke();
         var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents);
 
         try {

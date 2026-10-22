@@ -92,8 +92,8 @@ public sealed class UnixPtyProcess : IPtyProcess {
         env["LINES"]   = rows.ToString();
 
         // Clear any hosted-agent identity/routing (and Claude session vars / daemon supervision
-        // state) the daemon may have inherited BEFORE re-applying extraEnv — matches the OLD
-        // managed child branch's ordering (unsetenv, then extraEnv setenv) exactly.
+        // state) the daemon may have inherited BEFORE applying extraEnv, so a variable the launch
+        // sets itself survives the scrub.
         foreach (var key in PtyEnvScrub.ClaudeSessionVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.HostedAgentVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.DaemonSupervisionVars) env.Remove(key);

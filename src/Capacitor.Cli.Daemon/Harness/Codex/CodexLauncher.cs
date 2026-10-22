@@ -199,7 +199,7 @@ internal sealed partial class CodexLauncher(
 
         // Review-flow reviewers get exactly ONE MCP server: kcap-flow-result (+ any
         // allowlisted, non-flow-starting server) — it can only submit a result, never start a
-        // flow. Codex's `-c` overrides deep-merge into ~/.codex/config.toml (no analog of
+        // flow. Codex's `-c` overrides deep-merge into the layout's config.toml (no analog of
         // Claude's `--strict-mcp-config`), so we (1) DISABLE every inherited server — from
         // config.toml AND native plugins, enumerated via `codex mcp list --json` — in one
         // `-c mcp_servers={ … }` table override that handles dotted/plugin names too, then
@@ -353,7 +353,7 @@ internal sealed partial class CodexLauncher(
         const string name = "kcap-flow-result";
 
         // Force-enable: the disable pass above skips this name, but the user's OWN
-        // ~/.codex/config.toml may already have it (or never had it) set to enabled=false from
+        // config.toml may already have it (or never had it) set to enabled=false from
         // a prior manual registration. `-c` deep-merges over that file, so skipping the disable
         // is not enough on its own — an explicit enabled=true override wins regardless.
         args.Add("-c");
@@ -470,7 +470,7 @@ internal sealed partial class CodexLauncher(
     }
 
     /// Review launch: inject the same kcap-review MCP server Claude gets, but via
-    /// ephemeral `-c` overrides (no ~/.codex/config.toml mutation, nothing to clean
+    /// ephemeral `-c` overrides (no config.toml mutation, nothing to clean
     /// up), and pass the rendered review prompt as Codex's initial prompt (Codex has
     /// no --system-prompt equivalent).
     ///

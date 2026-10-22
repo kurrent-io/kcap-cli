@@ -477,7 +477,7 @@ public static partial class DaemonRunner {
         // Codex is the ONE vendor with two transports. The composite factory routes review-flow
         // launches to codex app-server when this daemon resolved it active (config.CodexAppServerActive),
         // and delegates everything else — every interactive launch, and all launches under the PTY
-        // default — to the wrapped PTY factory, byte-identically to before.
+        // default — to the wrapped PTY factory.
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp => {
             var codexLauncher = sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "codex")
                     ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'codex'");
@@ -493,7 +493,7 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 time,
-                connection: sp.GetRequiredService<ServerConnection>()); // §2.3 interactive approvals
+                connection: sp.GetRequiredService<ServerConnection>()); // interactive approvals
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
@@ -1640,8 +1640,8 @@ public static partial class DaemonRunner {
         return capabilities;
     }
 
-    /// <summary>Fingerprints, then probes, each advertised vendor's catalog and, under its own directory,
-    /// each registered account's whose catalog depends on the account.</summary>
+    /// <summary>Fingerprints, then probes, each advertised vendor's catalog and, for the vendor whose
+    /// catalog depends on the account, each registered account's catalog under its own directory.</summary>
     internal static async Task ProbeVendorCatalogsAsync(
             DaemonConfig config, IReadOnlyList<IHostedAgentRuntimeFactory> factories,
             Core.Accounts.AccountsSnapshotDto? accounts, CancellationToken ct) {
