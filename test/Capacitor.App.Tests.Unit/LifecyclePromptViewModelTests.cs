@@ -203,4 +203,18 @@ public class LifecyclePromptViewModelTests {
             await Assert.That(vm.ShowInstalledVersion).IsFalse();
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Uninstall_is_destructive() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var prompt = new LifecyclePrompt(LifecyclePrompt.KindUninstall, null, null, false, "removes kcap.", "data is deleted");
+            var vm = new LifecyclePromptViewModel(prompt, new TaskCompletionSource<bool>());
+
+            await Assert.That(vm.Title).IsEqualTo("Uninstall kcap");
+            await Assert.That(vm.AcceptButtonText).IsEqualTo("Uninstall");
+            await Assert.That(vm.AcceptIsDestructive).IsTrue();
+            await Assert.That(vm.Warning).IsEqualTo("data is deleted");
+        });
+    }
 }

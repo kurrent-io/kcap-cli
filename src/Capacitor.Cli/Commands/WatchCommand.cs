@@ -46,6 +46,26 @@ partial class WatchCommand(
     readonly CursorMarkers  _markers  = new(config, time);
     readonly WatcherPaths   _paths    = WatcherPaths.FromEnvironment(config);
     readonly Dictionary<(string, string?), HeldLineRedaction> _heldLines = [];
+    readonly WatchAckCursor _ackCursor = new(config);
+    readonly Lock   _ackCursorGate = new();
+    int _ackCursorWritten = -1;
+
+    /// The Codex hook declares only the turns the server acknowledged, so the root watcher publishes its count
+    /// whenever it moves, rewinds included. Reconnect and drain both publish, so the count is read and written under
+    /// one lock: a count read earlier can never land after a newer one.
+    internal void PublishAckedLines(string sessionId, string? agentId, string vendor, WatchState state) {
+        if (agentId is not null || vendor != "codex") return;
+
+        lock (_ackCursorGate) {
+            var count = state.LinesProcessed;
+            if (count == _ackCursorWritten) return;
+            if (_ackCursor.Write(sessionId, count)) _ackCursorWritten = count;
+        }
+    }
+
+    internal void RetireAckCursor(string sessionId, string? agentId, string vendor) {
+        if (agentId is null && vendor == "codex") _ackCursor.Delete(sessionId);
+    }
 
     /// <summary>The clock redaction budgets read, when not <c>time</c>.</summary>
     internal TimeProvider? RedactionClock { get; init; }
@@ -716,6 +736,7 @@ partial class WatchCommand(
                     // Thin wrapper over the directly-testable GatedApplyReconnectRewindAsync.
                     var rewound = await GatedApplyReconnectRewindAsync(
                         cursorRewindGate, state, serverPosition, sessionId, vendor, transcriptPath, cursorGuard, cts.Token);
+                    PublishAckedLines(sessionId, agentId, vendor, state);
 
                     if (!rewound) {
                         // the server's frontier couldn't be
@@ -805,6 +826,7 @@ partial class WatchCommand(
 
         // Register with server and get resume position
         state.LinesProcessed = await hubConnection.InvokeAsync<int>("WatcherConnect", sessionId, agentId, cts.Token);
+        PublishAckedLines(sessionId, agentId, vendor, state);
         Log(time, $"Connected via SignalR, resuming from line {state.LinesProcessed}");
         TouchHeartbeat();
 
@@ -1223,6 +1245,7 @@ partial class WatchCommand(
         // so an end written after this look finds none and gets a watcher of its own.
         watchers.RemoveOwnPidFile(
             agentId is null ? sessionId : $"{sessionId}-{agentId}", Environment.ProcessId);
+        RetireAckCursor(sessionId, agentId, vendor);
 
         if (TakesHandedMuseEnd(vendor, agentId)) museEndRequest ??= ClaimHandedMuseEnd(sessionId);
 
@@ -4691,16 +4714,20 @@ partial class WatchCommand(
             Action?             onCursorRewriteDetected = null
         ) {
         if (gate is null) {
-            return await DrainNewLines(
+            var drained = await DrainNewLines(
                 hubConnection, sessionId, transcriptPath, agentId, state, vendor, ct,
                 isFinalDrain: isFinalDrain, cursorGuard: cursorGuard, onCursorRewriteDetected: onCursorRewriteDetected);
+            PublishAckedLines(sessionId, agentId, vendor, state);
+            return drained;
         }
 
         await gate.WaitAsync(ct);
         try {
-            return await DrainNewLines(
+            var drained = await DrainNewLines(
                 hubConnection, sessionId, transcriptPath, agentId, state, vendor, ct,
                 isFinalDrain: isFinalDrain, cursorGuard: cursorGuard, onCursorRewriteDetected: onCursorRewriteDetected);
+            PublishAckedLines(sessionId, agentId, vendor, state);
+            return drained;
         } finally {
             gate.Release();
         }

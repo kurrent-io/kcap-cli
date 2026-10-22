@@ -109,7 +109,7 @@ Argument_unregistered_directory_is_refused_with_the_add_remedy()
 - `DaemonInfoDto`: append `Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null` (key: registry id).
 - `DaemonConnect`: append `bool SupportsAccountLaunches = false, AccountsSnapshotDto? Accounts = null, Dictionary<string, VendorModelOption[]>? VendorModelsByAccount = null`.
 - `AccountsSnapshotDto(string HostId, long Revision, AccountViewDto[] Accounts, DefaultDirectoryDto[] Defaults)`; `AccountViewDto(string Id, string Vendor, string Directory, string DirectoryKey, string Label, string RecordingState)`; `DefaultDirectoryDto(string Vendor, string Directory, string DirectoryKey)`. Vendor is the launch token (`claude`, `codex`); RecordingState is the enum name in lowercase (`recording`, `installed`, `broken`, `not_wired`). `AccountsSnapshotJsonContext` snake_case, `[JsonSerializable(typeof(AccountsSnapshotDto))]`, used by the frame and the hub (register the type in `Models.cs`'s hub JSON context too).
-- `FrameType.AccountsSubscribe = 86`, `FrameType.AccountsSnapshot = 87` (Text = JSON).
+- `FrameType.AccountsSubscribe = 32`, `FrameType.AccountsSnapshot = 87` (Text = JSON).
 - `FrameCodec.Spawn(..., AgentStartTitle? title = null, string? accountId = null)`: after the title byte(s) write `WriteLp(ms, accountId ?? "")`; `ParseSpawn` reads it when bytes remain, empty → null; the tuple gains `string? accountId` last. `FrameCodec.AccountsSnapshot(string json)` → `LocalFrame` of type `AccountsSnapshot`, and `LocalFrame.AccountsSubscribe()`.
 
 - [ ] **Step 1: Write the failing tests**

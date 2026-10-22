@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Harness.Pi;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -221,7 +222,8 @@ internal static class PiRpcRuntimeFakes {
             Action?    onDisposed     = null,
             TranscriptJournal? journal = null,
             PiReviewerGuards?  reviewerGuards = null,
-            TimeProvider?      time    = null) {
+            TimeProvider?      time    = null,
+            Func<AcpInteractionRequest, CancellationToken, Task<AcpInteractionDecision>>? requestInteraction = null) {
         var process = new FakePiRpcProcess {
             AutoStateResponse = answerGetState ? stateResponse ?? GetStateResponse() : null,
         };
@@ -237,7 +239,8 @@ internal static class PiRpcRuntimeFakes {
             stopGrace:      stopGrace,
             onDisposed:     onDisposed,
             journal:        journal,
-            reviewerGuards: reviewerGuards);
+            reviewerGuards: reviewerGuards,
+            requestInteraction: requestInteraction);
 
         return (runtime, process);
     }

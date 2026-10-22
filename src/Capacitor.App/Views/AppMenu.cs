@@ -13,13 +13,20 @@ public sealed class AppMenu {
     readonly BehaviorSubject<Action?> _showSettings = new(null);
     readonly NativeMenuItem _setup = new("Set up kcap…") { IsEnabled = false };
     Action? _showSetup;
+    readonly NativeMenuItem _uninstall = new("Uninstall kcap…") { IsEnabled = false };
+    Action? _runUninstall;
 
     public AppMenu(Action showAbout) {
         var about = new NativeMenuItem("About kcap");
         about.Click += (_, _) => showAbout();
         _settings.Click += (_, _) => _showSettings.Value?.Invoke();
         _setup.Click += (_, _) => _showSetup?.Invoke();
+        _uninstall.Click += (_, _) => _runUninstall?.Invoke();
         Menu = new NativeMenu { about, new NativeMenuItemSeparator(), _settings, _setup };
+        if (OperatingSystem.IsMacOS()) {
+            Menu.Add(new NativeMenuItemSeparator());
+            Menu.Add(_uninstall);
+        }
     }
 
     public NativeMenu Menu { get; }
@@ -36,5 +43,10 @@ public sealed class AppMenu {
     public void SetSetupAction(Action? showSetup) {
         _showSetup = showSetup;
         _setup.IsEnabled = showSetup is not null;
+    }
+
+    public void SetUninstallAction(Action? uninstall) {
+        _runUninstall = uninstall;
+        _uninstall.IsEnabled = uninstall is not null;
     }
 }

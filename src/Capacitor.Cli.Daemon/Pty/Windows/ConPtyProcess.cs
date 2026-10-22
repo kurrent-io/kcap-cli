@@ -107,6 +107,10 @@ public sealed class ConPtyProcess : IPtyProcess {
             env.Remove(key);
         }
 
+        foreach (var key in PtyEnvScrub.InheritedSessionVars) {
+            env.Remove(key);
+        }
+
         // Clear any hosted-agent identity/routing the daemon may have inherited (e.g.
         // it was started from inside a kcap-tracked session) so the spawned agent gets
         // ONLY what extraEnv sets: hosted launches re-add these below; private local

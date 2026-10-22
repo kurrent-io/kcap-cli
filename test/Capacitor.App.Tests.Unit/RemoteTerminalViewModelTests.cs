@@ -26,11 +26,12 @@ public class RemoteTerminalViewModelTests {
         public readonly RemoteTerminalViewModel Vm;
 
         /// <param name="subscribe">The server's answers, in place before the pane's first showing asks.</param>
-        public Harness(bool visible = true, Func<string, Task<HubCallOutcome>>? subscribe = null) {
+        public Harness(bool visible = true, Func<string, Task<HubCallOutcome>>? subscribe = null, bool measured = true) {
             if (subscribe is not null) Lane.TerminalSubscribeHandler = subscribe;
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
             Visible = new BehaviorSubject<bool>(visible);
             Vm = new RemoteTerminalViewModel("a1", Lane, Access, Ended, Visible, Time, () => { var s = new FakeTerminalSurface(); Surfaces.Add(s); return s; });
+            if (measured) Vm.SetViewport(80, 24);
         }
 
         public void Drop() => Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
@@ -80,7 +81,7 @@ public class RemoteTerminalViewModelTests {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
-            h.Surfaces.Single().RaiseResize(100, 30);
+            h.Vm.SetViewport(100, 30);
             await WaitUntilAsync(() => h.Lane.Resizes.Contains(("a1", 100, 30)), what: "the viewport");
 
             await h.Vm.TeardownAsync();
@@ -188,6 +189,34 @@ public class RemoteTerminalViewModelTests {
         });
     }
 
+    [Test]
+    public async Task An_unmeasured_pane_never_reports_the_sources_size_as_its_viewport() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(measured: false);
+            try {
+                await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
+                h.Lane.TerminalDimensionsSubject.OnNext(new TerminalSize("a1", 130, 54));
+                await Assert.That(h.Lane.Resizes).IsEmpty();
+
+                h.Vm.SetViewport(100, 30);
+                await WaitUntilAsync(() => h.Lane.Resizes.Contains(("a1", 100, 30)), what: "the measured viewport");
+                var reported = h.Lane.Resizes.Count;
+                h.Lane.TerminalDimensionsSubject.OnNext(new TerminalSize("a1", 90, 25));
+                h.Surfaces.Single().RaiseResize(90, 25);
+                await Assert.That(h.Lane.Resizes.Count).IsEqualTo(reported);
+                await Assert.That(h.Vm.SourceColumns).IsEqualTo(90);
+                await Assert.That(h.Vm.SourceRows).IsEqualTo(25);
+
+                h.Visible.OnNext(false);
+                h.Visible.OnNext(true);
+                await WaitUntilAsync(() => h.Lane.Resizes.Count > reported, what: "the restored viewport");
+                await Assert.That(h.Lane.Resizes.Last()).IsEqualTo(("a1", 100, 30));
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
     /// The hub's bounds are 1..500 × 1..200, and (0,0) is its own clear sentinel.
     [Test]
     public async Task A_size_outside_the_servers_bounds_is_never_reported() {
@@ -195,12 +224,11 @@ public class RemoteTerminalViewModelTests {
             var h = new Harness();
             await WaitUntilAsync(() => h.Vm.Phase == RemoteTerminalPhase.Live, what: "live");
             var reported = h.Lane.Resizes.Count;
-            var surface = h.Surfaces.Single();
 
-            surface.RaiseResize(0, 0);
-            surface.RaiseResize(501, 30);
-            surface.RaiseResize(100, 201);
-            surface.RaiseResize(100, 30);
+            h.Vm.SetViewport(0, 0);
+            h.Vm.SetViewport(501, 30);
+            h.Vm.SetViewport(100, 201);
+            h.Vm.SetViewport(100, 30);
 
             await WaitUntilAsync(() => h.Lane.Resizes.Contains(("a1", 100, 30)), what: "the viewport in bounds");
             await Assert.That(h.Lane.Resizes.Count).IsEqualTo(reported + 1);

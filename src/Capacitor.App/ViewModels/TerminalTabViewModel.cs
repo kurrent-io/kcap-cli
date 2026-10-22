@@ -312,16 +312,18 @@ public sealed class TerminalTabViewModel : ReactiveObject {
         }
     }
 
-    // Held ring replays are megabytes; kept as strings so holding them adds no copy.
+    // Held ring replays are megabytes; kept as the pieces they arrived in so holding them adds no copy.
     readonly List<string> _held = [];
     ITerminalSurface? _heldSurface;
     int _heldGeneration;
     ITimer? _heldTimer;
     bool _heldArmed;
 
-    void Deliver(int generation, ITerminalSurface surface, string text) {
+    void Deliver(int generation, ITerminalSurface surface, string text) => Deliver(generation, surface, [text]);
+
+    void Deliver(int generation, ITerminalSurface surface, IReadOnlyList<string> pieces) {
         if (_surfaceShown) {
-            surface.Feed(text);
+            surface.Feed(pieces);
             return;
         }
         if (!ReferenceEquals(_heldSurface, surface)) {
@@ -329,7 +331,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
             _heldSurface = surface;
             _heldGeneration = generation;
         }
-        _held.Add(text);
+        _held.AddRange(pieces);
         if (_heldArmed) return;
         _heldArmed = true;
         // Off-thread in production, synchronous under a fake clock: the scheduler keeps the feed
@@ -341,10 +343,10 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     void FeedHeld() {
         _heldArmed = false;
         if (_held.Count == 0) return;
-        var text = _held.Count == 1 ? _held[0] : string.Concat(_held);
+        var pieces = _held.ToArray();
         _held.Clear();
         if (_heldSurface is not { } surface || Retired(_heldGeneration)) return;
-        surface.Feed(text);
+        surface.Feed(pieces);
     }
 
     public ReactiveCommand<Unit, Unit> ReattachCommand { get; }
@@ -646,7 +648,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
     }
 
     async Task OnAttachedAsync(int generation, int openingToken, ITerminalSurface surface, Utf8StreamDecoder decoder, AttachAck ack, CancellationToken ct) {
-        var text = decoder.Decode(ack.Snapshot);
+        var pieces = decoder.DecodePieces(ack.Snapshot);
         var incarnation = ack.RuntimeStartedAt;
         if (incarnation is null) {
             lock (_resumeLock) incarnation = _attemptIncarnation.Generation == generation ? _attemptIncarnation.Stamp : null;
@@ -658,7 +660,7 @@ public sealed class TerminalTabViewModel : ReactiveObject {
                 _resumeDeadline = null;
                 _attachedIncarnation = incarnation;
             }
-            Deliver(generation, surface, text);
+            Deliver(generation, surface, pieces);
             Publish(TerminalSessionState.Attached(ack.ReadOnlyReason), openingToken);
         }, DispatcherPriority.Default, ct);
     }

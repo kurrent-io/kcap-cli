@@ -190,13 +190,7 @@ internal sealed partial class ClaudeLauncher(
                 args.Add(ctx.Model);
             }
 
-            if (ctx.PromptFile is { } promptFile) {
-                // Outside the worktree, so Claude would otherwise ask before reading it.
-                args.Add("--add-dir");
-                args.Add(Path.GetDirectoryName(promptFile)!);
-                args.Add("--");
-                args.Add(PromptFile.Pointer(promptFile));
-            } else if (!string.IsNullOrEmpty(ctx.Prompt)) {
+            if (!string.IsNullOrEmpty(ctx.Prompt)) {
                 args.Add("--");
                 args.Add(ctx.Prompt);
             }

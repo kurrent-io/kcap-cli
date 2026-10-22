@@ -21,7 +21,7 @@ public class PtyHostedAgentRuntimeFactoryEnvTests {
         var pty     = new SpyPtyProcessFactory();
         var factory = new PtyHostedAgentRuntimeFactory(
             new SpyHostedAgentLauncher("claude", "claude"), pty, NullLogger<PtyHostedAgentRuntimeFactory>.Instance,
-            TimeProvider.System, Home.PathTo("prompts"), Home);
+            TimeProvider.System, Home);
 
         var start = await factory.StartAsync(Context(account), CancellationToken.None);
         await start.Runtime.DisposeAsync();

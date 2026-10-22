@@ -1,4 +1,8 @@
+using System.Runtime.CompilerServices;
 using Capacitor.Cli.Daemon.Pty;
+using Capacitor.Remote.Models;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -16,8 +20,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Input writes take the input lane, so a paste and its submit are never interleaved by another
 /// writer; the graceful stop only tries for it (see <see cref="RequestGracefulStopAsync"/>).
 /// </summary>
-internal sealed class PtyHostedAgentRuntime(
-        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false, string? promptFile = null) : IHostedAgentRuntime {
+internal sealed partial class PtyHostedAgentRuntime(
+        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false,
+        ILogger? logger = null) : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
@@ -34,7 +39,7 @@ internal sealed class PtyHostedAgentRuntime(
     /// <summary>
     /// Past codex's 120ms post-paste Enter-suppression window, so the one CR still submits.
     /// </summary>
-    static readonly TimeSpan SingleSubmitDelay = TimeSpan.FromMilliseconds(150);
+    internal static readonly TimeSpan SingleSubmitDelay = TimeSpan.FromMilliseconds(150);
 
     /// <summary>
     /// How long the graceful stop waits for the input lane before writing without it. A delivery
@@ -43,7 +48,30 @@ internal sealed class PtyHostedAgentRuntime(
     /// </summary>
     internal static readonly TimeSpan GracefulStopLaneWait = TimeSpan.FromSeconds(1);
 
-    readonly SemaphoreSlim  _lane = new(1, 1);
+    /// <summary>
+    /// How long startup output must have been silent before the launch prompt is pasted: a TUI still
+    /// drawing its banner or startup spinner is not reading its composer yet. Codex's spinner redraws
+    /// every 100 ms, so the window has to outlast that gap.
+    /// </summary>
+    internal static readonly TimeSpan LaunchPromptQuietWindow = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>Upper bound on that wait: a TUI that never settles still gets its prompt.</summary>
+    internal static readonly TimeSpan LaunchPromptMaxWait = TimeSpan.FromSeconds(10);
+
+    /// <summary>The PTY offers no exit event, so the wait for first output is sliced and the exit
+    /// flag re-read between slices.</summary>
+    static readonly TimeSpan LaunchPromptExitPoll = TimeSpan.FromMilliseconds(250);
+
+    readonly TerminalMouseModeTracker _mouseMode = new();
+    readonly ILogger _logger = logger ?? NullLogger.Instance;
+    readonly SemaphoreSlim           _lane        = new(1, 1);
+    readonly TaskCompletionSource    _firstOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    readonly CancellationTokenSource _disposal    = new();
+    long                             _lastOutputAt;
+    volatile bool                    _stopRequested;
+
+    /// <summary>The pending launch-prompt delivery, or null when the launch carried no prompt to paste.</summary>
+    internal Task<LaunchPromptOutcome>? LaunchPromptDelivery { get; private set; }
 
     public string  Vendor              => vendor;
     public int     Pid                 => pty.Pid;
@@ -52,17 +80,97 @@ internal sealed class PtyHostedAgentRuntime(
     public string? StartIdentity       => pty.StartIdentity;
     public bool    EmitsTerminalOutput => true;
 
-    public IAsyncEnumerable<byte[]> ReadOutputAsync(CancellationToken ct = default) => pty.ReadOutputAsync(ct);
+    public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
+        await foreach (var chunk in pty.ReadOutputAsync(ct).ConfigureAwait(false)) {
+            _mouseMode.Feed(chunk);
+            Volatile.Write(ref _lastOutputAt, time.GetTimestamp());
+            _firstOutput.TrySetResult();
+
+            yield return chunk;
+        }
+    }
+
+    /// <summary>
+    /// Makes <paramref name="prompt"/> the agent's first message without putting it on the command
+    /// line: pastes it once startup output has been quiet for <see cref="LaunchPromptQuietWindow"/>
+    /// or <see cref="LaunchPromptMaxWait"/> has passed. A text follow-up sent meanwhile lands after
+    /// it; raw and special keys do not wait, so a viewer can answer a startup dialog themselves.
+    /// </summary>
+    internal void DeliverLaunchPrompt(string prompt) {
+        if (LaunchPromptDelivery is not null) throw new InvalidOperationException("The launch prompt is already queued.");
+
+        LaunchPromptDelivery = DeliverLaunchPromptAsync(prompt);
+    }
+
+    async Task<LaunchPromptOutcome> DeliverLaunchPromptAsync(string prompt) {
+        try {
+            var settled = await WaitForStartupToSettleAsync(_disposal.Token);
+            if (pty.HasExited) return LaunchPromptOutcome.AgentExited;
+            if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+
+            await _lane.WaitAsync(_disposal.Token);
+
+            try {
+                if (_stopRequested) return LaunchPromptOutcome.StopRequested;
+
+                await pty.WriteAsync(BracketedPaste.Frame(prompt));
+                await SubmitAsync();
+            } finally {
+                try { _lane.Release(); } catch (ObjectDisposedException) { }
+            }
+
+            return settled ? LaunchPromptOutcome.Delivered : LaunchPromptOutcome.DeliveredAfterMaxWait;
+        } catch (OperationCanceledException) {
+            return LaunchPromptOutcome.Cancelled;
+        } catch (Exception ex) when (ex is IOException or ObjectDisposedException) {
+            return LaunchPromptOutcome.WriteFailed;
+        }
+    }
+
+    /// <summary>A follow-up waits for the launch prompt so it lands after it. The delivery reports
+    /// its own fate; the follow-up only needs it to be over.</summary>
+    async Task WaitForLaunchPromptAsync() {
+        if (LaunchPromptDelivery is not { } delivery) return;
+
+        try { await delivery; } catch (Exception) { }
+    }
+
+    /// <summary>True once output has been quiet for the window, false when the wait expired first.
+    /// Returns early, true, when the agent has exited or been asked to stop; the caller checks those.</summary>
+    async Task<bool> WaitForStartupToSettleAsync(CancellationToken ct) {
+        var started = time.GetTimestamp();
+
+        while (!pty.HasExited && !_stopRequested) {
+            var remaining = LaunchPromptMaxWait - time.GetElapsedTime(started);
+            if (remaining <= TimeSpan.Zero) return false;
+
+            if (!_firstOutput.Task.IsCompleted) {
+                try {
+                    await _firstOutput.Task.WaitAsync(remaining < LaunchPromptExitPoll ? remaining : LaunchPromptExitPoll, time, ct);
+                } catch (TimeoutException) { }
+
+                continue;
+            }
+
+            var quietFor = time.GetElapsedTime(Volatile.Read(ref _lastOutputAt));
+            if (quietFor >= LaunchPromptQuietWindow) return true;
+
+            await Task.Delay(LaunchPromptQuietWindow - quietFor, time, ct);
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// Delivers <paramref name="text"/> as a bracketed paste (ESC[200~ … ESC[201~) so the TUI treats
     /// it as one block, then submits it (see <see cref="SubmitAsync"/>).
     /// </summary>
     public async Task SendUserInputAsync(string text) {
+        await WaitForLaunchPromptAsync();
         await _lane.WaitAsync();
 
         try {
-            await pty.WriteAsync($"\x1b[200~{text}\x1b[201~");
+            await pty.WriteAsync(BracketedPaste.Frame(text));
             await SubmitAsync();
         } finally {
             _lane.Release();
@@ -70,12 +178,17 @@ internal sealed class PtyHostedAgentRuntime(
     }
 
     public async Task SendSpecialKeyAsync(string key) {
-        var bytes = SpecialKeyMap.ToBytes(key);
+        var isWheel = TerminalScrollKey.TryDecode(key, out var bytes);
+        if (!isWheel) bytes = SpecialKeyMap.ToBytes(key);
         if (bytes.Length == 0) return;
 
         await _lane.WaitAsync();
 
         try {
+            if (isWheel && (!_mouseMode.IsActive || pty.HasExited)) {
+                LogWheelDropped(_logger);
+                return;
+            }
             await pty.WriteAsync(bytes);
         } finally {
             _lane.Release();
@@ -100,7 +213,8 @@ internal sealed class PtyHostedAgentRuntime(
     /// master fd regardless, and the lane must never be what keeps the stop from being asked for.
     /// </summary>
     public async Task RequestGracefulStopAsync() {
-        var holdsLane = await _lane.WaitAsync(GracefulStopLaneWait, CancellationToken.None);
+        _stopRequested = true;
+        var holdsLane  = await _lane.WaitAsync(GracefulStopLaneWait, CancellationToken.None);
 
         try {
             await pty.WriteAsync("/exit");
@@ -149,15 +263,16 @@ internal sealed class PtyHostedAgentRuntime(
         }
     }
 
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Dropped wheel input while PTY mouse reporting is inactive or the process has exited")]
+    static partial void LogWheelDropped(ILogger logger);
+
     public Task WaitForExitAsync(TimeSpan? timeout = null) => pty.WaitForExitAsync(timeout);
     public Task TerminateAsync(TimeSpan?   timeout = null) => pty.TerminateAsync(timeout);
 
     public async ValueTask DisposeAsync() {
-        try {
-            await pty.DisposeAsync();
-            _lane.Dispose();
-        } finally {
-            if (promptFile is not null) PromptFile.Delete(promptFile);
-        }
+        await _disposal.CancelAsync();
+        await pty.DisposeAsync();
+        _lane.Dispose();
+        _disposal.Dispose();
     }
 }

@@ -90,8 +90,7 @@ internal static class AgentOrchestratorHarness {
         // test that still needs that vendor's launcher registered for the local-spawn path.
         var runtimeFactories = new Dictionary<string, IHostedAgentRuntimeFactory>();
         foreach (var l in launchers.Values)
-            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System,
-                Path.Combine(config.Store.StateDirectory(config.Name), "prompts"), config.Home);
+            runtimeFactories[l.Vendor] = new PtyHostedAgentRuntimeFactory(l, ptyFactory, NullLogger<PtyHostedAgentRuntimeFactory>.Instance, TimeProvider.System, config.Home);
         foreach (var f in extraRuntimeFactories ?? [])
             runtimeFactories[f.Vendor] = f;
 
@@ -249,6 +248,20 @@ internal static class AgentOrchestratorHarness {
         };
 
         orch.RegisterAgentForTest(agent);
+
+        return agent;
+    }
+
+    /// <summary>What the orchestrator records once the server has bound an agent's transcript, without
+    /// standing up a server to bind it.</summary>
+    internal static AgentInstance BindTranscript(AgentInstance agent) {
+        agent.AcpForwarder = new AcpForwarderHandle(
+            new AcpTranscriptForwarder(
+                (_, _) => Task.FromResult(new AcpBatchAck(0, 0)), initialEnvelope: null,
+                System.Threading.Channels.Channel.CreateUnbounded<AcpEventEnvelope>().Reader, NullLogger.Instance, TimeProvider.System,
+                resumeFromSeq: 0),
+            Task.CompletedTask);
+        agent.TranscriptBound = true;
 
         return agent;
     }

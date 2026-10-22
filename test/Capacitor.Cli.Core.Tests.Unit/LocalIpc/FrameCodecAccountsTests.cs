@@ -95,9 +95,9 @@ public class FrameCodecAccountsTests {
     }
 
     [Test]
-    public async Task Frame_values_are_pinned_86_and_87() {
+    public async Task Frame_values_are_pinned_32_and_87() {
 #pragma warning disable TUnitAssertions0005
-        await Assert.That((byte)FrameType.AccountsSubscribe).IsEqualTo((byte)86);
+        await Assert.That((byte)FrameType.AccountsSubscribe).IsEqualTo((byte)32);
         await Assert.That((byte)FrameType.AccountsSnapshot).IsEqualTo((byte)87);
 #pragma warning restore TUnitAssertions0005
     }

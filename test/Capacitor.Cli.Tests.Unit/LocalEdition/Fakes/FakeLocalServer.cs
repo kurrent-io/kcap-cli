@@ -20,11 +20,14 @@ sealed class FakeLocalServer(List<string> log, LocalRoot root) : HttpMessageHand
     /// <summary>Answers a path itself when it returns a response, replacing the scripted answers.</summary>
     public Func<string, HttpResponseMessage?>? Override { get; set; }
 
+    public Action<HttpRequestMessage>? OnCliSetupReport { get; set; }
+
     protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
         var path = request.RequestUri!.AbsolutePath;
 
         log.Add($"{request.Method} {path}");
         OnRequest?.Invoke(path);
+        if (path == "/api/users/me/cli-setup") OnCliSetupReport?.Invoke(request);
 
         if (Override?.Invoke(path) is { } custom) return Task.FromResult(custom);
 

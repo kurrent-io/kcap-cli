@@ -3,7 +3,6 @@
              xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
              xmlns:views="clr-namespace:Capacitor.App.Views"
              xmlns:services="clr-namespace:Capacitor.App.Services"
-             xmlns:terminal="clr-namespace:SvcSystems.UI.Terminal;assembly=SvcSystems.UI.Terminal"
              x:Class="Capacitor.App.Views.RemoteSessionView"
              x:DataType="vm:RemoteSessionViewModel"
              Background="{StaticResource KcapCanvasBrush}">
@@ -57,13 +56,8 @@
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="1" CornerRadius="10" Padding="13,10"
                 IsVisible="{Binding AccessNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-            <Grid ColumnDefinitions="*,Auto">
-                <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
-                           FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
-                <Button x:Name="AccessOpenTerminal" Grid.Column="1" Classes="kcapChip" Content="Open Terminal"
-                        Command="{Binding ShowTerminalCommand}" Margin="12,0,0,0" VerticalAlignment="Center"
-                        IsVisible="{Binding ShowsTerminalButton}" />
-            </Grid>
+            <TextBlock x:Name="AccessNoteText" Text="{Binding AccessNote}" TextWrapping="Wrap"
+                       FontSize="13.5" Foreground="{StaticResource KcapMutedBrush}" />
         </Border>
 
         <Grid Grid.Row="2">
@@ -80,13 +74,16 @@
             </ContentControl>
 
             <Grid x:Name="TerminalPane" RowDefinitions="*,Auto" IsVisible="{Binding ShowsTerminalPane}">
-                <!-- FontFamily MUST be set: the control's default is "Cascadia Mono", which only
-                     exists on Windows — elsewhere it silently falls back to ESTIMATED cell metrics
-                     while drawing with a real typeface, smearing every styled run off its column. -->
-                <terminal:TerminalControl x:Name="TerminalHost" Grid.Row="0"
-                                           FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
-                                           CaretBrush="{StaticResource KcapTextBrush}"
-                                           Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
+                <!-- A cross-platform monospace font keeps measured cells aligned with rendered text. -->
+                <views:RemoteTerminalViewport x:Name="TerminalViewport" Grid.Row="0">
+                    <views:RemoteTerminalControl x:Name="TerminalHost"
+                                               HorizontalAlignment="Left" VerticalAlignment="Top"
+                                               FontFamily="Menlo,Monaco,Consolas,Cascadia Mono,DejaVu Sans Mono,monospace"
+                                               CaretBrush="{StaticResource KcapTextBrush}"
+                                               SourceColumns="{Binding Terminal.SourceColumns}"
+                                               SourceRows="{Binding Terminal.SourceRows}"
+                                               Model="{Binding Terminal.Surface, Converter={x:Static views:TerminalSurfaceModelConverter.Instance}}" />
+                </views:RemoteTerminalViewport>
                 <Border Grid.Row="0" IsVisible="{Binding Terminal.ShowsBanner}"
                         Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
                         CornerRadius="8" Padding="14,8" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,14,0,0">
@@ -103,7 +100,7 @@
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate x:DataType="services:SpecialKeyChoice">
-                                    <Button Classes="specialKey" Content="{Binding Label}" Padding="10,4" FontSize="12" CornerRadius="7"
+                                    <Button Classes="specialKey" Content="{Binding Label}" Click="OnTerminalKeyClick" Padding="10,4" FontSize="12" CornerRadius="7"
                                             Command="{Binding $parent[views:RemoteSessionView].((vm:RemoteSessionViewModel)DataContext).Terminal.SendKeyCommand}"
                                             CommandParameter="{Binding Key}" />
                                 </DataTemplate>

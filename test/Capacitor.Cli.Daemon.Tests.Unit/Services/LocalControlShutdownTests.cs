@@ -92,11 +92,21 @@ public class LocalControlShutdownTests {
             while (!File.Exists(sockPath) && DateTime.UtcNow < deadline) await Task.Delay(20, cts.Token);
 
             async Task<LocalFrame?> Send(LocalFrame frame) {
-                using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
-                await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
-                await using var stream = new NetworkStream(sock, ownsSocket: false);
-                await FrameCodec.WriteAsync(stream, frame, cts.Token);
-                return await FrameCodec.ReadAsync(stream, cts.Token);
+                // Bind creates the socket file before Listen makes it ready to accept connections.
+                var connectDeadline = DateTime.UtcNow.AddSeconds(2);
+                while (true) {
+                    using var sock = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                    try {
+                        await sock.ConnectAsync(new UnixDomainSocketEndPoint(sockPath), cts.Token);
+                    } catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused) {
+                        if (DateTime.UtcNow >= connectDeadline) throw;
+                        await Task.Delay(20, cts.Token);
+                        continue;
+                    }
+                    await using var stream = new NetworkStream(sock, ownsSocket: false);
+                    await FrameCodec.WriteAsync(stream, frame, cts.Token);
+                    return await FrameCodec.ReadAsync(stream, cts.Token);
+                }
             }
 
             await body(orchestrator, spy, lifetime, Send);

@@ -1,4 +1,5 @@
 using Capacitor.Cli.Daemon.Services;
+using Capacitor.Remote.Models;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -46,8 +47,18 @@ public sealed class SpecialKeyMapTests {
     }
 
     [Test]
-    public async Task Unknown_key_returns_empty_array() {
-        var bytes = SpecialKeyMap.ToBytes("BogusKey");
+    [Arguments(null)]
+    [Arguments("BogusKey")]
+    public async Task Unknown_key_returns_empty_array(string? key) {
+        var bytes = SpecialKeyMap.ToBytes(key);
         await Assert.That(bytes.Length).IsEqualTo(0);
     }
+    [Test]
+    public async Task A_wheel_report_reaches_the_pty_without_becoming_a_prompt() {
+        var report = "\x1b[<64;50;19M"u8.ToArray();
+        await Assert.That(TerminalScrollKey.TryCreate(report, out var key)).IsTrue();
+        await Assert.That(SpecialKeyMap.ToBytes(key)).IsEquivalentTo(report);
+        await Assert.That(SpecialKeyMap.ToBytes("Wheel:" + Convert.ToBase64String("text\r"u8))).IsEmpty();
+    }
+
 }

@@ -5,6 +5,7 @@ using System.Xml;
 using System.Xml.Linq;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Setup;
 
 namespace Capacitor.App.Services;
 
@@ -78,7 +79,7 @@ internal sealed partial class ApplicationReferences(IProcessRunner runner, UserH
                 if (after.ExitCode == 0) throw new IOException($"Daemon '{name}' is still loaded.");
             }
         }
-        foreach (var folder in shimFolders ?? new[] { "/usr/local/bin", "/opt/homebrew/bin", Path.Combine(home.Path, ".local", "bin"), Path.Combine(home.Path, "bin") }) {
+        foreach (var folder in shimFolders ?? KcapLinkFolders.For(home)) {
             var path = Path.Combine(folder, "kcap");
             var info = new FileInfo(path);
             if (info.LinkTarget is not { } original) continue;

@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -167,6 +168,61 @@ public class ChatTabViewModelTests {
 
     static AgentStatusDto Dto(string? transcriptPath, string vendor = "claude") =>
         Agent("a1", vendor, hasTerminal: true, repoPath: "/repo/x") with { TranscriptPath = transcriptPath };
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Image_previews_wait_for_successful_local_reads() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var read = ReadCallLine.Replace("/repo/x/src/a.cs", "images/a.png");
+            var result = ToolResultLine.Replace("t1", "t2");
+            var path = Tmp.CreateFile("images.jsonl", [read]);
+            try {
+                await h.PushAsync(Dto(path) with { WorktreePath = Tmp.Path });
+                var call = Group(h.Chat, 0).Calls[0];
+                await Assert.That(call.PreviewPath).IsNull();
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(call.PreviewPath).IsEqualTo(Tmp.PathTo("images", "a.png"));
+                File.AppendAllText(path, read.Replace("t2", "t3") + "\n" + ToolErrorLine.Replace("t1", "t3") + "\n");
+                await h.TickAsync();
+                await Assert.That(Group(h.Chat, 0).Calls[^1].PreviewPath).IsNull();
+            } finally {
+                await h.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Remote_reads_never_acquire_workstation_previews(bool useWindowsPath) {
+        await RunOnUiAsync(async () => {
+            var imagePath = useWindowsPath ? @"C:\Users\runneradmin\AppData\Local\Temp\images\a.png" : Tmp.PathTo("a.png");
+            var path = Tmp.CreateFile("remote-image.jsonl", [
+                ReadCallLine.Replace("\"/repo/x/src/a.cs\"", JsonSerializer.Serialize(imagePath)),
+                ToolResultLine.Replace("t1", "t2"),
+            ]);
+            var time = new FakeTimeProvider();
+            using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1") with { Root = Tmp.Path });
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+                new AcceptingChatInput(), new NoAttachmentUploader(),
+                _ => new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { }),
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            try {
+                await (chat.PendingReadForTesting ?? throw new InvalidOperationException("The session did not start its transcript read."));
+                await Assert.That(chat.Items.Count).IsEqualTo(1);
+                var call = Group(chat, 0).Calls.Single();
+                await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
+                await Assert.That(ToolDetail.ImageFile(call.InputJson)).IsEqualTo(imagePath);
+                await Assert.That(call.PreviewPath).IsNull();
+            } finally {
+                await chat.TeardownAsync();
+            }
+        });
+    }
 
     static ToolGroupItem Group(ChatTabViewModel chat, int index) => (ToolGroupItem)chat.Items[index];
     static PendingCardItem[] CardRows(ChatTabViewModel chat) => [.. chat.Items.OfType<PendingCardItem>()];
@@ -443,6 +499,32 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Prose closes the group while the call stays pending. The result arrives in a later read,
+    /// and the row it settles is already bound, so that update has to run on the UI thread.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_later_result_settles_the_closed_groups_call_on_the_ui_thread() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var path = Tmp.CreateFile("t.jsonl", [ToolCallLine, AssistantLine]);
+            await h.PushAsync(Dto(path));
+            var call = Group(h.Chat, 0).Calls[0];
+            var onUiThread = false;
+            call.PropertyChanged += (_, e) => {
+                if (e.PropertyName == nameof(ToolCallItem.Outcome))
+                    onUiThread = Dispatcher.UIThread.CheckAccess();
+            };
+
+            File.AppendAllText(path, ToolResultLine + "\n");
+            await h.TickAsync();
+
+            await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
+            await Assert.That(onUiThread).IsTrue();
+            await Assert.That(Group(h.Chat, 0).Calls[0]).IsSameReferenceAs(call);
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_reset_and_a_path_switch_start_a_fresh_group_for_later_calls() {
@@ -503,14 +585,22 @@ public class ChatTabViewModelTests {
     }
 
     [Test]
+    [Arguments("mcp__plugin_linear_linear__save_issue", "Linear · save issue", "Linear")]
+    [Arguments("mcp__claude_ai_Linear__save_issue", "Linear · save issue", "Linear")]
+    [Arguments("mcp__claude_ai_kcap-plans__some_tool", "Kcap plans · some tool", "Kcap plans")]
+    [Arguments("mcp__claude_ai_kcap-plans__declare_plan_document", "Kcap plans · declare plan document", "Kcap plans")]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_foreign_mcp_call_reads_as_server_and_tool_with_its_first_argument() {
+    public async Task A_foreign_mcp_call_reads_as_server_and_tool_with_its_first_argument(string name, string label, string chip) {
         await RunOnUiAsync(async () => {
             var h = Claude();
-            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [LinearCallLine])));
+            var line = LinearCallLine.Replace("mcp__plugin_linear_linear__save_issue", name, StringComparison.Ordinal);
+            await h.PushAsync(Dto(Tmp.CreateFile("t.jsonl", [line])));
 
-            var call = Group(h.Chat, 0).Calls[0];
-            await Assert.That(call.Label).IsEqualTo("Linear · save issue");
+            var group = Group(h.Chat, 0);
+            var call = group.Calls[0];
+            await Assert.That(group.KindChip).IsEqualTo(chip);
+            await Assert.That(call.CardKind).IsEqualTo(ToolCardKind.None);
+            await Assert.That(call.Label).IsEqualTo(label);
             await Assert.That(call.Detail).IsEqualTo("Add tests");
             await Assert.That(call.Category).IsEqualTo(ToolCategory.Other);
             await h.TeardownAsync();
@@ -2837,6 +2927,36 @@ public class ChatTabViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_local_command_result_settles_one_send_without_a_chat_row() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                const string result = """{"type":"system","subtype":"local_command","commandRun":{"command":"rename","args":"receipt check"},"content":"<local-command-stdout>Session renamed to: receipt check</local-command-stdout>"}""";
+                var path = Tmp.CreateFile("local-command.jsonl", [result]);
+                await h.PushAsync(Dto(path));
+                for (var i = 0; i < 2; i++) {
+                    h.Chat.ComposerText = "/rename receipt check";
+                    var send = h.Chat.SendCommand.Execute().ToTask();
+                    input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                    await send;
+                }
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+                File.AppendAllText(path, """{"type":"system","subtype":"local_command","content":"<command-name>/rename</command-name><command-args>receipt check</command-args>"}""" + "\n");
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                await Assert.That(h.Chat.Items).IsEmpty();
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items).IsEmpty();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_slash_command_echo_acknowledges_input_without_a_display_row() {
         await RunOnUiAsync(async () => {
             var input = new ScriptedInput();
@@ -3169,6 +3289,28 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.TerminalMenuScreen).IsEqualTo(dialog.Screen);
                 await h.Chat.ShowTerminalCommand.Execute().ToTask();
                 await Assert.That(shown).IsTrue();
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    /// An empty chat can mean the agent is held at a prompt only its terminal shows, so it points
+    /// there, unless the agent has no terminal or the dialog card already does.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_empty_chat_offers_the_terminal_until_the_dialog_card_does() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.For("claude"));
+            try {
+                await Assert.That(h.Chat.ShowsTerminalOffer).IsFalse();
+                h.Chat.ShowTerminal = () => { };
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running" });
+                await Assert.That(h.Chat.PhaseNote).IsEqualTo("Waiting for chat…");
+                await Assert.That(h.Chat.ShowsTerminalOffer).IsTrue();
+
+                var dialog = new TerminalDialogDto("Do you want to proceed?", "", ["Yes", "No"], 0, "");
+                await h.PushAsync(Agent("a1", "claude", hasTerminal: true) with { Status = "Running", TerminalDialog = dialog });
+                await Assert.That(h.Chat.ShowsTerminalMenu).IsTrue();
+                await Assert.That(h.Chat.ShowsTerminalOffer).IsFalse();
             } finally { await h.TeardownAsync(); }
         });
     }
@@ -3553,7 +3695,7 @@ public class ChatTabViewModelTests {
             time.Advance(ChatTabViewModel.PollInterval);
             await (chat.PendingReadForTesting ?? Task.CompletedTask);
             await Assert.That(chat.Phase).IsEqualTo(ChatTabPhase.Reading);
-            await Assert.That(chat.PhaseNote).IsEqualTo("");
+            await Assert.That(chat.PhaseNote).IsEqualTo("Waiting for chat…");
             await chat.TeardownAsync();
         });
     }

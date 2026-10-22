@@ -670,16 +670,19 @@ public class AcpTranscriptForwarderTests {
     }
 
     /// <summary>Pins that the budget's size estimate never undercounts what the hub serializer writes,
-    /// including text the default encoder escapes to six bytes a character.</summary>
+    /// including text the default encoder escapes to six bytes a character. Every string member is long
+    /// enough that one the estimate missed would overrun the fixed allowance.</summary>
     [Test]
     [Arguments("plain ascii output")]
     [Arguments("naïve café — “quoted” 漢字 🚀")]
     [Arguments("<tag attr='x'> & \"q\" \\ back + `tick`")]
     [Arguments("tab\tnew\nline\u0001ctl")]
     public async Task The_size_estimate_bounds_the_serialized_envelope(string text) {
+        var s = string.Concat(Enumerable.Repeat(text, 50));
         var envelope = new AcpEventEnvelope {
-            Seq = 7, Kind = AcpEventKind.ToolResult, ToolCallId = text, ToolResult = string.Concat(Enumerable.Repeat(text, 50)),
-            ToolName = text, ItemId = text, TimestampIso = "2026-10-16T00:00:00Z", Model = text,
+            Seq = 7, Kind = AcpEventKind.ToolResult, Text = s, ToolCallId = s, ToolName = s, ToolInputJson = s, ToolKind = s,
+            ToolResult = s, Model = s, Cwd = s, RawSessionId = s, SessionMode = s, EndReason = s, TimestampIso = s, ItemId = s,
+            RepoOwner = s, RepoName = s, RepoRemoteUrl = s, RepoBranch = s, AgentId = s, AgentType = s, TurnId = s,
         };
 
         var serialized = JsonSerializer.SerializeToUtf8Bytes(envelope, CapacitorJsonContext.Default.AcpEventEnvelope);

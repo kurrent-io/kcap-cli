@@ -232,6 +232,10 @@ internal record AgentInstance(
     /// Null when no provider was wired, or when the build failed.</summary>
     public PolicySnapshot?      PolicySnapshot    { get; init; }
 
+    /// <summary>Launched fresh by this daemon process, so every permission it raised passed through this
+    /// daemon's bridges; never for a resume or an adopted agent, whose earlier refusals this process never saw.</summary>
+    public bool                 BridgedSinceStart { get; init; }
+
     /// <summary>The runtime transport this agent actually launched on, reported to the server on
     /// AgentRegistered so it can validate its launch decision. Each runtime owns its own transport
     /// (<see cref="IHostedAgentRuntime.RuntimeTransport"/>), so this reports the same value on initial
@@ -431,6 +435,15 @@ internal record AgentInstance(
     /// ending the session.
     /// </summary>
     public AcpForwarderHandle? AcpForwarder { get; set; }
+
+    int _transcriptBind;
+
+    /// <summary>Whether the server holds this agent's ACP transcript session: null while the bind is
+    /// still in flight, false when it failed or was refused, or the agent records nothing.</summary>
+    public bool? TranscriptBound {
+        get => Volatile.Read(ref _transcriptBind) switch { 1 => true, 2 => false, _ => null };
+        set => Volatile.Write(ref _transcriptBind, value switch { true => 1, false => 2, null => 0 });
+    }
 
     /// <summary>
     /// Per-agent/per-setup <see cref="CancellationTokenSource"/>, linked to the daemon's shutdown
@@ -1101,6 +1114,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _statusNotifier.Pulse();
     }
 
+    /// <summary>Only the session a fresh agent reported as its own started under this daemon: a request naming another
+    /// one, such as an older session resumed inside the agent, may carry refusals this daemon never saw.</summary>
+    static bool FreshIn(AgentInstance agent, string canonicalSession) =>
+        agent.BridgedSinceStart && agent.SessionId is { } own && PermissionWire.Canonical(own) == canonicalSession;
+
     /// The attribution ladder: the payload's agent id (raw, then canonical GUID), the resolved
     /// vendor session id, the worktree path — each rung only on exactly one live match. Live is
     /// "present in _agents"; teardown withdraws whatever was attributed during that window.
@@ -1112,21 +1130,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (query.AgentId is { Length: > 0 } rawId) {
             var raw = live.Where(a => string.Equals(a.Id, rawId, StringComparison.Ordinal)).ToList();
-            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot);
+            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot, FreshIn(raw[0], canonicalSession));
             if (PermissionWire.Canonical(rawId) is { } canonicalId) {
                 var canon = live.Where(a => PermissionWire.Canonical(a.Id) == canonicalId).ToList();
-                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot);
+                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot, FreshIn(canon[0], canonicalSession));
             }
         }
 
         var bySession = live.Where(a => a.SessionId is { } s && PermissionWire.Canonical(s) == canonicalSession).ToList();
-        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot);
+        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot, FreshIn(bySession[0], canonicalSession));
 
         if (query.Cwd is { Length: > 0 } cwd) {
             var wanted = Path.TrimEndingDirectorySeparator(cwd);
             var byCwd = live.Where(a => string.Equals(
                 Path.TrimEndingDirectorySeparator(a.Worktree.Path), wanted, RepoPathStore.PathComparison)).ToList();
-            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot);
+            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot, FreshIn(byCwd[0], canonicalSession));
         }
 
         return null;
@@ -2904,6 +2922,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 Work: work,
                 DaemonId: _daemonId,       // Phase B (D4 §6.4(3)): child env markers for the OrphanReaper scan
                 DaemonEpoch: _daemonEpoch,
+                DaemonName: _config.Name,
                 IsBorrowedSnapshot: snapshotBorrow,
                 ReviewContextCapabilityUrl: reviewContextCapabilityUrl,
                 FlowResultCapabilityUrl: flowResultCapabilityUrl,
@@ -2927,6 +2946,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
                 RequestedTransport: resume?.Entry.Transport,
+                PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null,
                 Account: account
             );
 
@@ -3057,6 +3077,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // interactive ACP launch (the policy above rejects any other shape).
                 PermissionPreset    = cmd.AcpPermissionPreset,
                 PolicySnapshot      = policySnapshot,
+                BridgedSinceStart   = resume is null && cmd.ResumeSessionId is null,
                 ReviewerBridgeToken = reviewerToken,
                 BorrowedSnapshotSource = borrowedSnapshotSource,
                 Placement           = placement,
@@ -3151,6 +3172,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             // A refused agent keeps running with nothing sent, so a held first turn goes out without the claim.
             if (agent.RegistrationRefused && start.Runtime.RequiresSourceClaimBeforeFirstTurn) _ = BeginRefusedFirstTurnAsync(agent, start.Runtime);
+
+            if (agent.IsServerSilent && start.Transcript is { } silentTranscript) {
+                agent.TranscriptBound = false;
+                silentTranscript.ServerBindSettled(bound: false);
+            }
 
             if (!agent.IsServerSilent && start.Transcript is { } transcript) {
                 // Create + store the per-agent CTS BEFORE firing the setup task, so it exists for
@@ -5250,6 +5276,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var cursor = await _server.SendAcpEventsAsync(agent.Id, transcript.AcpSessionId, [], acpCts.Token);
 
                 if (cursor.Rejected) {
+                    agent.TranscriptBound = false;
                     agent.TryRefuseReopenedTranscript();
                     LogReopenedTranscriptRefused(agent.Id);
 
@@ -5271,11 +5298,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return;
             }
 
+            agent.TranscriptBound = false;
             agent.TryRefuseReopenedTranscript();
             LogReopenedTranscriptRefused(agent.Id);
         } catch (Exception ex) {
             if (reopened) agent.TryRefuseReopenedTranscript();
             LogAcpBindFailed(ex, agent.Id);
+            agent.TranscriptBound = false;
+            transcript.ServerBindSettled(bound: false);
         }
     }
 
@@ -5344,6 +5374,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         var runTask = ForwardAcpTranscriptAsync(agent, forwarder, acpCts.Token);
         agent.AcpForwarder = new AcpForwarderHandle(forwarder, runTask);
+
+        agent.TranscriptBound = true;
+        transcript.ServerBindSettled(bound: true);
     }
 
     /// <summary>The held first turn of an agent the server refused: no claim can be made for it, and holding the

@@ -87,7 +87,7 @@ internal static class ClaudeHostedPolicySeam {
             action = null;
         }
 
-        refusals.Record(call.SessionId, call.ToolUseId, call.ToolName, action);
+        refusals.Record(call.SessionId, call.ToolUseId, approvalId: null, call.ToolName, action, promptId: null);
     }
 
     /// <summary>

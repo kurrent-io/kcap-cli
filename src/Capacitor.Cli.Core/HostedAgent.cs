@@ -18,6 +18,11 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     public const string SessionKindVar = "KCAP_SESSION_KIND";
     public const string FlowRoleVar    = "KCAP_FLOW_ROLE";
 
+    /// <summary>The agent kcap's MCP servers ask the hosting daemon about, for the session they act for.
+    /// Distinct from <see cref="AgentIdVar"/> because hooks read that one and link the session they
+    /// post to the agent, and inside an ACP child the daemon already records the session itself.</summary>
+    public const string DaemonAgentIdVar = "KCAP_DAEMON_AGENT_ID";
+
     /// <summary>The value <see cref="RenderedVar"/> carries when the web app renders the session.</summary>
     public const string Rendered = "1";
 
@@ -51,4 +56,11 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
         if (isFlowParticipant && !string.IsNullOrWhiteSpace(flowRole)) markers.Add(new(FlowRoleVar, flowRole));
         return markers;
     }
+
+    /// <summary>What a kcap MCP server inside the agent needs to ask its daemon for the agent's session:
+    /// the agent, and which of the daemons on the machine hosts it.</summary>
+    public static IReadOnlyList<KeyValuePair<string, string>> DaemonLookupMarkers(string agentId, string daemonName) =>
+        daemonName.Length == 0
+            ? [new(DaemonAgentIdVar, agentId)]
+            : [new(DaemonAgentIdVar, agentId), new(DaemonNameResolver.NameVar, daemonName)];
 }

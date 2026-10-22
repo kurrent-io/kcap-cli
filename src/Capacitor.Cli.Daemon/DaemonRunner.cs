@@ -448,8 +448,7 @@ public static partial class DaemonRunner {
 
         builder.Services.AddHttpClient("Attachments", client => client.BaseAddress = new Uri(config.ServerUrl));
 
-        var promptRoot = Path.Combine(coverageStateDir, "prompts");
-        PromptFile.Sweep(promptRoot);
+        LegacyPromptFiles.Sweep(coverageStateDir);
 
         builder.Services.AddSingleton<IHostedAgentLauncher, ClaudeLauncher>();
         builder.Services.AddSingleton<IHostedAgentLauncher, CodexLauncher>();
@@ -470,7 +469,6 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
                 sp.GetRequiredService<TimeProvider>(),
-                promptRoot,
                 config.Home
             )
         );
@@ -486,14 +484,14 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
                 sp.GetRequiredService<TimeProvider>(),
-                promptRoot,
                 config.Home);
             return new Harness.Codex.CodexHostedAgentRuntimeFactory(
                 (Harness.Codex.CodexLauncher) codexLauncher, pty,
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 time,
-                connection: sp.GetRequiredService<ServerConnection>()); // interactive approvals
+                connection: sp.GetRequiredService<ServerConnection>(), // interactive approvals reach the user through it
+                policyJudge: sp.GetRequiredService<PolicyJudgeGateway>());
         });
         builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
             new AcpHostedAgentRuntimeFactory(
@@ -582,7 +580,8 @@ public static partial class DaemonRunner {
                 sp.GetRequiredService<DaemonConfig>(),
                 sp.GetRequiredService<ILoggerFactory>(),
                 sp.GetRequiredService<TimeProvider>(),
-                paths: harnesses.Of<Core.Harness.Pi.PiHarness>().Paths
+                paths: harnesses.Of<Core.Harness.Pi.PiHarness>().Paths,
+                requestInteraction: sp.GetRequiredService<ServerConnection>().RequestAcpInteractionAsync
             )
         );
 

@@ -3,31 +3,10 @@ using Capacitor.Cli.Core.LocalIpc;
 namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// The daemon's advertised local-control capability list, surfaced on <c>HelloReply</c>.
-/// INVARIANT: an entry may exist here ONLY if <see cref="LocalControlServer"/> actually
-/// routes the corresponding frame(s) to a real handler — this list is assembled right next
-/// to that routing switch so a capability can never be advertised without behavior behind
-/// it. Every entry's handler is live in this build: <c>"consent/1"</c> routes
-/// ConsentSubscribe/ConsentResolve/ConsentRulesGet/ConsentRulesPut to <see cref="LaunchConsentIpc"/>;
-/// <c>"consent/2"</c> routes ConsentSubscribeV2/ConsentResolveV2 to the same handler with
-/// identity-checked resolution (mandatory <c>prompt_id</c> echo), <c>rule_saved</c> acks, and
-/// <c>prompt_id</c>/<c>requester_display</c>-stamped pendings; <c>"consent/3"</c> routes
-/// ConsentRulesPutV2 to the same handler, gating the policy replacement on an
-/// ExpectedName/ExpectedServerUrl identity echo (ack is the existing ConsentAck, with the coded
-/// <c>identity_mismatch</c> error on mismatch and nothing mutated). Both v2 entries are discovery
-/// only — enforcement lives in the v2 frames themselves. <c>"status/1"</c> routes StatusSubscribe
-/// to <see cref="DaemonStatusIpc"/>; <c>"permission/1"</c> routes
-/// PermissionSubscribe/PermissionResolve to <see cref="PermissionIpc"/>; and <c>"input/1"</c>
-/// routes SendText to <see cref="AgentOrchestrator.HandleLocalSendTextAsync"/>; <c>"input/2"</c>
-/// routes SendTextWithAttachments to
-/// <see cref="AgentOrchestrator.HandleLocalSendTextWithAttachmentsAsync"/>; and
-/// <c>"settings/1"</c> routes DaemonSettingsPut to <see cref="DaemonSettingsIpc"/>; and
-/// <c>"fence/1"</c> routes AdmissionFenceAcquire to <see cref="AdmissionFenceIpc"/>; and
-/// <c>"shutdown/1"</c> routes Shutdown to <see cref="DaemonShutdownIpc"/>; and
-/// <c>"resume/1"</c> routes AgentResume to <see cref="AgentOrchestrator.ResumeInterruptedAsync"/>; and
-/// <c>"attach-runtime/1"</c> routes AttachWithRuntime to <see cref="AgentOrchestrator.HandleLocalAttachAsync"/>; and
-/// <c>"accounts/1"</c> routes AccountsSubscribe to <see cref="AccountsIpc"/>.
+/// The daemon's advertised local-control capability list, surfaced on <c>HelloReply</c>. An entry may
+/// exist here only if <see cref="LocalControlServer"/> routes its frames to a live handler: a client
+/// gates on the entry and then sends frames an older daemon would fail to decode.
 /// </summary>
 internal static class LocalControlCapabilities {
-    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1", AgentAttachClient.RuntimeCapability, "accounts/1"];
+    public static readonly IReadOnlyList<string> Current = ["consent/1", "consent/2", "consent/3", "status/1", "permission/1", "input/1", "input/2", "settings/1", "fence/1", "shutdown/1", "resume/1", AgentAttachClient.RuntimeCapability, AgentSessionIpc.Capability, "accounts/1"];
 }

@@ -8,10 +8,9 @@ namespace Capacitor.Cli.Daemon.Tests.Unit.Acp;
 
 /// <summary>
 /// The launch-time permission-preset arm of <see cref="AcpInteractionBridge"/>: auto-approve a
-/// request whose ACP tool kind the preset covers with a single unambiguous <c>allow_once</c>, and
-/// FORWARD (prompt) everything else — an uncovered/absent/unknown kind, zero/multiple
-/// <c>allow_once</c>, or a sole <c>allow_always</c>. The preset can only ever replace a prompt with an
-/// allow; it never cancels. Fires the fire-and-forget audit exactly on auto-approve, never on forward.
+/// request the preset covers — by ACP tool kind, or every request under <c>auto</c> — with a single
+/// unambiguous <c>allow_once</c>, and FORWARD (prompt) everything else. The preset can only ever
+/// replace a prompt with an allow; it never cancels. Fires the audit exactly on auto-approve.
 /// </summary>
 public class AcpInteractionBridgePresetTests {
     const string AgentId      = "agent-1";
@@ -103,8 +102,67 @@ public class AcpInteractionBridgePresetTests {
     }
 
     [Test]
-    public async Task Sole_allow_always_is_forwarded_never_a_standing_grant() {
-        var (bridge, forwarded, notices) = Build(AcpPermissionPresets.Explore);
+    [Arguments("execute", "execute")]
+    [Arguments("fetch", "fetch")]
+    [Arguments("other", "other")]
+    [Arguments("read", "read")]
+    [Arguments("wat", "other")]
+    [Arguments(null, "other")]
+    public async Task Auto_approves_every_request_and_audits_it_under_a_known_kind(string? kind, string auditedKind) {
+        var (bridge, forwarded, notices) = Build(AcpPermissionPresets.Auto);
+
+        var outcome = await OutcomeOf(bridge, Frame(kind, ("allow-once", "allow_once"), ("deny", "reject_once")));
+
+        await Assert.That(outcome).IsEqualTo("selected");
+        await Assert.That(forwarded()).IsFalse();
+        await Assert.That(notices()).HasSingleItem();
+        await Assert.That(notices()[0].Preset).IsEqualTo(AcpPermissionPresets.Auto);
+        await Assert.That(notices()[0].ToolKind).IsEqualTo(auditedKind)
+            .Because("the server drops an audit whose kind is outside the ACP vocabulary");
+    }
+
+    [Test]
+    public async Task Auto_picks_the_single_use_allow_over_a_session_wide_grant() {
+        // Grok's own option set for a file write: a session-scoped allow_always beside allow_once.
+        var (bridge, _, _) = Build(AcpPermissionPresets.Auto);
+
+        var result = await bridge.HandleAsync(new AcpRequest(1, "session/request_permission",
+            Frame("edit", ("allow-edits-session", "allow_always"), ("allow-once", "allow_once"), ("reject-once", "reject_once"))),
+            CancellationToken.None);
+
+        await Assert.That(result!.Value.GetProperty("outcome").GetProperty("optionId").GetString()).IsEqualTo("allow-once");
+    }
+
+    [Test]
+    public async Task Auto_forwards_a_question_rather_than_answering_it() {
+        var forwarded = false;
+        var notices   = new List<AcpAutoApprovalNotice>();
+        var bridge = new AcpInteractionBridge(
+            requestInteraction: (_, _) => {
+                forwarded = true;
+
+                return Task.FromResult(new AcpInteractionDecision("answered", "no", "no", 1, null, null));
+            },
+            agentId: AgentId,
+            logger: NullLogger.Instance,
+            preset: Preset(AcpPermissionPresets.Auto),
+            notifyAutoApproval: notices.Add, time: TimeProvider.System);
+        const string schema = """{"type":"object","properties":{"proceed":{"type":"string","enum":["yes","no"]}}}""";
+        var frame = $$"""{"sessionId":"{{AcpSessionId}}","message":"Proceed?","mode":"form","requestedSchema":{{schema}}}""";
+
+        var result = await bridge.HandleAsync(
+            new AcpRequest(1, "elicitation/create", JsonDocument.Parse(frame).RootElement.Clone()), CancellationToken.None);
+
+        await Assert.That(forwarded).IsTrue();
+        await Assert.That(notices).IsEmpty();
+        await Assert.That(result!.Value.GetRawText()).IsEqualTo("""{"action":"accept","content":{"proceed":"no"}}""");
+    }
+
+    [Test]
+    [Arguments(AcpPermissionPresets.Explore)]
+    [Arguments(AcpPermissionPresets.Auto)]
+    public async Task Sole_allow_always_is_forwarded_never_a_standing_grant(string preset) {
+        var (bridge, forwarded, notices) = Build(preset);
 
         await OutcomeOf(bridge, Frame("read", ("allow-always", "allow_always"), ("deny", "deny")));
 
@@ -113,8 +171,10 @@ public class AcpInteractionBridgePresetTests {
     }
 
     [Test]
-    public async Task Two_allow_once_options_are_ambiguous_and_forwarded() {
-        var (bridge, forwarded, notices) = Build(AcpPermissionPresets.Explore);
+    [Arguments(AcpPermissionPresets.Explore)]
+    [Arguments(AcpPermissionPresets.Auto)]
+    public async Task Two_allow_once_options_are_ambiguous_and_forwarded(string preset) {
+        var (bridge, forwarded, notices) = Build(preset);
 
         await OutcomeOf(bridge, Frame("read", ("allow-a", "allow_once"), ("allow-b", "allow_once")));
 
@@ -123,10 +183,12 @@ public class AcpInteractionBridgePresetTests {
     }
 
     [Test]
-    public async Task Preset_is_ignored_outside_the_interactive_disabled_policy() {
+    [Arguments(AcpPermissionPresets.Explore)]
+    [Arguments(AcpPermissionPresets.Auto)]
+    public async Task Preset_is_ignored_outside_the_interactive_disabled_policy(string preset) {
         // Under a review-flow unattended policy the preset arm must never run (it would double up with
         // the unattended auto-approve) — the audit sink stays empty.
-        var (bridge, _, notices) = Build(AcpPermissionPresets.Explore, AcpUnattendedInteractionPolicy.AutoApprove);
+        var (bridge, _, notices) = Build(preset, AcpUnattendedInteractionPolicy.AutoApprove);
 
         await OutcomeOf(bridge, Frame("read", ("allow-once", "allow_once"), ("deny", "deny")));
 

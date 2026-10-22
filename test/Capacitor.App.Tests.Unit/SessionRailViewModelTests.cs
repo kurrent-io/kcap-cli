@@ -54,7 +54,7 @@ public class SessionRailViewModelTests {
             directory.Rows.AddOrUpdate(row);
             var session = rail.Repos.Single().Sessions.Single();
             var command = session.OpenCommand;
-            rail.SelectedAgentId = "a";
+            rail.SelectedSessionKey = "local:a";
             directory.Rows.AddOrUpdate(row with { Title = "Updated", Model = "new model", SessionId = "published", LiveSubagents = 2, AwaitingInput = false });
             await Assert.That(ReferenceEquals(session, rail.Repos.Single().Sessions.Single())).IsTrue();
             await Assert.That(ReferenceEquals(command, session.OpenCommand)).IsTrue();
@@ -69,6 +69,31 @@ public class SessionRailViewModelTests {
             directory.Rows.RemoveKey(row.Key);
             prs.OnNext(new Dictionary<string, RailPullRequestSummary>());
             await Assert.That(session.PullRequestLabel).IsEqualTo("PR #42");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_selected_pending_launch_stays_selected_when_published_without_selecting_its_remote_namesake() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var directory = new FakeAgentDirectory();
+            var identity = new RepoIdentity("path:/repo", "repo");
+            var pending = AgentRow.FromPending(new PendingLaunchDto("same", "claude", "/repo", "Launching", DateTime.UtcNow, "spawned"), identity);
+            directory.Rows.AddOrUpdate(pending);
+            directory.Rows.AddOrUpdate(AgentRow.FromRemote(RemoteDto("same", "owner", "repo")));
+            using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System);
+
+            rail.SelectedSessionKey = "local:same";
+            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("pending:same");
+
+            directory.Rows.Edit(rows => {
+                rows.RemoveKey(pending.Key);
+                rows.AddOrUpdate(AgentRow.FromLocal(Dto("same", "/repo"), identity));
+            });
+            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("local:same");
+
+            rail.SelectedSessionKey = "remote:same";
+            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("remote:same");
         });
     }
 
@@ -256,7 +281,7 @@ public class SessionRailViewModelTests {
                 service.Agents.AddOrUpdate(Dto("a2", "/dev/alpha", created: DateTime.UtcNow.AddHours(-1)));
                 await Assert.That(rail.Repos[0].Sessions[0].Id).IsEqualTo("a1");
                 await Assert.That(rail.Repos[0].Sessions[1].Id).IsEqualTo("a2");
-                rail.SelectedAgentId = "a1";
+                rail.SelectedSessionKey = "local:a1";
                 await Assert.That(rail.Repos[0].Sessions[0].Id).IsEqualTo("a1");
                 await Assert.That(rail.Repos[0].Sessions[0].IsSelected).IsTrue();
                 await Assert.That(rail.Repos[0].Sessions[0].Id).IsEqualTo("a1");
@@ -277,7 +302,7 @@ public class SessionRailViewModelTests {
                 await Assert.That(alpha.IsExpanded).IsTrue();
                 alpha.ToggleCommand.Execute().Subscribe();
                 service.Agents.AddOrUpdate(Dto("a2", "/dev/alpha"));
-                rail.SelectedAgentId = "a2";
+                rail.SelectedSessionKey = "local:a2";
                 await Assert.That(alpha.IsExpanded).IsFalse();
                 await Assert.That(alpha.CountText).IsEqualTo("2 sessions");
                 await Assert.That(rail.Repos[1].IsExpanded).IsTrue();

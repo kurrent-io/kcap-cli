@@ -13,7 +13,7 @@ namespace Capacitor.Cli.Commands;
 /// Installs one release into a script install, the way the install script does: download the RID's
 /// archive, verify it against the release manifest's sha256, extract it into its own
 /// <c>versions/&lt;v&gt;</c> and switch <c>current</c> to it. A running kcap keeps its own files, because
-/// no version directory that is in use is ever written.
+/// no version directory that is in use is ever written or pruned.
 ///
 /// <para>Verification fails closed: a manifest that cannot be read, has no valid checksum for this RID,
 /// or does not match the downloaded bytes installs nothing.</para>
@@ -22,6 +22,9 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
     /// <summary>Switches <c>current</c> to a version directory. A seam: Windows needs a junction, and
     /// a test cannot make one off Windows.</summary>
     internal Action<ScriptInstallLayout, string> SwitchCurrent { get; init; } = DefaultSwitch;
+
+    /// <summary>Whether something runs from a version directory, so pruning must keep it.</summary>
+    internal Func<string, bool> InUse { get; init; } = AnyFileInUse;
 
     internal async Task<bool> InstallAsync(
             ScriptInstallLayout layout, string version, string channel, string rid, TextWriter stdout, TextWriter stderr,
@@ -53,8 +56,9 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
             return false;
         }
 
-        var dest = layout.VersionDir(version);
-        if (ActiveVersionDir(layout) is { } active && PathsEqual(active, dest)) {
+        var dest     = layout.VersionDir(version);
+        var previous = ActiveVersionDir(layout);
+        if (previous is not null && PathsEqual(previous, dest)) {
             await stdout.WriteLineAsync($"kcap {version} is already the active version.");
             TryWriteMarker(layout, channel, stderr);
             return true;
@@ -96,8 +100,8 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
                 return false;
             }
 
-            // A leftover directory of this version is not active, but a process started from it before
-            // `current` moved away may still run there: it is moved aside and kept, never deleted.
+            // A process started from a leftover directory of this version may still run there, so it is
+            // moved aside rather than overwritten; pruning deletes it once nothing uses it.
             var aside = Path.Combine(layout.Versions, $".replaced-{version}-{Guid.NewGuid():N}");
             try {
                 if (Directory.Exists(dest)) Directory.Move(dest, aside);
@@ -116,6 +120,9 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
 
             TryWriteMarker(layout, channel, stderr);
             await stdout.WriteLineAsync($"Installed kcap {version} to {layout.Root}");
+
+            var pruned = PruneVersions(layout, keep: [dest, previous]);
+            if (pruned > 0) await stdout.WriteLineAsync($"Removed {pruned} unused kcap version{(pruned == 1 ? "" : "s")}.");
 
             return true;
         } finally {
@@ -152,6 +159,64 @@ public sealed partial class ScriptUpdater(KcapReleaseClient releases) {
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             try { File.Delete(tmp); } catch { /* best-effort */ }
             stderr.WriteLine($"Could not record the update channel in {layout.Marker}: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Deletes the version directories and moved-aside copies an update leaves behind, keeping
+    /// <paramref name="keep"/>: the new version and the one it replaced, which a daemon or agent started
+    /// before the switch is likely still running. Anything else in use stays too. Returns how many went.
+    /// </summary>
+    internal int PruneVersions(ScriptInstallLayout layout, IEnumerable<string?> keep) {
+        var kept = keep.OfType<string>().ToArray();
+        var pruned = 0;
+
+        IEnumerable<DirectoryInfo> candidates;
+        try {
+            candidates = new DirectoryInfo(layout.Versions).EnumerateDirectories()
+                .Where(d => d.LinkTarget is null)
+                .Where(d => ReleaseManifest.IsValidVersion(d.Name) || d.Name.StartsWith(".replaced-", StringComparison.Ordinal))
+                .Where(d => !kept.Any(k => PathsEqual(k, d.FullName)))
+                .ToArray();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return 0;
+        }
+
+        foreach (var dir in candidates) {
+            if (InUse(dir.FullName)) continue;
+
+            try {
+                dir.Delete(recursive: true);
+                pruned++;
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                // Started after the probe, or not ours to delete: the next update tries again.
+            }
+        }
+
+        return pruned;
+    }
+
+    /// <summary>
+    /// True when a file in <paramref name="dir"/> cannot be opened exclusively for writing. A running
+    /// executable refuses that on Windows (sharing violation) and Linux (ETXTBSY); macOS does not, but
+    /// deleting a running binary there leaves the process its file.
+    /// </summary>
+    internal static bool AnyFileInUse(string dir) {
+        // A link inside the directory would make whatever it reaches count; an unreadable entry counts.
+        var options = new EnumerationOptions {
+            RecurseSubdirectories = true,
+            AttributesToSkip      = FileAttributes.ReparsePoint,
+            IgnoreInaccessible    = false,
+        };
+
+        try {
+            foreach (var file in Directory.EnumerateFiles(dir, "*", options)) {
+                using var _ = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+
+            return false;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            return true;
         }
     }
 

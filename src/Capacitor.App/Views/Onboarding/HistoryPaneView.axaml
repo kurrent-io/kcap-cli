@@ -67,7 +67,11 @@
                             <TextBlock Classes="onboardingMicro" VerticalAlignment="Bottom">
                                 <Run Text="FOUND ON " /><Run Text="{Binding MachineName}" Foreground="{StaticResource OnboardingTextBrush}" />
                             </TextBlock>
-                            <Grid Grid.Column="1" ColumnDefinitions="*,*,*">
+                            <Grid Grid.Column="1" ColumnDefinitions="*,*" IsVisible="{Binding LocalLevels}">
+                                <TextBlock Classes="onboardingMicro" Text="SKIP" HorizontalAlignment="Left" />
+                                <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="IMPORT" HorizontalAlignment="Right" />
+                            </Grid>
+                            <Grid Grid.Column="1" ColumnDefinitions="*,*,*" IsVisible="{Binding CloudLevels}">
                                 <TextBlock Classes="onboardingMicro" Text="SKIP" HorizontalAlignment="Left" />
                                 <TextBlock Grid.Column="1" Classes="onboardingMicro" Text="ONLY ME" HorizontalAlignment="Center" />
                                 <TextBlock Grid.Column="2" Classes="onboardingMicro" Text="SHARED" HorizontalAlignment="Right" />
@@ -87,7 +91,7 @@
                                             </StackPanel>
                                             <views:ImportTrack Grid.Column="1" x:Name="OwnerTrack" VerticalAlignment="Center"
                                                                AutomationProperties.Name="{Binding Owner, StringFormat='History access for {0}'}"
-                                                               Stop="{Binding Stop, Mode=TwoWay}" />
+                                                               LastStop="{Binding LastStop}" Stop="{Binding Stop, Mode=TwoWay}" />
                                         </Grid>
                                         <ItemsControl ItemsSource="{Binding Repos}">
                                             <ItemsControl.ItemTemplate>
@@ -100,7 +104,7 @@
                                                         </StackPanel>
                                                         <views:ImportTrack Grid.Column="1" x:Name="RepoTrack" VerticalAlignment="Center"
                                                                            AutomationProperties.Name="{Binding Slug, StringFormat='History access for {0}'}"
-                                                                           Stop="{Binding Stop, Mode=TwoWay}" />
+                                                                           LastStop="{Binding LastStop}" Stop="{Binding Stop, Mode=TwoWay}" />
                                                     </Grid>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
@@ -116,7 +120,7 @@
                 </StackPanel>
 
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding HasRepos}"
-                           Text="Shared uses your recording privacy setting for new imports. Only me keeps imported history private. Skip doesn't import it." />
+                           Text="{Binding LevelsNote}" />
 
                 <StackPanel Spacing="8" IsVisible="{Binding HasRepos}" Margin="0,4,0,0">
                     <TextBlock Classes="onboardingMicro" Text="HOW MUCH HISTORY" />

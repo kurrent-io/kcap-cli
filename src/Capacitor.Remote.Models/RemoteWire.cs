@@ -58,7 +58,7 @@ public static class ApiRoutes {
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/permission-response/{Uri.EscapeDataString(requestId)}";
 }
 
-/// The daemon's fixed special-key vocabulary — anything else is a server-side no-op.
+/// Named keys understood by the daemon; wheel reports use TerminalScrollKey.
 public static class SpecialKeys {
     public const string Escape = "Escape";
     public const string Tab = "Tab";

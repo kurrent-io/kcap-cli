@@ -45,6 +45,7 @@ public partial class App : Application {
     // DetachedPollInterval is 1s) — short enough that a handful of polls still fit inside the
     // lane's 10s DetachedConfirmWindow.
     static readonly TimeSpan OneShotProbeTimeout = TimeSpan.FromSeconds(2);
+    static readonly TimeSpan UninstallTerminalPathTimeout = TimeSpan.FromSeconds(2);
 
     // Linked to the app's shutdown sequence below; the token StartDaemonCommand's WAIT is built
     // against — never CancellationToken.None, or an unbounded wait would survive app exit.
@@ -89,8 +90,13 @@ public partial class App : Application {
 
     readonly UiScaleSetting _uiScale;
 
+    // Set only in a copy started to uninstall; nothing of the normal app is built in it.
+    readonly UninstallMode? _uninstallMode = Program.Uninstall;
+    UninstallRunViewModel? _uninstallRun;
+
     public App() {
-        _telemetry   = CliTelemetry.Start(TelemetryStartup.ForDesktopApp(serverUrl: null, _endpoints.SignupUrl), _config, _time);
+        // A live facade creates the device id and the spool under the config root being removed.
+        _telemetry   = CliTelemetry.Start(DesktopTelemetry(_uninstallMode, _endpoints.SignupUrl), _config, _time);
         _usageNotice = new UsageDataNotice(_telemetry, _config);
         _foreignHttp = new ServiceCollection().AddAppForeignHttp(_config, _serverEnv).BuildValidated();
 #pragma warning disable RS0030 // the one store the ban points every other site at
@@ -98,6 +104,9 @@ public partial class App : Application {
 #pragma warning restore RS0030
         _uiScale = UiScaleSetting.LoadAsync(_appState).GetAwaiter().GetResult();
     }
+
+    internal static TelemetryStartup DesktopTelemetry(UninstallMode? uninstall, string signupUrl) =>
+        TelemetryStartup.ForDesktopApp(serverUrl: null, signupUrl) with { Suppressed = uninstall is not null };
 
     /// The authenticated lanes. They cannot join <see cref="_foreignHttp"/>: their handlers need a
     /// resolved server, and the app starts before a profile has named one. Process-lifetime for the
@@ -141,6 +150,8 @@ public partial class App : Application {
     // No disposal needed — it holds no subscription, only a one-shot await chain that cancelling
     // _shutdown stops.
     ShimOfferCoordinator? _shimOffer;
+    // The wizard's PATH link, which can outlive the wizard; the shim offer waits on it.
+    Task<string?> _wizardPathLink = Task.FromResult<string?>(null);
     // No disposal needed — its Status subscription dies with _service's own subject disposal below.
     ConsentFlipCoordinator? _consentFlip;
     // Inert outside a packed bundle (CreateUpdater degrades a construction failure the same way);
@@ -232,6 +243,7 @@ public partial class App : Application {
     bool _shutdownStarted;
     bool _shutdownConfirmed;
     bool _setupRestarting;
+    bool _uninstallRelaunching;
     // 0 = normal shutdown. Set to 1 on a startup failure so the DEFERRED shutdown path (Cmd+Q /
     // platform shutdown while the error window is showing — OnShutdownRequested ->
     // DisposeAndShutdownAsync) still reports failure, instead of TryShutdown()'s platform
@@ -278,10 +290,14 @@ public partial class App : Application {
                 if (startup.WindowState == WindowState.Minimized) startup.WindowState = WindowState.Normal;
                 startup.Activate();
             });
-            // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
-            _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
-            _menuBar.Install();
-            _ = StartAsync(desktop);
+            if (_uninstallMode is { } uninstall) {
+                RunUninstallMode(desktop, uninstall);
+            } else {
+                // Before StartAsync: it shows its first window (the install guard or the wizard) synchronously.
+                _menuBar = new AppMenuBar(new ShellUrlOpener(), () => desktop.Windows, () => MainWindowAction(_coordinator));
+                _menuBar.Install();
+                _ = StartAsync(desktop);
+            }
         }
 
         base.OnFrameworkInitializationCompleted();
@@ -398,6 +414,37 @@ public partial class App : Application {
             _localInstall = null;
             _wizardWindow = null;
         }
+    }
+
+    // The installed bundle's CLI and removal only: no lane, daemon client, lifecycle controller,
+    // updater, wizard or tray, so nothing restarts or recreates what is being removed.
+    void RunUninstallMode(IClassicDesktopStyleApplicationLifetime desktop, UninstallMode uninstall) {
+        var runner = new ProcessRunner(_time);
+        var probe  = TerminalPathProbe.Create(runner, Environment.GetEnvironmentVariable);
+        var cli    = NewWizardCli(_config, _serverEnv, _localRoot, runner, ResolvePinnedCli().Path, probe);
+        // Shutdown closes the window, whose Closed handler quits again.
+        var quitting = false;
+        void Quit(int exitCode) {
+            if (quitting) return;
+            quitting = true;
+            desktop.Shutdown(exitCode);
+        }
+        var run = OperatingSystem.IsMacOS()
+            ? uninstall.BuildRun(Environment.ProcessPath, root => new MacAppRemoval(runner, _userHome, root), cli, () => Quit(0))
+            : null;
+        if (run is null) {
+            Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app.");
+            // Posted: the lifetime's main loop has not started yet.
+            Dispatcher.UIThread.Post(() => Quit(1));
+            return;
+        }
+
+        _uninstallRun = run;
+        var window = new UninstallWindow { DataContext = run, WindowStartupLocation = WindowStartupLocation.CenterScreen };
+        window.Closed += (_, _) => Quit(0);
+        desktop.MainWindow = window;
+        window.Show();
+        _ = run.RunAsync();
     }
 
     // macOS only: elsewhere there is no bundle. Returns true when a window was shown and startup
@@ -552,10 +599,14 @@ public partial class App : Application {
         // The controller's attach subscription must be live BEFORE service.Start() begins pumping,
         // or the startup phase could miss the first terminal outcome it hinges on.
         var (lifecycle, shimOffer, consentFlip, lifecycleSurface, lifecycleProbe, lifecycleCli) = BuildLifecycleController(
-            service, ops, autoActionsPermanentlyClosed, lifecycleStatus.OnNext,
-            // One lock for setting and withdrawing, so a withdrawal never erases a message set beside it.
+            service, ops, autoActionsPermanentlyClosed,
+            // One lock per lane for setting and withdrawing, so a withdrawal never erases a message set beside it.
+            message => { lock (lifecycleStatus) lifecycleStatus.OnNext(message); },
             message => { lock (lifecycleAttention) lifecycleAttention.OnNext(message); },
-            message => { lock (lifecycleAttention) if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null); },
+            message => {
+                lock (lifecycleStatus) if (ReferenceEquals(lifecycleStatus.Value, message)) lifecycleStatus.OnNext(null);
+                lock (lifecycleAttention) if (ReferenceEquals(lifecycleAttention.Value, message)) lifecycleAttention.OnNext(null);
+            },
             lane.RunAsync, profiles?.Resolution, () => lane.IsRetired(service.DaemonName));
         lifecycle.Start();
         _lifecycle = lifecycle;
@@ -866,6 +917,10 @@ public partial class App : Application {
             : null;
         ConfigureSettingsMenu(openSettings);
         _appMenu.SetSetupAction(() => _ = RestartForSetupAsync(desktop));
+        if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {
+            var facts = UninstallFactsFor(bundleRoot, service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
+            _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
+        }
 
         // LAST, deliberately: anything above throwing lands in the catch with no
         // tray icon ever created, leaving the error window as the only surface.
@@ -883,7 +938,7 @@ public partial class App : Application {
     internal void ConfigureSettingsMenu(Action? openSettings) => _appMenu.SetSettingsAction(openSettings);
 
     async Task RestartForSetupAsync(IClassicDesktopStyleApplicationLifetime desktop) {
-        if (_setupRestarting || _shutdownStarted) return;
+        if (_setupRestarting || _uninstallRelaunching || _shutdownStarted) return;
         _setupRestarting = true;
         try {
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window,
@@ -901,6 +956,44 @@ public partial class App : Application {
             _setupRestarting = false;
             Console.Error.WriteLine($"kcap: could not reopen setup: {ex.Message}");
             _coordinator?.Window?.Notifier?.Notify("Could not reopen setup. Please try again.");
+        }
+    }
+
+    UninstallFactsSource UninstallFactsFor(string bundleRoot, string daemonName, string? profileServerUrl,
+            DaemonLifecycleController lifecycle, ILoginShellProbe probe) => new(
+        LocalServerUrl: () => LocalServerFact.Read(_localRoot),
+        AttachedDaemon: daemonName,
+        Activity: () => lifecycle.LatestActivity,
+        LiveDaemons: () => DaemonPidLiveness.LiveDaemons(_daemonStore),
+        HostedServerUrl: () => profileServerUrl is { Length: > 0 } && !IsLocalServer(profileServerUrl, _localRoot) ? profileServerUrl : null,
+        TerminalPath: probe.TerminalPathAsync,
+        BundleRoot: bundleRoot,
+        TerminalPathTimeout: UninstallTerminalPathTimeout,
+        Time: _time,
+        Log: Console.Error);
+
+    // The relaunched copy runs the uninstall: this process must be gone before the bundle is.
+    async Task RelaunchForUninstallAsync(IClassicDesktopStyleApplicationLifetime desktop, UninstallFactsSource source) {
+        if (_uninstallRelaunching || _setupRestarting || _shutdownStarted) return;
+        _uninstallRelaunching = true;
+        // Left set only once the relaunch is registered: it also stops an ordinary quit applying a pending update.
+        var relaunchRegistered = false;
+        try {
+            var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
+            if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) return;
+            var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
+            desktop.Exit += (_, _) => {
+                try { Process.Start(start); }
+                catch (Exception ex) { Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}"); }
+            };
+            relaunchRegistered = true;
+            desktop.TryShutdown();
+        } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: could not start the uninstall: {ex.Message}");
+            _coordinator?.Window?.Notifier?.Notify("Could not start the uninstall. Please try again.");
+        } finally {
+            if (!relaunchRegistered) _uninstallRelaunching = false;
         }
     }
 
@@ -1135,10 +1228,10 @@ public partial class App : Application {
             AlreadyAuthenticated: alreadyAuthenticated,
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,
-            ProfileOverride: _serverEnv.Profile);
+            ProfileOverride: _serverEnv.Profile,
+            UsageNotice: _usageNotice);
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
-        graph.ViewModel.UsageNotice = _usageNotice;
 
         _wizardAuth = graph.Auth;
         _historyImport = graph.History;
@@ -1153,6 +1246,7 @@ public partial class App : Application {
             WizardAttentionCopyFor);
 
         await WaitForWizardCloseAsync(graph.ViewModel, _shutdown.Token);
+        if (graph.PathFix is { } pathFix) _wizardPathLink = pathFix.UnfinishedAsync();
         var quiesced = await HandoffAfterWizardAsync(
             graph.Auth, graph.Install, () => DaemonThenLaneQuiescedAsync(graph.Daemon, lane), QuiesceShutdownCap, channel, _time);
 
@@ -1563,7 +1657,7 @@ public partial class App : Application {
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
             lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
-            _shutdown.Token, autoActionsPermanentlyClosed);
+            _shutdown.Token, autoActionsPermanentlyClosed, _wizardPathLink);
 
         // The delegate below and the claims store must share one root: TryConsume takes the config
         // lock this delegate then reads under.
@@ -2036,6 +2130,11 @@ public partial class App : Application {
     // Once that completes, TryShutdown() re-raises this same event; the SECOND pass is let
     // through. This never blocks the UI thread on the async disposal.
     void OnShutdownRequested(object? sender, ShutdownRequestedEventArgs e) {
+        // Nothing to tear down in this mode; a quit mid-run would leave kcap half removed.
+        if (_uninstallRun is { } uninstall) {
+            e.Cancel = uninstall.State == UninstallRunState.Running;
+            return;
+        }
         // Navigation's twin of BeginShutdownPass rule 1, and for the same reason: applied on EVERY
         // pass, before the confirmed-pass early return, so a window the coordinator builds BETWEEN
         // the passes can neither open a workspace nor keep one attached.
@@ -2124,7 +2223,7 @@ public partial class App : Application {
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
                     _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
-                applyOnExit: () => { if (!_setupRestarting) _updates?.ApplyPendingOnExit(); });
+                applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });
         } else {
             await DisposeLifecycleAndServiceAsync();
             _shutdownConfirmed = true;

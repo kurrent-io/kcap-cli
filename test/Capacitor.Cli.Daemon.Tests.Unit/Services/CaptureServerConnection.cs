@@ -19,7 +19,13 @@ sealed class CaptureServerConnection() : ServerConnection(
 , TimeProvider.System) {
     public            string?                               ConnectionIdForTest { get; init; } = "connection-1";
     internal override string?                               CurrentConnectionId => ConnectionIdForTest;
-    public            List<(string AgentId, string Reason)> LaunchFailedCalls   { get; } = [];
+    readonly List<(string AgentId, string Reason)> _launchFailedCalls = [];
+
+    /// <summary>A snapshot: the orchestrator reports a failed launch from its own tasks, so a test
+    /// reading this while an agent is still winding down must not enumerate a list being appended.</summary>
+    public IReadOnlyList<(string AgentId, string Reason)> LaunchFailedCalls {
+        get { lock (_launchFailedCalls) return [.. _launchFailedCalls]; }
+    }
 
     /// <summary>When set, LaunchFailedAsync still RECORDS the call (so a test can assert the
     /// send was attempted) but returns a faulted task — for the finalizer's verdict-report
@@ -57,7 +63,7 @@ sealed class CaptureServerConnection() : ServerConnection(
     }
 
     public override async Task LaunchFailedAsync(string agentId, string reason) {
-        LaunchFailedCalls.Add((agentId, reason));
+        lock (_launchFailedCalls) _launchFailedCalls.Add((agentId, reason));
         LaunchFailedEntered?.TrySetResult();
 
         if (LaunchFailedGate is { } gate) await gate.Task.ConfigureAwait(false);

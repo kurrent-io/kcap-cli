@@ -42,6 +42,7 @@ public static class OpenCodeExtensionInstaller {
         //     client and append any new {info,parts} as JSONL lines to that file; the
         //     watcher streams them. The server's OpenCodeTranscriptNormalizer dedupes by
         //     deterministic part id, so re-appending an updated message is safe.
+        //   - tool.execute.before → a kcap MCP call that names no session_id gets the calling session's.
         //
         // Dependency-free (only node: builtins) and fail-safe by default.
 
@@ -90,6 +91,17 @@ public static class OpenCodeExtensionInstaller {
           const coldStarts = new Map<string, number>()
           const TITLE_MAX_SESSIONS = 64
           const lastTitle = new Map<string, string>()   // dedupes session.updated noise per session
+          // kcap MCP tools, as `<server>_<tool>`, whose optional session_id names the CALLING session.
+          // Elsewhere it is a filter or a session to read, which a default would silently narrow or
+          // replace; close_loose_end treats a session it defaulted differently from one it was given.
+          const CALLER_SESSION_TOOLS = new Set([
+            "kcap-workitems_declare_work_item", "kcap-workitems_get_session_work_items",
+            "kcap-workitems_detach_work_item", "kcap-workitems_declare_loose_end",
+            "kcap-workitems_claim_loose_end", "kcap-workitems_release_loose_end",
+            "kcap-plans_declare_plan_document", "kcap-plans_set_plan_tasks",
+            "kcap-plans_update_plan_task", "kcap-plans_get_plan",
+            "kcap-flows_start_agent", "kcap-flows_get_flow_status", "kcap-flows_get_review_flow_status",
+          ])
 
           // Bounded like the memory cache: most sessions end without a session.deleted. Re-inserting keeps the most
           // recently titled sessions; an evicted one only writes its title line again.
@@ -509,6 +521,27 @@ public static class OpenCodeExtensionInstaller {
                   writeMessages(file(sid), msgs)
                   await flushSubagents(sid, msgs)
                 }
+              } catch {
+                // never disrupt the OpenCode session
+              }
+            },
+            // OpenCode tells an MCP server nothing about the session calling it, so a kcap call that
+            // names none is stamped with the caller's. The args object is the one OpenCode sends on, so
+            // it is mutated in place, never replaced. Only a session proven top-level is stamped: a
+            // subagent's id names no session the server stores, and one still being classified may be one.
+            "tool.execute.before": async (input: any, output: any) => {
+              try {
+                const sid = input?.sessionID
+                const args = output?.args
+                if (!sid || !CALLER_SESSION_TOOLS.has(input?.tool)) return
+                if (!args || typeof args !== "object") return
+                if (args.session_id !== undefined && args.session_id !== null && args.session_id !== "") return
+                if (!started.has(sid)) {
+                  const pending = pendingStart.get(sid)
+                  if (pending) await Promise.race([pending, new Promise((res) => setTimeout(res, MEMORY_WAIT_MS))])
+                }
+                if (!started.has(sid) || children.has(sid)) return
+                args.session_id = sid
               } catch {
                 // never disrupt the OpenCode session
               }

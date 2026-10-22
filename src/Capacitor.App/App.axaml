@@ -408,6 +408,23 @@
             <Setter Property="BorderBrush" Value="{StaticResource KcapBorderBrush}" />
             <Setter Property="Foreground" Value="{StaticResource KcapFaintBrush}" />
         </Style>
+        <!-- A link inside a line of text, coloured like a chat link. -->
+        <Style Selector="Button.kcapLink">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="Button.kcapLink /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapLink:pointerover /template/ ContentPresenter#PART_ContentPresenter,
+                         Button.kcapLink:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{StaticResource KcapInfoBrush}" />
+        </Style>
+        <Style Selector="Button.kcapLink TextBlock">
+            <Setter Property="TextDecorations" Value="Underline" />
+        </Style>
         <!-- The chip look on a radio. Fluent draws an ellipse glyph beside the content, so this is a
              template swap rather than setters; the presenter is deliberately not named
              PART_ContentPresenter, which keeps Fluent's per-state presenter styles off the chip. -->

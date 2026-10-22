@@ -98,6 +98,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     internal const string LocalServerRefusedNotice = "The local server refused this app's connection. Restart kcap.";
     internal const string LocalServerLostNotice    = "Lost the connection to the local server. kcap keeps trying to reconnect.";
 
+    /// The daemon detects harnesses once at startup, so installing one takes a daemon restart.
+    internal static string NoHarnessesNotice(string? remoteMachine) => remoteMachine is null
+        ? "No coding agents were found on this machine. Install Claude Code, Codex or another supported agent, then restart the daemon."
+        : $"No coding agents were found on {remoteMachine}. Install one there, then restart its daemon.";
+
+    internal static string HarnessUnavailableMessage(string label) => $"{label} isn't available on this machine. Choose another agent.";
+
     internal static string RemoteOfflineNotice(string machine) => $"{machine} is offline. Launches resume when it reconnects.";
 
     const string IncompatibleReason = "daemon_incompatible";
@@ -261,7 +268,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// A 401 outcome is the only writer besides its own reset paths. A subject (not a reactive
     /// property read via WhenAnyValue) so the ctor can compose it — see SessionRailViewModel's
-    /// _selectedAgentIdChanges for why WhenAnyValue is avoided in constructors here.
+    /// _selectedSessionKeyChanges for why WhenAnyValue is avoided in constructors here.
     readonly BehaviorSubject<bool> _signInRequired = new(false);
     /// True after a successful re-auth until the daemon reports server-connected (or goes down).
     /// Keeps the banner from still asking to Sign in while the daemon catches up.
@@ -495,17 +502,25 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         // Never starts empty: a null SupportedVendors means "daemon
         // capability unknown", not "hosts nothing" — Build(null) offers everything until the first
-        // real snapshot narrows it. Merged with the machine-picker's own override (null when
-        // local, the selected remote machine's advertised vendors otherwise — SelectMachineAsync's
-        // rule). ObserveOn BEFORE ToProperty: Snapshots is pushed from the daemon client's own
-        // background thread (MainWindowViewModel's identical comment).
-        _harnesses = daemon.Snapshots
+        // real snapshot narrows it. A remote selection follows its live registry entry, so a
+        // restarted daemon's new set applies; the list captured at selection covers a registry
+        // that no longer resolves it. ObserveOn BEFORE ToProperty: Snapshots is pushed from the
+        // daemon client's own background thread.
+        var harnessOptions = daemon.Snapshots
             .Select(s => s.Daemon.SupportedVendors)
             .StartWith((string[]?)null)
-            .CombineLatest(_remoteVendorOverride, _machineSelectionChanges,
-                (localVendors, remoteVendors, sel) => HostedHarnessCatalog.Build(sel.Remote ? remoteVendors : localVendors))
+            .CombineLatest(_remoteVendorOverride, _daemons.StartWith((IReadOnlyList<DaemonInfo>) []), _machineSelectionChanges,
+                (localVendors, remoteVendors, list, sel) => HostedHarnessCatalog.Build(!sel.Remote ? localVendors
+                    : FindMachine(list, sel.Name, _lastViewerId) is { } live ? live.SupportedVendors : remoteVendors));
+        var noHarnesses = harnessOptions.Select(options => !options.Any(o => o.Available)).DistinctUntilChanged();
+        _harnesses = harnessOptions
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .ToProperty(this, x => x.Harnesses, HostedHarnessCatalog.Build(null))
+            .DisposeWith(_disposables);
+        // A daemon that restarts with a different set can leave the chip on a vendor it no longer hosts.
+        harnessOptions
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(RevalidateVendor)
             .DisposeWith(_disposables);
 
         // The machine catalog follows the selection: the local snapshot's, or the selected remote
@@ -634,7 +649,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             .CombineLatest(
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
-                (ready, attachable, uploading) => ready && attachable && !uploading);
+                noHarnesses,
+                (ready, attachable, uploading, none) => ready && attachable && !uploading && !none);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -671,9 +687,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     n.foreign is { } foreign ? DaemonOnOtherServerNotice(foreign, appServerUrl!) : null))
             .ObserveOn(RxSchedulers.MainThreadScheduler);
         rawNotices.Subscribe(ArmOrResetCatchUp).DisposeWith(_disposables);
+        // A stopped local server's Start banner is the whole story, so the no-harness fallback stays
+        // out of it whether or not the daemon has noticed the server is gone.
         var notices = rawNotices.CombineLatest(_catchUpTimedOut, NoticeAfterCatchUp)
-            .CombineLatest(_localServer, _localServerDown, _machineSelectionChanges,
-                (notice, local, down, sel) => NoticeForLocalServer(notice, local, down, sel.Remote ? sel.Name : null));
+            .CombineLatest(noHarnesses.ObserveOn(RxSchedulers.MainThreadScheduler), _localServer, _localServerDown, _machineSelectionChanges,
+                (notice, none, local, down, sel) => NoticeForLocalServer(
+                    notice ?? (none && !(local && down && !sel.Remote) ? NoHarnessesNotice(sel.Remote ? sel.Name : null) : null),
+                    local, down, sel.Remote ? sel.Name : null));
         _connectionNotice = notices
             .ToProperty(this, x => x.ConnectionNotice, ConnectingNotice)
             .DisposeWith(_disposables);
@@ -1100,8 +1120,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// Resets SelectedVendor to the first vendor Available in supportedVendors' Build() when the
     /// current one isn't — shared so a machine's OWN advertised set is what a selection (either
     /// direction) is checked against, never whatever a PRIOR machine last set it to.
-    void RevalidateVendorAgainst(string[]? supportedVendors) {
-        var options = HostedHarnessCatalog.Build(supportedVendors);
+    void RevalidateVendorAgainst(string[]? supportedVendors) => RevalidateVendor(HostedHarnessCatalog.Build(supportedVendors));
+
+    void RevalidateVendor(IReadOnlyList<HarnessOption> options) {
         var current = options.FirstOrDefault(o => string.Equals(o.Vendor, SelectedVendor, StringComparison.OrdinalIgnoreCase));
         if (current is not { Available: true })
             SetVendor(options.FirstOrDefault(o => o.Available)?.Vendor ?? DefaultVendor);
@@ -1194,17 +1215,30 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
     /// Sets the repository and restores that repository's remembered harness, or DefaultVendor
     /// when none — never the vendor a DIFFERENT repository had selected. In remote mode the local
-    /// HarnessByRepo store is never consulted: the vendor is instead revalidated against the
-    /// selected remote machine's own advertised set (RevalidateVendorAgainst).
+    /// HarnessByRepo store is never consulted. Either way the result is revalidated against the
+    /// selected machine's current harnesses.
     public async Task SelectRepositoryAsync(string repoPath) {
         SelectedRepoPath = repoPath.Length == 0 ? ScratchRepoPath : PlatformPaths.Normalize(repoPath);
         if (RemoteMachineSelected) {
-            RevalidateVendorAgainst(_selectedRemoteMachine?.SupportedVendors);
+            RevalidateVendor(Harnesses);
             return;
         }
 
         var saved = await _state.LoadAsync();
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
+        RevalidateVendor(Harnesses);
+    }
+
+    /// Read against the draft's machine, not the current selection, which may have moved during an upload.
+    string? HarnessErrorFor(LaunchDraft draft) {
+        var options = HostedHarnessCatalog.Build(draft.Remote
+            ? FindMachine(_currentDaemons, draft.Machine, _lastViewerId)?.SupportedVendors
+            : _currentLocalVendors);
+        var harness = options.FirstOrDefault(o => string.Equals(o.Vendor, draft.Vendor, StringComparison.OrdinalIgnoreCase));
+        if (harness is { Available: true }) return null;
+        return options.Any(o => o.Available)
+            ? HarnessUnavailableMessage(harness?.Label ?? draft.Vendor)
+            : NoHarnessesNotice(draft.Remote ? draft.Machine : null);
     }
 
     /// The one place a vendor change lands, so the model-reset invariant (ids are
@@ -1225,6 +1259,13 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         if (draft.Files.Count > 0 && !CanAttachFor(draft)) {
             StartError = AttachHintFor(_signedIn, false);
+            return;
+        }
+
+        // Execute() does not gate on CanExecute, and a remembered vendor restored with a repository
+        // is never checked against what the machine hosts.
+        if (HarnessErrorFor(draft) is { } harnessError) {
+            StartError = harnessError;
             return;
         }
 
@@ -1267,6 +1308,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             }
             if (!CanAttachFor(draft)) {
                 StartError = AttachHintFor(_signedIn, false);
+                return;
+            }
+            if (HarnessErrorFor(draft) is { } withdrawn) {
+                StartError = withdrawn;
                 return;
             }
         }

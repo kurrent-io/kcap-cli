@@ -140,6 +140,7 @@ static class WizardFixtures {
         public bool ShimApplicable = true;
         public string? CliPath = "/opt/kcap/bin/kcap";
         public string? ShimTarget = "/opt/kcap/bin/kcap";
+        public ICliPathInstaller? ShimInstaller;
         public IReadOnlySet<HarnessId> Detected = VendorDetection.Build("claude");
         public TimeProvider Time = TimeProvider.System;
         // Matches DefaultDaemonName, so a sign-in keeps the name and writes no config of its own.
@@ -188,7 +189,7 @@ static class WizardFixtures {
             RunMutation: Lane.RunAsync,
             Observation: Observation,
             AppState: new NoopAppStateStore(),
-            ShimInstaller: new PathShimInstaller(new NoopProcessRunner(), Probe),
+            ShimInstaller: ShimInstaller ?? new PathShimInstaller(new NoopProcessRunner(), Probe),
             UrlOpener: UrlOpener,
             Probe: Probe,
             // A NEW feed per call: a composition that built one per step is caught by the factory
@@ -1038,7 +1039,7 @@ public class WizardStartupTests {
 
             await Assert.That(graph.Steps.Select(s => s.Id).ToList()).IsEquivalentTo([
                 WizardStepId.Edition, WizardStepId.Install, WizardStepId.SignIn,
-                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Done,
+                WizardStepId.Harnesses, WizardStepId.Import, WizardStepId.Privacy, WizardStepId.Done,
             ], CollectionOrdering.Matching);
             // No mutation, no IPC, no status read: composing the wizard never speaks to a daemon.
             await Assert.That(harness.Lane.Requests).IsEmpty();

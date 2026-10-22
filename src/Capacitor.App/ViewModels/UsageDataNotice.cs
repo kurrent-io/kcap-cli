@@ -14,20 +14,21 @@ public sealed class UsageDataNotice : ReactiveObject {
       + "file paths, prompts or transcript content. It can be associated with your workspace and its creator.";
 
     public const string NotSaved =
-        "Usage data is off until the app quits, but the choice couldn't be saved, so it starts again the next time the app opens.";
+        "Usage data is off in this app until it quits, but the choice couldn't be saved, so kcap commands still send it and the app starts again the next time it opens.";
 
+    readonly CliTelemetry _telemetry;
+    readonly ConfigRoot   _config;
     bool   _visible;
     string _message = Text;
 
     public UsageDataNotice(CliTelemetry telemetry, ConfigRoot config) {
+        _telemetry = telemetry;
+        _config    = config;
         _visible   = telemetry.NoticeDue(config);
         // An environment variable outranks the saved choice, so a Turn off here would not last.
         CanTurnOff = TelemetrySettings.Resolve(TelemetryState.PersistedEnabled(config)).Reason is not ("KCAP_TELEMETRY" or "DO_NOT_TRACK");
-        AcknowledgeCommand = ReactiveCommand.Create(() => {
-            telemetry.AcknowledgeNotice(config);
-            Hide();
-        });
-        TurnOffCommand = ReactiveCommand.Create(() => { TurnOff(telemetry, config, this); }, Observable.Return(CanTurnOff));
+        AcknowledgeCommand = ReactiveCommand.Create(Acknowledge);
+        TurnOffCommand     = ReactiveCommand.Create(() => { TurnOff(); }, Observable.Return(CanTurnOff));
     }
 
     public bool Visible {
@@ -49,6 +50,14 @@ public sealed class UsageDataNotice : ReactiveObject {
     public event Action? TurnedOff;
 
     public void Hide() => Visible = false;
+
+    public void Acknowledge() {
+        _telemetry.AcknowledgeNotice(_config);
+        Hide();
+    }
+
+    /// <returns>Whether the opt-out was saved.</returns>
+    public bool TurnOff() => TurnOff(_telemetry, _config, this);
 
     /// Stops this process first, whose queue the saved flag alone would not stop, then saves the opt-out
     /// every kcap process reads. An unsaved one keeps the notice up, saying so.

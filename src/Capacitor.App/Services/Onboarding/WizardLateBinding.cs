@@ -82,5 +82,8 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
     public Task<StreamingResult> LocalUpgradeAsync(Action<StreamedLine> onLine, CancellationToken interrupt, CancellationToken ct) =>
         bind().LocalUpgradeAsync(onLine, interrupt, ct);
 
+    public Task<StreamingResult> UninstallAsync(bool purgeLocal, Action<StreamedLine> onLine, CancellationToken ct) =>
+        bind().UninstallAsync(purgeLocal, onLine, ct);
+
     public Task<ProcessResult> LocalStartAsync(CancellationToken ct) => bind().LocalStartAsync(ct);
 }

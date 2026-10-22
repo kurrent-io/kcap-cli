@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Capacitor.Cli.Daemon.Pty.Unix;
@@ -91,10 +92,10 @@ public sealed class UnixPtyProcess : IPtyProcess {
         env["COLUMNS"] = cols.ToString();
         env["LINES"]   = rows.ToString();
 
-        // Clear any hosted-agent identity/routing (and Claude session vars / daemon supervision
-        // state) the daemon may have inherited BEFORE applying extraEnv, so a variable the launch
-        // sets itself survives the scrub.
+        // Clear what the daemon inherited (hosted-agent identity, another harness's session, Claude's
+        // session vars, supervision state) before extraEnv, which re-adds what this launch sets.
         foreach (var key in PtyEnvScrub.ClaudeSessionVars) env.Remove(key);
+        foreach (var key in PtyEnvScrub.InheritedSessionVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.HostedAgentVars) env.Remove(key);
         foreach (var key in PtyEnvScrub.DaemonSupervisionVars) env.Remove(key);
         // Defense in depth: CaptureBootCarriers already clears these from the daemon's
@@ -242,7 +243,20 @@ public sealed class UnixPtyProcess : IPtyProcess {
     public Task WriteAsync(byte[] data) {
         if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
 
-        return Task.Run(() => _master.TryUse(fd => UnixPtyInterop.write(fd, data, data.Length)));
+        return Task.Run(() => _master.TryUse(fd => WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length))));
+    }
+
+    /// <summary>A master write may take only part of the buffer, a signal may interrupt it before any
+    /// byte goes out, and a negative count otherwise is a failure; the first two would drop the tail
+    /// of a paste without a trace.</summary>
+    internal static void WriteFully(ReadOnlyMemory<byte> data, Func<ReadOnlyMemory<byte>, nint> write) {
+        while (data.Length > 0) {
+            var written = write(data);
+            if (written < 0 && Marshal.GetLastPInvokeError() == UnixPtyInterop.EINTR) continue;
+            if (written <= 0) throw new IOException($"The PTY master write returned {written}.");
+
+            data = data[(int) written..];
+        }
     }
 
     public void Resize(ushort cols, ushort rows) {

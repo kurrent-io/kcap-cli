@@ -721,6 +721,22 @@ public class KcapCliTests {
     }
 
     [Test]
+    [Arguments(false, new[] { "uninstall", "--yes", "--force", "--keep-path-links" })]
+    [Arguments(true, new[] { "uninstall", "--yes", "--force", "--keep-path-links", "--purge-local" })]
+    public async Task UninstallAsync_builds_argv_env_with_no_timeout(bool purgeLocal, string[] expected) {
+        var runner = new FakeProcessRunner();
+        var cli = MakeCli(runner);
+        using var caller = new CancellationTokenSource();
+
+        await cli.UninstallAsync(purgeLocal, _ => { }, caller.Token);
+
+        await Assert.That(runner.SeenArgs).IsEquivalentTo(expected, CollectionOrdering.Matching);
+        await Assert.That(runner.SeenOptions!.EnvOverlay!["KCAP_PROFILE"]).IsEqualTo("work");
+        await Assert.That(runner.SeenOptions!.Timeout).IsNull();
+        await Assert.That(runner.SeenStreamingToken.CanBeCanceled).IsFalse();
+    }
+
+    [Test]
     public async Task LocalStartAsync_builds_argv_env_and_the_eleven_minute_bound() {
         var runner = new FakeProcessRunner();
         var cli = MakeCli(runner);
