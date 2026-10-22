@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
+using System.Text.Json;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
@@ -167,6 +168,61 @@ public class ChatTabViewModelTests {
 
     static AgentStatusDto Dto(string? transcriptPath, string vendor = "claude") =>
         Agent("a1", vendor, hasTerminal: true, repoPath: "/repo/x") with { TranscriptPath = transcriptPath };
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Image_previews_wait_for_successful_local_reads() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            var read = ReadCallLine.Replace("/repo/x/src/a.cs", "images/a.png");
+            var result = ToolResultLine.Replace("t1", "t2");
+            var path = Tmp.CreateFile("images.jsonl", [read]);
+            try {
+                await h.PushAsync(Dto(path) with { WorktreePath = Tmp.Path });
+                var call = Group(h.Chat, 0).Calls[0];
+                await Assert.That(call.PreviewPath).IsNull();
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(call.PreviewPath).IsEqualTo(Tmp.PathTo("images", "a.png"));
+                File.AppendAllText(path, read.Replace("t2", "t3") + "\n" + ToolErrorLine.Replace("t1", "t3") + "\n");
+                await h.TickAsync();
+                await Assert.That(Group(h.Chat, 0).Calls[^1].PreviewPath).IsNull();
+            } finally {
+                await h.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Remote_reads_never_acquire_workstation_previews(bool useWindowsPath) {
+        await RunOnUiAsync(async () => {
+            var imagePath = useWindowsPath ? @"C:\Users\runneradmin\AppData\Local\Temp\images\a.png" : Tmp.PathTo("a.png");
+            var path = Tmp.CreateFile("remote-image.jsonl", [
+                ReadCallLine.Replace("\"/repo/x/src/a.cs\"", JsonSerializer.Serialize(imagePath)),
+                ToolResultLine.Replace("t1", "t2"),
+            ]);
+            var time = new FakeTimeProvider();
+            using var session = new BehaviorSubject<ChatSessionInfo>(Session("s1") with { Root = Tmp.Path });
+            var chat = new ChatTabViewModel(
+                "a1", AgentOrigin.Remote, session, Observable.Return<string[]?>(null),
+                new AcceptingChatInput(), new NoAttachmentUploader(),
+                _ => new LocalTranscriptFeed(path, TranscriptChat.For("claude")!, "a1", time, _ => { }),
+                new RecordingOpener(), time, new FakePermissionService(), new SessionRuns(time));
+            try {
+                await (chat.PendingReadForTesting ?? throw new InvalidOperationException("The session did not start its transcript read."));
+                await Assert.That(chat.Items.Count).IsEqualTo(1);
+                var call = Group(chat, 0).Calls.Single();
+                await Assert.That(call.Outcome).IsEqualTo(ToolOutcome.Done);
+                await Assert.That(ToolDetail.ImageFile(call.InputJson)).IsEqualTo(imagePath);
+                await Assert.That(call.PreviewPath).IsNull();
+            } finally {
+                await chat.TeardownAsync();
+            }
+        });
+    }
 
     static ToolGroupItem Group(ChatTabViewModel chat, int index) => (ToolGroupItem)chat.Items[index];
     static PendingCardItem[] CardRows(ChatTabViewModel chat) => [.. chat.Items.OfType<PendingCardItem>()];
