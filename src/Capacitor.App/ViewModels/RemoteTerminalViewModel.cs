@@ -11,17 +11,9 @@ namespace Capacitor.App.ViewModels;
 
 public enum RemoteTerminalPhase { Waiting, Connecting, Live, Offline, Ended, Refused }
 
-/// A read-only view of a terminal on another machine: the server replays its buffer, then
-/// streams. The pane takes the source's size, and reports a viewport back only while it is on
-/// screen — the server takes the minimum across viewers, so a hidden pane would clamp the live
-/// agent's PTY for everyone. Each subscribe lands on a fresh surface, so a replay never stacks on
-/// scrollback. It asks the server on the pane's first showing, so a workspace kept on its Chat tab
-/// costs the server no replay or stream, and asks again only when the answer could have changed:
-/// the lane reconnects, session access is established or denied, an ended session returns, or a
-/// failed ask's back-off runs out. Whether the viewer may see the terminal is the server's answer,
-/// never the app's guess, so it holds before any session as much as during one; a terminal live
-/// before the session carries on when it starts. A refusal reads as Refused; a server too old to
-/// answer leaves an empty pane that only looks like "no output yet".
+/// Each subscribe replays onto a fresh surface. Buffer dimensions follow the source;
+/// the measured viewport is reported separately while visible, since the server clamps
+/// the PTY to the smallest viewer. Subscribe only on first showing or when access can change.
 public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// The hub's own bounds, and (0,0) is its clear sentinel — a client never sends one.
     const int MaxCols = 500, MaxRows = 200;
@@ -56,6 +48,9 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
     /// told otherwise, so a reported one must always be given back and an unreported one never.
     bool _reported;
     (int Cols, int Rows)? _sourceSize;
+    (int Cols, int Rows)? _viewport;
+    public int SourceColumns => _sourceSize?.Cols ?? 80;
+    public int SourceRows => _sourceSize?.Rows ?? 24;
     SessionAccessState? _access;
     /// Admitted before session access was established: the session starting is no reason to ask again.
     bool _carriesOn;
@@ -111,7 +106,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
                 Ask();
                 return;
             }
-            if (Surface is { } surface) ReportViewport(surface.CurrentSize);
+            if (_viewport is { } size) ReportViewport(size);
         }).DisposeWith(_disposables);
         // The host's verdict can be withdrawn: a transient registry snapshot drops the row and the
         // next refresh restores the same live session, so the pane follows the lease again then.
@@ -154,6 +149,8 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             _sourceSize = (d.Cols, d.Rows);
             Surface?.Resize(d.Cols, d.Rows);
             this.RaisePropertyChanged(nameof(SizeNote));
+            this.RaisePropertyChanged(nameof(SourceColumns));
+            this.RaisePropertyChanged(nameof(SourceRows));
         }).DisposeWith(_disposables);
     }
 
@@ -172,19 +169,15 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             if (generation != _generation || SpecialKeyMapper.Map(bytes) is not { } key) return;
             _ = SendKeyAsync(key);
         };
-        surface.Resized += (cols, rows) => {
-            if (generation != _generation) return;
-            ReportViewport((cols, rows));
-        };
         if (_sourceSize is { } size) surface.Resize(size.Cols, size.Rows);
         _decoder = decoder;
         Surface = surface;
         Phase = RemoteTerminalPhase.Connecting;
         _receiving = true;
-        _ = SubscribeAsync(generation, surface);
+        _ = SubscribeAsync(generation);
     }
 
-    async Task SubscribeAsync(int generation, ITerminalSurface surface) {
+    async Task SubscribeAsync(int generation) {
         HubCallOutcome outcome;
         try {
             outcome = await _lane.SubscribeToTerminalAsync(_agentId, _token);
@@ -223,7 +216,7 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
             _strayMembership = false;
             _subscribed = true;
             Phase = RemoteTerminalPhase.Live;
-            ReportViewport(surface.CurrentSize);
+            if (_viewport is { } size) ReportViewport(size);
         });
     }
 
@@ -239,8 +232,14 @@ public sealed class RemoteTerminalViewModel : ReactiveObject {
         _retry = null;
     }
 
-    /// The one place a viewport is reported: a pane off screen still carries its unmeasured
-    /// constructor size, and the server clamps the source to the smallest viewer.
+    public void SetViewport(int cols, int rows) {
+        if (cols is not (> 0 and <= MaxCols) || rows is not (> 0 and <= MaxRows)) return;
+        if (_viewport == (cols, rows)) return;
+        _viewport = (cols, rows);
+        ReportViewport((cols, rows));
+    }
+
+    // A hidden pane must not clamp the source to its last measured viewport.
     void ReportViewport((int Cols, int Rows) size) {
         if (!_visible || !_subscribed) return;
         var (cols, rows) = size;
