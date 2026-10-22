@@ -39,7 +39,7 @@ sealed class LocalStack(
     /// stops short (<see cref="LocalInstallFailure"/>). <paramref name="force"/> lets a purge's recovery stop daemons that
     /// are running agents.</summary>
     public Task<T> RunAsync<T>(IProgress<LocalInstallEvent> progress, Func<LifecycleLease, LocalStackState, CancellationToken, Task<T>> command,
-        CancellationToken ct, bool force = false) {
+        CancellationToken ct, bool force = false, Action<LocalStackState>? beforeRecovery = null) {
         // A rolled-forward setup is already committed; the command reads the state it left.
         var recovery  = new LocalSetupRecovery(service, home, local, time, progress, _ => { });
         var lifecycle = new LocalLifecycle(root, [
@@ -48,7 +48,8 @@ sealed class LocalStack(
             new LocalUpgradeRecovery(this, progress),
         ], time);
 
-        return lifecycle.RunAsync(LeaseWait, (lease, token) => command(lease, ReadRegistry(mayWrite: true), token), ct);
+        return lifecycle.RunAsync(LeaseWait, (lease, token) => command(lease, ReadRegistry(mayWrite: true), token), ct,
+            beforeRecovery is null ? null : _ => beforeRecovery(Read()));
     }
 
     /// <summary>The registry as <see cref="RunAsync{T}"/> hands it to its command, for a command that changed it.</summary>

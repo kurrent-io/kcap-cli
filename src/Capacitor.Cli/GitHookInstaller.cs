@@ -32,7 +32,13 @@ sealed class GitHookInstaller(UserHome home, Func<string?>? resolveBinaryPath = 
     /// </summary>
     public bool Refresh() => Entry() is { } entry && (entry == Expected() || Write());
 
-    public void Remove() => Git("--remove-section", Section);
+    public bool Remove() {
+        // No git reads an entry when none runs, so there is nothing to remove. With a working git, a
+        // config it cannot read is a failure: --remove-section on a missing section fails the same way.
+        if (!File.Exists(ConfigFile()) || InstalledGitVersion() is null) return true;
+        if (Git("--list") is null) return false;
+        return Entry() is null || Git("--remove-section", Section) is not null;
+    }
 
     public bool IsInstalled() => Entry() is not null;
 
