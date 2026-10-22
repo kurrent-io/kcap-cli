@@ -1134,6 +1134,16 @@ public class UninstallCommandTests {
     }
 
     [Test]
+    public async Task Uninstall_resets_a_kiro_default_left_naming_a_missing_kcap_agent() {
+        await using var fixture = await Fixture.CreateAsync();
+        var kiro = TestHarnesses.Under(fixture.UserHome).Of<KiroHarness>().Paths;
+        fixture.Temp.CreateFile(Path.GetRelativePath(fixture.Home, kiro.SettingsFile), "{\"chat.defaultAgent\": \"kcap\"}");
+
+        await Assert.That(await RunUninstall(fixture)).IsEqualTo(0);
+        await Assert.That(KiroSettings.ReadDefaultAgent(kiro.SettingsFile)).IsEqualTo("kiro_default");
+    }
+
+    [Test]
     public async Task Uninstall_retains_kiro_restore_marker_when_settings_cannot_be_read() {
         await using var fixture = await Fixture.CreateAsync();
         var kiro = TestHarnesses.Under(fixture.UserHome).Of<KiroHarness>().Paths;

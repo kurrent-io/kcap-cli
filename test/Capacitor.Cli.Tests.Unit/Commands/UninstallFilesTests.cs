@@ -10,8 +10,8 @@ public class UninstallFilesTests {
     public async Task Removes_config_beside_a_nested_local_root_without_following_unrelated_links() {
         var config = Tmp.CreateDir("config");
         var local = Tmp.CreateDir("config/nested/local");
-        File.WriteAllText(Path.Combine(local, "install.json"), "registry");
-        File.WriteAllText(Path.Combine(local, "lifecycle.lock"), "");
+        Tmp.CreateFile("config/nested/local/install.json", "registry");
+        Tmp.CreateFile("config/nested/local/lifecycle.lock");
         Tmp.CreateFile("config/nested/profile.json", "delete");
         var unrelated = Tmp.CreateFile("outside/user-file", "keep");
         Directory.CreateSymbolicLink(Path.Combine(config, "linked"), Tmp.PathTo("outside"));
