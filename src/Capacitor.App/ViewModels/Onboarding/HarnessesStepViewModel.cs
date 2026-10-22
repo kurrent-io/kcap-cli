@@ -210,9 +210,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
                 var config = await AppConfig.LoadProfileConfig(_config, ct).ConfigureAwait(true);
                 var profileName = _resolveProfileName?.Invoke() ?? config.ActiveProfile;
                 if (config.Profiles.GetValueOrDefault(profileName ?? ProfileConfig.DefaultName) is { } profile) {
-                    var current = VisibilityOptions.FirstOrDefault(o => o.Value == profile.DefaultVisibility);
-                    CurrentVisibilityNote = current is null ? null : $"Current setting: {current.Label}.";
-                    this.RaisePropertyChanged(nameof(CurrentVisibilityNote));
+                    NoteCurrentVisibility(profile.DefaultVisibility);
                     UseProviderApiKey = profile.UseProviderApiKey;
                 }
             } catch (Exception ex) {
@@ -315,8 +313,15 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         }
 
         Message = null;
+        NoteCurrentVisibility(visibility);
 
         return true;
+    }
+
+    void NoteCurrentVisibility(string? value) {
+        var current = VisibilityOptions.FirstOrDefault(o => o.Value == value);
+        CurrentVisibilityNote = current is null ? null : $"Current setting: {current.Label}.";
+        this.RaisePropertyChanged(nameof(CurrentVisibilityNote));
     }
 
     async Task InstallSelectedAsync() {
