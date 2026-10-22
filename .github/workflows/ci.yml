@@ -34,7 +34,7 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest,  modules: 3, tests: 4 }
-          - { os: macos-latest,   modules: 3, tests: 4 }
+          - { os: getmac,         modules: 3, tests: 4 }
           # Narrower: at three-by-four this leg spent a 20s service-readiness budget and a 1s
           # memory-fetch budget inside the code under test with nothing actually slow.
           - { os: windows-latest, modules: 2, tests: 2 }

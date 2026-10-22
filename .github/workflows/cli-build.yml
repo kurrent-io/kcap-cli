@@ -52,7 +52,8 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    runs-on: ${{ matrix.os }}
+    # GetMac is a third-party runner: a job that loads the Apple signing secrets stays on GitHub's.
+    runs-on: ${{ matrix.os == 'macos-latest' && !inputs.sign && 'getmac' || matrix.os }}
     container: ${{ matrix.container || '' }}
     env:
       VERSION: ${{ inputs.version }}
