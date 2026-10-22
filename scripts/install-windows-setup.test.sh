@@ -9,6 +9,7 @@ layout=(
   "Local/kcap/current/kcap-desktop.exe"
   "Local/kcap/current/kcap.exe"
   "Local/kcap/current/kcap-daemon.exe"
+  "Local/kcap/current/kcap-service.exe"
   "Roaming/Microsoft/Windows/Start Menu/Programs/kcap.lnk"
 )
 
@@ -31,6 +32,7 @@ assert complete      ""              0 0
 assert setup-failed  ""              1 1
 assert no-update-exe "${layout[0]}"  0 1
 assert no-daemon     "${layout[3]}"  0 1
-assert no-shortcut   "${layout[4]}"  0 1
+assert no-service    "${layout[4]}"  0 1
+assert no-shortcut   "${layout[5]}"  0 1
 
 [ "$fail" -eq 0 ] && echo "ok" || exit 1

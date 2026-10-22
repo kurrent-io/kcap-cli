@@ -1,0 +1,121 @@
+using System.Text.Json;
+using Capacitor.Cli.Service.Control;
+using Capacitor.Cli.Service.Logging;
+using Capacitor.Cli.Service.Supervision;
+using Capacitor.Cli.Service.Tests.Unit.Supervision;
+using Microsoft.Extensions.Time.Testing;
+
+namespace Capacitor.Cli.Service.Tests.Unit.Control;
+
+public class ControlDispatcherTests {
+    const string Alice = "S-1-5-21-1-1001";
+    const string Bob   = "S-1-5-21-1-1002";
+
+    sealed class NullLog : IServiceLog {
+        public void Write(string line) { }
+    }
+
+    readonly FakeDaemonHost _host = new();
+    readonly FakeEnrollmentIndex _index = new();
+    int _lastUserGone;
+
+    ControlDispatcher NewDispatcher(out Supervisor supervisor) {
+        supervisor = new Supervisor(_host, new FakeTimeProvider(), new NullLog());
+        return new ControlDispatcher(supervisor, _index, () => _lastUserGone++, "1.5.0", new NullLog());
+    }
+
+    static ControlResponse Parse(string line) => JsonSerializer.Deserialize(line, ControlJsonContext.Default.ControlResponse)!;
+
+    [Test]
+    public async Task Capabilities_list_exactly_the_verbs_the_dispatcher_handles() {
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"capabilities"}""", CancellationToken.None));
+
+        await Assert.That(response.Capabilities!.Verbs).IsEquivalentTo(["capabilities", "enroll", "start", "status", "stop", "unenroll"]);
+        await Assert.That(response.Capabilities.Protocol).IsEqualTo(ControlDispatcher.Protocol);
+        await Assert.That(response.Capabilities.Version).IsEqualTo("1.5.0");
+    }
+
+    [Test]
+    public async Task A_caller_sees_and_stops_only_their_own_daemon() {
+        _host.SignIn(1, Alice);
+        _host.SignIn(2, Bob);
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out var supervisor);
+        supervisor.Start();
+
+        var stop = Parse(await dispatcher.HandleAsync(Bob, """{"verb":"stop","sid":"S-1-5-21-1-1001"}""", CancellationToken.None));
+
+        await Assert.That(stop.Status!.State).IsEqualTo("stopped");
+        await Assert.That(_host.StopRequests).IsEquivalentTo([Bob]);
+        await Assert.That(supervisor.Status(Alice).State).IsEqualTo(DaemonState.Running);
+    }
+
+    [Test]
+    public async Task Enroll_indexes_the_user_once_their_daemon_runs() {
+        _host.SignIn(1, Alice);
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsTrue();
+        await Assert.That(response.Status!.State).IsEqualTo("running");
+        await Assert.That(_index.Sids).Contains(Alice);
+    }
+
+    [Test]
+    public async Task Enroll_without_an_enrollment_is_refused_and_not_indexed() {
+        _host.SignIn(1, Alice);
+        _host.Enrollments.Remove(Alice);
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None));
+
+        await Assert.That(response.Ok).IsFalse();
+        await Assert.That(response.Error).IsEqualTo("no enrollment");
+        await Assert.That(_index.IsEmpty).IsTrue();
+    }
+
+    [Test]
+    public async Task The_last_unenroll_removes_the_service_and_an_earlier_one_does_not() {
+        _host.SignIn(1, Alice);
+        _host.SignIn(2, Bob);
+        _host.StopRequestEndsDaemon = true;
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+        await dispatcher.HandleAsync(Bob, """{"verb":"enroll"}""", CancellationToken.None);
+
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+        await Assert.That(_lastUserGone).IsEqualTo(0);
+
+        await dispatcher.HandleAsync(Bob, """{"verb":"unenroll"}""", CancellationToken.None);
+        await Assert.That(_lastUserGone).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_departed_users_entry_does_not_keep_the_service_installed() {
+        _host.SignIn(1, Alice);
+        _host.StopRequestEndsDaemon = true;
+        _index.Add(Bob);
+        _index.Departed.Add(Bob);
+        var dispatcher = NewDispatcher(out _);
+        await dispatcher.HandleAsync(Alice, """{"verb":"enroll"}""", CancellationToken.None);
+
+        await dispatcher.HandleAsync(Alice, """{"verb":"unenroll"}""", CancellationToken.None);
+
+        await Assert.That(_lastUserGone).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments("""{"verb":"format-c"}""", "unknown verb 'format-c'")]
+    [Arguments("not json", "the request is not a JSON object with a verb")]
+    public async Task A_bad_request_gets_an_error_response(string line, string error) {
+        var dispatcher = NewDispatcher(out _);
+
+        var response = Parse(await dispatcher.HandleAsync(Alice, line, CancellationToken.None));
+
+        await Assert.That(response.Ok).IsFalse();
+        await Assert.That(response.Error).IsEqualTo(error);
+    }
+}
