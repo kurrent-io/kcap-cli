@@ -24,6 +24,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<bool>                        _onLocalPath;
 
     IReadOnlyList<HarnessId>? _discoveredFor;
+    bool                      _discoveredLocal;
     HistoryState              _state = HistoryState.Looking;
     bool                      _titleLocally = true;
     int                       _unmatched;
@@ -101,6 +102,14 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         _ => null,
     };
 
+    /// The local edition has nobody to share with, so its track is skip or import.
+    public bool LocalLevels => _discoveredLocal;
+    public bool CloudLevels => !_discoveredLocal;
+
+    public string LevelsNote => _discoveredLocal
+        ? "Import adds this history to kcap on this Mac. Skip doesn't import it."
+        : "Shared uses your recording privacy setting for new imports. Only me keeps imported history private. Skip doesn't import it.";
+
     /// "from ✓ Claude Code ✓ Codex": the harnesses this page reads from.
     public IReadOnlyList<string> FromLabels { get; private set; } = [];
 
@@ -177,7 +186,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         var scope = _inScope();
         // The same harnesses as last time: the list the user may already have adjusted stands. A
         // discovery that could not read the disk is asked again.
-        if (_discoveredFor is not null && _discoveredFor.SequenceEqual(scope) && State != HistoryState.Unreadable)
+        if (_discoveredFor is not null && _discoveredFor.SequenceEqual(scope) && _discoveredLocal == _onLocalPath()
+            && State != HistoryState.Unreadable)
             return Task.CompletedTask;
 
         _discovery?.Cancel();
@@ -189,8 +199,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(Groups));
         this.RaisePropertyChanged(nameof(Windows));
         this.RaisePropertyChanged(nameof(UnmatchedNote));
-        _discoveredFor = scope;
-        FromHarnesses  = scope;
+        _discoveredFor   = scope;
+        _discoveredLocal = _onLocalPath();
+        this.RaisePropertyChanged(nameof(LocalLevels));
+        this.RaisePropertyChanged(nameof(CloudLevels));
+        this.RaisePropertyChanged(nameof(LevelsNote));
+        FromHarnesses    = scope;
         FromLabels     = [.. scope.Select(HarnessRegistry.LabelOf)];
         this.RaisePropertyChanged(nameof(FromLabels));
         this.RaisePropertyChanged(nameof(TitlingOffered));
@@ -237,7 +251,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
 
         // Owners by their most recent repository, repositories in the report's own order.
         Groups = [.. report.Repos
-            .Select(r => new HistoryRepoRow(r))
+            .Select(r => new HistoryRepoRow(r, _discoveredLocal))
             .GroupBy(r => r.Owner, StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(g => g.Max(r => r.LastSessionAt ?? DateTimeOffset.MinValue))
             .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)

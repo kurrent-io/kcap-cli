@@ -7,16 +7,20 @@ namespace Capacitor.App.Views.Onboarding;
 sealed class ImportTrackAutomationPeer(ImportTrack owner) : ControlAutomationPeer(owner), IRangeValueProvider {
     protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Slider;
     protected override string GetClassNameCore() => nameof(ImportTrack);
+    bool TwoStops => owner.LastStop == 1;
     protected override string GetNameCore() => $"{base.GetNameCore()}, {owner.Stop switch {
-        0 => "skip",
-        1 => "only me",
-        2 => "shared",
-        _ => "mixed",
+        0               => "skip",
+        1 when TwoStops => "import",
+        1               => "only me",
+        2               => "shared",
+        _               => "mixed",
     }}";
-    protected override string GetHelpTextCore() => "Use the arrow keys to choose skip, only me, or shared. Only me and shared upload this history.";
+    protected override string GetHelpTextCore() => TwoStops
+        ? "Use the arrow keys to choose skip or import."
+        : "Use the arrow keys to choose skip, only me, or shared. Only me and shared upload this history.";
     public bool IsReadOnly => !owner.IsEffectivelyEnabled;
     public double Minimum => 0;
-    public double Maximum => 2;
+    public double Maximum => owner.LastStop;
     public double Value => Math.Max(0, owner.Stop);
     public double SmallChange => 1;
     public double LargeChange => 1;
