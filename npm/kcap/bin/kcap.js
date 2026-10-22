@@ -425,17 +425,19 @@ function runUpdate(binaryPath, updArgs) {
   }
 
   // A running daemon keeps executing the old image until restarted. On
-  // macOS/Linux it self-detects the new binary and restarts when idle; on
-  // Windows self-detection is off (the running image was moved, not replaced),
-  // so the user applies it explicitly.
+  // macOS/Linux it self-detects the new binary and restarts once running agents
+  // reach a turn boundary (bounded wait), resuming them; on Windows
+  // self-detection is off (the running image was moved, not replaced), so the
+  // user applies it explicitly.
   if (daemonRunning) {
     if (process.platform === "win32") {
       console.log("A kcap daemon is running and still uses the old version. Apply the");
       console.log("update with `kcap daemon restart` (add --force if agents are running).");
     } else {
-      console.log("A kcap daemon is running; it will restart automatically when idle to");
-      console.log("pick up the new version. Check with `kcap daemon status`, or apply now");
-      console.log("with `kcap daemon restart --force`.");
+      console.log("A kcap daemon is running; it will switch to the new version within a");
+      console.log("few minutes, once running agents reach a turn boundary, and resume them.");
+      console.log("Check with `kcap daemon status`, or apply now with");
+      console.log("`kcap daemon restart --force`.");
     }
   }
 
