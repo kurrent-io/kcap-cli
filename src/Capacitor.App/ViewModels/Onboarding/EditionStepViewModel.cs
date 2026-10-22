@@ -12,7 +12,7 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string LocalTitle = "For you, locally";
     public const string LocalDetail =
-        "For a Mac one person uses, no account. The server is downloaded to this Mac and runs there, so your sessions " +
+        "For a machine one person uses, no account. The server is downloaded to this machine and runs there, so your sessions " +
         "never leave it. Free.";
     public const string CloudTitle = "For your team, cloud";
     public const string CloudDetail =

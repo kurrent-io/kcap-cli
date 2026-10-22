@@ -804,6 +804,7 @@ public class RemoteSessionViewModelTests {
             await Assert.That(pty.IsTerminalActive).IsTrue();
             await Assert.That(pty.ShowsTerminalPane).IsTrue();
             await Assert.That(pty.ShowsChatPane).IsFalse();
+            pty.Terminal!.SetViewport(100, 30);
             await pty.TeardownAsync();
             await Assert.That(h.Lane.ResizeReleases).Contains("a1");
 

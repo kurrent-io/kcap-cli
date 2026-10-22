@@ -1,5 +1,8 @@
 using System.Runtime.CompilerServices;
 using Capacitor.Cli.Daemon.Pty;
+using Capacitor.Remote.Models;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Capacitor.Cli.Daemon.Services;
 
@@ -17,8 +20,9 @@ namespace Capacitor.Cli.Daemon.Services;
 /// Input writes take the input lane, so a paste and its submit are never interleaved by another
 /// writer; the graceful stop only tries for it (see <see cref="RequestGracefulStopAsync"/>).
 /// </summary>
-internal sealed class PtyHostedAgentRuntime(
-        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false) : IHostedAgentRuntime {
+internal sealed partial class PtyHostedAgentRuntime(
+        string vendor, IPtyProcess pty, TimeProvider time, bool approvalsDisabled = false,
+        ILogger? logger = null) : IHostedAgentRuntime {
     /// <summary>
     /// Delays (relative to the previous write) before each carriage return on the spray submit path.
     /// A single CR right after a paste is unreliable: codex's TUI suppresses Enter-as-submit for a
@@ -58,6 +62,8 @@ internal sealed class PtyHostedAgentRuntime(
     /// flag re-read between slices.</summary>
     static readonly TimeSpan LaunchPromptExitPoll = TimeSpan.FromMilliseconds(250);
 
+    readonly TerminalMouseModeTracker _mouseMode = new();
+    readonly ILogger _logger = logger ?? NullLogger.Instance;
     readonly SemaphoreSlim           _lane        = new(1, 1);
     readonly TaskCompletionSource    _firstOutput = new(TaskCreationOptions.RunContinuationsAsynchronously);
     readonly CancellationTokenSource _disposal    = new();
@@ -76,6 +82,7 @@ internal sealed class PtyHostedAgentRuntime(
 
     public async IAsyncEnumerable<byte[]> ReadOutputAsync([EnumeratorCancellation] CancellationToken ct = default) {
         await foreach (var chunk in pty.ReadOutputAsync(ct).ConfigureAwait(false)) {
+            _mouseMode.Feed(chunk);
             Volatile.Write(ref _lastOutputAt, time.GetTimestamp());
             _firstOutput.TrySetResult();
 
@@ -171,12 +178,17 @@ internal sealed class PtyHostedAgentRuntime(
     }
 
     public async Task SendSpecialKeyAsync(string key) {
-        var bytes = SpecialKeyMap.ToBytes(key);
+        var isWheel = TerminalScrollKey.TryDecode(key, out var bytes);
+        if (!isWheel) bytes = SpecialKeyMap.ToBytes(key);
         if (bytes.Length == 0) return;
 
         await _lane.WaitAsync();
 
         try {
+            if (isWheel && (!_mouseMode.IsActive || pty.HasExited)) {
+                LogWheelDropped(_logger);
+                return;
+            }
             await pty.WriteAsync(bytes);
         } finally {
             _lane.Release();
@@ -250,6 +262,9 @@ internal sealed class PtyHostedAgentRuntime(
             return false;
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Dropped wheel input while PTY mouse reporting is inactive or the process has exited")]
+    static partial void LogWheelDropped(ILogger logger);
 
     public Task WaitForExitAsync(TimeSpan? timeout = null) => pty.WaitForExitAsync(timeout);
     public Task TerminateAsync(TimeSpan?   timeout = null) => pty.TerminateAsync(timeout);

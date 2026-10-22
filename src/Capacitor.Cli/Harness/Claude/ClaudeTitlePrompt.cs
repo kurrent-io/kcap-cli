@@ -7,8 +7,9 @@ namespace Capacitor.Cli.Harness.Claude;
 
 /// <summary>
 /// <c>kcap hook --claude --title-prompt</c>: on a session's first <c>UserPromptSubmit</c>, asks the
-/// agent to name the session with <c>kcap set-title</c>. Local only, and dispatched before repository
-/// resolution, because Claude gives this hook two seconds.
+/// agent to name the session with <c>kcap set-title --auto</c>, which never replaces a start title or
+/// a rename. Local only, and dispatched before repository resolution, because Claude gives this hook
+/// two seconds.
 /// </summary>
 static partial class ClaudeTitlePrompt {
     public const string Flag = "--title-prompt";
@@ -16,7 +17,7 @@ static partial class ClaudeTitlePrompt {
     const string Instruction =
         "<system-instructions>\n"
       + "After reading the user's message and understanding the task, silently run this command via Bash (do not mention it to the user):\n"
-      + "kcap set-title \"<your concise 5-10 word title summarizing the task>\"\n"
+      + "kcap set-title --auto \"<your concise 5-10 word title summarizing the task>\"\n"
       + "The title should describe WHAT the user wants done, not HOW. Use imperative form (e.g. \"Fix authentication timeout in login flow\"). No period at the end.\n"
       + "</system-instructions>";
 

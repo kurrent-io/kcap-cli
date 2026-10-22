@@ -12,7 +12,7 @@
                 <Button x:Name="ContinueAfterSignUpButton" Classes="onboardingPrimary" HorizontalAlignment="Stretch"
                         HorizontalContentAlignment="Center" Content="Continue"
                         Command="{Binding ContinueAfterSignUpCommand}" />
-                <TextBlock Classes="onboardingNote" Text="Continue finds your new workspace and signs this Mac in to it." />
+                <TextBlock Classes="onboardingNote" Text="Continue finds your new workspace and signs this machine in to it." />
 
                 <StackPanel Spacing="4" IsVisible="{Binding StatusLineVisible}">
                     <TextBlock x:Name="SignUpStatusText" Classes="onboardingLabel" Text="{Binding Status}" TextWrapping="Wrap"

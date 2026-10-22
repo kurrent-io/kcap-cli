@@ -141,7 +141,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
         var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
 
         var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
 
         if (launchPrompt is not null) {
             runtime.DeliverLaunchPrompt(launchPrompt);
@@ -158,7 +158,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     partial void LogPromptPastedAfterSpawn(string agentId, int length);
 
     /// <summary>An agent that never received its task leaves no other trace, so every withdrawn or
-    /// blind delivery is logged here; the runtime itself has no logger.</summary>
+    /// blind delivery is logged here.</summary>
     async Task LogLaunchPromptOutcomeAsync(Task<LaunchPromptOutcome> delivery, string agentId) {
         LaunchPromptOutcome outcome;
 
