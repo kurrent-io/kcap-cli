@@ -38,7 +38,8 @@ public class LocalEmbeddingStepTests {
 
         await Assert.That(changed).IsFalse();
         await Assert.That(Single<LocalInstallEvent.EmbeddingsSkipped>().Code).IsEqualTo(LocalEmbeddingSkipCode.OllamaNotFound);
-        await Assert.That(Single<LocalInstallEvent.EmbeddingsSkipped>().Message).EndsWith("search works by keyword.");
+        await Assert.That(Single<LocalInstallEvent.EmbeddingsSkipped>().Message).EndsWith(
+            "; search works by keyword. Start Ollama, then run kcap setup --local again to turn on search by meaning.");
         await Assert.That(File.Exists(LocalEmbeddingFile.PathFor(Root))).IsFalse();
     }
 

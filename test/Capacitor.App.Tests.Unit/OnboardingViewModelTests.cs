@@ -205,13 +205,13 @@ public class OnboardingViewModelTests {
             var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Done)], canFinishLater: gate);
             await vm.PendingEnterForTesting;
 
-            var open = CanExecute(vm.FinishLaterCommand);
+            var open = (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible);
             gate.OnNext(false);
-            return (open, CanExecute(vm.FinishLaterCommand));
+            return (open, (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible));
         });
 
-        await Assert.That(open).IsTrue();
-        await Assert.That(closed).IsFalse();
+        await Assert.That(open).IsEqualTo((true, true));
+        await Assert.That(closed).IsEqualTo((false, false));
     }
 
     [Test]
