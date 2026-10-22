@@ -146,6 +146,25 @@ public class AgentQuietTurnTests {
     }
 
     [Test]
+    public async Task A_status_snapshot_carries_when_the_current_turn_started() {
+        var time = new FakeTimeProvider();
+        await using var orch = Build(time);
+        var agent = orch.SeedAgentForTest("turn-start", isPrivate: true, pty: new ScriptedPtyProcess());
+        agent.ActivityClock.SetAwaitingInput(true);
+        await Assert.That(orch.SnapshotAgentsForStatus().Single().WorkingSince).IsNull();
+
+        time.Advance(TimeSpan.FromSeconds(5));
+        var started = time.GetUtcNow().UtcDateTime;
+        agent.ActivityClock.SetAwaitingInput(false);
+        // A tool hook repeats the verdict mid-turn; it must not restart the turn.
+        time.Advance(TimeSpan.FromSeconds(3));
+        agent.ActivityClock.SetAwaitingInput(false);
+        time.Advance(TimeSpan.FromSeconds(3));
+
+        await Assert.That(orch.SnapshotAgentsForStatus().Single().WorkingSince).IsEqualTo(started);
+    }
+
+    [Test]
     public async Task A_quiet_pty_agent_is_published_as_waiting_and_output_clears_it() {
         var time = new FakeTimeProvider();
         await using var orch  = Build(time);

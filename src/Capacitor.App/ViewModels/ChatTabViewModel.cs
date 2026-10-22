@@ -499,6 +499,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int? _liveSubagents;
     long? _workingSince;
     TimeSpan _worked;
+    DateTime? _daemonWorkingSince;
 
     void RefreshActivityNote() {
         var inTurn = SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
@@ -507,6 +508,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _workingSince = null;
             _worked = TimeSpan.Zero;
         } else if (working) {
+            // A pane built mid-turn picks up the time the daemon has already seen pass.
+            if (_workingSince is null && _worked == TimeSpan.Zero && _daemonWorkingSince is { } started
+                && _time.GetUtcNow().UtcDateTime - started is { Ticks: > 0 } before)
+                _worked = before;
             _workingSince ??= _time.GetTimestamp();
         } else if (_workingSince is { } pausedAt) {
             _worked += _time.GetElapsedTime(pausedAt);
@@ -928,6 +933,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
+        _daemonWorkingSince = info.WorkingSince;
         if (!_feedReleased) _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,

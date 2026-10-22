@@ -163,7 +163,9 @@ internal partial class AgentOrchestrator {
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
-                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
+                WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
+                    ? (_time.GetUtcNow() - working).UtcDateTime : null))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
     static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {

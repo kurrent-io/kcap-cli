@@ -2579,6 +2579,23 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Navigating away and back builds a new pane mid-turn; it shows the turn's real elapsed time.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pane_opened_mid_turn_counts_from_the_daemons_turn_start() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            var started = h.Time.GetUtcNow().UtcDateTime - TimeSpan.FromSeconds(65);
+            var dto = Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false, WorkingSince = started };
+            await h.PushAsync(dto);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
+            h.Time.Advance(TimeSpan.FromSeconds(10));
+            await h.PushAsync(dto);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 15s");
+            await h.TeardownAsync();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Working_time_ticks_without_a_transcript_and_resets_for_each_turn() {
