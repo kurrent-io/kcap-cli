@@ -34,10 +34,12 @@ public class DaemonStatusReportTests {
         var server = new CaptureServerConnection();
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+        orch.SeedAgentForTest("a1", LaunchKind.Default, status: "Running");
 
         await server.OnRegisteredHook!.Invoke();
 
         await WaitHarness.PollUntilAsync(() => server.StatusReportCount > 0);
+        await Assert.That(server.StatusReports[0].ActiveCount).IsEqualTo(1);
     }
 
     /// <summary>The server keeps the reading with the highest version, so every change of the count must
