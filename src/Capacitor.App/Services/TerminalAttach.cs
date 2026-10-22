@@ -24,7 +24,8 @@ public sealed class CoreTerminalAttachClient(AgentAttachClient inner) : ITermina
     public static TerminalAttachClientFactory Factory(Func<string> socketPath) =>
         (agentId, requestRuntime, onAttached, onOutput) => new CoreTerminalAttachClient(new AgentAttachClient(
             socketPath(), agentId, onAttached, onOutput,
-            (ctx, ex) => Console.Error.WriteLine($"kcap: terminal attach {ctx}: {ex.Message}"), requestRuntime));
+            (ctx, ex) => Console.Error.WriteLine($"kcap: terminal attach {ctx}: {ex.Message}"), requestRuntime,
+            resizeOnAttach: false));
     public Task<AttachOutcome> RunAsync(int c, int r, CancellationToken ct) => inner.RunAsync(c, r, ct);
     public Task SendInputAsync(byte[] b) => inner.SendInputAsync(b);
     public Task ResizeAsync(int c, int r) => inner.ResizeAsync(c, r);
