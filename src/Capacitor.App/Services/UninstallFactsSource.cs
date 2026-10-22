@@ -4,11 +4,13 @@ namespace Capacitor.App.Services;
 
 /// Gathers what the uninstall confirmation names. A fact that cannot be read is logged and left
 /// out, and the terminal PATH gets a deadline, so neither a failure nor a slow login shell keeps
-/// the confirmation from showing.
+/// the confirmation from showing. A list that cannot be read is null, so the confirmation can tell
+/// "none" from "unknown".
 public sealed record UninstallFactsSource(
     Func<string?> LocalServerUrl,
+    string AttachedDaemon,
     Func<DaemonActivity?> Activity,
-    Func<bool> DaemonRunning,
+    Func<IReadOnlyList<string>> LiveDaemons,
     Func<string?> HostedServerUrl,
     Func<CancellationToken, Task<string?>> TerminalPath,
     string BundleRoot,
@@ -20,10 +22,13 @@ public sealed record UninstallFactsSource(
 
         return new UninstallFacts(
             Read(LocalServerUrl, "the local server", null),
+            AttachedDaemon,
             Read(Activity, "the daemon's activity", null),
-            Read(DaemonRunning, "whether the daemon is running", false),
+            Read<IReadOnlyList<string>?>(LiveDaemons, "the running daemons", null),
             Read(HostedServerUrl, "the server", null),
-            Read(() => OtherKcapInstalls.Find(terminalPath, BundleRoot), "other kcap installs", []));
+            terminalPath is null
+                ? null
+                : Read<IReadOnlyList<OtherKcapInstall>?>(() => OtherKcapInstalls.Find(terminalPath, BundleRoot), "other kcap installs", null));
     }
 
     async Task<string?> ReadTerminalPathAsync(CancellationToken ct) {

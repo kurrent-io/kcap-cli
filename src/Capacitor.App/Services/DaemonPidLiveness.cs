@@ -6,6 +6,10 @@ namespace Capacitor.App.Services;
 /// Whether the daemon's pid file names a live process. A token that cannot be compared counts as
 /// live: the answer only decides whether the uninstall warns, and a needless warning is harmless.
 public static class DaemonPidLiveness {
+    /// Every daemon in the store whose pid file names a live process.
+    public static IReadOnlyList<string> LiveDaemons(DaemonStore store) =>
+        [.. store.EnumerateNames().Where(name => IsRunning(store, name))];
+
     public static bool IsRunning(DaemonStore store, string daemonName) {
         string[] lines;
         try {

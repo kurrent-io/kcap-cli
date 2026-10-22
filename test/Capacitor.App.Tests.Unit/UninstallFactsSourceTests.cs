@@ -7,9 +7,9 @@ public class UninstallFactsSourceTests {
     [TempDir] public required TempDir Tmp { get; init; }
 
     UninstallFactsSource Source(
-        Func<string?>? local = null, Func<DaemonActivity?>? activity = null, Func<bool>? running = null,
+        Func<string?>? local = null, Func<DaemonActivity?>? activity = null, Func<IReadOnlyList<string>>? live = null,
         Func<string?>? hosted = null, Func<CancellationToken, Task<string?>>? terminalPath = null, TextWriter? log = null) => new(
-        local ?? (() => null), activity ?? (() => null), running ?? (() => false), hosted ?? (() => null),
+        local ?? (() => null), "default", activity ?? (() => null), live ?? (() => []), hosted ?? (() => null),
         terminalPath ?? (_ => Task.FromResult<string?>(null)), Tmp.GetResolvedPath("Kcap.app"),
         TimeSpan.FromMilliseconds(100), TimeProvider.System, log ?? TextWriter.Null);
 
@@ -19,14 +19,14 @@ public class UninstallFactsSourceTests {
         var bin = Tmp.GetResolvedPath("bin");
 
         var facts = await Source(
-            local: () => "http://127.0.0.1:5100", activity: () => new DaemonActivity(2, true), running: () => true,
+            local: () => "http://127.0.0.1:5100", activity: () => new DaemonActivity(2, true), live: () => ["default", "laptop"],
             hosted: () => "https://kcap.example", terminalPath: _ => Task.FromResult<string?>(bin)).GatherAsync(CancellationToken.None);
 
         await Assert.That(facts.LocalServerUrl).IsEqualTo("http://127.0.0.1:5100");
         await Assert.That(facts.Activity).IsEqualTo(new DaemonActivity(2, true));
-        await Assert.That(facts.DaemonRunning).IsTrue();
+        await Assert.That(facts.LiveDaemons).IsEquivalentTo(["default", "laptop"]);
         await Assert.That(facts.HostedServerUrl).IsEqualTo("https://kcap.example");
-        await Assert.That(facts.OtherInstalls.Select(o => o.Path)).IsEquivalentTo([Path.Combine(bin, "kcap")]);
+        await Assert.That(facts.OtherInstalls!.Select(o => o.Path)).IsEquivalentTo([Path.Combine(bin, "kcap")]);
     }
 
     [Test]
@@ -43,17 +43,34 @@ public class UninstallFactsSourceTests {
     }
 
     [Test]
-    public async Task A_terminal_path_that_never_answers_lists_no_other_installs() {
-        var facts = await Source(terminalPath: _ => new TaskCompletionSource<string?>().Task).GatherAsync(CancellationToken.None);
+    public async Task Unreadable_daemons_are_unknown_not_none() {
+        var facts = await Source(live: () => throw new IOException("daemons unreadable")).GatherAsync(CancellationToken.None);
 
-        await Assert.That(facts.OtherInstalls.Count).IsEqualTo(0);
+        await Assert.That(facts.LiveDaemons).IsNull();
     }
 
     [Test]
-    public async Task A_terminal_path_that_fails_lists_no_other_installs() {
+    public async Task A_terminal_path_that_never_answers_leaves_other_installs_unknown() {
+        var facts = await Source(terminalPath: _ => new TaskCompletionSource<string?>().Task).GatherAsync(CancellationToken.None);
+
+        await Assert.That(facts.OtherInstalls).IsNull();
+    }
+
+    [Test]
+    public async Task A_terminal_path_that_fails_leaves_other_installs_unknown() {
         var facts = await Source(terminalPath: _ => Task.FromException<string?>(new InvalidOperationException("no shell")))
             .GatherAsync(CancellationToken.None);
 
-        await Assert.That(facts.OtherInstalls.Count).IsEqualTo(0);
+        await Assert.That(facts.OtherInstalls).IsNull();
+    }
+
+    [Test]
+    public async Task A_terminal_path_without_kcap_finds_none() {
+        var bin = Tmp.CreateDir("empty-bin").Path;
+
+        var facts = await Source(terminalPath: _ => Task.FromResult<string?>(bin)).GatherAsync(CancellationToken.None);
+
+        await Assert.That(facts.OtherInstalls).IsNotNull();
+        await Assert.That(facts.OtherInstalls!.Count).IsEqualTo(0);
     }
 }

@@ -956,8 +956,9 @@ public partial class App : Application {
     UninstallFactsSource UninstallFactsFor(string bundleRoot, string daemonName, string? profileServerUrl,
             DaemonLifecycleController lifecycle, ILoginShellProbe probe) => new(
         LocalServerUrl: () => LocalServerFact.Read(_localRoot),
+        AttachedDaemon: daemonName,
         Activity: () => lifecycle.LatestActivity,
-        DaemonRunning: () => DaemonPidLiveness.IsRunning(_daemonStore, daemonName),
+        LiveDaemons: () => DaemonPidLiveness.LiveDaemons(_daemonStore),
         HostedServerUrl: () => profileServerUrl is { Length: > 0 } && !IsLocalServer(profileServerUrl, _localRoot) ? profileServerUrl : null,
         TerminalPath: probe.TerminalPathAsync,
         BundleRoot: bundleRoot,

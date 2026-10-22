@@ -97,15 +97,19 @@ too, and the confirmation says so before anything is removed.
     warning, visually distinct, that every session recorded on the local server is permanently
     deleted.
   - When the daemon reports running agents: how many will be ended. When a daemon is running but
-    not answering, say so and that anything it runs will be ended. Either way accepting passes
-    `--force` (my call), so Retry never fails the same refusal again.
+    not answering, say so and that anything it runs will be ended. Every other daemon whose pid is
+    live is named too, with the same line, since `--force` stops them all; when the daemons
+    directory cannot be read, say that anything a daemon runs will be ended. Either way accepting
+    passes `--force` (my call), so Retry never fails the same refusal again.
   - When the profile points at a hosted server: one line that sessions already sent there stay there.
   - **Another kcap install** (decided: remove everything regardless). The hooks, daemon services and
     config are shared, so the uninstall removes them for every install, unlike the Windows hook,
     which scopes itself to the app's own services. When a `kcap` outside this bundle is found (on
     the terminal PATH via the login-shell probe, or in a known install location such as npm's global
     prefix, Homebrew or the script installer), the confirmation names it and says it will stop
-    working, with the command that removes it. The uninstall neither removes nor protects it.
+    working, with the command that removes it. When the terminal PATH cannot be read in time, one
+    line says any kcap installed outside the app would also stop working. The uninstall neither
+    removes nor protects it.
   - Accept label: "Uninstall".
 - **Run in a fresh copy of the app (my call).** Accepting quits the app through its normal shutdown
   and relaunches it as `--uninstall` (plus `--purge-local` when the warning was shown), the way

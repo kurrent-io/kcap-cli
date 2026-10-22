@@ -4,10 +4,13 @@ using Capacitor.App.Services;
 namespace Capacitor.App.Tests.Unit;
 
 public class UninstallConfirmationTests {
+    const string Attached = "default";
+
     static UninstallFacts Facts(
         string? local = null, DaemonActivity? activity = null, bool daemonRunning = false,
-        string? hosted = null, params OtherKcapInstall[] others) =>
-        new(local, activity, daemonRunning, hosted, others);
+        string? hosted = null, IReadOnlyList<string>? live = null, bool liveUnknown = false,
+        bool othersUnknown = false, params OtherKcapInstall[] others) =>
+        new(local, Attached, activity, liveUnknown ? null : live ?? (daemonRunning ? [Attached] : []), hosted, othersUnknown ? null : others);
 
     [Test]
     public async Task Lists_what_is_removed() {
@@ -64,6 +67,51 @@ public class UninstallConfirmationTests {
 
         await Assert.That(d).Contains("not answering");
         await Assert.That(d).Contains("will be ended");
+    }
+
+    [Test]
+    public async Task Another_live_daemon_is_named_and_its_work_ended() {
+        var d = UninstallConfirmation.Build(Facts(activity: new DaemonActivity(1, true), live: [Attached, "laptop"])).Prompt.Disclosure;
+
+        await Assert.That(d).Contains("1 running agent will be ended");
+        await Assert.That(d).Contains("The kcap daemon 'laptop' is also running. Anything it runs will be ended.");
+        await Assert.That(d).DoesNotContain($"'{Attached}'");
+    }
+
+    [Test]
+    public async Task Another_live_daemon_is_named_when_the_app_is_not_attached() {
+        var d = UninstallConfirmation.Build(Facts(live: ["laptop"])).Prompt.Disclosure;
+
+        await Assert.That(d).Contains("'laptop' is also running");
+        await Assert.That(d).DoesNotContain("not answering");
+    }
+
+    [Test]
+    public async Task Unreadable_daemons_keep_the_conservative_line() {
+        var d = UninstallConfirmation.Build(Facts(liveUnknown: true)).Prompt.Disclosure;
+
+        await Assert.That(d).Contains("Anything a running kcap daemon is doing will be ended.");
+    }
+
+    [Test]
+    public async Task Unreadable_daemons_beside_a_known_activity_warn_about_the_others() {
+        var d = UninstallConfirmation.Build(Facts(activity: new DaemonActivity(0, false), liveUnknown: true)).Prompt.Disclosure;
+
+        await Assert.That(d).Contains("Anything another kcap daemon is running will be ended.");
+    }
+
+    [Test]
+    public async Task Unknown_other_installs_get_one_line() {
+        var d = UninstallConfirmation.Build(Facts(othersUnknown: true)).Prompt.Disclosure;
+
+        await Assert.That(d).Contains("Any other kcap installed outside this app (npm, Homebrew, a script install) will also stop working.");
+    }
+
+    [Test]
+    public async Task No_other_installs_say_nothing_about_them() {
+        var d = UninstallConfirmation.Build(Facts()).Prompt.Disclosure;
+
+        await Assert.That(d).DoesNotContain("stop working");
     }
 
     [Test]

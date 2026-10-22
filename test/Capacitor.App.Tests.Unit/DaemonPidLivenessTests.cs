@@ -28,6 +28,14 @@ public class DaemonPidLivenessTests {
         await Assert.That(DaemonPidLiveness.IsRunning(Daemons.Store, Name)).IsTrue();
     }
 
+    [Test]
+    public async Task Live_daemons_lists_only_the_live_pids() {
+        Daemons.CreateFile(Path.GetFileName(Daemons.Store.PidPath("live")), $"{Environment.ProcessId}\n{ProcessStartToken.ForCurrent()}\n");
+        Daemons.CreateFile(Path.GetFileName(Daemons.Store.PidPath("stale")), "not a pid\n");
+
+        await Assert.That(DaemonPidLiveness.LiveDaemons(Daemons.Store)).IsEquivalentTo(["live"]);
+    }
+
     /// A same-scheme token that differs is a recycled pid, even though the pid itself is alive.
     [Test]
     public async Task A_live_pid_with_another_incarnations_token_is_not_running() {
