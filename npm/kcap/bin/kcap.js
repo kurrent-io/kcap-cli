@@ -436,10 +436,12 @@ function runUpdate(binaryPath, updArgs) {
       console.log("update with `kcap daemon restart` (add --force if agents are running).");
     } else {
       console.log("A kcap daemon is running on the old version. A background daemon");
-      console.log("restarts on the new one by itself, waiting a few minutes for running");
-      console.log("agents to finish their turn, and resumes the agents it can. A daemon");
-      console.log("started in a terminal needs a manual stop and start. Check with");
-      console.log("`kcap daemon status`, or apply now with `kcap daemon restart --force`.");
+      console.log("restarts on the new one by itself. It waits a few minutes for running");
+      console.log("agents to finish their turn, then restarts even mid-turn (a running");
+      console.log("eval or agent launch can hold it longer), and resumes the agents it");
+      console.log("can. A daemon started in a terminal needs a manual stop and start.");
+      console.log("Check with `kcap daemon status`, or apply now with");
+      console.log("`kcap daemon restart --force`.");
     }
   }
 
