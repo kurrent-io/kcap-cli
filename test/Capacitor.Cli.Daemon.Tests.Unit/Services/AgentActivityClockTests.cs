@@ -143,6 +143,21 @@ public class AgentActivityClockTests {
         await Assert.That(clock.AwaitingInput).IsTrue();
     }
 
+    /// The quiet deadline can fall between a viewer's input and the repaint it provokes.
+    [Test]
+    public async Task Viewer_input_just_before_the_quiet_deadline_still_covers_its_repaint() {
+        var time = new FakeTimeProvider();
+        var clock = new AgentActivityClock(time);
+        time.Advance(AgentActivityClock.QuietTurn - TimeSpan.FromMilliseconds(50));
+        clock.NoteViewerInput();
+        time.Advance(TimeSpan.FromMilliseconds(50));
+        await Assert.That(clock.TryMarkQuiet(AgentActivityClock.QuietTurn)).IsTrue();
+
+        time.Advance(TimeSpan.FromMilliseconds(25));
+        clock.AdvanceTerminalOutput(hasVisibleText: true);
+        await Assert.That(clock.AwaitingInput).IsTrue();
+    }
+
     [Test]
     public async Task Idle_resize_grace_expires_even_when_output_keeps_arriving() {
         var time = new FakeTimeProvider();

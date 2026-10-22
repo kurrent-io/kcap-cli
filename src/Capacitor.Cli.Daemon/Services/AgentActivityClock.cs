@@ -145,14 +145,15 @@ internal sealed class AgentActivityClock(TimeProvider time) {
 
     // A viewer's resize, scroll or pointer move makes the agent repaint, in several PTY chunks.
     // Only a silence-based idle verdict is protected, and only briefly after each input: sustained
-    // output must still recover a missed turn-start hook.
+    // output must still recover a missed turn-start hook. Input is recorded whether or not a wait
+    // exists yet, since the quiet deadline can fall between the input and its repaint.
     internal static readonly TimeSpan TerminalRedrawGrace = TimeSpan.FromSeconds(1);
 
     /// <summary>A viewer resized the terminal or sent input that submits nothing (a wheel or
     /// pointer report, a keystroke before Enter). Call before the bytes reach the PTY.</summary>
     public void NoteViewerInput() {
         lock (_gate) {
-            if (_silenceWait) _viewerInputAt = time.GetTimestamp();
+            _viewerInputAt = time.GetTimestamp();
         }
     }
 
@@ -201,7 +202,6 @@ internal sealed class AgentActivityClock(TimeProvider time) {
         lock (_gate) {
             if (DueLocked(quiet) is not { } due || due > TimeSpan.Zero) return false;
             _silenceWait   = true;
-            _viewerInputAt = null;
             _awaitingInput = true;
             _waitGeneration++;
             return true;
@@ -230,7 +230,6 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     bool ClearSilenceLocked() {
         if (!_silenceWait) return false;
         _silenceWait       = false;
-        _viewerInputAt     = null;
         _awaitingInput     = false;
         _notAwaitingSince  = time.GetTimestamp();
         _workingSince      = _notAwaitingSince;
