@@ -2596,6 +2596,27 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// A pane opened behind a pending card still excludes the time the card stays up.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pane_opened_behind_a_card_excludes_the_blocked_time() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            try {
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                var started = h.Time.GetUtcNow().UtcDateTime - TimeSpan.FromSeconds(65);
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false, WorkingSince = started });
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+
+                h.Time.Advance(TimeSpan.FromMinutes(10));
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Working_time_ticks_without_a_transcript_and_resets_for_each_turn() {

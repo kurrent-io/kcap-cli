@@ -500,6 +500,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     long? _workingSince;
     TimeSpan _worked;
     DateTime? _daemonWorkingSince;
+    bool _turnBaselined;
 
     void RefreshActivityNote() {
         var inTurn = SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
@@ -507,11 +508,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (!inTurn) {
             _workingSince = null;
             _worked = TimeSpan.Zero;
-        } else if (working) {
-            // A pane built mid-turn picks up the time the daemon has already seen pass.
-            if (_workingSince is null && _worked == TimeSpan.Zero && _daemonWorkingSince is { } started
-                && _time.GetUtcNow().UtcDateTime - started is { Ticks: > 0 } before)
+            _turnBaselined = false;
+        } else if (!_turnBaselined) {
+            // A pane built mid-turn picks up the time the daemon has already seen pass, read when the
+            // turn is first seen so time spent behind a card afterwards stays excluded.
+            _turnBaselined = true;
+            if (_daemonWorkingSince is { } started && _time.GetUtcNow().UtcDateTime - started is { Ticks: > 0 } before)
                 _worked = before;
+        }
+        if (working) {
             _workingSince ??= _time.GetTimestamp();
         } else if (_workingSince is { } pausedAt) {
             _worked += _time.GetElapsedTime(pausedAt);
