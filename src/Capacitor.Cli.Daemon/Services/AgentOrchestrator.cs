@@ -899,10 +899,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnSendRawInput           += HandleSendRawInput;
         _server.OnResizeTerminal         += HandleResizeTerminal;
         _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
-        // Settlement lost-ack redelivery (D1): re-deliver unretired terminal acks POST-registration
-        // (readiness restored) — inside ReRegisterAgentsHook the CommandAckAsync IsReady gate would drop
-        // them. Fires on every (re)connect + heartbeat re-register.
-        _server.OnRegisteredHook              =  () => { Processor?.RedeliverUnretiredProcessedAcks(); return Task.CompletedTask; };
+        // Acks and status reports sent inside the registration bracket are dropped by the IsReady gate,
+        // so this report, and the ack redelivery it runs, is what reaches the server for that window.
+        // Not awaited: a parked send must not hold up the reconnect path.
+        _server.OnRegisteredHook              =  () => { _ = SendStatusReportNowAsync(); return Task.CompletedTask; };
         _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
         _permissionBridge.AttributeHandler    =  HandleAttributePermission;
         _permissionBridge.InputWaitHandler    =  HandleInputWait;

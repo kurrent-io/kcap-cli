@@ -27,6 +27,19 @@ public class DaemonStatusReportTests {
         await Assert.That(report.Quarantined).IsEmpty(); // until D4/Task 8
     }
 
+    /// <summary>A report built inside the registration bracket is dropped, so a count change there reaches
+    /// the server only through the report sent once readiness returns.</summary>
+    [Test]
+    public async Task Readiness_returning_sends_a_status_report() {
+        var server = new CaptureServerConnection();
+        await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
+
+        await server.OnRegisteredHook!.Invoke();
+
+        await WaitHarness.PollUntilAsync(() => server.StatusReportCount > 0);
+    }
+
     /// <summary>The server keeps the reading with the highest version, so every change of the count must
     /// advance it, whether the agent stops or leaves the registry.</summary>
     [Test]
