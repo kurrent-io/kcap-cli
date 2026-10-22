@@ -27,28 +27,26 @@ public class DaemonStatusReportTests {
         await Assert.That(report.Quarantined).IsEmpty(); // until D4/Task 8
     }
 
-    /// <summary>The server orders a register or unregister against a report by these versions: a report
-    /// counting an agent carries a version at or past the one it began counting at, and a report no
-    /// longer counting it one at or past the one it stopped at.</summary>
+    /// <summary>The server keeps the reading with the highest version, so every change of the count must
+    /// advance it, whether the agent stops or leaves the registry.</summary>
     [Test]
     [Arguments(false)]
     [Arguments(true)]
-    public async Task Report_version_orders_against_when_an_agent_starts_and_stops_counting(bool unpublished) {
+    public async Task Report_version_advances_with_every_count_change(bool unpublished) {
         await using var orch = AgentOrchestratorHarness.BuildOrchestrator(
             new CaptureServerConnection(), new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>());
 
         var before = orch.BuildStatusReport();
         var agent = orch.SeedAgentForTest("a1", LaunchKind.Default, status: "Running");
-        var started = agent.ActiveCountVersion;
         var counting = orch.BuildStatusReport();
         if (unpublished) orch.UnpublishAgentForTest("a1");
         else orch.SetAgentStatus(agent, "Stopped");
         var stopped = orch.BuildStatusReport();
 
-        await Assert.That(started).IsGreaterThan(before.ActiveCountVersion!.Value);
-        await Assert.That((counting.ActiveCount, counting.ActiveCountVersion)).IsEqualTo((1, started));
-        await Assert.That(agent.ActiveCountVersion).IsGreaterThan(started);
-        await Assert.That((stopped.ActiveCount, stopped.ActiveCountVersion)).IsEqualTo((0, agent.ActiveCountVersion));
+        await Assert.That(counting.ActiveCount).IsEqualTo(1);
+        await Assert.That(counting.ActiveCountVersion!.Value).IsGreaterThan(before.ActiveCountVersion!.Value);
+        await Assert.That(stopped.ActiveCount).IsEqualTo(0);
+        await Assert.That(stopped.ActiveCountVersion!.Value).IsGreaterThan(counting.ActiveCountVersion!.Value);
     }
 
     // Surface 3: a sent status report carries this machine's harness inventory (every vendor +

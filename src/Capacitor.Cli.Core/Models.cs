@@ -1897,8 +1897,7 @@ public readonly record struct DaemonStatusReport(
         // every unsolicited report. The server's idle-marker coordinator confirms a claim only
         // against the report carrying ITS nonce — an unechoed report can never confirm one.
         string?                       EchoNonce                     = null,
-        // The active count version read with ActiveCount; it advances each time an agent starts or stops
-        // counting toward it.
+        // Advances with every change that can move ActiveCount; the server keeps the highest-versioned reading.
         long?                         ActiveCountVersion            = null,
         ResumingAgentClaim[]?         ResumingAgents                = null
     );
@@ -2245,8 +2244,7 @@ public readonly record struct DaemonConnect(
         // cannot see a branch that exists only here.
         bool                                        SupportsBranchBaseRef = false,
         ResumingAgentClaim[]?                       ResumingAgents = null,
-        // ActiveCount and its active count version, read together, so the server orders this daemon's
-        // register and unregister against the connect as it does against a status report.
+        // The daemon's ActiveCount and its version, read together, as on a status report.
         int?                                        ActiveCount = null,
         long?                                       ActiveCountVersion = null,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
@@ -2304,8 +2302,8 @@ public readonly record struct AgentRegistered(
         // The session's start title, with the same meaning as on LaunchAgentCommand.
         string? Title        = null,
         bool    TitleDerived = false,
-        // The daemon's active count version when the agent began counting toward ActiveCount. An older server
-        // ignores it.
+        // The daemon's ActiveCount and its version, read together after the agent was published.
+        int?    ActiveCount        = null,
         long?   ActiveCountVersion = null,
         // The agent's vendor. A re-registration after a reconnect has no launch on the server to
         // read it from. Trailing name-bound field — an older server ignores it, an older daemon
@@ -2335,8 +2333,13 @@ public readonly record struct ReportAgentCommandsArgs(
 
 /// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
 /// A server that predates it ignores the field.</param>
-/// <param name="ActiveCountVersion">The daemon's active count version when the agent stopped counting toward ActiveCount.</param>
-public readonly record struct AgentUnregistered(string AgentId, long? ActiveCountVersion = null, string? StopReason = null);
+/// <param name="ActiveCount">The daemon's ActiveCount, read with <paramref name="ActiveCountVersion"/>.</param>
+public readonly record struct AgentUnregistered(
+        string  AgentId,
+        int?    ActiveCount        = null,
+        long?   ActiveCountVersion = null,
+        string? StopReason         = null
+    );
 
 public readonly record struct LaunchFailed(
         string AgentId,
