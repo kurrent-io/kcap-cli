@@ -124,6 +124,25 @@ public class AgentOrchestratorAccountTests {
     }
 
     [Test]
+    public async Task Explicit_account_id_for_a_vendor_without_accounts_is_refused() {
+        Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
+        using var repo     = GitRepo.CreateWithCommit();
+        var       server   = new CaptureServerConnection();
+        var       pty      = new SpyPtyProcessFactory();
+        var       launcher = Spy("cursor");
+        await using var orch = Build(server, pty, launcher, repo);
+
+        await orch.HandleLaunchAgentForTest(Launch("acct-cursor", repo, WorkId, vendor: "cursor"));
+
+        await Assert.That(server.LaunchFailedCalls).Count().IsEqualTo(1);
+        await Assert.That(server.LaunchFailedCalls[0].AgentId).IsEqualTo("acct-cursor");
+        await Assert.That(server.LaunchFailedCalls[0].Reason).IsEqualTo("account_unavailable: cursor has no accounts");
+        await Assert.That(launcher.PrepareCalls).IsEqualTo(0);
+        await Assert.That(pty.SpawnCalls).IsEqualTo(0);
+        await Assert.That(orch.GetAgentForTest("acct-cursor")).IsNull();
+    }
+
+    [Test]
     public async Task Registered_account_whose_directory_is_gone_is_refused() {
         var work = Register(WorkId, HarnessId.Claude, Tmp.CreateDir(".claude-work"), "Work");
         Directory.Delete(work);

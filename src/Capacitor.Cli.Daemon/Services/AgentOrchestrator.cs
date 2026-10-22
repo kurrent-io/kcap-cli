@@ -2365,15 +2365,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>The account a launch runs under. A vendor without a default directory has no accounts:
-    /// it carries none and is never refused.</summary>
+    /// a launch without an id carries none, and one naming an id is refused.</summary>
     internal AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId) =>
         ResolveAccount(vendorToken, accountId, resumed: null);
 
     /// <summary>A resume resolves the account its ledger entry <paramref name="resumed"/> recorded, and
     /// ignores <paramref name="accountId"/>.</summary>
     AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId, ResumeLaunchDescriptor? resumed) {
-        if (HarnessId.From(vendorToken) is not { } vendor || !_config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory))
-            return new AccountResolutionOutcome(null, null);
+        if (HarnessId.From(vendorToken) is not { } vendor || !_config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory)) {
+            return resumed is null && !string.IsNullOrEmpty(accountId)
+                ? new AccountResolutionOutcome(null, $"{AccountResolution.Unavailable}: {vendorToken} has no accounts")
+                : new AccountResolutionOutcome(null, null);
+        }
 
         var registry = _config.Accounts?.TryLoad();
 
