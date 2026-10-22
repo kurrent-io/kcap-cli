@@ -173,7 +173,9 @@ jobs:
     uses: ./.github/workflows/cli-build.yml
     with:
       version: ${{ needs.version.outputs.version }}
-      rids: osx-arm64 win-x64 linux-x64
+      # macOS runners are the org's scarcest pool, so PRs skip the macOS CLI and app. Pushes keep
+      # building both, because release waits on the tag's run.
+      rids: ${{ github.event_name == 'push' && 'osx-arm64 win-x64 linux-x64' || 'win-x64 linux-x64' }}
 
   desktop:
     name: Desktop
@@ -181,8 +183,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS runners are the org's scarcest pool, so PRs skip the macOS app. The tag push must
-        # keep building it, because release waits on this run.
         rid: ${{ github.event_name == 'push' && fromJSON('["osx-arm64","win-x64","linux-x64"]') || fromJSON('["win-x64","linux-x64"]') }}
     uses: ./.github/workflows/desktop.yml
     with:
