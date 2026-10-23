@@ -290,7 +290,8 @@ public static partial class DaemonRunner {
             return LockRefusalExit(IsSupervised(config.Name));
         }
 
-        config.InstanceId = daemonLock.InstanceId;
+        config.InstanceId      = daemonLock.InstanceId;
+        config.PriorInstanceId = daemonLock.PriorInstanceId;
         StartupPhase(time, "lock acquired");
 
         // Phase B2-b (sequenced-settlement design §4.2.3): the durable per-daemon state root — used by

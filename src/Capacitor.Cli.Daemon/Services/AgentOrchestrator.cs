@@ -1776,6 +1776,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Test seams (this daemon's PID-record store) so a unit test can seed/inspect records
     /// without a real launch. Never used in production.</summary>
     internal void WritePidRecordForTest(AgentPidRecord record)     => _pidRecords?.Write(record);
+    internal void DeletePidRecordForTest(string agentId)           => DeletePidRecord(agentId);
     internal IReadOnlyList<AgentPidRecord> PidRecordsForTest()      => _pidRecords?.ReadAll() ?? [];
 
     /// <summary>Test-only: the per-daemon record root, so a test can build the store a NEXT BOOT would
@@ -5846,6 +5847,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // touches a current-incarnation live agent), env-marker scan reaps a prior incarnation's
             // recordless survivors. Fire-and-forget; single-flight; swallows its own faults.
             _ = ReapOrphansOnceAsync(ct);
+            _ = SweepParticipantTombstonesAsync();
 
             // Selection is a snapshot; the DECISION is the claim each of these makes under the agent's
             // own fence (TryClaimReapAsync), which re-validates incarnation and — for the idle/wedge

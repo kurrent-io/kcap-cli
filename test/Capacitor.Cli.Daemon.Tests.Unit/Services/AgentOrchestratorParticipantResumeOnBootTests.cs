@@ -1,0 +1,191 @@
+using System.Collections.Concurrent;
+using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
+using Capacitor.Cli.Core.Resume;
+using Capacitor.Cli.Daemon.Services;
+using Capacitor.Cli.Daemon.Tests.Unit.Pty;
+
+namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
+
+/// <summary>A booting daemon resumes a flow participant only when the boot just before it stopped that
+/// participant for resume; every other participant entry is reported failed, so its flow heals as it
+/// does without a resume.</summary>
+public class AgentOrchestratorParticipantResumeOnBootTests {
+    static readonly DateTimeOffset Now = new(2026, 10, 23, 10, 0, 0, TimeSpan.Zero);
+
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    sealed class ReviewerFactory : IHostedAgentRuntimeFactory {
+        public string CliPath => "unused";
+        public string Vendor => "cursor";
+        public bool SupportsUnattended => true;
+        public bool IsAvailable() => true;
+        public bool SupportsReviewerRestartResume(string? runtimeTransport, WorkLocation work) => true;
+        public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
+        public bool Fails { get; init; }
+
+        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+            Contexts.Enqueue(ctx);
+            if (Fails) throw new InvalidOperationException("the reviewer could not reopen its session");
+
+            return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null));
+        }
+    }
+
+    sealed record Fixture(AgentOrchestrator Orch, CaptureServerConnection Server, ReviewerFactory Factory, string Repo);
+
+    Fixture Build(ReviewerFactory? factory = null, Action<DaemonConfig>? configure = null) {
+        var repo   = Tmp.CreateDir("repo");
+        var server = new CaptureServerConnection();
+        factory ??= new ReviewerFactory();
+        var orch = AgentOrchestratorHarness.BuildOrchestrator(
+            server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
+            allowedRepoPath: repo, extraRuntimeFactories: [factory],
+            configure: c => {
+                c.InstanceId            = "instance-now";
+                c.PriorInstanceId       = "instance-old";
+                c.ResumeReadinessWindow = TimeSpan.FromMilliseconds(100);
+                configure?.Invoke(c);
+            });
+
+        return new Fixture(orch, server, factory, repo);
+    }
+
+    ResumeLedgerEntry Participant(
+            Fixture f, string agentId, ResumeState state = ResumeState.Resuming, DateTimeOffset? resumingAt = null,
+            string? predecessor = "instance-old", string? vendorSession = "vendor-session-1", string? worktree = null) {
+        var stamp = resumingAt ?? TimeProvider.System.GetUtcNow();
+        var launch = new ResumeLaunchDescriptor(
+            Prompt: "review this", Model: "default", Effort: null, RepoPath: f.Repo,
+            WorktreePath: worktree ?? Tmp.CreateDir($"wt-{agentId}"), Work: WorkLocation.OwnedWorktree,
+            GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null, PermissionPreset: null,
+            McpConfigPath: null, Title: "review", IsPrivate: false, Origin: "server",
+            RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
+            ConsentAt: stamp.ToString("O"), FlowRunId: "flow-1", FlowRole: "reviewer",
+            WorktreeBranch: $"capacitor/{agentId}", WorktreeIsStandalone: true, WorktreeSourceRepo: f.Repo);
+        var entry = new ResumeLedgerEntry(
+            ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, "cursor", "pty",
+            $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
+            PredecessorInstanceId: predecessor, ResumingAt: state == ResumeState.Resuming ? stamp : null,
+            Participant: new ParticipantResume(LaunchKind.ReviewFlow, ["kcap-flow-result"], null, null, 7, 1_000, "round 1", stamp));
+        f.Orch.ParticipantLedger!.Write(entry);
+
+        return entry;
+    }
+
+    ResumeLedgerEntry Eligible(Func<ResumeLedgerEntry, ResumeLedgerEntry>? change = null) {
+        var launch = new ResumeLaunchDescriptor(
+            null, null, null, "/repo", Tmp.Path, WorkLocation.OwnedWorktree, null, null, null, null, null, null,
+            false, "server", null, null, null, null, "flow-1", "reviewer");
+        var entry = new ResumeLedgerEntry(
+            1, "agent-1", "daemon-1", Now, Now, "cursor", "pty", "session-1", "vendor-1", launch, ResumeState.Resuming, 0,
+            null, "instance-old", Now.AddMinutes(-1),
+            Participant: new ParticipantResume(LaunchKind.ReviewFlow, null, null, null, 1, 0, null, null));
+
+        return change?.Invoke(entry) ?? entry;
+    }
+
+    [Test]
+    public async Task An_eligible_entry_has_no_ineligibility() =>
+        await Assert.That(AgentOrchestrator.ParticipantIneligibility(Eligible(), "instance-old", Now, autoResume: true)).IsNull();
+
+    [Test]
+    [Arguments("auto_resume_off")]
+    [Arguments("not_planned")]
+    [Arguments("stale")]
+    [Arguments("not_predecessor")]
+    [Arguments("no_prior_instance")]
+    [Arguments("worktree_missing")]
+    [Arguments("session_missing")]
+    public async Task Each_ineligibility_is_named(string reason) {
+        var (entry, prior, auto) = reason switch {
+            "auto_resume_off"   => (Eligible(), "instance-old", false),
+            "not_planned"       => (Eligible(e => e with { State = ResumeState.Running }), "instance-old", true),
+            "stale"             => (Eligible(e => e with { ResumingAt = Now.AddMinutes(-16) }), "instance-old", true),
+            "not_predecessor"   => (Eligible(), "instance-between", true),
+            "no_prior_instance" => (Eligible(), (string?) null, true),
+            "worktree_missing"  => (Eligible(e => e with { Launch = e.Launch with { WorktreePath = "/no/such/worktree" } }), "instance-old", true),
+            _                   => (Eligible(e => e with { VendorSession = null }), "instance-old", true)
+        };
+
+        var expected = reason == "no_prior_instance" ? "not_predecessor" : reason;
+        await Assert.That(AgentOrchestrator.ParticipantIneligibility(entry, prior, Now, auto)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task An_eligible_participant_is_resumed_ahead_of_interactive_entries() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Participant(f, "reviewer-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts.Single().AgentId).IsEqualTo("reviewer-1");
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNotNull();
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")!.State).IsEqualTo(ResumeState.Running);
+    }
+
+    [Test]
+    public async Task An_ineligible_participant_is_reported_failed_and_removed() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Participant(f, "reviewer-1", predecessor: "instance-between");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Server.ShutdownReports.Select(r => (r.AgentId, r.Status, r.Reason)))
+            .IsEquivalentTo([("reviewer-1", "Failed", "resume_failed:not_predecessor")]);
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsFalse();
+        await Assert.That(f.Factory.Contexts).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_failed_participant_resume_never_runs_kcap_continue() {
+        var f = Build(new ReviewerFactory { Fails = true });
+        await using var _ = f.Orch;
+        f.Orch.ContinueEntry = (_, _, _) => throw new InvalidOperationException("a participant must not continue");
+        Participant(f, "reviewer-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Server.ShutdownReports.Single().Reason).StartsWith("resume_failed:");
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+    }
+
+    [Test]
+    public async Task An_unresolved_predecessor_leaves_a_tombstone_until_it_resolves() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Participant(f, "reviewer-1", state: ResumeState.Running);
+        f.Orch.WritePidRecordForTest(new AgentPidRecord(
+            "reviewer-1", 999_999, "", PidIdentityKind.IdentityUnavailable, "ReviewFlow", "cursor", "flow-1", "reviewer",
+            f.Orch.DaemonIdForTest, "previous-epoch", TimeProvider.System.GetUtcNow()));
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Server.ShutdownReports.Single().Reason).IsEqualTo("resume_failed:not_planned");
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")!.LastError).IsEqualTo("tombstone:not_planned");
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsTrue();
+
+        f.Orch.DeletePidRecordForTest("reviewer-1");
+        await f.Orch.SweepParticipantTombstonesAsync();
+
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+        await Assert.That(Directory.Exists(entry.Launch.WorktreePath)).IsFalse();
+    }
+
+    [Test]
+    public async Task A_participant_entry_is_refused_by_agent_resume() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Participant(f, "reviewer-1", state: ResumeState.Interrupted);
+        f.Orch.LoadResumeLedger();
+
+        await Assert.That(await f.Orch.ResumeInterruptedAsync("reviewer-1", CancellationToken.None)).IsEqualTo("not_interrupted");
+    }
+}

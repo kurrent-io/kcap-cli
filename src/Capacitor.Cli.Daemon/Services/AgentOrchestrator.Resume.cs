@@ -620,7 +620,108 @@ internal partial class AgentOrchestrator {
 
         SortResumeLedger(entries);
 
+        return SortParticipants();
+    }
+
+    /// <summary>Planned participant stops of the boot just before this one go ahead of every interactive
+    /// candidate; the rest are failed once the lane starts. False when the store could not be read, with
+    /// the same meaning as for the interactive ledger.</summary>
+    bool SortParticipants() {
+        if (ParticipantLedger is not { } ledger) return true;
+
+        IReadOnlyList<ResumeLedgerEntry> entries;
+
+        try {
+            entries = ledger.ReadAll();
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeLedgerUnreadable(ex);
+            return false;
+        }
+
+        var now   = _time.GetUtcNow();
+        var queue = new List<ResumeLedgerEntry>();
+
+        foreach (var entry in entries) {
+            _participantEntries[entry.AgentId] = 0;
+
+            if (IsTombstone(entry)) continue;
+
+            if (ParticipantIneligibility(entry, _config.PriorInstanceId, now, _config.AutoResume) is { } reason) {
+                _participantFailuresAtBoot.Add((entry, reason));
+            } else {
+                _resumeCandidates[entry.AgentId] = entry;
+                queue.Add(entry);
+            }
+        }
+
+        _resumeOrder.InsertRange(0, queue);
+        _ledgerWorktrees = [.. _ledgerWorktrees, .. entries.Where(e => e.Launch.Work == WorkLocation.OwnedWorktree).Select(e => e.Launch.WorktreePath)];
+        _ledgerAgentIds  = [.. _ledgerAgentIds.Concat(entries.Select(e => e.AgentId)).Distinct(StringComparer.Ordinal)];
+
         return true;
+    }
+
+    /// <summary>How long a participant's planned stop stays resumable: the server keeps its claim this long.</summary>
+    static readonly TimeSpan ParticipantClaimLifetime = TimeSpan.FromMinutes(15);
+
+    const string TombstonePrefix = "tombstone:";
+
+    static bool IsTombstone(ResumeLedgerEntry entry) =>
+        entry.State == ResumeState.Interrupted && entry.LastError?.StartsWith(TombstonePrefix, StringComparison.Ordinal) == true;
+
+    /// <summary>Why a participant entry must not be resumed, or null when it may.</summary>
+    internal static string? ParticipantIneligibility(ResumeLedgerEntry entry, string? priorInstanceId, DateTimeOffset now, bool autoResume) =>
+        !autoResume                                                                       ? "auto_resume_off"
+      : entry.State != ResumeState.Resuming || entry.ResumingAt is null                   ? "not_planned"
+      : now - entry.ResumingAt.Value > ParticipantClaimLifetime                           ? "stale"
+      : priorInstanceId is null || !string.Equals(entry.PredecessorInstanceId, priorInstanceId, StringComparison.Ordinal) ? "not_predecessor"
+      : !Directory.Exists(entry.Launch.WorktreePath)                                      ? "worktree_missing"
+      : entry.VendorSession is null                                                       ? "session_missing"
+      :                                                                                     null;
+
+    readonly List<(ResumeLedgerEntry Entry, string Reason)> _participantFailuresAtBoot = [];
+
+    /// <summary>The one end of a participant that will not be resumed: reported failed so the server
+    /// records its death and the flow heals, then removed — or, while a process of it may still be running,
+    /// kept as a tombstone that holds its worktree until the reaper resolves it.</summary>
+    async Task FailParticipantAsync(ResumeLedgerEntry entry, string reason, int? exitCode, CancellationToken ct) {
+        if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, reason, exitCode, ct);
+
+        if (IsUnresolved(entry.AgentId)) {
+            lock (_ledgerLock) {
+                TryWriteLedger(entry.AgentId, () => entry with {
+                    State = ResumeState.Interrupted, LastError = TombstonePrefix + reason, UpdatedAt = _time.GetUtcNow()
+                });
+            }
+
+            return;
+        }
+
+        DeleteLedger(entry.AgentId);
+        await RemoveDiscardedResourcesAsync(entry);
+    }
+
+    bool IsUnresolved(string agentId) =>
+        _agents.ContainsKey(agentId) || _orphanReaper?.BlockedCandidates().Any(c => c.AgentId == agentId) == true;
+
+    int _sweepingTombstones;
+
+    /// <summary>Removes each tombstone whose last process is now proven gone. Single-flight; never throws.</summary>
+    internal async Task SweepParticipantTombstonesAsync() {
+        if (ParticipantLedger is not { } ledger || Interlocked.Exchange(ref _sweepingTombstones, 1) == 1) return;
+
+        try {
+            foreach (var entry in ledger.ReadAll().Where(IsTombstone)) {
+                if (IsUnresolved(entry.AgentId)) continue;
+
+                DeleteLedger(entry.AgentId);
+                await RemoveDiscardedResourcesAsync(entry);
+            }
+        } catch (Exception ex) {
+            LogCleanupStepFailed(ex, "sweeping participant tombstones", "*");
+        } finally {
+            Volatile.Write(ref _sweepingTombstones, 0);
+        }
     }
 
     void SortResumeLedger(IReadOnlyList<ResumeLedgerEntry> entries) {
@@ -815,6 +916,9 @@ internal partial class AgentOrchestrator {
             foreach (var (entry, reason) in _interruptedAtBoot.Where(i => !i.Entry.Launch.IsPrivate))
                 await ReportResumeFailedAsync(entry, reason, null, ct);
 
+            foreach (var (entry, reason) in _participantFailuresAtBoot)
+                await FailParticipantAsync(entry, reason, null, ct);
+
             await Task.WhenAll(_resumeOrder.Select(entry => RunResumeThroughLaneAsync(entry, ct)));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
         } catch (Exception ex) {
@@ -844,7 +948,10 @@ internal partial class AgentOrchestrator {
 
             // Left resuming with no candidate, the entry would be invisible to `agent ls` and refused by
             // `agent resume` until the next boot.
-            if (!_agents.ContainsKey(entry.AgentId) && !IsWithdrawn(entry.AgentId)) InterruptEntry(entry.AgentId, ex.GetType().Name);
+            if (!_agents.ContainsKey(entry.AgentId) && !IsWithdrawn(entry.AgentId)) {
+                if (entry.Participant is not null) await FailParticipantAsync(entry, ex.GetType().Name, null, CancellationToken.None);
+                else InterruptEntry(entry.AgentId, ex.GetType().Name);
+            }
         } finally {
             bool discarded;
 
@@ -880,7 +987,8 @@ internal partial class AgentOrchestrator {
 
         lock (_ledgerLock) {
             if (TryReadLedger(agentId) is not { } entry) return Task.FromResult("unknown");
-            if (entry.State != ResumeState.Interrupted) return Task.FromResult("not_interrupted");
+            // A participant's flow has healed without it by now; resuming it would add a second reviewer.
+            if (entry.State != ResumeState.Interrupted || entry.Participant is not null) return Task.FromResult("not_interrupted");
             if (ResumeBlockedReason(entry) is { } blocked) return Task.FromResult($"blocked:{blocked}");
 
             var now = _time.GetUtcNow();
@@ -906,9 +1014,10 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Native resume, then kcap continue, then interrupted.</summary>
     internal async Task<ResumeOutcome> ResumeEntryAsync(ResumeLedgerEntry entry, CancellationToken ct) {
+        var participant = entry.Participant is not null;
         var native = entry.VendorSession is not null
                   && _runtimeFactories.TryGetValue(entry.Vendor, out var factory)
-                  && factory.SupportsRestartResume(entry.Transport);
+                  && (participant ? factory.SupportsReviewerRestartResume(entry.Transport, entry.Launch.Work) : factory.SupportsRestartResume(entry.Transport));
 
         string reason;
         int?   exitCode = null;
@@ -924,11 +1033,26 @@ internal partial class AgentOrchestrator {
             // A start the shutdown or a withdrawal cancelled is no failed attempt.
             ct.ThrowIfCancellationRequested();
 
+            if (participant) {
+                if (IsWithdrawn(entry.AgentId)) return ResumeOutcome.Stopped;
+
+                await FailParticipantAsync(entry, reason, exitCode, ct);
+
+                return ResumeOutcome.Interrupted;
+            }
+
             if (RecordFailedAttempt(entry, LastErrorOf(reason, exitCode)) is not { } failed) return ResumeOutcome.Stopped;
 
             entry = failed;
         } else {
             reason = NativeResumeUnsupported;
+        }
+
+        // A participant continued under a new id would be an agent its flow does not know.
+        if (participant) {
+            await FailParticipantAsync(entry, reason, exitCode, ct);
+
+            return ResumeOutcome.Interrupted;
         }
 
         var outcome = await ContinueEntry(entry, reason, ct);
