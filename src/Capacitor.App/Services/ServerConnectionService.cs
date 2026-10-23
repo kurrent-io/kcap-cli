@@ -508,29 +508,15 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             var hub = _hub;
             if (hub is not { State: HubConnectionState.Connected })
                 return new LaunchOutcome(false, null, "Not connected to the server.");
-            var payload = LaunchPayload.For(request);
-            LaunchResponse response;
-            try {
-                response = await hub.InvokeAsync<LaunchResponse>(HubMethods.TryLaunchAgent, payload, ct).ConfigureAwait(false);
-            } catch (HubException ex) when (IsMissingMethod(ex, HubMethods.TryLaunchAgent)) {
-                var agentId = await hub.InvokeAsync<string>(HubMethods.RequestLaunchAgentV2, payload, ct).ConfigureAwait(false);
-                return new LaunchOutcome(Started: true, AgentId: agentId, Error: null);
-            }
-            return response.AgentId is { } id
-                ? new LaunchOutcome(Started: true, AgentId: id, Error: null)
-                : new LaunchOutcome(false, null, response.Refusal);
+            var agentId = await hub.InvokeAsync<string>(
+                HubMethods.RequestLaunchAgentV2, LaunchPayload.For(request), ct).ConfigureAwait(false);
+            return new LaunchOutcome(Started: true, AgentId: agentId, Error: null);
         } catch (HubException ex) {
             return new LaunchOutcome(false, null, ServerMessage(ex));
         } catch (Exception ex) {
             return new LaunchOutcome(false, null, ex.Message, IsUnauthorized(ex));
         }
     }
-
-    /// A server without the method fails while binding the call. A fault inside a method it has reads
-    /// "An unexpected error occurred invoking …" instead, and must not count.
-    internal static bool IsMissingMethod(HubException ex, string method) =>
-        ex.Message.StartsWith($"Failed to invoke '{method}'", StringComparison.Ordinal)
-     && ex.Message.Contains("Method does not exist", StringComparison.Ordinal);
 
     /// The text a server method threw, without the "An unexpected error occurred invoking '…' on the
     /// server. HubException: " SignalR puts in front of it.

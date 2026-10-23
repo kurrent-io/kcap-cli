@@ -186,7 +186,7 @@ public class ServerConnectionServiceTests {
             // The payload arrives with the pinned snake_case names whatever the policy does.
             if (!payload.TryGetProperty("daemon_name", out var d) || d.GetString() != "work-mac")
                 throw new InvalidOperationException("daemon_name missing");
-            return new() { AgentId = "agent-42" };
+            return "agent-42";
         };
         await using var lane = Lane(host);
         lane.Start();
@@ -200,9 +200,9 @@ public class ServerConnectionServiceTests {
     }
 
     [Test]
-    public async Task ARefusedLaunchShowsTheServersWords() {
+    public async Task ARefusedLaunchShowsOnlyTheServersWords() {
         await using var host = await HubTestHost.StartAsync();
-        HubTestHost.LaunchHandler = _ => new() { Refusal = "Daemon 'work-mac' is full (5 of 5 in use)." };
+        HubTestHost.LaunchHandler = _ => throw new HubException("Daemon 'work-mac' is full (5 of 5 in use).");
         await using var lane = Lane(host);
         lane.Start();
         await Next(lane.Status, s => s.State == ServerLaneState.Connected);
@@ -211,14 +211,6 @@ public class ServerConnectionServiceTests {
             new LaunchRequest("work-mac", "/work/repo", "claude", "do it"), CancellationToken.None);
         await Assert.That(outcome.Started).IsFalse();
         await Assert.That(outcome.Error).IsEqualTo("Daemon 'work-mac' is full (5 of 5 in use).");
-    }
-
-    /// An older server throws its refusal, and SignalR puts its own wording in front.
-    [Test]
-    [Arguments("An unexpected error occurred invoking 'RequestLaunchAgentV2' on the server. HubException: Daemon 'd' is not connected", "Daemon 'd' is not connected")]
-    [Arguments("An unexpected error occurred invoking 'RequestLaunchAgentV2' on the server.", "An unexpected error occurred invoking 'RequestLaunchAgentV2' on the server.")]
-    public async Task ServerMessageDropsTheSignalRPrefix(string message, string shown) {
-        await Assert.That(ServerConnectionService.ServerMessage(new HubException(message))).IsEqualTo(shown);
     }
 
     [Test]

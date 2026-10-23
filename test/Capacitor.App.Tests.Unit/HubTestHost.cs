@@ -19,7 +19,7 @@ public sealed class HubTestHost : IAsyncDisposable {
     public string Url { get; private set; } = "";
 
     public static Func<List<DaemonInfo>> DaemonsHandler { get; set; } = () => [];
-    public static Func<JsonElement, LaunchResponse> LaunchHandler { get; set; } = _ => new() { AgentId = "agent-1" };
+    public static Func<JsonElement, string> LaunchHandler { get; set; } = _ => "agent-1";
     static int _launchCalls;
     public static int LaunchCalls => _launchCalls;
 
@@ -54,7 +54,7 @@ public sealed class HubTestHost : IAsyncDisposable {
     public static async Task<HubTestHost> StartAsync(bool requireAuth = false, TimeSpan? admissionDelay = null,
             Action<string, bool>? onRequest = null, Action<HttpRequest>? inspect = null) {
         DaemonsHandler = () => [];
-        LaunchHandler = _ => new() { AgentId = "agent-1" };
+        LaunchHandler = _ => "agent-1";
         _launchCalls = 0;
         ChatSubscribeHandler = _ => true;
         AccessWatchHandler = sid => ChatSubscribeHandler(sid);
@@ -189,7 +189,7 @@ public sealed class HubTestHost : IAsyncDisposable {
 
         public List<DaemonInfo> GetConnectedDaemons() => DaemonsHandler();
 
-        public LaunchResponse TryLaunchAgent(JsonElement payload) {
+        public string RequestLaunchAgentV2(JsonElement payload) {
             Interlocked.Increment(ref _launchCalls);
             return LaunchHandler(payload);
         }
