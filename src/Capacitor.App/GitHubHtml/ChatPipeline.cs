@@ -79,18 +79,23 @@ public static class ChatPipeline {
         /// joined instead, by a line break for each newline that separated them in the source.
         static void Keep(MarkdownDocument document) {
             foreach (var container in document.Descendants<ContainerBlock>().Prepend(document).ToArray())
-                for (var i = container.Count - 1; i > 0; i--) {
-                    if (container[i - 1] is not ParagraphBlock { Inline: { } into } before
-                        || container[i] is not ParagraphBlock { Inline: { } from } after) continue;
-                    var lastLine = before.GetData(LastLineKey) as int? ?? before.Line;
-                    for (var line = lastLine; line < after.Line; line++) into.AppendChild(new LineBreakInline { IsHard = true });
+                for (var i = 0; i < container.Count - 1;) {
+                    if (container[i] is not ParagraphBlock { Inline: { } into } before
+                        || container[i + 1] is not ParagraphBlock { Inline: { } from } after) {
+                        i++;
+                        continue;
+                    }
+                    for (var line = LastLine(before); line < after.Line; line++) into.AppendChild(new LineBreakInline { IsHard = true });
                     while (from.FirstChild is { } inline) {
                         inline.Remove();
                         into.AppendChild(inline);
                     }
-                    container.RemoveAt(i);
+                    before.SetData(LastLineKey, LastLine(after));
+                    container.RemoveAt(i + 1);
                 }
         }
+
+        static int LastLine(ParagraphBlock paragraph) => paragraph.GetData(LastLineKey) as int? ?? paragraph.Line;
     }
 
     sealed class Hoist : IMarkdownExtension {
