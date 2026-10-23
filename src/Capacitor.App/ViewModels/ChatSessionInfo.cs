@@ -16,12 +16,16 @@ public sealed record ChatSessionInfo(
         // The select dialog on the local agent's terminal. Null on the remote lane and from an older daemon.
         TerminalDialogDto? TerminalDialog = null,
         // Why the local daemon could not resume the agent after a restart. Null on the remote lane.
-        string? Interruption = null) {
+        string? Interruption = null,
+        // When the local daemon saw the current turn start. Null on the remote lane and from an older daemon.
+        DateTime? WorkingSince = null) {
     /// True when this session is waiting on the user. Independent of the status word.
     public bool WaitsOnUser { get; init; }
 
     /// Both daemon lanes refuse attachments to anything but a plain agent.
     public bool TakesAttachments { get; init; } = true;
+
+    public bool IsOwnedByCurrentUser { get; init; }
 
     /// The daemon dropped the agent before this pane ever saw it.
     public static readonly ChatSessionInfo Gone = new("Completed", "Completed", "", null, null, null, true, "", null);
@@ -33,7 +37,7 @@ public sealed record ChatSessionInfo(
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
         ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath,
-        dto.LiveSubagents, dto.UsageLimit, dto.TerminalDialog, dto.Interruption) {
+        dto.LiveSubagents, dto.UsageLimit, dto.TerminalDialog, dto.Interruption, dto.WorkingSince) {
         WaitsOnUser = SessionStatusDots.WaitsOnUser(dto), TakesAttachments = dto.Kind == "agent",
     };
 

@@ -232,7 +232,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
             [HostedAgent.AgentIdVar]  = ctx.AgentId,
         };
-        HostedLaunchMarkers.Apply(env, ctx.IsReviewFlow, ctx.FlowRole);
+        HostedLaunchMarkers.ApplyOverlay(env, ctx);
         if (!string.IsNullOrEmpty(ctx.DaemonId))        env["KCAP_DAEMON_ID"]         = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
@@ -243,13 +243,14 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         return env;
     }
 
-    // Materialize the child's environment. The marker must reflect THIS launch's emit decision only —
-    // never a value inherited from the daemon's own environment, or a non-emitting child would suppress
-    // its hook watcher and lose transcript ingestion. Clear any inherited marker, then apply the overlay
-    // (which carries the marker only when emitting).
+    // Materialize the child's environment over the daemon's own, where nothing inherited may speak for
+    // this launch: an inherited envelope marker would make a non-emitting child's hook watcher stand
+    // down and lose ingestion, and an inherited session or lookup agent names another session.
     internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
         childEnv.Remove(HostedAppServerMarkerEnv);
         childEnv.Remove(HostedAgent.FlowRoleVar);
+        childEnv.Remove(HostedAgent.DaemonAgentIdVar);
+        InheritedHarnessSessions.Remove(childEnv);
         foreach (var (k, v) in overlay) childEnv[k] = v;
     }
 

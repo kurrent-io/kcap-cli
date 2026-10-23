@@ -63,6 +63,23 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.NextLabel).IsEqualTo("Import 3 repositories");
     }
 
+    /// The local edition has no other readers: its track is skip or import, and import is private.
+    [Test]
+    public async Task On_the_local_path_every_repository_imports_privately_with_no_shared_stop() {
+        var h = new Harness(Report(), onLocalPath: true);
+        await h.EnterAsync();
+        var acme = h.Vm.Groups.Single(g => g.Owner == "acme");
+        acme.Stop = (int)ImportLevel.Shared;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.LocalLevels).IsTrue();
+        await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r is { Level: ImportLevel.OnlyMe, LastStop: 1 })).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single().Private).IsTrue();
+        await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
+    }
+
     /// A window's count is the sum of its cell for every repository not skipped.
     [Test]
     public async Task Window_counts_follow_the_selected_repositories() {

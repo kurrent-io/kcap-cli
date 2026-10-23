@@ -18,6 +18,8 @@ public class WorkspaceSwitchCoverTests {
     /// On a 2x display the still the cover holds over a session switch reproduces the pane pixel for
     /// pixel: not its top-left quarter magnified, nor a 1x capture scaled up. The outgoing content is
     /// hidden once the still is taken, so what the frame still shows can only come from the cover.
+    /// The hold's limit runs on the view model's clock, so the sample cannot race it, and the cover
+    /// lifts once that clock passes the limit.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_switch_cover_shows_the_outgoing_pane_unmagnified_at_2x() {
@@ -25,8 +27,9 @@ public class WorkspaceSwitchCoverTests {
             var sampled = await AvaloniaSession.DispatchAsync(() => {
                 var service = new FakeDaemonClientService();
                 var actions = NewActions();
+                var time = new FakeTimeProvider();
                 var vm = new MainWindowViewModel(
-                    service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+                    service, CancellationToken.None, TestActivity.New(), time,
                     workspaceFactory: agentId => new WorkspaceViewModel(
                         agentId, service, actions, new FakeTerminalAttachClientFactory().Factory, () => new FakeTerminalSurface(),
                         new FakeTimeProvider(), new RecordingOpener(), new FakePermissionService(), new FakeWorkContextSource(),
@@ -47,7 +50,11 @@ public class WorkspaceSwitchCoverTests {
                     outgoing.IsVisible = false;
                     Dispatcher.UIThread.RunJobs();
                     var during = Pixels(window.CaptureRenderedFrame()!, area);
-                    return (before, during, covered: cover.IsVisible);
+                    var covered = cover.IsVisible;
+
+                    time.Advance(TimeSpan.FromMilliseconds(400));
+                    Dispatcher.UIThread.RunJobs();
+                    return (before, during, covered, lifted: !cover.IsVisible);
                 } finally {
                     vm.CloseWorkspace();
                     window.Close();
@@ -58,6 +65,7 @@ public class WorkspaceSwitchCoverTests {
             await Assert.That(sampled.covered).IsTrue();
             await Assert.That(sampled.before.Distinct().Count()).IsGreaterThanOrEqualTo(4);
             await Assert.That(sampled.during.Where((pixel, i) => pixel != sampled.before[i]).Count()).IsEqualTo(0);
+            await Assert.That(sampled.lifted).IsTrue();
         });
     }
 

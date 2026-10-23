@@ -24,4 +24,19 @@ public class ImportTrackTests {
             await Assert.That(track.Stop).IsEqualTo(2);
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_two_stop_track_reads_skip_or_import_and_offers_nothing_past_import() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var track = new ImportTrack { LastStop = 1, Stop = 0 };
+            var peer = ControlAutomationPeer.CreatePeerForElement(track)!;
+            var range = peer.GetProvider<IRangeValueProvider>()!;
+            range.SetValue(1);
+            await Assert.That(peer.GetName()).Contains("import");
+            await Assert.That(range.Maximum).IsEqualTo(1);
+            await Assert.That(() => range.SetValue(2)).Throws<ArgumentOutOfRangeException>();
+            await Assert.That(track.Stop).IsEqualTo(1);
+        });
+    }
 }

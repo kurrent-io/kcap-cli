@@ -202,16 +202,16 @@ public class OnboardingViewModelTests {
     public async Task Finish_later_follows_its_gate() {
         var (open, closed) = await AvaloniaSession.DispatchAsync(async () => {
             var gate = new System.Reactive.Subjects.BehaviorSubject<bool>(true);
-            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Done)], canFinishLater: gate);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], canFinishLater: gate);
             await vm.PendingEnterForTesting;
 
-            var open = CanExecute(vm.FinishLaterCommand);
+            var open = (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible);
             gate.OnNext(false);
-            return (open, CanExecute(vm.FinishLaterCommand));
+            return (open, (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible));
         });
 
-        await Assert.That(open).IsTrue();
-        await Assert.That(closed).IsFalse();
+        await Assert.That(open).IsEqualTo((true, true));
+        await Assert.That(closed).IsEqualTo((false, false));
     }
 
     [Test]

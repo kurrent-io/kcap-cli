@@ -47,6 +47,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// had one shows its chat before a session.
     bool _hadSession;
     AgentRow _row;
+    string? _viewerSubject;
 
     public string AgentId { get; }
     public ChatTabViewModel Chat { get; }
@@ -308,6 +309,12 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
             planActivity: planActivity, openCard: OpenCard, drafts: drafts) { InputSending = inputSending };
+        lane.Status.Select(s => s.Subject).DistinctUntilChanged()
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(subject => {
+                _viewerSubject = subject;
+                PublishSession(SessionEnded);
+            }).DisposeWith(_disposables);
         if (PullRequests is { } fixHost)
             Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
         Terminal = surfaceFactory is not null && HostedHarnessCatalog.ShowsTerminal(null, row.Vendor)
@@ -450,7 +457,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     /// An unchanged row republishes nothing, so the pane's session handling runs only on a change.
     void PublishSession(bool ended) {
-        var info = ChatSessionInfo.FromRemote(_row, ended);
+        var info = ChatSessionInfo.FromRemote(_row, ended) with {
+            IsOwnedByCurrentUser = !string.IsNullOrWhiteSpace(_viewerSubject)
+                && string.Equals(_row.OwnerUserId, _viewerSubject, StringComparison.Ordinal),
+        };
         if (info != _session.Value) _session.OnNext(info);
     }
 

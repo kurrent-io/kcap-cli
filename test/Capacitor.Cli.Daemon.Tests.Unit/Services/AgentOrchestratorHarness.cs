@@ -252,6 +252,20 @@ internal static class AgentOrchestratorHarness {
         return agent;
     }
 
+    /// <summary>What the orchestrator records once the server has bound an agent's transcript, without
+    /// standing up a server to bind it.</summary>
+    internal static AgentInstance BindTranscript(AgentInstance agent) {
+        agent.AcpForwarder = new AcpForwarderHandle(
+            new AcpTranscriptForwarder(
+                (_, _) => Task.FromResult(new AcpBatchAck(0, 0)), initialEnvelope: null,
+                System.Threading.Channels.Channel.CreateUnbounded<AcpEventEnvelope>().Reader, NullLogger.Instance, TimeProvider.System,
+                resumeFromSeq: 0),
+            Task.CompletedTask);
+        agent.TranscriptBound = true;
+
+        return agent;
+    }
+
     /// <summary>Latches the reap claim the way the reaper's own claim does, so a delivery can be made
     /// to meet a condemned agent without standing up a sweep to condemn it.</summary>
     internal static void ClaimReap(AgentInstance agent) => Interlocked.CompareExchange(ref agent.ReapClaimed, 1, 0);

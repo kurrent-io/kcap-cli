@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Xml;
@@ -7,7 +8,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Platform.Mac;
 
-public sealed record MoveOutcome(bool Moved, string? InstalledPath, string? Error);
+public sealed record MoveOutcome(bool Moved, string? InstalledPath, string? Error, bool PermissionDenied = false);
 
 public sealed partial class ApplicationsMover(
         IProcessRunner runner, Func<string, string, bool> promote, string applicationsDir = "/Applications",
@@ -73,8 +74,19 @@ public sealed partial class ApplicationsMover(
         IApplicationReferences? references = null;
         var promoted = false;
         var swapped = false;
+        var destinationPermissionDenied = false;
+        void WriteDestination(Action write) {
+            try { write(); }
+            catch (UnauthorizedAccessException) {
+                destinationPermissionDenied = true;
+                throw;
+            }
+        }
         try {
-            Directory.CreateDirectory(applicationsDir);
+            WriteDestination(() => {
+                Directory.CreateDirectory(applicationsDir);
+                Directory.CreateDirectory(staging);
+            });
             var copy = await runner.RunAsync("ditto", [plan.PayloadPath!, staging], new RunOptions(Timeout: CopyTimeout), ct).ConfigureAwait(false);
             ct.ThrowIfCancellationRequested();
             if (copy.TimedOut) return Fail(staging, "Copying took too long. Try again.");
@@ -89,13 +101,15 @@ public sealed partial class ApplicationsMover(
                     && (root == plan.ExistingPath || Path.GetDirectoryName(root) is "/Applications" || Path.GetDirectoryName(root) == userApplicationsDir))
                 .Distinct().ToArray();
             if (references is not null) await references.PrepareAsync([.. retiredRoots.Concat(roots).Distinct()], plan.Target, ct).ConfigureAwait(false);
-            if (Exists(plan.Target)) {
-                if (swap?.Invoke(staging, plan.Target) != true) throw new IOException("The update could not be installed. The existing copy has not been changed.");
-                swapped = true;
-            } else {
-                if (!promote(staging, plan.Target)) throw new IOException("kcap.app appeared while copying. Open that copy instead.");
-                promoted = true;
-            }
+            WriteDestination(() => {
+                if (Exists(plan.Target)) {
+                    if (swap?.Invoke(staging, plan.Target) != true) throw new IOException("The update could not be installed. The existing copy has not been changed.");
+                    swapped = true;
+                } else {
+                    if (!promote(staging, plan.Target)) throw new IOException("kcap.app appeared while copying. Open that copy instead.");
+                    promoted = true;
+                }
+            });
             if (references is not null) await references.ApplyAsync(ct).ConfigureAwait(false);
             foreach (var root in retiredRoots) {
                 var backup = root + ".migrating-" + Guid.NewGuid().ToString("N");
@@ -124,7 +138,8 @@ public sealed partial class ApplicationsMover(
             } catch (Exception restore) { errors.Add(restore.Message); }
             if (errors.Count == 1) RemoveStaging(staging);
             if (ex is OperationCanceledException && errors.Count == 1) throw;
-            return new(false, plan.Target, string.Join("\n\n", errors));
+            return new(false, plan.Target, string.Join("\n\n", errors),
+                PermissionDenied: destinationPermissionDenied && errors.Count == 1);
         } finally {
             if (references is not null) await references.DisposeAsync().ConfigureAwait(false);
         }
@@ -166,12 +181,22 @@ public sealed partial class ApplicationsMover(
 
     /// A plain rename replaces an EMPTY existing directory; RENAME_EXCL fails on any existing entry.
     [SupportedOSPlatform("macos")]
-    public static bool PromoteExclusive(string from, string to) => renamex_np(from, to, RENAME_EXCL) == 0;
+    public static bool PromoteExclusive(string from, string to) => Rename(from, to, RENAME_EXCL);
 
     [SupportedOSPlatform("macos")]
-    public static bool SwapAtomic(string from, string to) => renamex_np(from, to, 0x2) == 0;
+    public static bool SwapAtomic(string from, string to) => Rename(from, to, 0x2);
+
+    [SupportedOSPlatform("macos")]
+    static bool Rename(string from, string to, uint flags) {
+        if (renamex_np(from, to, flags) == 0) return true;
+        var error = Marshal.GetLastPInvokeError();
+        if (error is EPERM or EACCES or EROFS)
+            throw new UnauthorizedAccessException($"Cannot write to {to}.", new Win32Exception(error));
+        return false;
+    }
 
     const uint RENAME_EXCL = 0x4;
+    const int EPERM = 1, EACCES = 13, EROFS = 30;
 
     [LibraryImport("libc", EntryPoint = "renamex_np", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
     private static partial int renamex_np(string from, string to, uint flags);

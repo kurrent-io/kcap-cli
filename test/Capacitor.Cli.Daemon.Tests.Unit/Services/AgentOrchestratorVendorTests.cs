@@ -117,7 +117,8 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(commands!.Single().Name).IsEqualTo("review");
     }
 
-    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.</summary>
+    /// <summary>A refused fresh launch keeps running locally, and nothing more reaches the server under its id.
+    /// Its stop still reaches the server as a status report, which is all that frees its slot there.</summary>
     [Test]
     public async Task A_refused_launch_keeps_running_and_sends_nothing_more_for_its_id() {
         using var repoPath = GitRepo.CreateWithCommit();
@@ -133,7 +134,9 @@ public class AgentOrchestratorVendorTests {
         await Assert.That(agent).IsNotNull();
         await Assert.That(agent!.IsServerSilent).IsTrue();
 
+        // The spy process exits at once, so its own cleanup may already be running and this call returns early.
         await orch.CleanupAgentForTest("refused-launch");
+        await WaitHarness.PollUntilAsync(() => server.StatusReports.Any(r => r.ActiveCount == 0));
 
         await Assert.That(server.AgentRegisteredCallCount).IsEqualTo(1);
         await Assert.That(server.StatusChangedCalls).IsEmpty();

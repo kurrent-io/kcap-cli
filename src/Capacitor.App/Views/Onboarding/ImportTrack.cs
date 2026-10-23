@@ -7,14 +7,18 @@ using Avalonia.Media;
 namespace Capacitor.App.Views.Onboarding;
 
 /// <summary>
-/// The History page's three-stop track: skip, only me, shared. Each stop includes the one before
-/// it, so stops up to the chosen one are drawn passed, and the step from skip to only me — where
-/// data first leaves the machine — stays dashed until it is crossed. <see cref="Stop"/> -1 is
-/// "mixed": no thumb and nothing passed, and any stop is a change.
+/// The History page's track: skip, only me, shared — or, on the local edition, which has no other
+/// readers, skip and import (<see cref="LastStop"/> 1). Each stop includes the one before it, so
+/// stops up to the chosen one are drawn passed, and the step from skip to the first import stop
+/// stays dashed until it is crossed. <see cref="Stop"/> -1 is "mixed": no thumb and nothing passed,
+/// and any stop is a change.
 /// </summary>
 public sealed class ImportTrack : Control {
     public static readonly StyledProperty<int> StopProperty =
         AvaloniaProperty.Register<ImportTrack, int>(nameof(Stop), defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
+
+    public static readonly StyledProperty<int> LastStopProperty =
+        AvaloniaProperty.Register<ImportTrack, int>(nameof(LastStop), 2, coerce: (_, value) => Math.Clamp(value, 1, 2));
 
     const double TrackWidth = 228;
     const double Thumb      = 13;
@@ -30,7 +34,7 @@ public sealed class ImportTrack : Control {
     IBrush Brush(string key) => this.TryFindResource(key, out var value) && value is IBrush brush ? brush : Brushes.Transparent;
 
     static ImportTrack() {
-        AffectsRender<ImportTrack>(StopProperty);
+        AffectsRender<ImportTrack>(StopProperty, LastStopProperty);
         FocusableProperty.OverrideDefaultValue<ImportTrack>(true);
         CursorProperty.OverrideDefaultValue<ImportTrack>(new Cursor(StandardCursorType.Hand));
     }
@@ -40,7 +44,12 @@ public sealed class ImportTrack : Control {
         set => SetValue(StopProperty, value);
     }
 
-    static double X(int stop) => Thumb / 2 + stop * (TrackWidth - Thumb) / 2;
+    public int LastStop {
+        get => GetValue(LastStopProperty);
+        set => SetValue(LastStopProperty, value);
+    }
+
+    double X(int stop) => Thumb / 2 + stop * (TrackWidth - Thumb) / LastStop;
 
     protected override Size MeasureOverride(Size availableSize) => new(TrackWidth, Height_);
     protected override AutomationPeer OnCreateAutomationPeer() => new ImportTrackAutomationPeer(this);
@@ -54,7 +63,7 @@ public sealed class ImportTrack : Control {
     public override void Render(DrawingContext context) {
         var y = Height_ / 2;
 
-        for (var i = 1; i < 3; i++) {
+        for (var i = 1; i <= LastStop; i++) {
             var from    = X(i - 1) + Ring / 2;
             var to      = X(i) - Ring / 2;
             var passed  = Stop >= i;
@@ -67,12 +76,12 @@ public sealed class ImportTrack : Control {
             }
         }
 
-        for (var i = 0; i < 3; i++) {
+        for (var i = 0; i <= LastStop; i++) {
             var pen = new Pen(Stop >= i ? PassedBrush : StopBrush, 1.5);
             context.DrawEllipse(null, pen, new Point(X(i), y), Ring / 2 - 0.75, Ring / 2 - 0.75);
         }
 
-        if (Stop is >= 0 and <= 2) {
+        if (Stop >= 0 && Stop <= LastStop) {
             var center = new Point(X(Stop), y);
             context.DrawEllipse(GlowBrush, null, center, Thumb / 2 + 3, Thumb / 2 + 3);
             context.DrawEllipse(ThumbBrush, null, center, Thumb / 2, Thumb / 2);
@@ -104,12 +113,12 @@ public sealed class ImportTrack : Control {
 
     protected override void OnKeyDown(KeyEventArgs e) {
         base.OnKeyDown(e);
-        var current = Stop < 0 ? 1 : Stop;
+        var current = Stop < 0 ? 1 : Math.Min(Stop, LastStop);
         int? next = e.Key switch {
             Key.Left or Key.Down => Math.Max(0, current - 1),
-            Key.Right or Key.Up  => Math.Min(2, current + 1),
+            Key.Right or Key.Up  => Math.Min(LastStop, current + 1),
             Key.Home             => 0,
-            Key.End              => 2,
+            Key.End              => LastStop,
             _                    => null,
         };
         if (next is not { } value) return;
@@ -128,7 +137,7 @@ public sealed class ImportTrack : Control {
     }
 
     void SetFromPointer(double x) {
-        var stop = (int)Math.Round((x - Thumb / 2) / ((TrackWidth - Thumb) / 2), MidpointRounding.AwayFromZero);
-        Stop = Math.Clamp(stop, 0, 2);
+        var stop = (int)Math.Round((x - Thumb / 2) / ((TrackWidth - Thumb) / LastStop), MidpointRounding.AwayFromZero);
+        Stop = Math.Clamp(stop, 0, LastStop);
     }
 }

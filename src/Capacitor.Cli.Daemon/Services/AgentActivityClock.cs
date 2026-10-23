@@ -23,16 +23,23 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     // re-read or reset. Backs AgeMs, the reaper's TTL input.
     readonly long _spawnTimestamp       = time.GetTimestamp();
     long    _lastAdvanceTimestamp = time.GetTimestamp();
+    // Mode changes still prove that the process is alive, but do not extend a task's quiet
+    // window. Keep turn evidence separate from the liveness timestamp the reviewer reaper reads.
+    long    _lastTurnActivityTimestamp = time.GetTimestamp();
     ulong   _activitySeq = 1;
     bool    _turnInFlight;
     bool    _awaitingInput;
     // Set when the wait came from silence rather than a turn end, so the next output can clear
     // it. A hook verdict clears the bit and then owns the flag.
     bool    _silenceWait;
+    long?   _viewerInputAt;
     ulong   _waitGeneration;
     // When the flag last became false. Silence is measured from here as well as from the last
     // output: a key that clears the wait must not be undone by the idle time already elapsed.
     long    _notAwaitingSince = time.GetTimestamp();
+    // When the flag last went from true to false. Unlike _notAwaitingSince, a repeated "not
+    // waiting" verdict mid-turn (every pre-tool-use hook) must not move it.
+    long    _workingSince = time.GetTimestamp();
     string? _launchStage;
 
     /// <summary>Starts at 1 on spawn — a freshly-launched agent is never "already idle"; the
@@ -136,9 +143,44 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     /// several seconds with no output is the turn having ended.</summary>
     internal static readonly TimeSpan QuietTurn = TimeSpan.FromSeconds(8);
 
-    /// <summary>Records one unit of activity: bumps <see cref="ActivitySeq"/> and resets the idle
-    /// window to zero from this instant. Called from all six sources (see the class doc). Output
-    /// after a silence wait means the turn is running again.</summary>
+    // A viewer's resize, scroll or pointer move makes the agent repaint, in several PTY chunks.
+    // Only a silence-based idle verdict is protected, and only briefly after each input: sustained
+    // output must still recover a missed turn-start hook. Input is recorded whether or not a wait
+    // exists yet, since the quiet deadline can fall between the input and its repaint.
+    internal static readonly TimeSpan TerminalRedrawGrace = TimeSpan.FromSeconds(1);
+
+    /// <summary>A viewer resized the terminal or sent input that submits nothing (a wheel or
+    /// pointer report, a keystroke before Enter). Call before the bytes reach the PTY.</summary>
+    public void NoteViewerInput() {
+        lock (_gate) {
+            _viewerInputAt = time.GetTimestamp();
+        }
+    }
+
+    /// <summary>How long the agent has been working: since its wait last cleared, or since spawn.
+    /// Null while it is waiting.</summary>
+    public TimeSpan? WorkingFor {
+        get {
+            lock (_gate) return _awaitingInput ? null : TimeSpan.FromMilliseconds((long) Elapsed(_workingSince));
+        }
+    }
+
+    /// <summary>All PTY output proves liveness. Only text can start a turn or extend its quiet
+    /// window; mode negotiation and cursor housekeeping cannot. A repaint answering viewer input
+    /// is not a turn either. Explicit input and turn signals use their ordinary paths.</summary>
+    public void AdvanceTerminalOutput(bool hasVisibleText) {
+        bool cleared;
+        lock (_gate) {
+            var redraw = _viewerInputAt is { } input && time.GetElapsedTime(input) < TerminalRedrawGrace;
+            cleared = hasVisibleText && !redraw && ClearSilenceLocked();
+            AdvanceLocked(turnActivity: hasVisibleText);
+        }
+        if (cleared) OnAwaitingInputChanged?.Invoke(false);
+    }
+
+    /// <summary>Records explicit activity: bumps <see cref="ActivitySeq"/> and resets the idle
+    /// window to zero from this instant. Clears a silence wait immediately; PTY bytes instead use
+    /// <see cref="AdvanceTerminalOutput"/> so viewer-driven repaints cannot start a turn.</summary>
     public void Advance() {
         bool cleared;
         lock (_gate) {
@@ -170,7 +212,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     TimeSpan? DueLocked(TimeSpan quiet) {
         if (_awaitingInput || _turnInFlight || _silenceWait) return null;
         if (CountLiveLocked() > 0) return null;
-        var idleLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_lastAdvanceTimestamp));
+        var idleLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_lastTurnActivityTimestamp));
         var sinceLeft = quiet - TimeSpan.FromMilliseconds((long)Elapsed(_notAwaitingSince));
         var due = idleLeft > sinceLeft ? idleLeft : sinceLeft;
         return due <= TimeSpan.Zero ? TimeSpan.Zero : due;
@@ -190,6 +232,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
         _silenceWait       = false;
         _awaitingInput     = false;
         _notAwaitingSince  = time.GetTimestamp();
+        _workingSince      = _notAwaitingSince;
         return true;
     }
 
@@ -212,6 +255,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
             awaitingChanged = awaiting != _awaitingInput;
             if (ended) _waitGeneration++;
             if (!awaiting) _notAwaitingSince = time.GetTimestamp();
+            if (_awaitingInput && !awaiting) _workingSince = _notAwaitingSince;
             _awaitingInput = awaiting;
             AdvanceLocked();
         }
@@ -230,7 +274,10 @@ internal sealed class AgentActivityClock(TimeProvider time) {
             _silenceWait = false;
             changed = _awaitingInput != value;
             if (value) _waitGeneration++;
-            else _notAwaitingSince = time.GetTimestamp();
+            else {
+                _notAwaitingSince = time.GetTimestamp();
+                if (changed) _workingSince = _notAwaitingSince;
+            }
             _awaitingInput = value;
         }
         if (changed) OnAwaitingInputChanged?.Invoke(value);
@@ -244,6 +291,7 @@ internal sealed class AgentActivityClock(TimeProvider time) {
             _silenceWait      = false;
             _awaitingInput    = false;
             _notAwaitingSince = time.GetTimestamp();
+            _workingSince     = _notAwaitingSince;
         }
         OnAwaitingInputChanged?.Invoke(false);
     }
@@ -396,9 +444,10 @@ internal sealed class AgentActivityClock(TimeProvider time) {
     }
 
     // Caller must hold _gate.
-    void AdvanceLocked() {
+    void AdvanceLocked(bool turnActivity = true) {
         _activitySeq++;
         _lastAdvanceTimestamp = time.GetTimestamp();
+        if (turnActivity) _lastTurnActivityTimestamp = _lastAdvanceTimestamp;
     }
 }
 

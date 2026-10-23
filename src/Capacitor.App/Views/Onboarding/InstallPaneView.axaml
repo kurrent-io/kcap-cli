@@ -18,44 +18,7 @@
         </Border>
 
         <Border Classes="onboardingCard" IsVisible="{Binding ChoiceVisible}">
-            <StackPanel Spacing="12">
-                <StackPanel Spacing="10" DataContext="{Binding Search}" x:DataType="vmr:SearchChoiceViewModel">
-                    <TextBlock Classes="onboardingLabel" FontSize="13" Text="Search by meaning" />
-                    <TextBlock Classes="onboardingDetail" TextWrapping="Wrap" Text="{x:Static vmr:SearchChoiceViewModel.Explainer}" />
-                    <StackPanel Spacing="2">
-                        <RadioButton x:Name="SearchDefaultOption" Classes="onboardingOption" GroupName="InstallSearch"
-                                     IsChecked="{Binding UseDefault, Mode=TwoWay}">
-                            <StackPanel Spacing="2">
-                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="{x:Static vmr:SearchChoiceViewModel.DefaultLabel}" />
-                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap"
-                                           Text="{x:Static vmr:SearchChoiceViewModel.DefaultDetail}" />
-                            </StackPanel>
-                        </RadioButton>
-                        <RadioButton x:Name="SearchOtherOption" Classes="onboardingOption" GroupName="InstallSearch"
-                                     IsChecked="{Binding UseOther, Mode=TwoWay}">
-                            <StackPanel Spacing="6">
-                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="Use another Ollama model" />
-                                <TextBox x:Name="SearchOtherModel" Classes="onboardingField" PlaceholderText="Model name, e.g. nomic-embed-text"
-                                         Text="{Binding OtherModel, Mode=TwoWay}" IsEnabled="{Binding UseOther}"
-                                         AutomationProperties.Name="Ollama embedding model" />
-                                <TextBlock x:Name="SearchOtherModelError" Classes="onboardingError" TextWrapping="Wrap"
-                                           Text="{Binding OtherModelError}"
-                                           IsVisible="{Binding OtherModelError, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-                            </StackPanel>
-                        </RadioButton>
-                        <RadioButton x:Name="SearchKeywordOption" Classes="onboardingOption" GroupName="InstallSearch"
-                                     IsChecked="{Binding UseKeyword, Mode=TwoWay}">
-                            <StackPanel Spacing="2">
-                                <TextBlock Classes="onboardingLabel" FontSize="13" Text="Search by keyword only" />
-                                <TextBlock Classes="onboardingDetail" TextWrapping="Wrap"
-                                           Text="{x:Static vmr:SearchChoiceViewModel.KeywordDetail}" />
-                            </StackPanel>
-                        </RadioButton>
-                    </StackPanel>
-                </StackPanel>
-                <Button x:Name="InstallButton" Classes="onboardingPrimary" Content="Install" HorizontalAlignment="Left"
-                        Command="{Binding InstallCommand}" />
-            </StackPanel>
+            <icons:SearchChoiceView DataContext="{Binding Search}" />
         </Border>
 
         <Border Classes="onboardingCard" IsVisible="{Binding ProgressVisible}">

@@ -42,6 +42,9 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     // even when a later page of its manifest failed.
     string? _heldToken;
 
+    // The body of a hold request no answer has reached yet; see TakeHoldAsync.
+    string? _unansweredHold;
+
     public async Task<EvidenceScopeStatus> ResolveAsync(CancellationToken ct) {
         var (status, fresh) = holds ? await FetchAllPagesAsync(TakeHoldAsync, ct) : await FetchAllPagesAsync(ct);
         if (status == EvidenceScopeStatus.Ok) State = fresh;
@@ -93,8 +96,12 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     /// <summary>Releases the hold this client took, if any, within <see cref="ReleaseTimeout"/>. Never throws: a release
     /// that fails for any reason leaves the hold to expire on the server, and the run's own cleanup still runs.</summary>
     public async ValueTask DisposeAsync() {
-        if (Interlocked.Exchange(ref _heldToken, null) is not { } token) return;
         using var timeout = new CancellationTokenSource(ReleaseTimeout, time);
+        if (Interlocked.Exchange(ref _heldToken, null) is not { } token) {
+            if (Interlocked.Exchange(ref _unansweredHold, null) is not { } unanswered) return;
+            token = await RecoverHoldAsync(unanswered, timeout.Token);
+            if (token is null) return;
+        }
         try {
             using var request = new HttpRequestMessage(HttpMethod.Delete, Route("hold")) { Content = HoldBody(token) };
             using var resp    = await http.SendAsync(request, timeout.Token);
@@ -104,6 +111,19 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
         }
     }
 
+    /// <summary>The token of the hold an unanswered request took, by replaying it under the same key; null when the
+    /// replay took or answered none. Never throws, like the release it serves.</summary>
+    async Task<string?> RecoverHoldAsync(string body, CancellationToken ct) {
+        try {
+            var (status, page) = await SendPageAsync(HttpMethod.Post, Route("holds"), HoldCreateBody(body), ct);
+            if (status == EvidenceScopeStatus.Ok) return page!.Held == true ? page.Token : null;
+            ReleaseFailure = $"could not recover the evidence scope hold to release it: {LastError ?? status.ToString()}";
+        } catch (Exception e) {
+            ReleaseFailure = $"could not recover the evidence scope hold to release it: {e.Message}";
+        }
+        return null;
+    }
+
     string Url(string query) => $"{baseUrl.TrimEnd('/')}/api/sessions/{Uri.EscapeDataString(sessionId)}/evidence-scope?{query}";
 
     string Route(string leaf) => $"{baseUrl.TrimEnd('/')}/api/sessions/{Uri.EscapeDataString(sessionId)}/evidence-scope/{leaf}";
@@ -111,13 +131,21 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     static StringContent HoldBody(string token) =>
         new(JsonSerializer.Serialize(new EvidenceScopeHoldRequestDto { Token = token }, CapacitorJsonContext.Default.EvidenceScopeHoldRequestDto), Encoding.UTF8, "application/json");
 
-    // One request key per resolution, so a redelivery of this request can never take a second hold.
-    Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> TakeHoldAsync(CancellationToken ct) {
+    // One request key per resolution, so a redelivery of this request can never take a second hold. The server may commit
+    // a hold whose answer never arrives (the request was cancelled, timed out or lost its connection), so the request is
+    // kept until a token or a refusal answers it: disposing the client replays it, which answers the hold that key took.
+    async Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> TakeHoldAsync(CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
         var body = JsonSerializer.Serialize(new EvidenceScopeHoldCreateRequestDto {
             RequestId = Guid.NewGuid().ToString("N"), Continuations = false, Delegates = true, AdoptedChildren = false, IncludePlans = true
         }, CapacitorJsonContext.Default.EvidenceScopeHoldCreateRequestDto);
-        return SendPageAsync(HttpMethod.Post, Route("holds"), new StringContent(body, Encoding.UTF8, "application/json"), ct);
+        _unansweredHold = body;
+        var (status, page) = await SendPageAsync(HttpMethod.Post, Route("holds"), HoldCreateBody(body), ct);
+        if (page is not null) _unansweredHold = null;
+        return (status, page);
     }
+
+    static StringContent HoldCreateBody(string body) => new(body, Encoding.UTF8, "application/json");
 
     static TimeSpan Lifetime(EvidenceScopeManifestDto page) => page.IssuedAt is { } issued && page.ExpiresAt is { } expires ? expires - issued : ArtifactLifetime;
 

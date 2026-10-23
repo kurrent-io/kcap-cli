@@ -65,12 +65,12 @@ public sealed class LocalEmbeddingProgress : ReactiveObject {
     public string? ReembedNote => ConfiguredModel switch {
         null                                => null,
         var model when ReplacedModel is { } replaced
-            => $"Everything stored was embedded with {replaced}, so it is embedded again with {model} in the background.",
-        var model                           => $"What is already stored is embedded with {model} in the background.",
+            => $"The search index is being rebuilt with {model} in the background after switching from {replaced}. Your saved information is kept.",
+        var model                           => $"The search index for saved information is being built with {model} in the background.",
     };
 
     public string? PullText => Pulling && Model is { } model
-        ? PullFraction is { } f ? $"Downloading {model}… {(int)Math.Round(f * 100)}%" : $"Downloading {model}…"
+        ? PullFraction is { } f ? $"Downloading the Ollama model {model}… {(int)Math.Round(f * 100)}%" : $"Downloading the Ollama model {model}…"
         : null;
 
     /// True when the line was an `embeddings_*` event.

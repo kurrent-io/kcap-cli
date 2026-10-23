@@ -39,7 +39,8 @@ public static class MistralVibeHooksInstaller {
     /// <summary>Removes the kcap-owned entries, preserving user entries, and drops the array when it
     /// empties. Deletes the version marker.</summary>
     public static TomlConfigFile.Outcome Remove(string hooksTomlPath) {
-        var outcome = TomlConfigFile.Edit(hooksTomlPath, RemoveMutate);
+        // Edit takes its lock beside the file, which would create ~/.vibe on a machine without Vibe.
+        var outcome = File.Exists(hooksTomlPath) ? TomlConfigFile.Edit(hooksTomlPath, RemoveMutate) : TomlConfigFile.Outcome.Unchanged;
         DeleteMarker(hooksTomlPath);
         return outcome;
     }

@@ -94,6 +94,45 @@ internal partial class AgentOrchestrator {
         return [.. live, .. ledger.Where(l => !listed.Contains(l.Entry.AgentId)).Select(l => LedgerStatusRow(l.Entry, l.Status))];
     }
 
+    /// <summary>The session the server files the agent under: the one it was launched or resumed into, else
+    /// the ACP session its runtime opened. Null until the agent has one.</summary>
+    static string? SessionOf(AgentInstance agent) =>
+        agent.SessionId ?? SessionIds.Canonical((agent.Runtime as IAcpTranscriptSource)?.AcpSessionId);
+
+    /// <summary>How long a session query waits for a launching agent's session to be bound on the server.
+    /// An ACP agent's first turn is queued before the agent is published and bound, so its first tool
+    /// call can arrive inside that window.</summary>
+    internal static readonly TimeSpan AgentSessionBindWait = TimeSpan.FromSeconds(10);
+
+    static readonly TimeSpan AgentSessionBindPoll = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>Answers a hosted agent's own kcap MCP servers, which start before the agent's session
+    /// exists and so cannot be handed it in their environment. An empty reply means no such agent, or no
+    /// session the server holds yet; the caller asks again on its next call.</summary>
+    public async Task HandleLocalAgentSessionAsync(string agentId, Stream stream, CancellationToken ct) {
+        var started = _time.GetTimestamp();
+        while (!AgentSessionSettled(agentId) && _time.GetElapsedTime(started) < AgentSessionBindWait)
+            await Task.Delay(AgentSessionBindPoll, _time, ct);
+
+        await FrameCodec.WriteAsync(stream, LocalFrame.AgentSessionReply(HeldSessionOf(agentId)), ct);
+    }
+
+    /// <summary>The agent's session once the server holds it. A transcript's session is held only once its
+    /// bind succeeded: answering it before, or after a failed bind, would have the caller keep an id the
+    /// server refuses for good.</summary>
+    string? HeldSessionOf(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+     && (agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is true)
+            ? SessionOf(agent)
+            : null;
+
+    /// <summary>False while the agent is still launching, or its transcript's bind is still in flight.</summary>
+    bool AgentSessionSettled(string agentId) =>
+        _agents.TryGetValue(agentId, out var agent)
+            ? agent.Runtime is not IAcpTranscriptSource || agent.TranscriptBound is not null
+              || agent.Status is not ("Starting" or "Running")
+            : !_pendingLaunches.ContainsKey(agentId);
+
     internal static string TranscriptFormatOf(AgentInstance agent) =>
         agent.Runtime is IAcpTranscriptSource ? TranscriptFormats.Envelopes : TranscriptFormats.Vendor;
 
@@ -114,7 +153,7 @@ internal partial class AgentOrchestrator {
                 WorktreePath: a.Checkout.Worktree,
                 WorkLocation: a.Checkout.BorrowedFrom is null ? WorkLocationText.Owned : WorkLocationText.Borrowed,
                 BorrowedFrom: a.Checkout.BorrowedFrom,
-                SessionId: a.SessionId ?? SessionIds.Canonical((a.Runtime as IAcpTranscriptSource)?.AcpSessionId),
+                SessionId: SessionOf(a),
                 Branch: string.IsNullOrWhiteSpace(a.Worktree.Branch) ? null : a.Worktree.Branch,
                 // Only a live agent can wait on the user; a terminal one keeps whatever its clock
                 // last recorded, which must not read as a pending ask.
@@ -124,7 +163,9 @@ internal partial class AgentOrchestrator {
                 // count only while the agent is live, since nothing runs under a terminal one.
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
-                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null))];
+                TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
+                WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
+                    ? (_time.GetUtcNow() - working).UtcDateTime : null))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
     static AgentStatusDto LedgerStatusRow(ResumeLedgerEntry entry, string status) {
@@ -491,7 +532,7 @@ internal partial class AgentOrchestrator {
                 // through the daemon bridge. --private omits all of this.
                 env[HostedAgent.RenderedVar] = HostedAgent.Rendered;
                 env[HostedAgent.AgentIdVar]  = agentId;
-                HostedLaunchMarkers.Apply(env, isFlowParticipant: false, flowRole: null);
+                HostedLaunchMarkers.ApplyLocal(env, agentId, _config.Name);
                 if (_permissionBridge.BaseUrl is { } bridgeUrl) env[HostedAgent.BridgeUrlVar] = bridgeUrl;
             }
 
@@ -653,9 +694,12 @@ internal partial class AgentOrchestrator {
                         // before the write so a wait that begins during it survives.
                         var waitGeneration = agent.ActivityClock.WaitGeneration;
 
+                        var submit = IsSubmit(f.Bytes);
+                        if (!submit) agent.ActivityClock.NoteViewerInput();
+
                         try {
                             await agent.Runtime.SendRawInputAsync(f.Bytes);
-                            if (IsSubmit(f.Bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
                         } catch (NotSupportedException) {
                             // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
                             // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
@@ -738,6 +782,9 @@ internal partial class AgentOrchestrator {
         }
 
         if (c > 0 && r > 0) {
+            // Arm before Resize: a PTY can produce the redraw on another thread immediately.
+            // All viewers (local, web, and a departing smaller viewer) share this path.
+            agent.ActivityClock.NoteViewerInput();
             agent.Runtime.Resize(c, r);
             agent.CurrentCols = c;
             agent.CurrentRows = r;

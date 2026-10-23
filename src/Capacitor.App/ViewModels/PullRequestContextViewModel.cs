@@ -75,6 +75,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
+    internal const string NoPullRequestsNote = "No pull requests yet.";
     string _notice = WorkContextViewModel.WaitingNote;
     PullRequestReaderNote? _readerNote;
 
@@ -207,7 +208,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
-            SetNotice(snapshot is null ? "Loading pull requests…" : "");
+            SetNotice(snapshot is null && _selected is null ? NoPullRequestsNote : "");
             if (snapshot is not null) Seed(snapshot);
             RequestRefresh();
         }).DisposeWith(_subscriptions);
@@ -315,6 +316,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (!_hasListed) {
             // Pin the requested subject without cancelling the initial link discovery.
             _selected = choice;
+            if (_notice == NoPullRequestsNote) _notice = "";
             this.RaisePropertyChanged(nameof(Selected));
             Notify();
             return;

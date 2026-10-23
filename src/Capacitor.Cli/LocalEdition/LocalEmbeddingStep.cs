@@ -34,7 +34,8 @@ static class LocalEmbeddingStep {
         var url   = ollama.BaseUrl.ToString().TrimEnd('/');
 
         if (await ollama.VersionAsync(ct) is not { } version)
-            return Skipped(progress, LocalEmbeddingSkipCode.OllamaNotFound, $"No Ollama answers on {url}", current);
+            return Skipped(progress, LocalEmbeddingSkipCode.OllamaNotFound, $"Ollama is not responding on {url}", current,
+                current?.Model is null ? "Start Ollama, then run kcap setup --local again to turn on search by meaning." : null);
 
         progress.Report(new LocalInstallEvent.EmbeddingOllamaFound(url, version));
 
@@ -90,13 +91,14 @@ static class LocalEmbeddingStep {
         else LocalEmbeddingFile.Write(root, previous);
     }
 
+    /// <param name="advice">Its own sentence, so the desktop app can drop it as terminal advice.</param>
     static LocalEmbeddingSetting? Skipped(IProgress<LocalInstallEvent> progress, LocalEmbeddingSkipCode code, string why,
-        LocalEmbeddingSetting? current) {
+        LocalEmbeddingSetting? current, string? advice = null) {
         var outcome = current?.Model is { } model
             ? $"the server keeps embedding with {model}, and searches by keyword while that fails."
             : "search works by keyword.";
 
-        progress.Report(new LocalInstallEvent.EmbeddingsSkipped(code, $"{why}; {outcome}"));
+        progress.Report(new LocalInstallEvent.EmbeddingsSkipped(code, advice is null ? $"{why}; {outcome}" : $"{why}; {outcome} {advice}"));
 
         return null;
     }

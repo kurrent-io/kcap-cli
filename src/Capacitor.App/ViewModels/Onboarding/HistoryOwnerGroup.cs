@@ -20,6 +20,7 @@ public sealed class HistoryOwnerGroup : ReactiveObject {
 
     public string Owner { get; }
     public IReadOnlyList<HistoryRepoRow> Repos { get; }
+    public int LastStop => Repos[0].LastStop;
 
     /// The repositories disagree, so the owner track shows no level of its own.
     public bool Mixed => Repos.Select(r => r.Level).Distinct().Skip(1).Any();
@@ -32,7 +33,7 @@ public sealed class HistoryOwnerGroup : ReactiveObject {
     public int Stop {
         get => Mixed ? -1 : (int)Repos[0].Level;
         set {
-            if (value is < 0 or > 2) return;
+            if (value < 0 || value > LastStop) return;
             foreach (var repo in Repos) repo.Stop = value;
         }
     }

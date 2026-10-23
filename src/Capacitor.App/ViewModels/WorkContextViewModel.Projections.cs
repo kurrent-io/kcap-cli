@@ -132,9 +132,9 @@ public sealed partial class WorkContextViewModel {
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasContributors => _contributors.Count > 0;
     /// The card carries the PR picker and the live checks and review rows, so it stays while it
-    /// has a PR to select or something to say; a list settled with neither leaves the pane's own
-    /// empty copy to speak instead of a bare frame. Before a session id the card could only repeat
-    /// the pane's waiting note.
+    /// has a PR to select or something to say, including the empty-list message during discovery
+    /// and polling. The pane's own empty copy is a fallback when there is no card content.
+    /// Before a session id the card could only repeat the pane's waiting note.
     public bool ShowsPullRequestCard =>
         Phase != WorkContextPhase.WaitingForSession
         && PullRequests is { } prs && (prs.HasChoice || prs.HasNotice || prs.HasReaderNote);
