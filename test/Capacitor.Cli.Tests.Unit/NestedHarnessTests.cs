@@ -2,27 +2,30 @@ namespace Capacitor.Cli.Tests.Unit;
 
 /// <summary>
 /// A hook links its session to the hosted agent only when no other coding agent sits between it and the daemon: a
-/// <c>codex exec</c> a hosted Claude runs inherits <c>KCAP_AGENT_ID</c> but its session is its own.
+/// <c>codex exec</c> a hosted Claude runs inherits <c>KCAP_AGENT_ID</c> but its session is its own. Each argument row is
+/// the ancestry from the hook's parent upward, one process per entry, its names separated by '|'.
 /// </summary>
 public class NestedHarnessTests {
     static readonly IReadOnlyList<string> Vendors = ["claude", "codex"];
 
     [Test]
-    // hook's parent sh(90) -> claude(50) -> kcap daemon(10)
-    [Arguments(false, new[] { 90, 50, 10 }, new[] { "sh", "claude", "kcap" })]
-    // codex(80) -> zsh(70) -> claude(50) -> kcap(10): a nested agent
-    [Arguments(true, new[] { 80, 70, 50, 10 }, new[] { "codex", "zsh", "claude", "kcap" })]
-    // codex npm shim(81) -> codex binary(80) -> kcap(10): one agent, launched through its own shim
-    [Arguments(false, new[] { 81, 80, 10 }, new[] { "codex", "codex", "kcap" })]
-    // claude(50) -> kcap-daemon(10) -> zsh(5) -> codex(3): a daemon started inside another agent's session
-    [Arguments(false, new[] { 50, 10, 5, 3 }, new[] { "claude", "kcap-daemon", "zsh", "codex" })]
-    // codex(80) -> claude(50) -> kcap(10): a nested agent the outer one started directly
-    [Arguments(true, new[] { 80, 50, 10 }, new[] { "codex", "claude", "kcap" })]
-    // codex(80) -> zsh(70) -> claude(50), then unreadable: what was seen still counts
-    [Arguments(true, new[] { 80, 70, 50 }, new[] { "codex", "zsh", "claude" })]
-    public async Task A_second_coding_agent_below_the_daemon_marks_the_hook_nested(bool nested, int[] pids, string[] names) {
-        var rows = pids.Select((pid, i) => (pid, ppid: i + 1 < pids.Length ? pids[i + 1] : 999, names[i])).ToArray();
+    // npm kcap launcher -> sh -> claude -> kcap-daemon
+    [Arguments(false, new[] { "node|kcap", "sh", "claude", "kcap-daemon" })]
+    // npm kcap launcher -> codex -> zsh -> claude -> kcap: a nested agent behind the outer agent's shell
+    [Arguments(true, new[] { "node|kcap", "codex", "zsh", "claude", "kcap" })]
+    // codex -> claude -> kcap: a nested agent the outer one started directly
+    [Arguments(true, new[] { "codex", "claude", "kcap" })]
+    // claude -> claude -> kcap: a same-vendor agent the outer one started directly
+    [Arguments(true, new[] { "claude", "claude", "kcap" })]
+    // native codex -> codex's npm shim -> kcap: one agent, launched through its own shim
+    [Arguments(false, new[] { "codex", "node|codex", "kcap" })]
+    // claude -> kcap-daemon -> zsh -> codex: a daemon started inside another agent's session
+    [Arguments(false, new[] { "claude", "kcap-daemon", "zsh", "codex" })]
+    // codex -> zsh -> claude, then unreadable: what was seen still counts
+    [Arguments(true, new[] { "codex", "zsh", "claude" })]
+    public async Task A_second_coding_agent_below_the_daemon_marks_the_hook_nested(bool nested, string[] ancestry) {
+        var rows = ancestry.Select((names, i) => (pid: 100 - i, ppid: i + 1 < ancestry.Length ? 99 - i : 2, names.Split('|'))).ToArray();
 
-        await Assert.That(NestedHarness.IsNested(pids[0], Vendors, ProcTable.Of(rows))).IsEqualTo(nested);
+        await Assert.That(NestedHarness.IsNested(100, Vendors, ProcTable.OfNames(rows))).IsEqualTo(nested);
     }
 }

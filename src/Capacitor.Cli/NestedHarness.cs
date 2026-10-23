@@ -9,9 +9,14 @@ namespace Capacitor.Cli;
 /// sessions are its own, so it must not link them to the hosted agent.
 /// </summary>
 public static class NestedHarness {
-    /// <summary>The daemon's executables, as the CLI and as its own project. The walk stops there, so a daemon started
-    /// from inside an agent's session does not make the agents it hosts look nested.</summary>
-    static readonly string[] Daemons = ["kcap", "kcap-daemon"];
+    /// <summary>The CLI's own executables, the daemon's among them. Those this process was launched through (the npm
+    /// launcher runs the native CLI as its child) are skipped; the next one up is the daemon, where the walk stops, so a
+    /// daemon started from inside an agent's session does not make the agents it hosts look nested.</summary>
+    static readonly string[] Kcap = ["kcap", "kcap-daemon"];
+
+    /// <summary>Interpreters a vendor's launcher script runs under, as Codex's npm shim does before it execs the native
+    /// binary. Only such a launcher counts with a same-vendor child as one agent.</summary>
+    static readonly string[] Interpreters = ["node", "bun", "deno", "python", "python3"];
 
     static readonly Lazy<bool> CurrentProcess = new(() =>
         ProcessHelpers.GetParentPid() is { } parent
@@ -21,9 +26,7 @@ public static class NestedHarness {
     public static string? LinkedAgentId(this HostedAgent hosted) => hosted.AgentId is { } id && !CurrentProcess.Value ? id : null;
 
     /// <summary>Walks the ancestry from <paramref name="startPid"/> to the daemon, or as far as it can be read, and
-    /// reports whether it holds more than one coding agent. A process of the same vendor as its child counts with it,
-    /// since a vendor's launcher can exec its own binary (Codex's npm shim does). An unreadable ancestry reports what it
-    /// saw.</summary>
+    /// reports whether it holds more than one coding agent. An unreadable ancestry reports what it saw.</summary>
     internal static bool IsNested(
             int                                                 startPid,
             IReadOnlyList<string>                               vendors,
@@ -31,16 +34,25 @@ public static class NestedHarness {
             int                                                 maxHops = 32
         ) {
         var     agents     = 0;
+        var     pastSelf   = false;
         string? childAgent = null;
         var     pid        = startPid;
 
         for (var hop = 0; hop < maxHops && pid > 1; hop++) {
             if (lookup(pid) is not { } info) break;
 
-            if (info.names.Any(name => Daemons.Any(daemon => ProcessHelpers.MatchesAgentName(name, daemon)))) break;
+            if (Is(info.names, Kcap)) {
+                if (pastSelf) break;
 
-            var agent = vendors.FirstOrDefault(vendor => info.names.Any(name => ProcessHelpers.MatchesAgentName(name, vendor)));
-            if (agent is not null && agent != childAgent && ++agents > 1) return true;
+                pid = info.ppid;
+                continue;
+            }
+
+            pastSelf = true;
+
+            var agent    = vendors.FirstOrDefault(vendor => Is(info.names, [vendor]));
+            var launcher = agent is not null && agent == childAgent && Is(info.names, Interpreters);
+            if (agent is not null && !launcher && ++agents > 1) return true;
 
             childAgent = agent;
             pid        = info.ppid;
@@ -48,4 +60,7 @@ public static class NestedHarness {
 
         return false;
     }
+
+    static bool Is(IReadOnlyList<string> names, IReadOnlyList<string> executables) =>
+        names.Any(name => executables.Any(executable => ProcessHelpers.MatchesAgentName(name, executable)));
 }
