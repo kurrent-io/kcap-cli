@@ -14,8 +14,9 @@ public static class NestedHarness {
     /// daemon started from inside an agent's session does not make the agents it hosts look nested.</summary>
     static readonly string[] Kcap = ["kcap", "kcap-daemon"];
 
-    /// <summary>Interpreters a vendor's launcher script runs under, as Codex's npm shim does before it execs the native
-    /// binary. Only such a launcher counts with a same-vendor child as one agent.</summary>
+    /// <summary>Interpreters a vendor's launcher script runs under, as Codex's npm shim does before it starts the native
+    /// binary. Only such a launcher counts as one agent with its same-vendor child, and only when that child is native:
+    /// an agent that itself runs under an interpreter, as Gemini's does, is no launcher's binary.</summary>
     static readonly string[] Interpreters = ["node", "bun", "deno", "python", "python3"];
 
     static readonly Lazy<bool> CurrentProcess = new(() =>
@@ -35,7 +36,8 @@ public static class NestedHarness {
         ) {
         var     agents     = 0;
         var     pastSelf   = false;
-        string? childAgent = null;
+        string? childAgent       = null;
+        var     childInterpreted = false;
         var     pid        = startPid;
 
         for (var hop = 0; hop < maxHops && pid > 1; hop++) {
@@ -50,12 +52,14 @@ public static class NestedHarness {
 
             pastSelf = true;
 
-            var agent    = vendors.FirstOrDefault(vendor => Is(info.names, [vendor]));
-            var launcher = agent is not null && agent == childAgent && Is(info.names, Interpreters);
+            var agent       = vendors.FirstOrDefault(vendor => Is(info.names, [vendor]));
+            var interpreted = Is(info.names, Interpreters);
+            var launcher    = agent is not null && agent == childAgent && interpreted && !childInterpreted;
             if (agent is not null && !launcher && ++agents > 1) return true;
 
-            childAgent = agent;
-            pid        = info.ppid;
+            childAgent       = agent;
+            childInterpreted = interpreted;
+            pid              = info.ppid;
         }
 
         return false;

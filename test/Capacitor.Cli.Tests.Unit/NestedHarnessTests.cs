@@ -6,7 +6,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// the ancestry from the hook's parent upward, one process per entry, its names separated by '|'.
 /// </summary>
 public class NestedHarnessTests {
-    static readonly IReadOnlyList<string> Vendors = ["claude", "codex"];
+    static readonly IReadOnlyList<string> Vendors = ["claude", "codex", "gemini"];
 
     [Test]
     // npm kcap launcher -> sh -> claude -> kcap-daemon
@@ -19,6 +19,8 @@ public class NestedHarnessTests {
     [Arguments(true, new[] { "claude", "claude", "kcap" })]
     // native codex -> codex's npm shim -> kcap: one agent, launched through its own shim
     [Arguments(false, new[] { "codex", "node|codex", "kcap" })]
+    // gemini -> gemini -> kcap: an agent that runs under node, started directly by another
+    [Arguments(true, new[] { "node|gemini", "node|gemini", "kcap" })]
     // claude -> kcap-daemon -> zsh -> codex: a daemon started inside another agent's session
     [Arguments(false, new[] { "claude", "kcap-daemon", "zsh", "codex" })]
     // codex -> zsh -> claude, then unreadable: what was seen still counts
