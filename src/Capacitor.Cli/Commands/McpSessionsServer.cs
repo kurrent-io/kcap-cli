@@ -341,8 +341,9 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             if (progress.StatusCode == HttpStatusCode.Unauthorized)
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
 
-            var body = progress.StatusCode == HttpStatusCode.OK ? await progress.Content.ReadAsStringAsync() : null;
-            return BuildToolResult(id, EvalReportTool.Render(sessionId, progress.StatusCode, body));
+            var body             = progress.StatusCode == HttpStatusCode.OK ? await progress.Content.ReadAsStringAsync() : null;
+            var (text, isError)  = EvalReportTool.Render(sessionId, progress.StatusCode, body);
+            return BuildToolResult(id, text, isError);
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {

@@ -23,8 +23,9 @@ public class EvalReportToolTests {
 
     [Test]
     public async Task A_completed_run_renders_every_finding_recommendation_and_suggestion() {
-        var report = EvalReportTool.Render("s-1", HttpStatusCode.OK, Completed);
+        var (report, isError) = EvalReportTool.Render("s-1", HttpStatusCode.OK, Completed);
 
+        await Assert.That(isError).IsFalse();
         await Assert.That(report).StartsWith("# Eval report: session s-1");
         await Assert.That(report).Contains("Overall 3/5 · judge sonnet");
         await Assert.That(report).Contains("## testing (2/5)");
@@ -37,22 +38,40 @@ public class EvalReportToolTests {
     }
 
     [Test]
-    [Arguments(HttpStatusCode.NotFound, null, "is not ingested yet, or is not visible to you")]
-    [Arguments(HttpStatusCode.NoContent, null, "has not been evaluated")]
-    [Arguments(HttpStatusCode.InternalServerError, null, "could not be read (HTTP 500)")]
-    [Arguments(HttpStatusCode.OK, "not json", "was not valid JSON")]
-    [Arguments(HttpStatusCode.OK, """{"is_terminal":false,"completed_result":null,"questions":[]}""", "is being evaluated")]
-    [Arguments(HttpStatusCode.OK, """{"is_terminal":true,"completed_result":null,"failure_reason":"daemon disconnected mid-run"}""", "failed: daemon disconnected mid-run")]
-    [Arguments(HttpStatusCode.OK, """{"is_terminal":true,"completed_result":{"categories":[],"failed_questions":[{"code":"spend_budget"}]}}""", "failed: every question failed to judge")]
-    public async Task No_completed_run_answers_its_state_instead(HttpStatusCode status, string? body, string expected) {
-        await Assert.That(EvalReportTool.Render("s-1", status, body)).Contains(expected);
+    [Arguments(HttpStatusCode.NotFound, null, "is not ingested yet, or is not visible to you", false)]
+    [Arguments(HttpStatusCode.NoContent, null, "has not been evaluated", false)]
+    [Arguments(HttpStatusCode.InternalServerError, null, "could not be read (HTTP 500)", true)]
+    [Arguments(HttpStatusCode.Forbidden, null, "could not be read (HTTP 403)", true)]
+    [Arguments(HttpStatusCode.OK, "not json", "was not valid JSON", true)]
+    [Arguments(HttpStatusCode.OK, """{"is_terminal":false,"completed_result":null,"questions":[]}""", "is being evaluated", false)]
+    [Arguments(HttpStatusCode.OK, """{"is_terminal":true,"completed_result":null,"failure_reason":"daemon disconnected mid-run"}""", "failed: daemon disconnected mid-run", false)]
+    [Arguments(HttpStatusCode.OK, """{"is_terminal":true,"completed_result":{"categories":[],"failed_questions":[{"code":"spend_budget"}]}}""", "failed: every question failed to judge", false)]
+    public async Task No_completed_run_answers_its_state_instead(HttpStatusCode status, string? body, string expected, bool error) {
+        var (text, isError) = EvalReportTool.Render("s-1", status, body);
+
+        await Assert.That(text).Contains(expected);
+        await Assert.That(isError).IsEqualTo(error);
+    }
+
+    [Test]
+    public async Task A_completed_run_with_no_categories_still_reports_its_score_and_retrospective() {
+        const string body = """
+            {"is_terminal":true,"completed_result":{"overall_score":4,"summary":"Fine.","categories":[],"failed_questions":[],
+             "retrospective":{"overall":"Clean run.","strengths":[],"issues":[],"suggestions":[]}}}
+            """;
+
+        var (text, isError) = EvalReportTool.Render("s-1", HttpStatusCode.OK, body);
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("Overall 4/5");
+        await Assert.That(text).Contains("Clean run.");
     }
 
     [Test]
     public async Task An_oversized_report_is_cut_and_says_so() {
         var huge = Completed.Replace("No test covers the fix.", new string('x', EvalReportTool.MaxReportChars));
 
-        var report = EvalReportTool.Render("s-1", HttpStatusCode.OK, huge);
+        var (report, _) = EvalReportTool.Render("s-1", HttpStatusCode.OK, huge);
 
         await Assert.That(report.Length).IsLessThan(EvalReportTool.MaxReportChars + 100);
         await Assert.That(report).Contains($"[Report cut at {EvalReportTool.MaxReportChars} characters of");
@@ -61,7 +80,7 @@ public class EvalReportToolTests {
     const string Trends = """
         {"repo_hash":"h","sessions_evaluated":2,"category_trends":[
           {"category":"testing","average_score":3,"points":[
-            {"session_id":"old","session_slug":"old-slug","evaluated_at":"2026-09-01T10:00:00+00:00","score":2},
+            {"session_id":"old","session_slug":"old-slug","evaluated_at":"2026-09-01T10:00:00+00:00","score":2.5},
             {"session_id":"new","session_slug":null,"evaluated_at":"2026-10-01T10:00:00+00:00","score":4}]},
           {"category":"safety","average_score":5,"points":[
             {"session_id":"new","session_slug":null,"evaluated_at":"2026-10-01T10:00:00+00:00","score":5}]}],
@@ -74,6 +93,7 @@ public class EvalReportToolTests {
 
         await Assert.That(runs.Select(r => r.SessionId)).IsEquivalentTo(["new", "old"], TUnit.Assertions.Enums.CollectionOrdering.Matching);
         await Assert.That(runs[0].Mean).IsEqualTo(4.5);
+        await Assert.That(runs[1].Scores["testing"]).IsEqualTo(2.5);   // a category average, fractional
 
         var listed = EvalReportTool.ProjectRuns(runs, limit: 1)["sessions"]!.AsArray();
         await Assert.That(listed.Count).IsEqualTo(1);

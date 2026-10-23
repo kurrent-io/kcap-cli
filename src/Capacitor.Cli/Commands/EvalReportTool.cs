@@ -78,9 +78,11 @@ static class EvalReportTool {
         foreach (var trend in Items(doc.RootElement, "category_trends")) {
             var category = trend.Str("category");
             foreach (var point in Items(trend, "points")) {
-                if (point.Str("session_id") is not { } id || category is null || point.Num("score") is null) continue;
+                // A trend score is a category average, so it is fractional as often as not.
+                if (point.Str("session_id") is not { } id || category is null
+                 || !point.TryGetProperty("score", out var score) || score.ValueKind != JsonValueKind.Number) continue;
                 if (!runs.TryGetValue(id, out var run)) runs[id] = run = new Run(id, point.Str("session_slug"), point.Str("evaluated_at"), []);
-                run.Scores[category] = point.GetProperty("score").GetDouble();
+                run.Scores[category] = score.GetDouble();
             }
         }
 
@@ -107,12 +109,13 @@ static class EvalReportTool {
         return new JsonObject { ["sessions"] = sessions };
     }
 
-    /// <summary>The report for one session's eval-progress answer, or the state that stands in for it.</summary>
-    internal static string Render(string sessionId, HttpStatusCode status, string? body) {
+    /// <summary>The report for one session's eval-progress answer, or the state that stands in for it. A state is an
+    /// answer; only a read that failed is an error.</summary>
+    internal static (string Text, bool IsError) Render(string sessionId, HttpStatusCode status, string? body) {
         switch (status) {
-            case HttpStatusCode.NotFound:  return $"Session {sessionId} is not ingested yet, or is not visible to you.";
-            case HttpStatusCode.NoContent: return $"Session {sessionId} has not been evaluated.";
-            case not HttpStatusCode.OK:    return $"The eval of session {sessionId} could not be read (HTTP {(int)status}).";
+            case HttpStatusCode.NotFound:  return ($"Session {sessionId} is not ingested yet, or is not visible to you.", false);
+            case HttpStatusCode.NoContent: return ($"Session {sessionId} has not been evaluated.", false);
+            case not HttpStatusCode.OK:    return ($"The eval of session {sessionId} could not be read (HTTP {(int)status}).", true);
         }
 
         JsonElement root;
@@ -120,16 +123,19 @@ static class EvalReportTool {
             using var doc = JsonDocument.Parse(body ?? "");
             root = doc.RootElement.Clone();
         } catch (JsonException) {
-            return $"The eval of session {sessionId} could not be read: the response was not valid JSON.";
+            return ($"The eval of session {sessionId} could not be read: the response was not valid JSON.", true);
         }
 
-        if (root.Obj("completed_result") is not { } result || !Items(result, "categories").Any()) {
-            if (root.Bool("is_terminal") == true || root.Obj("failed_result") is not null || root.Obj("completed_result") is not null)
-                return $"The latest eval of session {sessionId} failed: {root.Str("failure_reason") ?? "every question failed to judge"}.";
-            return $"Session {sessionId} is being evaluated; no completed report yet.";
-        }
+        // A run that judged nothing and recorded only coded failures is a failed run; a completed one with no
+        // categories still has its score, summary and retrospective to report.
+        var result      = root.Obj("completed_result");
+        var failureOnly = result is { } r && !Items(r, "categories").Any() && Items(r, "failed_questions").Any();
 
-        return Cap(Markdown(sessionId, result));
+        if (result is { } completed && !failureOnly) return (Cap(Markdown(sessionId, completed)), false);
+
+        if (failureOnly || root.Bool("is_terminal") == true || root.Obj("failed_result") is not null)
+            return ($"The latest eval of session {sessionId} failed: {root.Str("failure_reason") ?? "every question failed to judge"}.", false);
+        return ($"Session {sessionId} is being evaluated; no completed report yet.", false);
     }
 
     static string Markdown(string sessionId, JsonElement result) {
