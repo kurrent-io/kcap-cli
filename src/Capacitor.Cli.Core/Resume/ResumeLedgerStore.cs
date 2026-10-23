@@ -18,6 +18,12 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
     public static ResumeLedgerStore For(DaemonStore store, string daemonName, TimeProvider? time = null) =>
         new(store.ResumeDirectory(daemonName), time);
 
+    /// <summary>Flow participants' entries, in a subdirectory a daemon that cannot resume them never reads.</summary>
+    public static ResumeLedgerStore ParticipantsFor(DaemonStore store, string daemonName, TimeProvider? time = null) =>
+        new(ParticipantsDirectory(store.ResumeDirectory(daemonName)), time);
+
+    static string ParticipantsDirectory(string resumeDirectory) => Path.Combine(resumeDirectory, "participants");
+
     public static string FileStem(string agentId) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(agentId))).ToLowerInvariant();
 
@@ -46,7 +52,7 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
     public bool Delete(string agentId) {
         var existed = false;
 
-        foreach (var path in new[] { EntryPath(agentId), RingPath(agentId) }) {
+        foreach (var path in new[] { EntryPath(agentId), RingPath(agentId), ResumeEntryLock.PathFor(EntryPath(agentId)) }) {
             if (!File.Exists(path)) continue;
 
             File.Delete(path);
@@ -57,6 +63,23 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
     }
 
     public ResumeLedgerEntry? TryRead(string agentId) => ReadFile(EntryPath(agentId));
+
+    /// <summary>Reads, changes and writes the entry under its <see cref="ResumeEntryLock"/>. A null from
+    /// <paramref name="change"/> leaves the entry as it is.</summary>
+    public LockedUpdate TryUpdateUnderLock(string agentId, Func<ResumeLedgerEntry, ResumeLedgerEntry?> change, TimeSpan wait) {
+        var path = EntryPath(agentId);
+        if (!File.Exists(path)) return LockedUpdate.NoEntry;
+
+        using var held = ResumeEntryLock.TryAcquire(path, wait);
+        if (held is null) return LockedUpdate.LockTimeout;
+
+        if (ReadFile(path) is not { } entry) return LockedUpdate.NoEntry;
+        if (change(entry) is not { } changed) return LockedUpdate.Unchanged;
+
+        Write(changed);
+
+        return LockedUpdate.Written;
+    }
 
     public IReadOnlyList<ResumeLedgerEntry> ReadAll() {
         var results = new List<ResumeLedgerEntry>();
@@ -89,7 +112,8 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
 
         foreach (var daemonDirectory in Directory.EnumerateDirectories(store.Directory)) {
             try {
-                var found = new ResumeLedgerStore(Path.Combine(daemonDirectory, "resume")).TryRead(agentId);
+                var resume = Path.Combine(daemonDirectory, "resume");
+                var found  = new ResumeLedgerStore(resume).TryRead(agentId) ?? new ResumeLedgerStore(ParticipantsDirectory(resume)).TryRead(agentId);
                 if (found is not null) return found;
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 // One unreadable daemon directory must not hide an entry in the next.

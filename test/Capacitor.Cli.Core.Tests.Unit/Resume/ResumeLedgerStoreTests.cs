@@ -198,4 +198,116 @@ public class ResumeLedgerStoreTests {
         await Assert.That(found).IsEqualTo(Entry("agent-1"));
         await Assert.That(ResumeLedgerStore.FindByAgentId(tmp.Store, "missing")).IsNull();
     }
+
+    [Test]
+    public async Task Participant_entries_are_invisible_to_the_interactive_store() {
+        using var tmp = new TempDaemonStore();
+
+        ResumeLedgerStore.ParticipantsFor(tmp.Store, "d1").Write(Entry("agent-1"));
+
+        await Assert.That(ResumeLedgerStore.For(tmp.Store, "d1").ReadAll()).IsEmpty();
+        await Assert.That(ResumeLedgerStore.ParticipantsFor(tmp.Store, "d1").ReadAll().Select(e => e.AgentId)).IsEquivalentTo(["agent-1"]);
+    }
+
+    [Test]
+    public async Task FindByAgentId_sees_a_participant_entry() {
+        using var tmp = new TempDaemonStore();
+
+        ResumeLedgerStore.ParticipantsFor(tmp.Store, "d1").Write(Entry("agent-1"));
+
+        await Assert.That(ResumeLedgerStore.FindByAgentId(tmp.Store, "agent-1")?.AgentId).IsEqualTo("agent-1");
+    }
+
+    [Test]
+    public async Task Participant_and_fence_fields_round_trip() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.ParticipantsFor(tmp.Store, "d1");
+        var certification = new ReviewerCertificationRequirement("claude", ">=2.1.0", "claude-v3", "rev-1", "", "");
+        var participant = new ParticipantResume(
+            LaunchKind.ReviewFlow, ["kcap-flow-result"], ["Read"], certification, 42, 90_000, "round 2: look again", T0.AddMinutes(3));
+
+        store.Write(Entry("agent-1") with {
+            Participant = participant, RunEpoch = "epoch-2", LaunchEpoch = "epoch-1",
+            EndCommittedAt = T0.AddMinutes(4), EndCommittedEpoch = "epoch-2"
+        });
+
+        var read = store.TryRead("agent-1")!;
+
+        await Assert.That(read.RunEpoch).IsEqualTo("epoch-2");
+        await Assert.That(read.LaunchEpoch).IsEqualTo("epoch-1");
+        await Assert.That(read.EndCommittedAt).IsEqualTo(T0.AddMinutes(4));
+        await Assert.That(read.EndCommittedEpoch).IsEqualTo("epoch-2");
+        await Assert.That(read.Participant!.Kind).IsEqualTo(LaunchKind.ReviewFlow);
+        await Assert.That(read.Participant.McpAllowlist!).IsEquivalentTo(["kcap-flow-result"]);
+        await Assert.That(read.Participant.Tools!).IsEquivalentTo(["Read"]);
+        await Assert.That(read.Participant.Certification).IsEqualTo(certification);
+        await Assert.That(read.Participant.ActivitySeq).IsEqualTo(42UL);
+        await Assert.That(read.Participant.AgeMs).IsEqualTo(90_000UL);
+        await Assert.That(read.Participant.LastRoundInput).IsEqualTo("round 2: look again");
+        await Assert.That(read.Participant.LastRoundAt).IsEqualTo(T0.AddMinutes(3));
+    }
+
+    [Test]
+    public async Task An_entry_written_without_the_participant_and_fence_fields_reads_them_as_null() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+
+        store.Write(Entry("agent-1"));
+        var json = File.ReadAllText(store.EntryPath("agent-1"));
+        await Assert.That(json).DoesNotContain("participant\":{");
+
+        var read = store.TryRead("agent-1")!;
+
+        await Assert.That(read.Participant).IsNull();
+        await Assert.That(read.RunEpoch).IsNull();
+        await Assert.That(read.EndCommittedAt).IsNull();
+    }
+
+    [Test]
+    public async Task TryUpdateUnderLock_rewrites_the_entry() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+
+        var result = store.TryUpdateUnderLock("agent-1", e => e with { RunEpoch = "epoch-9" }, TimeSpan.FromSeconds(1));
+
+        await Assert.That(result).IsEqualTo(LockedUpdate.Written);
+        await Assert.That(store.TryRead("agent-1")!.RunEpoch).IsEqualTo("epoch-9");
+    }
+
+    [Test]
+    public async Task TryUpdateUnderLock_times_out_while_another_holder_has_the_lock() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+        using var held = ResumeEntryLock.TryAcquire(store.EntryPath("agent-1"), TimeSpan.FromSeconds(1));
+
+        var result = store.TryUpdateUnderLock("agent-1", e => e with { RunEpoch = "epoch-9" }, TimeSpan.FromMilliseconds(50));
+
+        await Assert.That(held).IsNotNull();
+        await Assert.That(result).IsEqualTo(LockedUpdate.LockTimeout);
+        await Assert.That(store.TryRead("agent-1")!.RunEpoch).IsNull();
+    }
+
+    [Test]
+    public async Task TryUpdateUnderLock_reports_a_missing_entry_and_a_declined_change() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+
+        await Assert.That(store.TryUpdateUnderLock("missing", e => e, TimeSpan.FromSeconds(1))).IsEqualTo(LockedUpdate.NoEntry);
+        await Assert.That(store.TryUpdateUnderLock("agent-1", _ => null, TimeSpan.FromSeconds(1))).IsEqualTo(LockedUpdate.Unchanged);
+    }
+
+    [Test]
+    public async Task Delete_removes_the_lock_file() {
+        using var tmp   = new TempDaemonStore();
+        var       store = ResumeLedgerStore.For(tmp.Store, "d1");
+        store.Write(Entry("agent-1"));
+        store.TryUpdateUnderLock("agent-1", e => e, TimeSpan.FromSeconds(1));
+
+        store.Delete("agent-1");
+
+        await Assert.That(File.Exists(store.EntryPath("agent-1") + ".lock")).IsFalse();
+    }
 }
