@@ -266,7 +266,7 @@ public sealed class OnboardingFacade(
 
     /// <summary>
     /// Asks each discovered WorkOS workspace whether it is still there, given the org-less sign-in's bearer.
-    /// Only a <see cref="WorkspaceAnswer.Gone"/> leaves one out; an outage keeps it. Unset, every listed
+    /// Only <see cref="WorkspaceAnswer.Gone"/> and <see cref="WorkspaceAnswer.Pending"/> leave one out; an outage keeps it. Unset, every listed
     /// workspace is offered.
     /// </summary>
     public Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>>? ProbeWorkspace { get; init; }
@@ -450,12 +450,12 @@ public sealed class OnboardingFacade(
         if (result.Error != DiscoveryError.None)
             return Halted(AuthProvider.WorkOS, TenantDiscovery.Describe(result.Error, AuthProvider.WorkOS), ct);
 
-        var tenants = ProbeWorkspace is null
-            ? result.Tenants
+        var (tenants, pending) = ProbeWorkspace is null
+            ? (result.Tenants, [])
             : await WorkOSDiscovery.DropGoneAsync(result.Tenants, ProbeWorkspace, auth.AccessToken, progress, ct);
 
         // The hosted lane is the only one that can provision, and only for an account with none.
-        return new DiscoveryReport(tenants, AuthProvider.WorkOS, CanCreate: tenants.Length == 0);
+        return new DiscoveryReport(tenants, AuthProvider.WorkOS, CanCreate: tenants.Length == 0 && pending.Length == 0);
     }
 
     async Task<DiscoveryReport> ListGitHubAsync(

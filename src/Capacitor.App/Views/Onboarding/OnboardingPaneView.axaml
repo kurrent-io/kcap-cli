@@ -46,12 +46,19 @@
                     </Grid>
                 </Button>
 
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <TextBlock Classes="onboardingBody" Text="Already have a workspace?" VerticalAlignment="Center" />
-                    <Button x:Name="ExistingWorkspaceButton" Classes="onboardingLink" Content="Sign in"
-                            AutomationProperties.Name="Already have a workspace? Sign in"
-                            Command="{Binding SignInCommand}" />
-                </StackPanel>
+                <Border x:Name="ExistingWorkspaceCard" Classes="onboardingCallout" Margin="0,4,0,0">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="14">
+                        <app:AppIcon Kind="LogIn" Size="20" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
+                            <TextBlock Classes="onboardingLabel" Text="{x:Static vm:EditionStepViewModel.ExistingTitle}" />
+                            <TextBlock Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.ExistingDetail}" />
+                        </StackPanel>
+                        <Button Grid.Column="2" x:Name="ExistingWorkspaceButton" Classes="onboardingSecondary" Content="Sign in"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="Already have a workspace? Sign in"
+                                Command="{Binding SignInCommand}" />
+                    </Grid>
+                </Border>
 
                 <TextBlock Classes="onboardingNote" Margin="0,6,0,0">
                     <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource OnboardingMonoFont}"
@@ -160,6 +167,8 @@
                                 IsVisible="{Binding SkipVisible}" />
                         <Button Grid.Column="2" x:Name="CancelTenantButton" Classes="onboardingSecondary" Content="Cancel"
                                 Command="{Binding CancelTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
+                        <Button Grid.Column="2" x:Name="OpenInBrowserButton" Classes="onboardingLink" Content="Open in browser"
+                                Command="{Binding OpenInBrowserCommand}" IsVisible="{Binding OpenInBrowserVisible}" />
                         <Button Grid.Column="3" x:Name="ConfirmTenantButton" Classes="onboardingPrimary" Content="Continue"
                                 Command="{Binding ConfirmTenantCommand}" IsVisible="{Binding TenantActionsVisible}" />
                         <Button Grid.Column="3" x:Name="NextButton" Command="{Binding NextCommand}"
@@ -168,13 +177,6 @@
                                 Content="{Binding NextLabel}"
                                 IsVisible="{Binding NextVisible}" />
                     </Grid>
-
-
-                    <!-- Done page only: the daemon is enabled beside the steps, and its outcome lands here. -->
-                    <TextBlock x:Name="LifecycleStatusText" Classes="onboardingNote" Text="{Binding Surface.StatusText}"
-                               IsVisible="{Binding ShowLifecycleStatus}" />
-                    <TextBlock x:Name="LifecycleAttentionText" Classes="onboardingError" Text="{Binding Surface.AttentionText}"
-                               IsVisible="{Binding ShowLifecycleAttention}" />
                 </StackPanel>
         </Border>
         </Grid>

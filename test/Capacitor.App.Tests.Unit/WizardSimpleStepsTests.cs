@@ -373,18 +373,6 @@ public class WizardSimpleStepsTests {
         await Assert.That(updates).IsEqualTo(0);
     }
 
-    /// A daemon that stopped short says why, rather than claiming setup is still under way.
-    [Test]
-    public async Task The_daemon_line_names_what_stopped_the_daemon() {
-        var stopped  = new DoneStepViewModel(() => DoneFacts.Empty with { DaemonProblem = "kcap isn't available on this machine." });
-        var underWay = new DoneStepViewModel(() => DoneFacts.Empty);
-        await stopped.OnEnterAsync(CancellationToken.None);
-        await underWay.OnEnterAsync(CancellationToken.None);
-
-        await Assert.That(stopped.DaemonLine).StartsWith("kcap isn't available on this machine.");
-        await Assert.That(underWay.DaemonLine).StartsWith("The daemon is being set up");
-    }
-
     // ── templates ────────────────────────────────────────────────────────────
 
     [Test]
@@ -401,7 +389,7 @@ public class WizardSimpleStepsTests {
 
             var texts    = window.GetVisualDescendants().OfType<TextBlock>().ToList();
             var title    = texts.FirstOrDefault(t => t.Name == "StepTitleText")?.Text;
-            var daemon   = texts.FirstOrDefault(t => t.Name == "DaemonLineText")?.Text;
+            var daemon   = texts.FirstOrDefault(t => t.Name == "ServicePillText")?.Text;
             var capture  = window.GetVisualDescendants().OfType<ItemsControl>().FirstOrDefault(i => i.Name == "CaptureItems")?.ItemCount;
 
             window.Close();
@@ -411,7 +399,7 @@ public class WizardSimpleStepsTests {
         });
 
         await Assert.That(result.title).IsEqualTo("From now on, your agents remember");
-        await Assert.That(result.daemon).StartsWith("Running as a service on test-mac.");
+        await Assert.That(result.daemon).IsEqualTo("Running");
         await Assert.That(result.capture).IsEqualTo(1);
     }
 }

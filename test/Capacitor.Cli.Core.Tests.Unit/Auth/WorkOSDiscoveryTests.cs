@@ -180,6 +180,42 @@ public class WorkOSDiscoveryTests {
         await provisioner.DidNotReceiveWithAnyArgs().OfferCreateAsync(default!, default);
     }
 
+    /// <summary>A workspace still being created is left out without anything taking its place: alone it
+    /// ends discovery as in progress rather than at the create offer, and beside another the user is
+    /// asked rather than signed in to the other.</summary>
+    [Test]
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task DiscoverAsync_takes_nothing_in_place_of_a_pending_workspace(bool withAnother) {
+        var proxy = Substitute.For<IAuthProxyClient>();
+        DiscoveredTenant pending = new() { Provider = "WorkOS", OrganizationId = "org_n", Slug = "fresh", DisplayName = "Fresh", Origin = "https://fresh.kcap.ai" };
+        DiscoveredTenant older   = new() { Provider = "WorkOS", OrganizationId = "org_o", Slug = "older", DisplayName = "Older", Origin = "https://older.kcap.ai" };
+        DiscoveredTenant[] tenants = withAnother ? [pending, older] : [pending];
+        proxy.DiscoverWorkOSTenantsAsync(Arg.Any<string>(), Arg.Any<string>())
+             .Returns(Task.FromResult(new Cli.Core.Auth.DiscoveryResult(tenants, DiscoveryError.None)));
+
+        var picker      = Substitute.For<ITenantPicker>();
+        var provisioner = Substitute.For<ITenantProvisioner>();
+
+        var flow = await WorkOSDiscovery.DiscoverAsync(
+            "https://auth.kcap.ai", new ProxyConfigResponse { WorkOSClientId = "client_d" },
+            proxy, picker, NoTelemetry.Funnel,
+            orglessLogin: ()       => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { AccessToken = "acc", RefreshToken = "rt" }),
+            orgSwitch:    (_, org) => Task.FromResult<WorkOSAuthResponse?>(new WorkOSAuthResponse { OrganizationId = org, AccessToken = "acc2", RefreshToken = "rt2" }),
+            provisioner: provisioner, time: TimeProvider.System,
+            probe: (t, _, _) => Task.FromResult(t.Slug == "fresh" ? WorkspaceAnswer.Pending : WorkspaceAnswer.Live));
+
+        await provisioner.DidNotReceiveWithAnyArgs().OfferCreateAsync(default!, default);
+        if (withAnother) {
+            await picker.Received(1).PickAsync(
+                Arg.Is<DiscoveredTenant[]>(offered => offered.Length == 1 && offered[0].Slug == "older"),
+                Arg.Any<TenantPickContext>(), Arg.Any<CancellationToken>());
+        } else {
+            await Assert.That(flow).IsTypeOf<WorkOSDiscoveryFlow.Failed>();
+            await Assert.That(((WorkOSDiscoveryFlow.Failed)flow).Reason).IsEqualTo(AuthFailureReason.ProvisioningInProgress);
+        }
+    }
+
     [Test]
     public async Task DiscoverAsync_errors_when_workos_not_configured() {
         var flow = await WorkOSDiscovery.DiscoverAsync(

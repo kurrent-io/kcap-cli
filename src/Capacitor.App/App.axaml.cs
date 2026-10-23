@@ -1237,7 +1237,8 @@ public partial class App : Application {
             HeldDaemonNames: HeldDaemonNamesAsync,
             ProfileOverride: _serverEnv.Profile,
             UsageNotice: _usageNotice,
-            ReportCliSetup: ReportWizardCliSetupAsync);
+            ReportCliSetup: ReportWizardCliSetupAsync,
+            ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
 
