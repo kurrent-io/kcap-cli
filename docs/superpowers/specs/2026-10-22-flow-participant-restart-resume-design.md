@@ -187,13 +187,13 @@ still land after publication and reach the server's `HostedAgentDeathBridge`.
 - After publication an end is also held when the ending process's daemon epoch differs from the
   epoch the entry records for its current run, which `TryPublishResumed` writes. The child env
   already carries the epoch it was launched under; `HostedAgent` reads it.
-- The decision is made where the end is produced (hook, watcher) and again where it is delivered.
-  An end the producer let through can sit in the spool across the whole restart — enqueued while the
-  entry was still `Running`, held by a backlog or a failed post, drained after the successor
-  published. So a spooled session end records its origin (agent id and daemon epoch) beside its
-  body, and the drain re-applies both rules before posting it; a held end is discarded. A spooled end
-  without an origin, written by an older kcap, posts as today. The exited-session sweep, which runs
-  in another process, reads the epoch from the session's recorded origin, which gains it.
+- The decision is made where the end is produced (hook, watcher, exited-session sweep). An end the
+  producer let through can sit in the spool across the whole restart — enqueued while the entry was
+  still `Running`, held by a backlog or a failed post, drained after the successor published. The
+  commit stamp below is taken before the end is posted or spooled, whichever comes first, so such an
+  end has already made its run ineligible for resume and the drain needs no re-check. The sweep,
+  which runs in another process, reads the agent id and epoch from the session's recorded origin,
+  which gains them.
 
 Checking at production and delivery still leaves a request in flight: an end can pass its last
 check and be posted, the planned stop can then mark the entry `Resuming`, and the successor can
@@ -202,8 +202,8 @@ made mutually exclusive, by a compare-and-set on the entry under a per-entry cro
 (`flock` on a lock file beside the entry; an exclusive open on Windows) that the hook, the watcher,
 the spool drain and the daemon all take:
 
-- Before posting a session end, the producer or drain stamps the entry with `EndCommittedAt` and the
-  ending epoch, only if the entry is `Running` under that epoch; otherwise the end is held.
+- Before posting or spooling a session end, the producer stamps the entry with `EndCommittedAt` and
+  the ending epoch, only if the entry is `Running` under that epoch; otherwise the end is held.
 - `TryMarkResuming` marks `Resuming` only if the entry carries no `EndCommittedAt`; otherwise the
   agent takes the ordinary end path at shutdown and is not resumed.
 - The stamp is durable and never cleared for that run. An end that posted, timed out with an unknown
@@ -275,9 +275,9 @@ entries' predecessor is not its prior instance, and discards them however recent
   stalled one is reported failed and cannot publish later, and the dead one is proven absent.
 - A reconnect racing the last candidate's publication or failure: the connect lists it as live or
   claimed, or reports incomplete.
-- Predecessor end delivered before and after successor registration, including one spooled by the
-  old process while its entry was still `Running` and drained by another process after publication:
-  role stays live; a genuine exit of the resumed process still ends it.
+- Predecessor end produced while `Resuming` and after successor publication: held, role stays live;
+  a genuine exit of the resumed process still ends it. One spooled by the old process while its
+  entry was still `Running`: the planned stop finds its stamp and does not resume the run.
 - An end paused after its stamp and released after successor registration, and one that times out:
   the planned stop finds the stamp, the agent is not resumed, and the flow heals as today.
 - A replacement that starts, fails recovery and cannot yet be proven dead: its worktree and snapshot
