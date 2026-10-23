@@ -19,6 +19,8 @@ public class NestedHarnessTests {
     [Arguments(true, new[] { "claude", "claude", "kcap" })]
     // native codex -> codex's npm shim -> kcap: one agent, launched through its own shim
     [Arguments(false, new[] { "codex", "node|codex", "kcap" })]
+    // native claude -> claude under node -> kcap: a native agent a Node-run one of the same vendor started directly
+    [Arguments(true, new[] { "claude", "node|claude", "kcap" })]
     // gemini -> gemini -> kcap: an agent that runs under node, started directly by another
     [Arguments(true, new[] { "node|gemini", "node|gemini", "kcap" })]
     // claude -> kcap-daemon -> zsh -> codex: a daemon started inside another agent's session

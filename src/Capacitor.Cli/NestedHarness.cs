@@ -14,10 +14,14 @@ public static class NestedHarness {
     /// daemon started from inside an agent's session does not make the agents it hosts look nested.</summary>
     static readonly string[] Kcap = ["kcap", "kcap-daemon"];
 
-    /// <summary>Interpreters a vendor's launcher script runs under, as Codex's npm shim does before it starts the native
-    /// binary. Only such a launcher counts as one agent with its same-vendor child, and only when that child is native:
-    /// an agent that itself runs under an interpreter, as Gemini's does, is no launcher's binary.</summary>
+    /// <summary>Interpreters a launcher script runs under.</summary>
     static readonly string[] Interpreters = ["node", "bun", "deno", "python", "python3"];
+
+    /// <summary>Vendors whose interpreted process is only ever a launcher for their native agent: Codex's npm package
+    /// runs a script that starts the native binary. Such a launcher counts as one agent with the native agent it
+    /// started. Other vendors' interpreted processes can be agents themselves (Claude and Gemini run under Node), so a
+    /// same-vendor parent of theirs is a second agent.</summary>
+    static readonly string[] LauncherVendors = ["codex"];
 
     static readonly Lazy<bool> CurrentProcess = new(() =>
         ProcessHelpers.GetParentPid() is { } parent
@@ -54,7 +58,7 @@ public static class NestedHarness {
 
             var agent       = vendors.FirstOrDefault(vendor => Is(info.names, [vendor]));
             var interpreted = Is(info.names, Interpreters);
-            var launcher    = agent is not null && agent == childAgent && interpreted && !childInterpreted;
+            var launcher    = agent is not null && agent == childAgent && LauncherVendors.Contains(agent) && interpreted && !childInterpreted;
             if (agent is not null && !launcher && ++agents > 1) return true;
 
             childAgent       = agent;
