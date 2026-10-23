@@ -252,7 +252,7 @@ sealed class CopilotHookCommand(
             forwarded["started_at"] = startedAt.ToString("O");
         }
 
-        if (hosted.AgentId is { } agentHostId) {
+        if (hosted.LinkedAgentId() is { } agentHostId) {
             forwarded["agent_host_id"] = agentHostId;
         }
 
@@ -394,7 +394,7 @@ sealed class CopilotHookCommand(
             forwarded["ended_at"] = endedAt.ToString("O");
         }
 
-        if (hosted.AgentId is { } agentHostId) {
+        if (hosted.LinkedAgentId() is { } agentHostId) {
             forwarded["agent_host_id"] = agentHostId;
         }
 

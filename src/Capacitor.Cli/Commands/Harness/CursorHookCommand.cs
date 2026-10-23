@@ -250,7 +250,7 @@ public sealed class CursorHookCommand(
 
             NormalizeGuidField(node, "session_id");
             node["home_dir"] = home.Path;
-            var agentHostId = hosted.AgentId;
+            var agentHostId = hosted.LinkedAgentId();
             if (agentHostId is not null) node["agent_host_id"] = agentHostId;
 
             // Surface 3: attach this machine's harness inventory, session-start only.

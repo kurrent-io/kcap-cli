@@ -1104,7 +1104,7 @@ static partial class ProcessHelpers {
     /// substring, so descriptive names such as the Electron desktop "Claude Helper
     /// (Renderer)" don't masquerade as the <c>claude</c> CLI.
     /// </summary>
-    static bool MatchesAgentName(string comm, string vendor) {
+    internal static bool MatchesAgentName(string comm, string vendor) {
         if (string.IsNullOrEmpty(comm)) {
             return false;
         }

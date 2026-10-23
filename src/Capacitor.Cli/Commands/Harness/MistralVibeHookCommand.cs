@@ -110,7 +110,7 @@ sealed class MistralVibeHookCommand(
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
 
         if (TryGetIsoTimestamp(node, "timestamp") is { } startedAt) forwarded["started_at"] = startedAt.ToString("O");
-        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if (hosted.LinkedAgentId() is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
         if (activeProfile?.DefaultVisibility is { } visibility) forwarded["default_visibility"] = visibility;
 
         SessionStartInventory.Stamp(forwarded, config, harnesses, clock.Time);
