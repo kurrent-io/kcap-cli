@@ -107,16 +107,22 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
         return changed;
     }
 
-    public static ResumeLedgerEntry? FindByAgentId(DaemonStore store, string agentId) {
+    public static ResumeLedgerEntry? FindByAgentId(DaemonStore store, string agentId) =>
+        LocateByAgentId(store, agentId)?.TryRead(agentId);
+
+    /// <summary>The store, among every daemon's, that holds an entry for <paramref name="agentId"/>.</summary>
+    public static ResumeLedgerStore? LocateByAgentId(DaemonStore store, string agentId) {
         if (!Directory.Exists(store.Directory)) return null;
 
         foreach (var daemonDirectory in Directory.EnumerateDirectories(store.Directory)) {
-            try {
-                var resume = Path.Combine(daemonDirectory, "resume");
-                var found  = new ResumeLedgerStore(resume).TryRead(agentId) ?? new ResumeLedgerStore(ParticipantsDirectory(resume)).TryRead(agentId);
-                if (found is not null) return found;
-            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-                // One unreadable daemon directory must not hide an entry in the next.
+            var resume = Path.Combine(daemonDirectory, "resume");
+
+            foreach (var candidate in new[] { new ResumeLedgerStore(resume), new ResumeLedgerStore(ParticipantsDirectory(resume)) }) {
+                try {
+                    if (candidate.TryRead(agentId) is not null) return candidate;
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    // One unreadable daemon directory must not hide an entry in the next.
+                }
             }
         }
 

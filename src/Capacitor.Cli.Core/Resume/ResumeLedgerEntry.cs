@@ -38,6 +38,7 @@ public sealed record ResumeLedgerEntry(
     // Set by whatever committed this run's session end; a stamped run is never resumed.
     DateTimeOffset? EndCommittedAt = null,
     string? EndCommittedEpoch = null,
+    string? EndCommittedSession = null,
     // When the runtime now recorded started; each launch and each resume stamps its own, so a client can
     // tell the runtime it attached to from a successor. Null before the runtime starts.
     DateTimeOffset? StartedAt = null

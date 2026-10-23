@@ -150,7 +150,7 @@ partial class WatchCommand(
     /// <summary>The hosted agent this watcher's process runs under, when a resume holds its session end.</summary>
     static string? AgentHoldingEndForResume() =>
         HostedAgent.FromEnvironment() is { AgentId: { } id } hosted
-     && DecideSessionEnd(runsOnElsewhere: false, hosted, ResumeEndSuppression.ShouldSuppress) == SessionEndAction.HeldForResume
+     && DecideSessionEnd(runsOnElsewhere: false, hosted, h => SessionEndFence.ShouldHold(h)) == SessionEndAction.HeldForResume
             ? id
             : null;
 
@@ -1268,7 +1268,7 @@ partial class WatchCommand(
             var claimant = LiveClaimant(sessionId);
             var hosted   = HostedAgent.FromEnvironment();
 
-            switch (DecideSessionEnd(SessionRunsOnElsewhere(vendor, agentId, claimant), hosted, ResumeEndSuppression.ShouldSuppress)) {
+            switch (DecideSessionEnd(SessionRunsOnElsewhere(vendor, agentId, claimant), hosted, h => SessionEndFence.ShouldHold(h, sessionId))) {
                 case SessionEndAction.RunsOnElsewhere:
                     Log(time, $"Not posting a {endReason} session-end: the session runs on in pid {claimant}");
                     await ArmSuccessorAsync(sessionId, transcriptPath, cwd, vendor, claimant);

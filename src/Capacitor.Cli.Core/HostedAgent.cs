@@ -17,6 +17,7 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     public const string BridgeUrlVar   = "KCAP_DAEMON_URL";
     public const string SessionKindVar = "KCAP_SESSION_KIND";
     public const string FlowRoleVar    = "KCAP_FLOW_ROLE";
+    public const string DaemonEpochVar = "KCAP_DAEMON_EPOCH";
 
     /// <summary>The agent kcap's MCP servers ask the hosting daemon about, for the session they act for.
     /// Distinct from <see cref="AgentIdVar"/> because hooks read that one and link the session they
@@ -33,6 +34,10 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     /// grants nothing: the flow agent id, which does carry authority, never reaches the agent process.</summary>
     public HostedSessionKind Kind { get; init; }
 
+    /// <summary>The epoch of the daemon incarnation that launched this process: a resumed agent runs
+    /// under a later one, so an end from this process is not the resumed run's end.</summary>
+    public string? DaemonEpoch { get; init; }
+
     public bool IsHosted => AgentId is not null || Kind != HostedSessionKind.None;
 
     /// <summary>
@@ -45,7 +50,8 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
         new(Environment.GetEnvironmentVariable(AgentIdVar) is { Length: > 0 } id ? id : null,
             Environment.GetEnvironmentVariable(RenderedVar) is Rendered,
             DaemonBridge.Parse(Environment.GetEnvironmentVariable(BridgeUrlVar))) {
-            Kind = HostedSessionKinds.Parse(Environment.GetEnvironmentVariable(SessionKindVar))
+            Kind        = HostedSessionKinds.Parse(Environment.GetEnvironmentVariable(SessionKindVar)),
+            DaemonEpoch = Environment.GetEnvironmentVariable(DaemonEpochVar) is { Length: > 0 } epoch ? epoch : null
         };
 
     /// <summary>The markers a daemon launch puts into the agent's environment. The role is written

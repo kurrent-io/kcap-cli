@@ -17,6 +17,14 @@ static class ClaudeSessionEndHandoff {
 
     public static bool ShouldHandOff(string[] args, string body) => !IsDetached(args) && IsSessionEnd(body);
 
+    public static string? SessionIdOf(string body) {
+        try {
+            return JsonNode.Parse(body)?["session_id"]?.GetValue<string>();
+        } catch {
+            return null;
+        }
+    }
+
     static bool IsSessionEnd(string body) {
         try {
             var name = JsonNode.Parse(body)?["hook_event_name"]?.GetValue<string>();
