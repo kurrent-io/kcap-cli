@@ -122,19 +122,21 @@ public class WizardCompositionCloudSignUpTests {
         await Assert.That(handler.Requests).IsEquivalentTo(["https://acme.kcap.ai/auth/config"]);
     }
 
-    /// A discovered workspace kcap.ai is still creating is waited on, saying so, until its host answers;
-    /// one kcap.ai calls failed, does not know, or can no longer be asked about, is left out.
+    /// A discovered workspace kcap.ai is still creating is waited on, saying so, until its host answers.
+    /// One kcap.ai calls failed or does not know is gone, and one it can no longer be asked about is pending.
     [Test]
-    [Arguments(new[] { "provisioning" }, WorkspaceAnswer.Live, true)]
-    [Arguments(new[] { "provisioning", "failed" }, WorkspaceAnswer.Gone, true)]
-    [Arguments(new[] { "provisioning", "401" }, WorkspaceAnswer.Gone, true)]
-    [Arguments(new string[0], WorkspaceAnswer.Gone, false)]
+    [Arguments(new[] { "provisioning" }, WorkspaceAnswer.Live, true, false)]
+    [Arguments(new[] { "provisioning", "failed" }, WorkspaceAnswer.Gone, true, true)]
+    [Arguments(new[] { "provisioning", "401" }, WorkspaceAnswer.Pending, true, false)]
+    [Arguments(new string[0], WorkspaceAnswer.Gone, false, false)]
     public async Task A_workspace_still_being_created_is_waited_on_until_it_answers(
-            string[] states, WorkspaceAnswer expected, bool waited) {
+            string[] states, WorkspaceAnswer expected, bool waited, bool failed) {
         var time = new FakeTimeProvider();
         using var handler = new ProvisioningHandler(states);
         var waitedFor = new List<string>();
-        var probe = WizardComposition.ProbeWorkspace(new PlainHttpClientFactory(handler), AuthEndpoints.Defaults, waitedFor.Add, time);
+        var failedFor = new List<string>();
+        var probe = WizardComposition.ProbeWorkspace(
+            new PlainHttpClientFactory(handler), AuthEndpoints.Defaults, waitedFor.Add, failedFor.Add, time);
 
         var answer = probe(new DiscoveredTenant { Origin = "https://acme.kcap.ai", Slug = "acme", DisplayName = "Acme" }, "bearer", CancellationToken.None);
         for (var tick = 0; tick < 50 && !answer.IsCompleted; tick++) {
@@ -144,6 +146,7 @@ public class WizardCompositionCloudSignUpTests {
 
         await Assert.That(await answer.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(expected);
         await Assert.That(waitedFor.Count > 0).IsEqualTo(waited);
+        await Assert.That(failedFor.Count > 0).IsEqualTo(failed);
     }
 
     /// Someone coming back from kcap.ai's sign-up opens on sign-in, without the sign-up page again;

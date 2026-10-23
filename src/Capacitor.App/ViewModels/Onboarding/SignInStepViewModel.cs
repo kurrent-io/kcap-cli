@@ -61,7 +61,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     bool    _urlPanelVisible;
     bool    _statusIsReady;
     bool    _expireAfterRun;
-    bool    _provisioningSeen;
+    string? _provisioningFailed;
 
     CancellationTokenSource? _signUpClock;
 
@@ -123,9 +123,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         bridges.Progress.WorkspaceProvisioning += workspace => {
             if (!Busy) return;
 
-            _provisioningSeen = true;
             ClearTransient();
             SetStatus(WorkspaceSettingUp, isError: false, WorkspaceSettingUpDetail(workspace));
+        };
+        bridges.Progress.WorkspaceProvisioningFailed += workspace => {
+            if (Busy) _provisioningFailed = workspace;
         };
 
         _picker.SelectionRequested += tenants => _post(() => {
@@ -515,8 +517,12 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
                 break;
             // The wait on a workspace still being created ran out before it went live.
-            case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when _provisioningSeen:
+            case AuthResult.Failed { Reason: AuthFailureReason.ProvisioningInProgress }:
                 SetStatus(WorkspaceSettingUp, isError: false, WorkspaceStillSettingUpDetail);
+
+                break;
+            case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when _provisioningFailed is { } workspace:
+                SetStatus(WorkspaceNotCreated, isError: true, WorkspaceNotCreatedDetail(workspace));
 
                 break;
             // A browser sign-up still provisioning: the wait goes on, so this is not a failed sign-in.
@@ -533,6 +539,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 break;
         }
     }
+
+    internal const string WorkspaceNotCreated = "kcap.ai couldn't finish creating your workspace";
+
+    internal static string WorkspaceNotCreatedDetail(string workspace) =>
+        $"{workspace} didn't finish setting up. Its page on kcap.ai says what happened";
 
     internal const string WorkspaceStillSettingUpDetail =
         "It's taking longer than usual. Sign in again in a few minutes, once kcap.ai says it's ready";
@@ -610,9 +621,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void ResetForRun(ConnectIntent intent) {
-        _running          = intent;
-        _lastReport       = null;
-        _provisioningSeen = false;
+        _running            = intent;
+        _lastReport         = null;
+        _provisioningFailed = null;
         Log.Clear();
         HidePrompts();
         ClearTransient();

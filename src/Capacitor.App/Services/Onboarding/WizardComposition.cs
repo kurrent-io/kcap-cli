@@ -135,7 +135,8 @@ internal static class WizardComposition {
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
             bridges.Telemetry, bridges.Endpoints, time,
             WizardAuthService.ArmingHook(claims),
-            ProbeWorkspace(httpFactory, bridges.Endpoints, bridges.Progress.ProvisioningWait, time), precondition));
+            ProbeWorkspace(httpFactory, bridges.Endpoints, bridges.Progress.ProvisioningWait, bridges.Progress.ProvisioningFailed, time),
+            precondition));
 
     internal static readonly TimeSpan ProvisioningPollInterval = TimeSpan.FromSeconds(5);
 
@@ -146,10 +147,11 @@ internal static class WizardComposition {
     /// kcap-web adds the owner to a workspace's organization before the workspace is live, so discovery
     /// can list one still provisioning, whose host 404s until then. kcap-web's own status for it tells
     /// the two apart: a workspace still being created is waited for, so sign-in finishes on its own once
-    /// it is live, and only one that is gone or failed is left out.
+    /// it is live. One kcap-web gave up on is gone; one still not live when the wait ends is pending.
     /// </summary>
     internal static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
-            IHttpClientFactory httpFactory, AuthEndpoints endpoints, Action<string> waiting, TimeProvider time) {
+            IHttpClientFactory httpFactory, AuthEndpoints endpoints, Action<string> waiting, Action<string> failed,
+            TimeProvider time) {
         return async (tenant, bearer, ct) => {
             var answer = await AskAsync(tenant, ct);
             if (answer != WorkspaceAnswer.Gone || tenant.Slug is not { Length: > 0 } slug) return answer;
@@ -168,12 +170,15 @@ internal static class WizardComposition {
 
                 // An expired bearer can no longer see a failure, so the wait ends there and sign-in offers another try.
                 status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
-                if (status.StatusCode == 401) return WorkspaceAnswer.Gone;
+                if (status.StatusCode == 401) return WorkspaceAnswer.Pending;
                 if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
-                    is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden) return WorkspaceAnswer.Gone;
+                    is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden) {
+                    failed(tenant.Label);
+                    return WorkspaceAnswer.Gone;
+                }
             }
 
-            return WorkspaceAnswer.Gone;
+            return WorkspaceAnswer.Pending;
         };
 
         async Task<WorkspaceAnswer> AskAsync(DiscoveredTenant tenant, CancellationToken ct) {

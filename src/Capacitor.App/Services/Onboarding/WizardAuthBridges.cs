@@ -19,6 +19,9 @@ public sealed class UiAuthProgress(Action<Action> post) : IAuthProgress {
     /// A discovered workspace is still being created; sign-in waits for it rather than leaving it out.
     public event Action<string>?         WorkspaceProvisioning;
 
+    /// kcap.ai stopped creating a discovered workspace, or it is no longer this account's.
+    public event Action<string>?         WorkspaceProvisioningFailed;
+
     public void Notice(string message) => post(() => NoticeReceived?.Invoke(message));
 
     public void Error(string message) => post(() => ErrorReceived?.Invoke(message));
@@ -33,6 +36,8 @@ public sealed class UiAuthProgress(Action<Action> post) : IAuthProgress {
     public void PollTick() => post(() => PollTicked?.Invoke());
 
     public void ProvisioningWait(string workspace) => post(() => WorkspaceProvisioning?.Invoke(workspace));
+
+    public void ProvisioningFailed(string workspace) => post(() => WorkspaceProvisioningFailed?.Invoke(workspace));
 }
 
 /// <summary>
