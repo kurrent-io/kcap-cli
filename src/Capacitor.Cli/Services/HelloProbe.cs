@@ -16,7 +16,7 @@ public sealed record HelloProbeResult(bool WellFormed, int? ProtocolVersion, str
     /// falsely read as reachable; <see cref="HelloProbe.RunAsync"/> is the only place it is set true.</summary>
     public bool Reachable { get; init; }
 
-    /// <summary>What the daemon advertised; empty when it sent none, as an older daemon does.</summary>
+    /// <summary>What the daemon advertised; empty when the reply carried no capabilities.</summary>
     public IReadOnlyList<string> Capabilities { get; init; } = [];
 }
 

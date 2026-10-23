@@ -104,8 +104,8 @@ public static class FrameCodec {
 
     // --- Spawn structured payload ---
     // Layout: [work:1][cols:BE16][rows:BE16][vendor:LP][cwd:LP][argc:BE32][args:LP…][private:1][title:1][title text:LP][account:LP].
-    // Every field after args is appended for wire compatibility: an older daemon ignores trailing
-    // bytes, and a frame from an older CLI simply ends early.
+    // Every field after args is trailing: a reader ignores bytes past the fields it knows, and a
+    // frame may end before any of them.
     const byte SpawnNoTitle       = 0;
     const byte SpawnExplicitTitle = 1;
     const byte SpawnDerivedTitle  = 2;

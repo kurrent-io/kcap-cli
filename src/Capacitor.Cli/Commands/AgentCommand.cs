@@ -103,7 +103,7 @@ internal sealed class AgentCommand(
         var name = ResolveName(parsed.DaemonName);
         if (!await EnsureDaemonAsync(name)) return 1;
 
-        // An older daemon never reads the account id and would start the agent under its default account.
+        // A daemon without accounts/1 never reads the account id and would start the agent under its default account.
         if (account is not null && !await DaemonChoosesAccountsAsync(name)) {
             await Console.Error.WriteLineAsync("kcap agent start: this daemon does not support choosing an account; update kcap on this machine");
 
