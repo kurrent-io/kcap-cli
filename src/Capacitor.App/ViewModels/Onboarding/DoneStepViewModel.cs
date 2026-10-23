@@ -70,8 +70,21 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string RepositoriesUnit => Import is { Repositories: 1 } ? "repository" : "repositories";
 
-    /// The landed count only moves when a pass ends, so the bar shows passes rather than inventing sessions.
-    public double ProgressValue => Import is { Passes: > 0 } run ? 100.0 * run.PassesDone / run.Passes : 0;
+    /// Sessions settled against the selection's count; passes when there is no count to measure against.
+    /// Too-short and excluded sessions never settle, so the bar can stop short of full before the run ends.
+    public double ProgressValue => Import switch {
+        { Expected: > 0 } run => Math.Min(100.0, 100.0 * run.Processed / run.Expected),
+        { Passes: > 0 } run   => 100.0 * run.PassesDone / run.Passes,
+        _                     => 0,
+    };
+
+    public string ActivityLine => Import switch {
+        { Processed: 0 }                  => "Looking through your history…",
+        { Expected: > 0 } run when run.Processed <= run.Expected
+            => $"{run.Processed.ToString("N0", CultureInfo.CurrentCulture)} of {run.Expected.ToString("N0", CultureInfo.CurrentCulture)} sessions checked",
+        { } run                           => $"{run.Processed.ToString("N0", CultureInfo.CurrentCulture)} sessions checked",
+        null                              => "",
+    };
 
     public bool FailedVisible => Import is { State: ImportRunState.Failed or ImportRunState.Cancelled } or { Running: false, Failed: > 0 };
 
