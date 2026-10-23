@@ -154,8 +154,13 @@ internal static class WizardComposition {
     internal static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
             IHttpClientFactory httpFactory, AuthEndpoints endpoints, Action<string> waiting, Action<string> failed,
             TimeProvider time) {
+        // The bearers of discoveries that already have a workspace to offer. Discovery waits on every probe,
+        // so a wait on one still being created would otherwise hold back the live ones.
+        var offerable = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+
         return async (tenant, bearer, ct) => {
             var answer = await AskAsync(tenant, ct);
+            if (answer != WorkspaceAnswer.Gone) offerable.TryAdd(bearer, 0);
             if (answer != WorkspaceAnswer.Gone || tenant.Slug is not { Length: > 0 } slug) return answer;
 
             var provisioning = new TenantProvisioningClient(
@@ -169,6 +174,8 @@ internal static class WizardComposition {
             var deadline = time.GetUtcNow() + ProvisioningWaitLimit;
             while (time.GetUtcNow() < deadline) {
                 await Task.Delay(ProvisioningPollInterval, time, ct);
+                if (offerable.ContainsKey(bearer)) return WorkspaceAnswer.Pending;
+
                 answer = await AskAsync(tenant, ct);
                 if (answer == WorkspaceAnswer.Live) return answer;
 

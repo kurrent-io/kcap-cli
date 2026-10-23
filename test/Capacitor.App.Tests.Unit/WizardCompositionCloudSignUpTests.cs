@@ -151,6 +151,26 @@ public class WizardCompositionCloudSignUpTests {
         await Assert.That(failedFor.Count > 0).IsEqualTo(failed);
     }
 
+    /// A live workspace found in the same discovery ends the wait on one still being created, so the
+    /// live one is offered without waiting for the other.
+    [Test]
+    public async Task A_live_workspace_ends_the_wait_on_one_still_being_created() {
+        var time = new FakeTimeProvider();
+        using var handler = new ProvisioningHandler(["provisioning"], liveOrigin: "https://older.kcap.ai");
+        var probe = WizardComposition.ProbeWorkspace(new PlainHttpClientFactory(handler), AuthEndpoints.Defaults, _ => { }, _ => { }, time);
+
+        var pending = probe(new DiscoveredTenant { Origin = "https://acme.kcap.ai", Slug = "acme" }, "bearer", CancellationToken.None);
+        var live    = await probe(new DiscoveredTenant { Origin = "https://older.kcap.ai", Slug = "older" }, "bearer", CancellationToken.None);
+        for (var tick = 0; tick < 50 && !pending.IsCompleted; tick++) {
+            time.Advance(WizardComposition.ProvisioningPollInterval);
+            await Task.Delay(20);
+        }
+
+        await Assert.That(live).IsEqualTo(WorkspaceAnswer.Live);
+        await Assert.That(await pending.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(WorkspaceAnswer.Pending);
+        await Assert.That(handler.StatusPolls).IsEqualTo(1);
+    }
+
     /// Someone coming back from kcap.ai's sign-up opens on sign-in, without the sign-up page again;
     /// everyone else starts on the edition choice.
     [Test]
@@ -185,12 +205,16 @@ public class WizardCompositionCloudSignUpTests {
 
     /// The host 404s until it is live, after two status polls of a workspace that only provisions; kcap-web's
     /// status answers each poll with the next scripted state, holding the last ("401" is an expired bearer),
-    /// and 404s when none is scripted.
-    sealed class ProvisioningHandler(string[] states) : HttpMessageHandler {
+    /// and 404s when none is scripted. A live origin answers 200 throughout.
+    sealed class ProvisioningHandler(string[] states, string? liveOrigin = null) : HttpMessageHandler {
         int _polls;
+
+        public int StatusPolls => _polls;
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             var path = request.RequestUri!.AbsolutePath;
+            if (liveOrigin is not null && request.RequestUri.GetLeftPart(UriPartial.Authority) == liveOrigin)
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
             if (path == "/auth/config") {
                 var live = states is ["provisioning"] && _polls >= 2;
                 return Task.FromResult(new HttpResponseMessage(live ? System.Net.HttpStatusCode.OK : System.Net.HttpStatusCode.NotFound));
