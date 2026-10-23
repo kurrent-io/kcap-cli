@@ -54,6 +54,26 @@ public class EvalReportToolTests {
     }
 
     [Test]
+    public async Task Unscored_outcomes_obligations_and_failed_questions_are_reported() {
+        const string body = """
+            {"is_terminal":true,"completed_result":{"overall_score":3,"summary":"Mixed.","categories":[{"name":"process","score":3,"questions":[
+               {"question_id":"tracked","outcome":"insufficient_evidence","finding":"Too little trace."},
+               {"question_id":"scoped","outcome":"not_applicable","finding":"No tracker."},
+               {"question_id":"planned","outcome":"assessed","score":3,"verdict":"warn","finding":"Partly.",
+                "obligations":[{"id":"o1","title":"Write a plan","status":"met","note":"plan.md"}],"obligations_not_reported":"one task cut"}]}],
+             "failed_questions":[{"category":"safety","question_id":"secrets","code":"spend_budget"}]}}
+            """;
+
+        var (text, _) = EvalReportTool.Render("s-1", HttpStatusCode.OK, body);
+
+        await Assert.That(text).Contains("- **tracked**: insufficient_evidence");
+        await Assert.That(text).Contains("- **scoped**: not_applicable");
+        await Assert.That(text).Contains("  - Obligation Write a plan (met): plan.md");
+        await Assert.That(text).Contains("  - Obligations not reported: one task cut");
+        await Assert.That(text).Contains("- safety/secrets: spend_budget");
+    }
+
+    [Test]
     public async Task A_completed_run_with_no_categories_still_reports_its_score_and_retrospective() {
         const string body = """
             {"is_terminal":true,"completed_result":{"overall_score":4,"summary":"Fine.","categories":[],"failed_questions":[],

@@ -79,8 +79,7 @@ static class EvalReportTool {
             var category = trend.Str("category");
             foreach (var point in Items(trend, "points")) {
                 // A trend score is a category average, so it is fractional as often as not.
-                if (point.Str("session_id") is not { } id || category is null
-                 || !point.TryGetProperty("score", out var score) || score.ValueKind != JsonValueKind.Number) continue;
+                if (point.Str("session_id") is not { } id || category is null || point.Prop("score") is not { ValueKind: JsonValueKind.Number } score) continue;
                 if (!runs.TryGetValue(id, out var run)) runs[id] = run = new Run(id, point.Str("session_slug"), point.Str("evaluated_at"), []);
                 run.Scores[category] = score.GetDouble();
             }
@@ -150,14 +149,25 @@ static class EvalReportTool {
         foreach (var category in Items(result, "categories")) {
             md.Append("## ").Append(category.Str("name")).Append(" (").Append(category.Num("score")?.ToString(CultureInfo.InvariantCulture) ?? "?").Append("/5)\n\n");
             foreach (var q in Items(category, "questions")) {
+                // A question the judge could not answer has an outcome in place of a score.
                 md.Append("- **").Append(q.Str("question_id")).Append("**: ")
-                  .Append(q.Num("score") is { } score ? $"{score}/5" : "not scored");
+                  .Append(q.Num("score") is { } score ? $"{score}/5" : q.Str("outcome") ?? "not scored");
                 if (q.Str("verdict") is { } verdict) md.Append(", ").Append(verdict);
                 md.Append('\n');
                 Line(md, "Finding", q.Str("finding"));
                 Line(md, "Evidence", q.Str("evidence"));
                 Line(md, "Recommendation", q.Str("recommendation"));
+                foreach (var o in Items(q, "obligations"))
+                    Line(md, $"Obligation {o.Str("title") ?? o.Str("id")} ({o.Str("status")})", o.Str("note") ?? "no note");
+                Line(md, "Obligations not reported", q.Str("obligations_not_reported"));
             }
+            md.Append('\n');
+        }
+
+        var failed = Items(result, "failed_questions").ToList();
+        if (failed.Count > 0) {
+            md.Append("## Questions that failed to judge\n\n");
+            foreach (var f in failed) md.Append("- ").Append(f.Str("category")).Append('/').Append(f.Str("question_id")).Append(": ").Append(f.Str("code")).Append('\n');
             md.Append('\n');
         }
 
@@ -192,5 +202,5 @@ static class EvalReportTool {
             : report[..MaxReportChars] + $"\n\n[Report cut at {MaxReportChars} characters of {report.Length}.]\n";
 
     static IEnumerable<JsonElement> Items(JsonElement parent, string name, bool objects = true) =>
-        parent.Arr(name) is { } array ? array.EnumerateArray().Where(e => objects ? e.ValueKind == JsonValueKind.Object : e.ValueKind == JsonValueKind.String) : [];
+        parent.Arr(name) is { } array ? array.EnumerateArray().Where(e => objects ? e.IsObject : e.IsString) : [];
 }
