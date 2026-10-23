@@ -90,6 +90,56 @@ public class WizardCompositionHappyPathTests {
     }
 
     [Test]
+    public async Task The_done_page_reports_the_install_once_the_daemon_runs_and_only_then_opens() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            new ServiceSnapshot("daemon-a", false, "not_installed", null, "/opt/kcap/kcapd", null, null, false, false));
+        bool? daemonRanFirst = null;
+
+        var readiness = await AvaloniaSession.DispatchAsync(async () => {
+            WizardGraph? graph = null;
+            graph = WizardComposition.BuildGraph(harness.Options() with {
+                AlreadyAuthenticated = true,
+                ReportCliSetup = _ => {
+                    daemonRanFirst = graph!.Daemon.Satisfied;
+                    return Task.FromResult(true);
+                },
+            });
+            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
+
+            return await done.WhenAnyValue(x => x.Readiness).FirstAsync(r => r != WorkspaceReadiness.Preparing).ToTask();
+        });
+
+        await Assert.That(readiness).IsEqualTo(WorkspaceReadiness.Ready);
+        await Assert.That(daemonRanFirst).IsTrue();
+    }
+
+    [Test]
+    public async Task The_done_page_does_not_report_an_install_whose_daemon_cannot_run() {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+        harness.Cli.CliPath = null;
+        var reports = 0;
+
+        var readiness = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with {
+                AlreadyAuthenticated = true,
+                ReportCliSetup = _ => {
+                    reports++;
+                    return Task.FromResult(true);
+                },
+            });
+            var done = graph.Steps.OfType<DoneStepViewModel>().Single();
+            await done.OnEnterAsync(CancellationToken.None);
+
+            return await done.WhenAnyValue(x => x.Readiness).FirstAsync(r => r != WorkspaceReadiness.Preparing).ToTask();
+        });
+
+        await Assert.That(readiness).IsEqualTo(WorkspaceReadiness.DaemonNotRunning);
+        await Assert.That(reports).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task A_configured_name_another_machine_holds_is_saved_as_its_free_variant_before_the_install() {
         WizardCompositionFixtures.WriteConfig(Config.Root,
             new ProfileConfig { ActiveProfile = "default", Profiles = new() { ["default"] = new Profile() } });
