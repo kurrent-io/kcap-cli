@@ -242,31 +242,49 @@ internal partial class AgentOrchestrator {
         }
     }
 
+    /// How long a daemon write waits for a session end holding the entry's lock.
+    static readonly TimeSpan EntryLockWait = TimeSpan.FromSeconds(1);
+
     bool TryMarkResuming(AgentInstance agent) {
         if (ResumeLedger is not { } ledger || !IsInteractive(agent)) return false;
 
         lock (_ledgerLock) {
-            if (agent.IsCleanupStarted || TryReadLedger(agent.Id) is not { } entry) return false;
+            if (agent.IsCleanupStarted) return false;
 
             var now = _time.GetUtcNow();
+            LockedUpdate result;
 
             try {
-                ledger.Write(entry with {
+                result = ledger.TryUpdateUnderLock(agent.Id, entry => EndCommittedForCurrentSession(entry, agent) ? null : entry with {
                     State                 = ResumeState.Resuming,
                     PredecessorInstanceId = _config.InstanceId,
                     ResumingAt            = now,
                     UpdatedAt             = now,
                     SessionId             = agent.SessionId ?? entry.SessionId,
                     VendorSession         = agent.VendorSession ?? entry.VendorSession
-                });
+                }, EntryLockWait);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 LogResumeLedgerFailed(ex, "writing", agent.Id);
                 return false;
             }
 
+            if (result != LockedUpdate.Written) return false;
+
             agent.ResumePending = true;
             return true;
         }
+    }
+
+    /// <summary>An end committed for the session the agent now runs. One committed for an earlier session
+    /// of the same process — a Claude <c>/clear</c> ends one session and starts the next — does not count;
+    /// an unknown session on either side does.</summary>
+    static bool EndCommittedForCurrentSession(ResumeLedgerEntry entry, AgentInstance agent) {
+        if (entry.EndCommittedAt is null) return false;
+
+        var ended   = WorkContextIds.CanonicalSessionId(entry.EndCommittedSession);
+        var current = WorkContextIds.CanonicalSessionId(agent.SessionId ?? entry.SessionId);
+
+        return ended is null || current is null || string.Equals(ended, current, StringComparison.OrdinalIgnoreCase);
     }
 
     /// Written through a temp file created owner-only, so the ring is never readable by anyone else.
@@ -380,7 +398,9 @@ internal partial class AgentOrchestrator {
             LastError:             null,
             PredecessorInstanceId: null,
             ResumingAt:            null,
-            DaemonInstanceId:      _config.InstanceId);
+            DaemonInstanceId:      _config.InstanceId,
+            RunEpoch:              _daemonEpoch,
+            LaunchEpoch:           prior?.LaunchEpoch ?? _daemonEpoch);
     }
 
     /// A Claude session is named by the daemon so the ledger holds it before the transcript exists;
@@ -443,9 +463,18 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    void TryWriteLedger(string agentId, Func<ResumeLedgerEntry> build) {
+    /// <summary>Under the entry lock, carrying over an end a session committed meanwhile, unless
+    /// <paramref name="newRun"/>: a resumed run starts with none.</summary>
+    void TryWriteLedger(string agentId, Func<ResumeLedgerEntry> build, bool newRun = false) {
         try {
-            ResumeLedger!.Write(build());
+            var result = ResumeLedger!.TryUpdateUnderLock(agentId, current => newRun ? build() : build() with {
+                EndCommittedAt      = current.EndCommittedAt,
+                EndCommittedEpoch   = current.EndCommittedEpoch,
+                EndCommittedSession = current.EndCommittedSession
+            }, EntryLockWait);
+
+            if (result == LockedUpdate.NoEntry) ResumeLedger.Write(build());
+            else if (result == LockedUpdate.LockTimeout) LogResumeLedgerFailed(new IOException("the entry stayed locked"), "writing", agentId);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogResumeLedgerFailed(ex, "writing", agentId);
         }
@@ -1038,6 +1067,7 @@ internal partial class AgentOrchestrator {
 
         var successor = entry with {
             AgentId = agentId, SessionId = null, VendorSession = null, Attempts = 0, LastError = null, CreatedAt = _time.GetUtcNow(),
+            LaunchEpoch = _daemonEpoch,
             InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId]
         };
         var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
@@ -1170,8 +1200,12 @@ internal partial class AgentOrchestrator {
                 State                 = ResumeState.Running,
                 LastError             = null,
                 PredecessorInstanceId = null,
-                ResumingAt            = null
-            });
+                ResumingAt            = null,
+                RunEpoch              = _daemonEpoch,
+                EndCommittedAt        = null,
+                EndCommittedEpoch     = null,
+                EndCommittedSession   = null
+            }, newRun: true);
         }
     }
 
