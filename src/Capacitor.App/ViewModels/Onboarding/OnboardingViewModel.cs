@@ -66,8 +66,9 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
     public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible
         || ShowLifecycleStatus || ShowLifecycleAttention;
-    /// Hidden, not disabled, where setup cannot be left half-done.
-    public bool FinishLaterVisible => _finishLaterAllowed;
+    /// Hidden, not disabled, where setup cannot be left half-done, and on Done, whose own primary
+    /// action already closes setup.
+    public bool FinishLaterVisible => _finishLaterAllowed && Current.Id != WizardStepId.Done;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 

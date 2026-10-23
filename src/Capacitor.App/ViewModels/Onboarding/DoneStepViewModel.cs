@@ -47,7 +47,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         : _current.Local && Import is null ? $"kcap keeps what your coding agents do on {_current.MachineName}, and gives them tools to search it back — so the next time you hit something, what you already worked out is there to find."
         : Import is null && !CapturePromised ? "Setup hasn't added recording connections. Any connections you already had are unchanged. You can connect more harnesses whenever you're ready."
         : Import is null         ? $"kcap keeps what your coding agents do on {_current.MachineName}, and gives them tools to search it back — so the next time you hit something, what you already worked out is there to find."
-        : Import.Running         ? "What has landed is already searchable, and the rest is still uploading in the background."
+        : Import.Running         ? "What has landed is already searchable."
         : Import.Imported > 0    ? "Your agents can search all of it — ask one what you have already tried, and it looks here first."
         :                          "No sessions were uploaded. Your history is still on this machine.";
 
@@ -66,7 +66,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string RepositoriesValue => Import?.Repositories.ToString(CultureInfo.CurrentCulture) ?? "—";
 
-    public string RepositoriesCaption => Running ? "keeps uploading after you open kcap" : "selected from this machine";
+    public string RepositoriesCaption => "selected from this machine";
 
     public string RepositoriesUnit => Import is { Repositories: 1 } ? "repository" : "repositories";
 

@@ -202,7 +202,7 @@ public class OnboardingViewModelTests {
     public async Task Finish_later_follows_its_gate() {
         var (open, closed) = await AvaloniaSession.DispatchAsync(async () => {
             var gate = new System.Reactive.Subjects.BehaviorSubject<bool>(true);
-            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Done)], canFinishLater: gate);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], canFinishLater: gate);
             await vm.PendingEnterForTesting;
 
             var open = (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible);
@@ -212,6 +212,22 @@ public class OnboardingViewModelTests {
 
         await Assert.That(open).IsEqualTo((true, true));
         await Assert.That(closed).IsEqualTo((false, false));
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Finish_later_is_hidden_on_the_done_page() {
+        var (onEdition, onDone) = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition), new FakeWizardStep(WizardStepId.Done)]);
+            await vm.PendingEnterForTesting;
+
+            var onEdition = vm.FinishLaterVisible;
+            await vm.NextCommand.Execute().ToTask();
+            return (onEdition, vm.FinishLaterVisible);
+        });
+
+        await Assert.That(onEdition).IsTrue();
+        await Assert.That(onDone).IsFalse();
     }
 
     [Test]

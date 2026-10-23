@@ -34,6 +34,8 @@
                         </StackPanel>
                         <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
                                      Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}" />
+                        <TextBlock x:Name="ImportContinuesText" Classes="onboardingNote"
+                                   Text="The import continues in the background, so you can start working now." />
                     </StackPanel>
                 </StackPanel>
 
