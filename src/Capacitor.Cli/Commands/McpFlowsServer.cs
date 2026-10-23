@@ -34,7 +34,7 @@ partial class McpFlowsServer(
         // Prefer the `--driver` stamp from this server's own registration (deterministic for the JSON
         // harnesses); fall back to env inference for Claude/Codex, whose registrations are unstamped.
         var driverVendor = DriverVendor.Infer(driverArg);
-        var callerAgentId = HostedAgent.FromEnvironment().AgentId;
+        var callerAgentId = HostedAgent.FromEnvironment().LinkedAgentId();
         var tools        = BuildToolsList();
 
         var repository = new CwdRepository(config, cwd, router, time);

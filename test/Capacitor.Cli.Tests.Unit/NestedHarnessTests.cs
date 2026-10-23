@@ -14,8 +14,10 @@ public class NestedHarnessTests {
     [Arguments(true, new[] { 80, 70, 50, 10 }, new[] { "codex", "zsh", "claude", "kcap" })]
     // codex npm shim(81) -> codex binary(80) -> kcap(10): one agent, launched through its own shim
     [Arguments(false, new[] { 81, 80, 10 }, new[] { "codex", "codex", "kcap" })]
-    // claude(50) -> kcap(10) -> zsh(5) -> codex(3): a daemon started inside another agent's session
-    [Arguments(false, new[] { 50, 10, 5, 3 }, new[] { "claude", "kcap", "zsh", "codex" })]
+    // claude(50) -> kcap-daemon(10) -> zsh(5) -> codex(3): a daemon started inside another agent's session
+    [Arguments(false, new[] { 50, 10, 5, 3 }, new[] { "claude", "kcap-daemon", "zsh", "codex" })]
+    // codex(80) -> claude(50) -> kcap(10): a nested agent the outer one started directly
+    [Arguments(true, new[] { 80, 50, 10 }, new[] { "codex", "claude", "kcap" })]
     // codex(80) -> zsh(70) -> claude(50), then unreadable: what was seen still counts
     [Arguments(true, new[] { 80, 70, 50 }, new[] { "codex", "zsh", "claude" })]
     public async Task A_second_coding_agent_below_the_daemon_marks_the_hook_nested(bool nested, int[] pids, string[] names) {
