@@ -101,8 +101,8 @@ public class AgentOrchestratorResumeAccountTests {
 
         await Assert.That(Recorded(atStart["ledger-work"]!)).IsEqualTo((work, WorkId, "Work"));
         await Assert.That(Recorded(orch.ResumeLedger!.TryRead("ledger-work")!)).IsEqualTo((work, WorkId, "Work"));
-        await Assert.That(Recorded(atStart["ledger-default"]!)).IsEqualTo((ClaudeDefault, (string?)null, ".claude"));
-        await Assert.That(Recorded(orch.ResumeLedger!.TryRead("ledger-default")!)).IsEqualTo((ClaudeDefault, (string?)null, ".claude"));
+        await Assert.That(Recorded(atStart["ledger-default"]!)).IsEqualTo((AccountDirectory.Normalize(ClaudeDefault), (string?)null, ".claude"));
+        await Assert.That(Recorded(orch.ResumeLedger!.TryRead("ledger-default")!)).IsEqualTo((AccountDirectory.Normalize(ClaudeDefault), (string?)null, ".claude"));
     }
 
     [Test]
@@ -113,10 +113,10 @@ public class AgentOrchestratorResumeAccountTests {
 
         await ResumeAsync(orch);
 
-        var expected = new ResolvedAccount(before, null, ".claude-before");
+        var expected = new ResolvedAccount(AccountDirectory.Normalize(before), null, ".claude-before");
         await Assert.That(_launcher.LastContext!.Account).IsEqualTo(expected);
         await Assert.That(orch.GetAgentForTest("resume-moved")!.Account).IsEqualTo(expected);
-        await Assert.That(_pty.LastEnv!["CLAUDE_CONFIG_DIR"]).IsEqualTo(before);
+        await Assert.That(_pty.LastEnv!["CLAUDE_CONFIG_DIR"]).IsEqualTo(AccountDirectory.Normalize(before));
         await Assert.That(orch.ResumeLedger!.TryRead("resume-moved")!.State).IsEqualTo(ResumeState.Running);
     }
 
@@ -182,7 +182,7 @@ public class AgentOrchestratorResumeAccountTests {
 
         await ResumeAsync(orch);
 
-        var expected = new ResolvedAccount(personal, null, ".claude-personal");
+        var expected = new ResolvedAccount(AccountDirectory.Normalize(personal), null, ".claude-personal");
         await Assert.That(_launcher.LastContext!.Account).IsEqualTo(expected);
         await Assert.That(orch.GetAgentForTest("resume-personal")!.Account).IsEqualTo(expected);
         await Assert.That(Recorded(orch.ResumeLedger!.TryRead("resume-personal")!)).IsEqualTo((personal, (string?)null, ".claude-personal"));
@@ -213,7 +213,7 @@ public class AgentOrchestratorResumeAccountTests {
 
         await ResumeAsync(orch);
 
-        var expected = new ResolvedAccount(ClaudeDefault, null, ".claude");
+        var expected = new ResolvedAccount(AccountDirectory.Normalize(ClaudeDefault), null, ".claude");
         await Assert.That(_launcher.LastContext!.Account).IsEqualTo(expected);
         await Assert.That(orch.GetAgentForTest("resume-legacy")!.Account).IsEqualTo(expected);
         await Assert.That(orch.ResumeLedger!.TryRead("resume-legacy")!.State).IsEqualTo(ResumeState.Running);

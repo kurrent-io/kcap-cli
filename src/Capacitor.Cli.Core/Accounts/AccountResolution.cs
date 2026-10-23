@@ -81,8 +81,21 @@ public static class AccountResolution {
 
     static bool IsNotAPath(Exception ex) => ex is ArgumentException or NotSupportedException or IOException;
 
-    static AccountResolutionOutcome Accepted(string directory, VendorAccount? entry) =>
-        new(new ResolvedAccount(directory, entry?.Id, entry?.Label ?? Path.GetFileName(Path.TrimEndingDirectorySeparator(directory))), null);
+    // The physical directory: a default reached through a symlink is recorded as the directory behind it,
+    // so retargeting the link before a resume cannot move the continuation to another account.
+    static AccountResolutionOutcome Accepted(string directory, VendorAccount? entry) {
+        var physical = Physical(directory);
+
+        return new(new ResolvedAccount(physical, entry?.Id, entry?.Label ?? Path.GetFileName(physical)), null);
+    }
+
+    static string Physical(string directory) {
+        try {
+            return AccountDirectory.Normalize(directory);
+        } catch (Exception ex) when (IsNotAPath(ex)) {
+            return Path.TrimEndingDirectorySeparator(directory);
+        }
+    }
 
     static AccountResolutionOutcome NoAccount(HarnessId vendor, string accountId) => Refused($"{Unavailable}: no {vendor} account {accountId}");
 

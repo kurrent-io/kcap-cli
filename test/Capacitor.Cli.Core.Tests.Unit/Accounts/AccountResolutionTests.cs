@@ -30,7 +30,7 @@ public class AccountResolutionTests {
         var outcome = AccountResolution.Resolve(Registry(), HarnessId.Claude, null, Personal);
 
         await Assert.That(outcome.Refused).IsFalse();
-        await Assert.That(outcome.Account!.Directory).IsEqualTo(Personal);
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(Personal));
         await Assert.That(outcome.Account.AccountId).IsEqualTo(PersId);
         await Assert.That(outcome.Account.Label).IsEqualTo("Personal");
     }
@@ -50,9 +50,30 @@ public class AccountResolutionTests {
         var other   = Tmp.CreateDir("elsewhere");
         var outcome = AccountResolution.Resolve(Registry(), HarnessId.Claude, null, other);
 
-        await Assert.That(outcome.Account!.Directory).IsEqualTo(other);
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(other));
         await Assert.That(outcome.Account.AccountId).IsNull();
         await Assert.That(outcome.Account.Label).IsEqualTo("elsewhere");
+    }
+
+    /// <summary>The recorded directory is the one behind the link, so a retargeted link cannot move a
+    /// resume to another account.</summary>
+    [Test]
+    public async Task Default_behind_a_symlink_records_the_physical_directory_and_a_retarget_cannot_move_a_resume() {
+        Skip.When(OperatingSystem.IsWindows(), "symlink creation needs elevated privilege on Windows CI");
+        var link = Tmp.PathTo("current");
+        Directory.CreateSymbolicLink(link, Work);
+
+        var launched = AccountResolution.Resolve(Registry(), HarnessId.Claude, null, link);
+
+        await Assert.That(launched.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(Work));
+        await Assert.That(launched.Account.AccountId).IsEqualTo(WorkId);
+
+        Directory.Delete(link);
+        Directory.CreateSymbolicLink(link, Personal);
+        var resumed = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, launched.Account.AccountId, launched.Account.Directory, link);
+
+        await Assert.That(resumed.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(Work));
+        await Assert.That(resumed.Account.AccountId).IsEqualTo(WorkId);
     }
 
     [Test]
@@ -124,7 +145,7 @@ public class AccountResolutionTests {
         var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, null, null, Personal);
 
         await Assert.That(outcome.Refused).IsFalse();
-        await Assert.That(outcome.Account!.Directory).IsEqualTo(Personal);
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(Personal));
         await Assert.That(outcome.Account.AccountId).IsEqualTo(PersId);
     }
 
@@ -133,7 +154,7 @@ public class AccountResolutionTests {
         var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, null, "", Personal);
 
         await Assert.That(outcome.Refused).IsFalse();
-        await Assert.That(outcome.Account!.Directory).IsEqualTo(Personal);
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(Personal));
         await Assert.That(outcome.Account.AccountId).IsEqualTo(PersId);
     }
 
@@ -162,7 +183,7 @@ public class AccountResolutionTests {
         var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, WorkId, stored, Personal);
 
         await Assert.That(outcome.Refused).IsFalse();
-        await Assert.That(outcome.Account!.Directory).IsEqualTo(stored);
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(stored));
         await Assert.That(outcome.Account.AccountId).IsEqualTo(WorkId);
         await Assert.That(outcome.Account.Label).IsEqualTo("Work");
     }
@@ -192,7 +213,7 @@ public class AccountResolutionTests {
         var outcome = AccountResolution.ResolveForResume(Registry(), HarnessId.Claude, null, stored, Personal);
 
         await Assert.That(outcome.Refused).IsFalse();
-        await Assert.That(outcome.Account!.Directory).IsEqualTo(stored);
+        await Assert.That(outcome.Account!.Directory).IsEqualTo(AccountDirectory.Normalize(stored));
         await Assert.That(outcome.Account.AccountId).IsNull();
         await Assert.That(outcome.Account.Label).IsEqualTo("adhoc");
 

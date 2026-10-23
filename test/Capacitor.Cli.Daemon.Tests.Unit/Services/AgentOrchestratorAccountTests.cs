@@ -68,7 +68,7 @@ public class AgentOrchestratorAccountTests {
 
         await orch.HandleLaunchAgentForTest(Launch("acct-default", repo, accountId: null));
 
-        var expected = new ResolvedAccount(ClaudeDefault, null, ".claude");
+        var expected = new ResolvedAccount(AccountDirectory.Normalize(ClaudeDefault), null, ".claude");
         await Assert.That(launcher.LastContext!.Account).IsEqualTo(expected);
         await Assert.That(orch.GetAgentForTest("acct-default")!.Account).IsEqualTo(expected);
     }
@@ -271,20 +271,21 @@ public class AgentOrchestratorAccountTests {
 
     [Test]
     public async Task Unregistered_default_reports_the_directory_and_a_null_id() {
-        var server = new CaptureServerConnection();
+        var physical = AccountDirectory.Normalize(ClaudeDefault);
+        var server   = new CaptureServerConnection();
         using var repo = GitRepo.CreateWithCommit();
         await using var orch = Build(server, LivePty(), Spy(), repo);
 
         await orch.HandleLaunchAgentForTest(Launch("acct-unregistered", repo, accountId: null));
 
         var row = orch.SnapshotAgentsForStatus().Single(a => a.Id == "acct-unregistered");
-        await Assert.That(row.AccountDirectory).IsEqualTo(ClaudeDefault);
+        await Assert.That(row.AccountDirectory).IsEqualTo(physical);
         await Assert.That(row.AccountId).IsNull();
         await Assert.That(row.AccountLabel).IsEqualTo(".claude");
-        await Assert.That(server.AgentRegisteredAccounts).IsEquivalentTo([("acct-unregistered", (string?)ClaudeDefault, (string?)null, (string?)".claude")]);
+        await Assert.That(server.AgentRegisteredAccounts).IsEquivalentTo([("acct-unregistered", (string?)physical, (string?)null, (string?)".claude")]);
 
         var live = orch.BuildLiveAgents().Single(a => a.Id == "acct-unregistered");
-        await Assert.That(live.AccountDirectory).IsEqualTo(ClaudeDefault);
+        await Assert.That(live.AccountDirectory).IsEqualTo(physical);
         await Assert.That(live.AccountId).IsNull();
         await Assert.That(live.AccountLabel).IsEqualTo(".claude");
     }
@@ -336,7 +337,7 @@ public class AgentOrchestratorAccountTests {
         await Assert.That(server.LaunchFailedCalls[0].AgentId).IsEqualTo("acct-malformed-id");
         await Assert.That(server.LaunchFailedCalls[0].Reason).IsEqualTo(RefusalFor(WorkId));
         await Assert.That(launcher.PrepareCalls).IsEqualTo(1);
-        await Assert.That(launcher.LastContext!.Account).IsEqualTo(new ResolvedAccount(ClaudeDefault, null, ".claude"));
+        await Assert.That(launcher.LastContext!.Account).IsEqualTo(new ResolvedAccount(AccountDirectory.Normalize(ClaudeDefault), null, ".claude"));
     }
 
     /// <summary>Both layouts hold a transcript for the agent's worktree, so the one detection links
