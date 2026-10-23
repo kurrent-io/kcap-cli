@@ -20,6 +20,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     DoneFacts _current = DoneFacts.Empty;
     WorkspaceReadiness _readiness;
     bool _preparing;
+    string? _readyFor;
 
     /// <param name="prepare">Brings the daemon up and reports the install, answering whether the
     /// dashboard may open; true asks it to try again. Null when there is nothing to wait for.</param>
@@ -173,10 +174,15 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     /// Re-read on every entry: Back-then-forward can change what the earlier pages did.
     public Task OnEnterAsync(CancellationToken ct) {
         Refresh();
+        // Back to sign-in can switch to a server that has not had this install's report.
+        if (_prepare is not null && Readiness == WorkspaceReadiness.Ready && _readyFor != Target) Readiness = WorkspaceReadiness.Preparing;
         if (Readiness != WorkspaceReadiness.Ready) _ = PrepareAsync(retry: false);
 
         return Task.CompletedTask;
     }
+
+    // What the link opens, and so which server must have the report.
+    string? Target => _current.Local ? _current.DashboardUrl : _current.WorkspaceUrl;
 
     void Refresh() {
         if (_current.Import is INotifyPropertyChanged before) before.PropertyChanged -= OnImportChanged;
@@ -185,12 +191,14 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         Restate();
     }
 
-    /// Ready is never revoked: once the server has the install, a later failure cannot make it ask again.
+    /// Ready holds for the server that took the report: a later failure cannot make it ask again,
+    /// but a different server has to be prepared afresh.
     async Task PrepareAsync(bool retry) {
         if (_prepare is null || _preparing || Readiness == WorkspaceReadiness.Ready) return;
 
         _preparing = true;
         Readiness  = WorkspaceReadiness.Preparing;
+        var target = Target;
         WorkspaceReadiness result;
         try {
             result = await _prepare(retry).ConfigureAwait(true);
@@ -203,7 +211,15 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
         // The daemon line reads the run that just settled.
         Refresh();
+
+        // Sign-in moved to another server while this ran; its answer says nothing about that one.
+        if (Target != target) {
+            await PrepareAsync(retry: false).ConfigureAwait(true);
+            return;
+        }
+
         Readiness = result == WorkspaceReadiness.Preparing ? WorkspaceReadiness.Unreported : result;
+        if (Readiness == WorkspaceReadiness.Ready) _readyFor = target;
     }
 
     // Next finishes the wizard — the shell's own last-step handling raises CloseRequested.

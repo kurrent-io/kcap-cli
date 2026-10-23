@@ -211,6 +211,61 @@ public class DoneStepViewModelTests {
         await Assert.That(calls).IsEquivalentTo([false, true]);
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Signing_in_to_another_workspace_registers_this_machine_again() {
+        var (linkBeforeReport, opened, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var opener = new RecordingUrlOpener();
+            var url = "https://acme.kcap.ai";
+            var reports = new List<TaskCompletionSource<WorkspaceReadiness>>();
+            var vm = new DoneStepViewModel(() => Facts() with { WorkspaceUrl = url }, opener, _ => {
+                reports.Add(new TaskCompletionSource<WorkspaceReadiness>());
+                return reports[^1].Task;
+            });
+            await vm.OnEnterAsync(CancellationToken.None);
+            reports[0].SetResult(WorkspaceReadiness.Ready);
+            await vm.WhenAnyValue(x => x.Readiness).FirstAsync(r => r == WorkspaceReadiness.Ready).ToTask();
+
+            url = "https://other.kcap.ai";
+            await vm.OnEnterAsync(CancellationToken.None);
+            var link = vm.WorkspaceVisible;
+            reports[1].SetResult(WorkspaceReadiness.Ready);
+            await vm.WhenAnyValue(x => x.Readiness).FirstAsync(r => r == WorkspaceReadiness.Ready).ToTask();
+            vm.OpenWorkspaceCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+
+            return (link, opener.Opened.ToList(), reports.Count);
+        });
+
+        await Assert.That(linkBeforeReport).IsFalse();
+        await Assert.That(opened).IsEquivalentTo(["https://other.kcap.ai"]);
+        await Assert.That(calls).IsEqualTo(2);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_report_for_the_previous_workspace_does_not_open_the_new_one() {
+        var (readyAfterStaleReport, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var url = "https://acme.kcap.ai";
+            var reports = new List<TaskCompletionSource<WorkspaceReadiness>>();
+            var vm = new DoneStepViewModel(() => Facts() with { WorkspaceUrl = url }, new RecordingUrlOpener(), _ => {
+                reports.Add(new TaskCompletionSource<WorkspaceReadiness>());
+                return reports[^1].Task;
+            });
+            await vm.OnEnterAsync(CancellationToken.None);
+
+            url = "https://other.kcap.ai";
+            await vm.OnEnterAsync(CancellationToken.None);
+            reports[0].SetResult(WorkspaceReadiness.Ready);
+            Dispatcher.UIThread.RunJobs();
+
+            return (vm.Readiness == WorkspaceReadiness.Ready, reports.Count);
+        });
+
+        await Assert.That(readyAfterStaleReport).IsFalse();
+        await Assert.That(calls).IsEqualTo(2);
+    }
+
     static DoneFacts LocalFacts(string? dashboardUrl = "http://localhost:5050", HistoryImportRun? import = null) =>
         new(["Claude Code"], false, false, import, true, "test-mac", null, null, true, dashboardUrl);
 
