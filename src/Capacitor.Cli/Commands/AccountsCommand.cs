@@ -16,6 +16,9 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     bool _skipNetwork;
     bool _json;
 
+    // Seam: a test removes the account here, where another command can.
+    internal Action? BetweenWiringAndStamp { get; set; }
+
     public async Task<int> HandleAsync(string[] args) {
         _skipNetwork = args.Contains(SkipNetworkFlag);
         _json        = args.Contains(JsonFlag);
@@ -96,7 +99,7 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
             // A partial unwire changed the account on disk, so the failure is committed like a failed wiring.
             var summary   = AccountWiring.FailureSummary(steps);
             var error     = $"Could not unwire {account.Label}: {summary}. It stays registered.";
-            var committed = StampWiring(account, summary);
+            var committed = StampWiring(account, summary).Revision;
             await Console.Error.WriteLineAsync(error);
             return await Finish("remove", account.Id, false, steps, committed, error);
         }
@@ -143,11 +146,19 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     async Task<(IReadOnlyList<WiringStep> Steps, long Revision, string? Error)> WireAndReport(VendorAccount account) {
         IReadOnlyList<WiringStep> steps;
         using (Registry(accounts.Lock)) steps = Guarded(() => AccountWiring.Wire(account, env.Home, Options));
+        BetweenWiringAndStamp?.Invoke();
 
         // The stamp's Mutate takes the lock held above, so it must come after that block. Committing after the
         // wiring is what lets a snapshot at this revision vouch for it.
-        var fatal    = AccountWiring.HasFatalFailure(steps);
-        var revision = StampWiring(account, fatal ? AccountWiring.FailureSummary(steps) : null);
+        var fatal             = AccountWiring.HasFatalFailure(steps);
+        var (revision, found) = StampWiring(account, fatal ? AccountWiring.FailureSummary(steps) : null);
+
+        if (!found) {
+            var removed = $"Account {account.Label} was removed while it was being wired.";
+            await Console.Error.WriteLineAsync(removed);
+
+            return (steps, revision, removed);
+        }
 
         string? error = null;
         if (!fatal) {
@@ -168,13 +179,16 @@ public sealed class AccountsCommand(AccountStore accounts, PluginEnvironment env
     }
 
     // Rebuilds the list even when the stamp changes nothing, so the revision still moves for a rewire that found nothing to fix.
-    long StampWiring(VendorAccount account, string? failure) {
+    // Found is false when a concurrent remove took the account between the wiring and this stamp.
+    (long Revision, bool Found) StampWiring(VendorAccount account, string? failure) {
         var now = time.GetUtcNow();
-        return Registry(() => accounts.MutateWithRevision(r => (r with {
+        var (found, revision) = Registry(() => accounts.MutateWithRevision(r => (r with {
             Accounts = [.. r.Accounts.Select(a => a.Id != account.Id ? a
                                                 : failure is null ? a with { WiredAt = now, WiringFailure = null }
                                                                   : a with { WiringFailure = failure })],
-        }, 0))).Revision;
+        }, r.Accounts.Any(a => a.Id == account.Id))));
+
+        return (revision, found);
     }
 
     Task Say(string line) => _json ? Task.CompletedTask : Console.Out.WriteLineAsync(line);

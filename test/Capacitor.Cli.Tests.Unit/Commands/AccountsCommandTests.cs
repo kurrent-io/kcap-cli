@@ -211,6 +211,24 @@ public class AccountsCommandTests {
     }
 
     [Test]
+    public async Task Rewire_of_an_account_removed_meanwhile_reports_the_conflict_not_success() {
+        var dir = ClaudeDir();
+        await Quietly("accounts", "add", "claude", dir);
+        var sut = Sut();
+        sut.BetweenWiringAndStamp = () => Store.Mutate(r => (r with { Accounts = [] }, 0));
+        using var capture = ConsoleOutput.StartFullCapture();
+
+        var exit = await sut.HandleAsync(["accounts", "rewire", dir, "--json"]);
+
+        var result = SingleResult(capture.GetCapturedOutput());
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(result.Succeeded).IsFalse();
+        await Assert.That(result.Error).Contains("removed while it was being wired");
+        await Assert.That(capture.GetCapturedError()).Contains("removed while it was being wired");
+        await Assert.That(Store.Load().Accounts).IsEmpty();
+    }
+
+    [Test]
     public async Task Add_whose_wiring_fails_registers_and_reports_failure_with_the_committed_revision() {
         var dir = ClaudeDir();
         File.WriteAllText(Path.Combine(dir, "settings.json"), "not json");
