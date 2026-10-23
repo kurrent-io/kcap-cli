@@ -315,7 +315,7 @@ public class StatusIpcJsonTests {
         var json = JsonSerializer.Serialize(dto, StatusIpcJsonContext.Default.AgentStatusDto);
         var back = JsonSerializer.Deserialize(old, StatusIpcJsonContext.Default.AgentStatusDto)!;
 
-        await Assert.That(json).EndsWith(""","interruption":null,"account_directory":"/Users/x/.claude-work","account_id":"a1b2","account_label":"Work"}""");
+        await Assert.That(json).EndsWith(""","interruption":null,"working_since":null,"account_directory":"/Users/x/.claude-work","account_id":"a1b2","account_label":"Work"}""");
         await Assert.That(back.AccountDirectory).IsNull();
         await Assert.That(back.AccountId).IsNull();
         await Assert.That(back.AccountLabel).IsNull();
