@@ -1,5 +1,4 @@
 using Capacitor.Cli.Core;
-using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.Cli;
 
@@ -25,26 +24,27 @@ public static class NestedHarness {
 
     static readonly Lazy<bool> CurrentProcess = new(() =>
         ProcessHelpers.GetParentPid() is { } parent
-     && IsNested(parent, HarnessRegistry.Identities.Select(h => h.VendorId).ToList(), ProcessHelpers.GetProcessInfo));
+     && IsNested(parent, ProcessHelpers.NestableAgents, ProcessHelpers.GetProcessInfo));
 
     /// <summary>The hosted agent's id when a hook may link this process's session to it.</summary>
     public static string? LinkedAgentId(this HostedAgent hosted) => hosted.AgentId is { } id && !CurrentProcess.Value ? id : null;
 
     /// <summary>Walks the ancestry from <paramref name="startPid"/> to the daemon, or as far as it can be read, and
-    /// reports whether it holds more than one coding agent. An unreadable ancestry reports what it saw.</summary>
+    /// reports whether it holds more than one coding agent; <paramref name="agentNames"/> are the agents' process names. An
+    /// unreadable or cyclic ancestry reports what it saw.</summary>
     internal static bool IsNested(
             int                                                 startPid,
-            IReadOnlyList<string>                               vendors,
-            Func<int, (int ppid, IReadOnlyList<string> names)?> lookup,
-            int                                                 maxHops = 32
+            IReadOnlyList<string>                               agentNames,
+            Func<int, (int ppid, IReadOnlyList<string> names)?> lookup
         ) {
+        var     visited    = new HashSet<int>();
         var     agents     = 0;
         var     pastSelf   = false;
         string? childAgent       = null;
         var     childInterpreted = false;
         var     pid        = startPid;
 
-        for (var hop = 0; hop < maxHops && pid > 1; hop++) {
+        while (pid > 1 && visited.Add(pid)) {
             if (lookup(pid) is not { } info) break;
 
             if (Is(info.names, Kcap)) {
@@ -56,7 +56,7 @@ public static class NestedHarness {
 
             pastSelf = true;
 
-            var agent       = vendors.FirstOrDefault(vendor => Is(info.names, [vendor]));
+            var agent       = agentNames.FirstOrDefault(name => Is(info.names, [name]));
             var interpreted = Is(info.names, Interpreters);
             var launcher    = agent is not null && agent == childAgent && LauncherVendors.Contains(agent) && interpreted && !childInterpreted;
             if (agent is not null && !launcher && ++agents > 1) return true;

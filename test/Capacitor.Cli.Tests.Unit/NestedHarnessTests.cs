@@ -6,8 +6,6 @@ namespace Capacitor.Cli.Tests.Unit;
 /// the ancestry from the hook's parent upward, one process per entry, its names separated by '|'.
 /// </summary>
 public class NestedHarnessTests {
-    static readonly IReadOnlyList<string> Vendors = ["claude", "codex", "gemini"];
-
     [Test]
     // npm kcap launcher -> sh -> claude -> kcap-daemon
     [Arguments(false, new[] { "node|kcap", "sh", "claude", "kcap-daemon" })]
@@ -23,6 +21,8 @@ public class NestedHarnessTests {
     [Arguments(true, new[] { "claude", "node|claude", "kcap" })]
     // gemini -> gemini -> kcap: an agent that runs under node, started directly by another
     [Arguments(true, new[] { "node|gemini", "node|gemini", "kcap" })]
+    // cursor-agent -> zsh -> agy -> kcap: agents named other than their vendor
+    [Arguments(true, new[] { "cursor-agent", "zsh", "agy", "kcap" })]
     // claude -> kcap-daemon -> zsh -> codex: a daemon started inside another agent's session
     [Arguments(false, new[] { "claude", "kcap-daemon", "zsh", "codex" })]
     // codex -> zsh -> claude, then unreadable: what was seen still counts
@@ -30,6 +30,15 @@ public class NestedHarnessTests {
     public async Task A_second_coding_agent_below_the_daemon_marks_the_hook_nested(bool nested, string[] ancestry) {
         var rows = ancestry.Select((names, i) => (pid: 100 - i, ppid: i + 1 < ancestry.Length ? 99 - i : 2, names.Split('|'))).ToArray();
 
-        await Assert.That(NestedHarness.IsNested(100, Vendors, ProcTable.OfNames(rows))).IsEqualTo(nested);
+        await Assert.That(NestedHarness.IsNested(100, ProcessHelpers.NestableAgents, ProcTable.OfNames(rows))).IsEqualTo(nested);
+    }
+
+    /// <summary>However many processes sit between the two agents, the walk reaches the outer one.</summary>
+    [Test]
+    public async Task A_second_agent_far_up_the_ancestry_still_marks_the_hook_nested() {
+        string[] ancestry = ["codex", ..Enumerable.Repeat("sh", 100), "claude", "kcap"];
+        var rows = ancestry.Select((names, i) => (pid: 1000 - i, ppid: i + 1 < ancestry.Length ? 999 - i : 2, new[] { names })).ToArray();
+
+        await Assert.That(NestedHarness.IsNested(1000, ProcessHelpers.NestableAgents, ProcTable.OfNames(rows))).IsTrue();
     }
 }
