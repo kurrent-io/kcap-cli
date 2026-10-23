@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Harness.Codex;
@@ -64,7 +65,7 @@ public class CodexLauncherAccountTests {
 
         await Assert.That(() => NewLauncher().Prepare(Ctx(source, worktree, Account(accountDir))))
             .Throws<CodexHooksNotInstalledException>()
-            .WithMessageContaining($"kcap accounts add codex {accountDir.Path}");
+            .WithMessageContaining($"kcap accounts add codex {ShellArgument.Quote(accountDir.Path)}");
     }
 
     [Test]

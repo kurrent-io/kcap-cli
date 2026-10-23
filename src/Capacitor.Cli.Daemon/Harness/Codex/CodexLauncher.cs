@@ -132,7 +132,7 @@ internal sealed partial class CodexLauncher(
             // Not `kcap plugin install --codex`: it wires the CLI shell's Codex directory, which
             // need not be the one this launch uses.
             throw new CodexHooksNotInstalledException(
-                $"Codex hooks not installed in {paths.Home}. Run `kcap accounts add codex {paths.Home}` " +
+                $"Codex hooks not installed in {paths.Home}. Run `kcap accounts add codex {ShellArgument.Quote(paths.Home)}` " +
                 "to wire that directory, or `kcap plugin install --codex --project` "                   +
                 "(project scope), and try again."
             );

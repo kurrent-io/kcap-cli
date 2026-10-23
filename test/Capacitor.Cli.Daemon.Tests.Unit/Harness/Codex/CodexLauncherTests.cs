@@ -558,7 +558,7 @@ public class CodexLauncherTests {
         });
         var checkedDir = Path.Combine(Home.Path, ".codex");
         await Assert.That(ex!.Message).Contains(checkedDir);
-        await Assert.That(ex.Message).Contains($"kcap accounts add codex {checkedDir}");
+        await Assert.That(ex.Message).Contains($"kcap accounts add codex {ShellArgument.Quote(checkedDir)}");
         await Assert.That(ex.Message).Contains("kcap plugin install --codex --project");
     }
 
