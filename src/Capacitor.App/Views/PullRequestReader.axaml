@@ -7,14 +7,19 @@
              Background="{StaticResource KcapCanvasBrush}">
     <Grid RowDefinitions="Auto,Auto,*,Auto">
         <StackPanel Margin="24,20,24,0" Spacing="8">
-            <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" IsVisible="{Binding HasChoice}">
+            <Grid ColumnDefinitions="Auto,*,Auto,Auto" ColumnSpacing="10" IsVisible="{Binding HasChoice}">
                 <views:PullRequestStatusLabel DataContext="{Binding LifecycleStatus}" VerticalAlignment="Center"
                     IsVisible="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).CanDisplay}" />
                 <TextBlock Grid.Column="1" Classes="prMuted" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
                            ToolTip.Tip="{Binding RepositoryLabel}">
                     <Run Text="{Binding RepositoryLabel}" /><Run Text=" " /><Run Text="{Binding NumberLabel}" />
                 </TextBlock>
-                <Button Grid.Column="2" Command="{Binding OpenGitHubCommand}" Classes="kcapGhost kcapQuiet prFlushRight" IsEnabled="{Binding CanOpenSource}"
+                <!-- Only while something keeps the pull request from merging: it fills the composer, and sending stays the user's call. -->
+                <Button x:Name="FixPullRequestButton" Grid.Column="2" Command="{Binding FixCommand}" IsVisible="{Binding ShowsFix}"
+                        Classes="kcapPrimary" VerticalAlignment="Center" Content="Fix it"
+                        ToolTip.Tip="Ask the agent to fix what keeps this pull request from merging"
+                        AutomationProperties.Name="Ask the agent to fix this pull request" />
+                <Button Grid.Column="3" Command="{Binding OpenGitHubCommand}" Classes="kcapGhost kcapQuiet prFlushRight" IsEnabled="{Binding CanOpenSource}"
                         AutomationProperties.Name="Open pull request in browser" VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="{Binding ProviderLabel}" VerticalAlignment="Center" />
@@ -53,6 +58,13 @@
                         </StackPanel>
                     </TabStripItem>
                     <TabStripItem Content="Comments" />
+                    <TabStripItem x:Name="ConflictsTab" IsVisible="{Binding ShowsConflictsTab}" ToolTip.Tip="{Binding ConflictsStatus.Tip}"
+                                  AutomationProperties.Name="Merge conflicts">
+                        <StackPanel Orientation="Horizontal" Spacing="7">
+                            <TextBlock Text="Conflicts" />
+                            <Ellipse Classes="prTabDot" Classes.warning="{Binding HasConflicts}" />
+                        </StackPanel>
+                    </TabStripItem>
                 </TabStrip>
             </Border>
             <!-- Fixed height: the Threads-only toggle is taller than the pills and would shift the content below.
@@ -83,6 +95,11 @@
                                         ReferenceBase="{Binding ReferenceBase}" />
                     <TextBlock Text="Description preview truncated. Open the pull request in your browser for the full text."
                                IsVisible="{Binding DescriptionTruncated}" Classes="prNote" />
+                </StackPanel>
+                <StackPanel x:Name="ConflictsContent" IsVisible="{Binding IsConflicts}" Margin="0,12,0,0" Spacing="12">
+                    <views:PullRequestStatusLabel DataContext="{Binding ConflictsStatus}" HorizontalAlignment="Left"
+                        IsVisible="{Binding $parent[views:PullRequestReader].((vm:PullRequestContextViewModel)DataContext).HasConflicts}" />
+                    <TextBlock x:Name="ConflictsNoteText" Text="{Binding ConflictsNote}" Foreground="{StaticResource KcapTextBrush}" FontSize="13" TextWrapping="Wrap" />
                 </StackPanel>
                 <TextBlock x:Name="PageNoteText" Text="{Binding PageNote}" Classes="prNote" Margin="0,12,0,0" IsVisible="{Binding PageNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 <!-- Loading and empty share one slot, glyph size and type so the one gives way to the other in place. -->
