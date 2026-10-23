@@ -871,6 +871,29 @@ public class PullRequestContextViewModelTests {
         } finally { await h.Dispose(); }
     });
 
+    /// Conflicts get a status row and a reader tab of their own, read from the overview alone: opening
+    /// the tab must not page rows from the server.
+    [Test]
+    public Task Conflicts_open_their_own_tab_without_paging() => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable: false, unresolved: 0));
+            h.Push(); await h.Show();
+            h.Vm.SetReaderVisible(true);
+
+            await Assert.That(h.Vm.HasConflicts).IsTrue();
+            await Assert.That(h.Vm.ConflictsStatus.Text).IsEqualTo("Merge conflicts");
+            await Assert.That(h.Vm.LifecycleStatus.Text).IsEqualTo("Open");
+            await h.Vm.ShowSectionCommand.Execute("conflicts");
+
+            await Assert.That(h.Vm.IsConflicts).IsTrue();
+            await Assert.That(h.Vm.SelectedTabIndex).IsEqualTo(4);
+            await Assert.That(h.Vm.ShowsLoading).IsFalse();
+            await Assert.That(h.Vm.PageNote).IsEmpty();
+            await Assert.That(h.Source.Pages).IsEqualTo(0);
+        } finally { await h.Dispose(); }
+    });
+
     /// Fix follows whether the composer can send, such as a session ending under it: the prompt would
     /// otherwise land in a composer that is hidden or refuses it.
     [Test]

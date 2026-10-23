@@ -121,7 +121,7 @@ public sealed partial class PullRequestContextViewModel {
                     var onePage = CurrentSection is { Pages.Count: 1, Earlier.Count: 0 };
                     var stoppedChecks = _section == "checks" && CurrentSection is { Stopped: true };
                     var reload = _refreshPage || _headRestartSection == SectionKey || checksLive || onePage || stoppedChecks;
-                    if (_readerVisible && _section != "overview" && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
+                    if (_readerVisible && ReadsRows && (CurrentSection is null || reload)) RequestPage(null, refresh: reload);
                     else if (headChanged) _sections.Remove("checks");
                     _refreshPage = false;
                 } else Fail(read);
@@ -130,7 +130,7 @@ public sealed partial class PullRequestContextViewModel {
     }
 
     void RequestPage(string? cursor, bool refresh = false, bool earlier = false) {
-        if (_disposed || !CanReveal || _session is not { } session || _selected is not { } choice || _section == "overview"
+        if (_disposed || !CanReveal || _session is not { } session || _selected is not { } choice || !ReadsRows
             || ReadRetryAt > _time.GetUtcNow().UtcDateTime) return;
         var key = SectionKey;
         if (_pageRequests.Contains(key)) return;
