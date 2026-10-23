@@ -15,18 +15,26 @@
                     <TextBlock x:Name="EditionNoticeText" Classes="onboardingBody" Text="{Binding Notice}" />
                 </Border>
                 <Button x:Name="LocalEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseLocalCommand}"
-                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}">
-                    <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
-                        <app:AppIcon Kind="Laptop" Size="20" />
-                        <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
-                                   Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
-                    </Grid>
+                        AutomationProperties.Name="{x:Static vm:EditionStepViewModel.LocalTitle}"
+                        AutomationProperties.HelpText="{Binding LocalUnavailableReason}">
+                    <StackPanel>
+                        <Grid Classes="onboardingEditionHead" ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" ColumnSpacing="14" RowSpacing="4">
+                            <app:AppIcon Kind="Laptop" Size="20" />
+                            <TextBlock Grid.Column="1" Classes="onboardingLabel" VerticalAlignment="Center"
+                                       Text="{x:Static vm:EditionStepViewModel.LocalTitle}" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Classes="onboardingDetail" Text="{x:Static vm:EditionStepViewModel.LocalDetail}" />
+                        </Grid>
+                        <StackPanel Classes="onboardingEditionFooter" IsVisible="{Binding LocalUnavailableVisible}">
+                            <Border Classes="onboardingDivider" />
+                            <Grid ColumnDefinitions="20,*" ColumnSpacing="14">
+                                <app:AppIcon Kind="Info" Size="14" HorizontalAlignment="Center" VerticalAlignment="Top"
+                                             Margin="0,2,0,0" Foreground="{StaticResource OnboardingDimBrush}" />
+                                <TextBlock Grid.Column="1" x:Name="LocalUnavailableText" Classes="onboardingNote"
+                                           Foreground="{StaticResource OnboardingMutedBrush}" Text="{Binding LocalUnavailableReason}" />
+                            </Grid>
+                        </StackPanel>
+                    </StackPanel>
                 </Button>
-                <Border Classes="onboardingCallout" IsVisible="{Binding LocalUnavailableVisible}">
-                    <TextBlock x:Name="LocalUnavailableText" Classes="onboardingBody"
-                               Text="{Binding LocalUnavailableReason}" />
-                </Border>
 
                 <Button x:Name="CloudEditionButton" Classes="onboardingEditionCard" Command="{Binding ChooseCloudCommand}"
                         AutomationProperties.Name="{x:Static vm:EditionStepViewModel.CloudTitle}">

@@ -95,6 +95,8 @@ internal sealed record WizardGraphOptions(
     LocalInstallController?                                                      Install = null,
     // Null, or already acknowledged, leaves the Privacy page out of the run.
     UsageDataNotice?                                                             UsageNotice = null,
+    // Tells the configured server this machine has kcap installed; true once it accepted.
+    Func<CancellationToken, Task<bool>>?                                         ReportCliSetup = null,
     // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
     bool                                                                         ResumeWebSignUp = false);
 
@@ -320,8 +322,7 @@ internal static class WizardComposition {
                 local ? LocalEndpoints.Read(root).Active?.ServerUrl : null,
                 daemon.Busy,
                 options.Surface.AttentionText ?? options.Surface.StatusText);
-        }, options.UrlOpener, serviceChanged,
-            retryService: () => daemon.EnsureAsync(options.ShutdownToken),
+        }, options.UrlOpener, PrepareWorkspaceAsync, serviceChanged,
             // The same page Help and support → Set up kcap leads through to connect an agent.
             addAgent: () => shell?.TryGoTo(WizardStepId.Harnesses));
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, new UsageDataStepViewModel(options.UsageNotice), done];
@@ -353,6 +354,19 @@ internal static class WizardComposition {
         return new WizardGraph(wizard, auth, steps, history, connect, daemon, install, pathFix);
 
         bool Connected() => signIn.Satisfied || Installed() || CommittedLocal();
+
+        // A run already in flight is waited out, never queued behind: a second run straight after a
+        // declined takeover would ask again. A failed run is repeated only when the user retries.
+        async Task<WorkspaceReadiness> PrepareWorkspaceAsync(bool retry) {
+            await daemon.QuiescedAsync().ConfigureAwait(true);
+            if (!daemon.Satisfied && (retry || daemon.Problem is null))
+                await daemon.EnsureAsync(options.ShutdownToken).ConfigureAwait(true);
+            if (!daemon.Satisfied) return WorkspaceReadiness.DaemonNotRunning;
+
+            return options.ReportCliSetup is null || await options.ReportCliSetup(options.ShutdownToken).ConfigureAwait(true)
+                ? WorkspaceReadiness.Ready
+                : WorkspaceReadiness.Unreported;
+        }
     }
 
     /// Why this machine cannot take the local edition, or null when it can. A cloud profile anywhere

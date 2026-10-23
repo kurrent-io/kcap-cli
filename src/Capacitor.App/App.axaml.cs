@@ -703,8 +703,7 @@ public partial class App : Application {
         _modelCatalog = modelCatalog;
         _ = modelCatalog.LoadAsync(_shutdown.Token);
 
-        var reportCliSetup = ServerCliSetupReport.Sender(
-            sessionHttp, profiles, typeof(CapacitorVersion).Assembly.GetName().Version?.ToString());
+        var reportCliSetup = ServerCliSetupReport.Sender(sessionHttp, profiles, ReportedCliVersion);
         _ = reportCliSetup(_shutdown.Token);
 
         // After the directory, which feeds it the session→agent map: a server-lane item names a
@@ -1238,6 +1237,7 @@ public partial class App : Application {
             HeldDaemonNames: HeldDaemonNamesAsync,
             ProfileOverride: _serverEnv.Profile,
             UsageNotice: _usageNotice,
+            ReportCliSetup: ReportWizardCliSetupAsync,
             ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
@@ -1739,31 +1739,60 @@ public partial class App : Application {
     }
 
     // A throwaway lane over a fresh resolution: the cached ServerLane is bound to the first profile it
-    // saw, and the wizard has only just signed in.
+    // saw, and the wizard has only just signed in. Null when the profile names no server.
+    async Task<(ServiceProvider Lane, ProfileContext Profiles)?> FreshServerLaneAsync(CancellationToken ct) {
+        var (_, profiles) = await ResolveAndEvaluateGateAsync(
+            _config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, ct).ConfigureAwait(false);
+        if (profiles?.Resolution.ServerUrl is not { Length: > 0 } url) return null;
+
+        var lane = new ServiceCollection()
+            .AddSingleton(_config)
+            .AddSingleton(profiles)
+            .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
+            .AddCapacitorHttp(_serverEnv, _machineEnv)
+            .BuildValidated();
+
+        return (lane, profiles);
+    }
+
     async Task<IReadOnlyDictionary<string, DaemonNameHolding>> HeldDaemonNamesAsync(CancellationToken ct) {
         try {
-            var (_, profiles) = await ResolveAndEvaluateGateAsync(
-                _config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, ct).ConfigureAwait(false);
-            if (profiles?.Resolution.ServerUrl is not { Length: > 0 } url) return FrozenDictionary<string, DaemonNameHolding>.Empty;
-
-            await using var lane = new ServiceCollection()
-                .AddSingleton(_config)
-                .AddSingleton(profiles)
-                .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
-                .AddCapacitorHttp(_serverEnv, _machineEnv)
-                .BuildValidated();
+            if (await FreshServerLaneAsync(ct).ConfigureAwait(false) is not ({ } lane, { } profiles))
+                return FrozenDictionary<string, DaemonNameHolding>.Empty;
+            await using var _ = lane;
 
             var (client, status, _, _) = await lane.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(ct).ConfigureAwait(false);
             using (client) {
                 if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return FrozenDictionary<string, DaemonNameHolding>.Empty;
 
-                return await DaemonNameHolder.HeldElsewhereAsync(client, url, _config, ct).ConfigureAwait(false);
+                return await DaemonNameHolder.HeldElsewhereAsync(client, profiles.Resolution.ServerUrl!, _config, ct).ConfigureAwait(false);
             }
         } catch (Exception ex) when (!ct.IsCancellationRequested) {
             Console.Error.WriteLine($"kcap: daemon name lookup failed — offering the configured name: {ex.Message}");
             return FrozenDictionary<string, DaemonNameHolding>.Empty;
         }
     }
+
+    // Sent from the wizard so the dashboard it opens already knows this install. Bounded, so a
+    // server that never answers leaves the Done page on a retry rather than a spinner.
+    async Task<bool> ReportWizardCliSetupAsync(CancellationToken ct) {
+        using var timeout = new CancellationTokenSource(WizardCliSetupReportTimeout, _time);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            if (await FreshServerLaneAsync(bounded.Token).ConfigureAwait(false) is not ({ } lane, { } profiles)) return false;
+            await using var _ = lane;
+
+            return await ServerCliSetupReport.Sender(lane.GetRequiredService<ICapacitorHttpClient>(), profiles, ReportedCliVersion)(bounded.Token)
+                .ConfigureAwait(false);
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: cli-setup report from setup failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    static readonly TimeSpan WizardCliSetupReportTimeout = TimeSpan.FromSeconds(30);
+
+    static string? ReportedCliVersion => typeof(CapacitorVersion).Assembly.GetName().Version?.ToString();
 
     // Delegates to the ONE shared validator: must agree with OnboardingGate on what counts as a
     // valid server_url (e.g. both reject file://), or a gate-incomplete machine could still pass
