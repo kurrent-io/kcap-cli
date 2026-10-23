@@ -146,6 +146,14 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return await HandleSessionEvalsAsync(id, arguments, client, baseUrl);
         }
 
+        if (toolName == EvalReportTool.ReportName) {
+            return await HandleEvalReportAsync(id, arguments, client, baseUrl, cwdRepoHash);
+        }
+
+        if (toolName == EvalReportTool.RunsName) {
+            return await HandleEvalRunsAsync(id, arguments, client, baseUrl, cwdRepoHash);
+        }
+
         var singlePlan = false;
 
         try {
@@ -308,6 +316,60 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
                 : BuildToolResult(id, result.ToJsonString());
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        }
+    }
+
+    async Task<string> HandleEvalReportAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl, string? cwdRepoHash) {
+        try {
+            var sessionId = ReadString(arguments, "session_id", "`session_id` must be a string.");
+            if (!string.IsNullOrWhiteSpace(sessionId) && !SessionEvalsTool.IsSessionId(sessionId))
+                throw new ArgumentException("`session_id` must match ^[A-Za-z0-9_-]{1,128}$.");
+
+            if (string.IsNullOrWhiteSpace(sessionId)) {
+                var repoHash = ResolveRepoHash(arguments, cwdRepoHash, RepoShapeMessage);
+                using var trends = await client.GetAsync(EvalReportTool.BuildTrendsUrl(baseUrl, repoHash, time));
+                if (trends.StatusCode == HttpStatusCode.Unauthorized)
+                    return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+                if (!trends.IsSuccessStatusCode)
+                    return BuildToolResult(id, $"Error: HTTP {(int)trends.StatusCode} reading the repository's evals", isError: true);
+                if (EvalReportTool.Runs(await trends.Content.ReadAsStringAsync()).FirstOrDefault() is not { } latest)
+                    return BuildToolResult(id, "No session of this repository that you can see has a completed eval in the last year.");
+                sessionId = latest.SessionId;
+            }
+
+            using var progress = await client.GetAsync(EvalReportTool.BuildProgressUrl(baseUrl, sessionId));
+            if (progress.StatusCode == HttpStatusCode.Unauthorized)
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+
+            var body = progress.StatusCode == HttpStatusCode.OK ? await progress.Content.ReadAsStringAsync() : null;
+            return BuildToolResult(id, EvalReportTool.Render(sessionId, progress.StatusCode, body));
+        } catch (ArgumentException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (JsonException) {
+            return BuildToolResult(id, "Error: the repository's evals could not be read: the response was not valid JSON.", isError: true);
+        }
+    }
+
+    async Task<string> HandleEvalRunsAsync(JsonNode id, JsonObject? arguments, HttpClient client, string baseUrl, string? cwdRepoHash) {
+        try {
+            var limit    = EvalReportTool.ParseLimit(arguments);
+            var repoHash = ResolveRepoHash(arguments, cwdRepoHash, RepoShapeMessage);
+            using var trends = await client.GetAsync(EvalReportTool.BuildTrendsUrl(baseUrl, repoHash, time));
+            if (trends.StatusCode == HttpStatusCode.Unauthorized)
+                return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
+            if (!trends.IsSuccessStatusCode)
+                return BuildToolResult(id, $"Error: HTTP {(int)trends.StatusCode} reading the repository's evals", isError: true);
+
+            var runs = EvalReportTool.Runs(await trends.Content.ReadAsStringAsync());
+            return BuildToolResult(id, EvalReportTool.ProjectRuns(runs, limit).ToJsonString());
+        } catch (ArgumentException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (HttpRequestException ex) {
+            return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
+        } catch (JsonException) {
+            return BuildToolResult(id, "Error: the repository's evals could not be read: the response was not valid JSON.", isError: true);
         }
     }
 
@@ -1092,6 +1154,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             McpToolAnnotations.Read
         ),
         SessionEvalsTool.Definition,
+        EvalReportTool.ReportDefinition,
+        EvalReportTool.RunsDefinition,
         ConnectionTool.Definition
     ];
 }
