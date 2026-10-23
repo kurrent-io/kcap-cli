@@ -185,6 +185,38 @@ public class EditionStepViewModelTests {
         await Assert.That(after).IsEqualTo(WizardStepId.SignIn);
     }
 
+    /// The reason is the card's own footer, not a sibling between the two cards, and the card
+    /// carries it as help text while it refuses the choice.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unavailable_local_card_says_why_in_its_own_footer() {
+        var (inCard, footerShown, enabled, help) = await AvaloniaSession.DispatchAsync(async () => {
+            var edition = new EditionStepViewModel(
+                CliTelemetry.Disabled(TimeProvider.System).Funnel, () => EditionStepViewModel.UnsupportedPlatform);
+            var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
+            await vm.PendingEnterForTesting;
+
+            var window = new MainWindow { Onboarding = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var local = window.GetVisualDescendants().OfType<Button>().First(c => c.Name == "LocalEditionButton");
+            var reason = window.GetVisualDescendants().OfType<TextBlock>().First(c => c.Name == "LocalUnavailableText");
+            var result = (reason.GetVisualAncestors().Contains(local), reason.IsEffectivelyVisible, local.IsEffectivelyEnabled,
+                Avalonia.Automation.AutomationProperties.GetHelpText(local));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return result;
+        });
+
+        await Assert.That(inCard).IsTrue();
+        await Assert.That(footerShown).IsTrue();
+        await Assert.That(enabled).IsFalse();
+        await Assert.That(help).IsEqualTo(EditionStepViewModel.UnsupportedPlatform);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_notice_stays_until_the_next_choice() {
