@@ -14,7 +14,24 @@ public class EvidenceScopeHoldClientTests : IDisposable {
 
     public void Dispose() { _http.Dispose(); _stub.Dispose(); }
 
-    EvidenceScopeClient Client(FakeTimeProvider time, bool holds = true) => new(_http, _stub.Url, EvidenceServerStub.SessionId, time, holds);
+    EvidenceScopeClient Client(FakeTimeProvider time, bool holds = true, HttpClient? http = null) =>
+        new(http ?? _http, _stub.Url, EvidenceServerStub.SessionId, time, holds);
+
+    /// <summary>Cancels the caller once the hold request is on the wire and before its answer, which the stub delays.</summary>
+    sealed class CancelOnceSent(CancellationTokenSource caller) : DelegatingHandler(new HttpClientHandler()) {
+        public List<string?> HoldKeys { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            if (request.Method == HttpMethod.Post)
+                HoldKeys.Add(JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct)).RootElement.GetProperty("request_id").GetString());
+            var sending = base.SendAsync(request, ct);
+            if (request.Method == HttpMethod.Post && !caller.IsCancellationRequested) {
+                await Task.Delay(200, CancellationToken.None);
+                await caller.CancelAsync();
+            }
+            return await sending;
+        }
+    }
 
     static string Held(string manifest, bool held = true) => manifest[..^1] + $",\"held\":{(held ? "true" : "false")}}}";
 
@@ -58,18 +75,33 @@ public class EvidenceScopeHoldClientTests : IDisposable {
     [Test]
     public async Task A_hold_request_cancelled_mid_flight_is_recovered_and_released_on_dispose() {
         _stub.Route("POST", "evidence-scope/holds", 200, Held(EvidenceServerStub.Manifest("v1", "tok-1", null, S0, S0.AddMinutes(30))),
-            delay: TimeSpan.FromMilliseconds(500));
+            delay: TimeSpan.FromSeconds(1));
         _stub.Route("DELETE", "evidence-scope/hold", 204, "");
-        var client = Client(new FakeTimeProvider(S0));
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var cts     = new CancellationTokenSource();
+        var       handler = new CancelOnceSent(cts);
+        using var http    = new HttpClient(handler);
+        var       client  = Client(new FakeTimeProvider(S0), http: http);
 
         await Assert.That(async () => await client.ResolveAsync(cts.Token)).Throws<OperationCanceledException>();
         await client.DisposeAsync();
 
-        var keys = _stub.Requests("evidence-scope/holds").Select(e => JsonDocument.Parse(e.RequestMessage.Body!).RootElement.GetProperty("request_id").GetString()).ToList();
-        await Assert.That(keys.Count).IsEqualTo(2);
-        await Assert.That(keys.Distinct().Count()).IsEqualTo(1);
+        await Assert.That(handler.HoldKeys.Count).IsEqualTo(2);
+        await Assert.That(handler.HoldKeys.Distinct().Count()).IsEqualTo(1);
         await Assert.That(ReleasedToken()).IsEqualTo("tok-1");
+    }
+
+    [Test]
+    public async Task A_replay_that_fails_reports_it_and_disposal_never_throws() {
+        _stub.Route("POST", "evidence-scope/holds", 500, "", delay: TimeSpan.FromSeconds(1));
+        using var cts    = new CancellationTokenSource();
+        using var http   = new HttpClient(new CancelOnceSent(cts));
+        var       client = Client(new FakeTimeProvider(S0), http: http);
+        await Assert.That(async () => await client.ResolveAsync(cts.Token)).Throws<OperationCanceledException>();
+
+        await client.DisposeAsync();
+
+        await Assert.That(client.ReleaseFailure).StartsWith("could not recover the evidence scope hold to release it");
+        await Assert.That(_stub.Requests("evidence-scope/hold")).IsEmpty();
     }
 
     [Test]

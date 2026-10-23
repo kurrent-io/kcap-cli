@@ -112,15 +112,16 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     }
 
     /// <summary>The token of the hold an unanswered request took, by replaying it under the same key; null when the
-    /// replay took or answered none.</summary>
+    /// replay took or answered none. Never throws, like the release it serves.</summary>
     async Task<string?> RecoverHoldAsync(string body, CancellationToken ct) {
         try {
             var (status, page) = await SendPageAsync(HttpMethod.Post, Route("holds"), HoldCreateBody(body), ct);
-            return status == EvidenceScopeStatus.Ok && page!.Held == true ? page.Token : null;
-        } catch (OperationCanceledException) {
-            ReleaseFailure = "could not recover the evidence scope hold to release it: the replay timed out";
-            return null;
+            if (status == EvidenceScopeStatus.Ok) return page!.Held == true ? page.Token : null;
+            ReleaseFailure = $"could not recover the evidence scope hold to release it: {LastError ?? status.ToString()}";
+        } catch (Exception e) {
+            ReleaseFailure = $"could not recover the evidence scope hold to release it: {e.Message}";
         }
+        return null;
     }
 
     string Url(string query) => $"{baseUrl.TrimEnd('/')}/api/sessions/{Uri.EscapeDataString(sessionId)}/evidence-scope?{query}";
