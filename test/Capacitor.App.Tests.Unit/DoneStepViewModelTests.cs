@@ -58,7 +58,7 @@ public class DoneStepViewModelTests {
                 await LineFor(Facts(recording: [])), await LineFor(Facts(hazard: true)));
         });
 
-        await Assert.That(remote).Contains("Restart any that are already open");
+        await Assert.That(remote).Contains("Restart any agent you already have open");
         await Assert.That(local).IsEqualTo(remote);
         await Assert.That(nothing).IsNull();
         await Assert.That(blocked).IsNull();
