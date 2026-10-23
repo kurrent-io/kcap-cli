@@ -50,7 +50,7 @@ public sealed class AgentStartArgs {
 
                     break;
                 case "--title":
-                    if (i + 1 >= kcap.Length || KcapFlags.Contains(kcap[i + 1])) {
+                    if (i + 1 >= kcap.Length || IsKcapFlag(kcap[i + 1])) {
                         r.Error = "--title requires a value";
 
                         return r;
@@ -64,7 +64,7 @@ public sealed class AgentStartArgs {
 
                     break;
                 case "--account":
-                    if (i + 1 >= kcap.Length || KcapFlags.Contains(kcap[i + 1])) {
+                    if (i + 1 >= kcap.Length || IsKcapFlag(kcap[i + 1])) {
                         r.Error = AccountNeedsValue;
 
                         return r;
@@ -91,6 +91,11 @@ public sealed class AgentStartArgs {
 
     // A title or account may itself start with '-', so only these are taken as a missing value.
     static readonly string[] KcapFlags = ["--", "--worktree", "--private", "--daemon", "-d", "--detach", "--title", "--account"];
+
+    static bool IsKcapFlag(string token) =>
+        KcapFlags.Contains(token)
+        || token.StartsWith("--title=", StringComparison.Ordinal)
+        || token.StartsWith("--account=", StringComparison.Ordinal);
 
     bool TrySetAccount(string value) {
         if (string.IsNullOrWhiteSpace(value)) {

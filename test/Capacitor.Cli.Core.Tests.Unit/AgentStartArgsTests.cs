@@ -117,11 +117,14 @@ public class AgentStartArgsTests {
     }
 
     [Test]
-    public async Task Title_flag_followed_by_another_flag_is_an_error() {
-        var a = AgentStartArgs.Parse(["claude", "--title", "--private"]);
+    [Arguments("--private")]
+    [Arguments("--account=a1b2")]
+    public async Task Title_flag_followed_by_another_flag_is_an_error(string flag) {
+        var a = AgentStartArgs.Parse(["claude", "--title", flag]);
 
         await Assert.That(a.Error).IsEqualTo("--title requires a value");
         await Assert.That(a.Title).IsNull();
+        await Assert.That(a.Account).IsNull();
     }
 
     [Test]
@@ -180,6 +183,7 @@ public class AgentStartArgsTests {
             ["claude", "--account"],
             ["claude", "--account", ""],
             ["claude", "--account", "--private"],
+            ["claude", "--account", "--title=t"],
             ["claude", "--account="],
         ];
 
