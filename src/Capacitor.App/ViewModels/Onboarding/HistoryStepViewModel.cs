@@ -48,9 +48,11 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     public bool         Applicable => true;
     public string       SkipLabel  => "Not now";
 
-    public string Lede =>
-        "kcap uploads the transcripts your harnesses have already written, so your past work is searchable " +
-        "from day one. Nothing leaves this machine until you choose.";
+    public string Lede => _onLocalPath()
+        ? "kcap imports the transcripts your harnesses have already written, so your past work is searchable " +
+          "from day one. Everything stays on this machine."
+        : "kcap uploads the transcripts your harnesses have already written, so your past work is searchable " +
+          "from day one. Nothing leaves this machine until you choose.";
 
     public string MachineName { get; }
 

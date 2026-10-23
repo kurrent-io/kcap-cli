@@ -68,7 +68,7 @@ public class DoneStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Failed_uploads_are_named_with_where_they_still_are() {
+    public async Task Failed_imports_are_named_with_where_they_still_are() {
         var (visible, title, body, landed, unit) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new DoneStepViewModel(() => Facts(import: null));
             var run = await FinishedRun(30, 3);
@@ -79,7 +79,7 @@ public class DoneStepViewModelTests {
         });
 
         await Assert.That(visible).IsTrue();
-        await Assert.That(title).IsEqualTo("3 sessions failed to upload");
+        await Assert.That(title).IsEqualTo("3 sessions failed to import");
         await Assert.That(body).Contains("test-mac");
         await Assert.That(body).Contains("retry");
         await Assert.That(landed).IsEqualTo("30");
