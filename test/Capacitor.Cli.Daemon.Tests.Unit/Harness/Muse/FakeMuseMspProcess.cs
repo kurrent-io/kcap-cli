@@ -1,15 +1,16 @@
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Capacitor.Cli.Daemon.Harness.Muse;
+using Capacitor.Cli.Daemon.Services;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Harness.Muse;
 
 /// <summary>
-/// Interactive <see cref="IMuseMspProcess"/> fake: <see cref="Push"/> puts a line on the child's
+/// Interactive <see cref="IJsonLineProcess"/> fake: <see cref="Push"/> puts a line on the child's
 /// stdout at any moment, <see cref="Writes"/> captures what the runtime wrote to stdin, and
 /// <see cref="EndOfStream"/> is the child exiting.
 /// </summary>
-internal sealed class FakeMuseMspProcess : IMuseMspProcess {
+internal sealed class FakeMuseMspProcess : IJsonLineProcess {
     readonly Channel<string> _lines  = Channel.CreateUnbounded<string>();
     readonly Lock            _gate   = new();
     readonly List<string>    _writes = [];

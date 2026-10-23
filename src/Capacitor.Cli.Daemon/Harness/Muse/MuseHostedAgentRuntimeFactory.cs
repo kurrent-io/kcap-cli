@@ -46,7 +46,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
     readonly bool                    _posixHost;
     readonly ILogger                 _logger;
 
-    readonly Func<ProcessStartInfo, CancellationToken, Task<IMuseMspProcess>> _processSource;
+    readonly Func<ProcessStartInfo, CancellationToken, Task<IJsonLineProcess>> _processSource;
     readonly Func<string, bool>                                               _binaryExists;
     readonly Func<string, string?>                                            _resolveVersion;
     readonly Func<string, bool>                                               _hooksInstalled;
@@ -66,7 +66,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
             MusePaths                                                       paths,
             PermissionPromptBroker?                                         permissionBroker      = null,
             PermissionDecisionLog?                                          permissionDecisionLog = null,
-            Func<ProcessStartInfo, CancellationToken, Task<IMuseMspProcess>>? processSource       = null,
+            Func<ProcessStartInfo, CancellationToken, Task<IJsonLineProcess>>? processSource       = null,
             Func<string, bool>?                                             binaryExists          = null,
             Func<string, string?>?                                          resolveVersion        = null,
             bool?                                                           posixHost             = null,
@@ -86,8 +86,8 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
         _posixHost             = posixHost ?? !OperatingSystem.IsWindows();
         _logger                = loggerFactory.CreateLogger<MuseHostedAgentRuntimeFactory>();
 
-        _processSource  = processSource ?? ((psi, _) => Task.FromResult<IMuseMspProcess>(
-            new MuseMspProcess(WindowsLaunchCommand.Apply(psi, config.Binaries), loggerFactory.CreateLogger<MuseMspProcess>(), time)));
+        _processSource  = processSource ?? ((psi, _) => Task.FromResult<IJsonLineProcess>(
+            new JsonLineProcess(WindowsLaunchCommand.Apply(psi, config.Binaries), loggerFactory.CreateLogger<JsonLineProcess>(), time)));
         _binaryExists   = binaryExists   ?? (path => config.Binaries.Finds(path));
         _resolveVersion = resolveVersion ?? (path => new VendorVersionResolver(config.Binaries).Resolve(path));
         _hooksInstalled = hooksInstalled ?? MuseHooksInstaller.IsInstalled;
@@ -188,7 +188,7 @@ internal sealed partial class MuseHostedAgentRuntimeFactory : IHostedAgentRuntim
         var relay        = !_hooksInstalled(_paths.SettingsJson);
         var relayedStart = false;
 
-        IMuseMspProcess?           process = null;
+        IJsonLineProcess?           process = null;
         MuseMspHostedAgentRuntime? runtime = null;
 
         try {

@@ -1132,6 +1132,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     static bool FreshIn(AgentInstance agent, string canonicalSession) =>
         agent.BridgedSinceStart && agent.SessionId is { } own && PermissionWire.Canonical(own) == canonicalSession;
 
+    static AttributedAgent Attributed(AgentInstance agent, string canonicalSession) =>
+        new(agent.Id, agent.PolicySnapshot, FreshIn(agent, canonicalSession), agent.Runtime.AsksPermissionsOnStdin);
+
     /// The attribution ladder: the payload's agent id (raw, then canonical GUID), the resolved
     /// vendor session id, the worktree path — each rung only on exactly one live match. Live is
     /// "present in _agents"; teardown withdraws whatever was attributed during that window.
@@ -1143,21 +1146,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (query.AgentId is { Length: > 0 } rawId) {
             var raw = live.Where(a => string.Equals(a.Id, rawId, StringComparison.Ordinal)).ToList();
-            if (raw.Count == 1) return new AttributedAgent(raw[0].Id, raw[0].PolicySnapshot, FreshIn(raw[0], canonicalSession));
+            if (raw.Count == 1) return Attributed(raw[0], canonicalSession);
             if (PermissionWire.Canonical(rawId) is { } canonicalId) {
                 var canon = live.Where(a => PermissionWire.Canonical(a.Id) == canonicalId).ToList();
-                if (canon.Count == 1) return new AttributedAgent(canon[0].Id, canon[0].PolicySnapshot, FreshIn(canon[0], canonicalSession));
+                if (canon.Count == 1) return Attributed(canon[0], canonicalSession);
             }
         }
 
         var bySession = live.Where(a => a.SessionId is { } s && PermissionWire.Canonical(s) == canonicalSession).ToList();
-        if (bySession.Count == 1) return new AttributedAgent(bySession[0].Id, bySession[0].PolicySnapshot, FreshIn(bySession[0], canonicalSession));
+        if (bySession.Count == 1) return Attributed(bySession[0], canonicalSession);
 
         if (query.Cwd is { Length: > 0 } cwd) {
             var wanted = Path.TrimEndingDirectorySeparator(cwd);
             var byCwd = live.Where(a => string.Equals(
                 Path.TrimEndingDirectorySeparator(a.Worktree.Path), wanted, RepoPathStore.PathComparison)).ToList();
-            if (byCwd.Count == 1) return new AttributedAgent(byCwd[0].Id, byCwd[0].PolicySnapshot, FreshIn(byCwd[0], canonicalSession));
+            if (byCwd.Count == 1) return Attributed(byCwd[0], canonicalSession);
         }
 
         return null;
@@ -5742,6 +5745,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     static readonly TimeSpan SessionIdPollInterval = TimeSpan.FromSeconds(2);
 
+    static readonly TimeSpan KnownTranscriptPollInterval = TimeSpan.FromMilliseconds(100);
+
     // Codex turn-start diagnostic: how long, and how often, to watch a hosted Codex reviewer's rollout for growth
     // after a round's input is delivered, so the daemon log can say whether Codex began a turn.
     // A working reviewer appends response items within seconds of starting; 2 minutes of silence
@@ -5756,7 +5761,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// locator is a no-op. Best-effort background work, cancelled with the agent; it never blocks
     /// a launch.
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
+        var streamJson = agent.Runtime as ClaudeStreamJsonHostedAgentRuntime;
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
+            "claude" when streamJson is not null => _ => streamJson.KnownTranscript,
             "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
                 _harnesses.Of<ClaudeHarness>().Paths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
@@ -5769,22 +5776,22 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (locate is null) return Task.CompletedTask;
 
         Interlocked.Increment(ref _discoveryStarts);
-        var task = RunDiscoveryAsync(agent, locate);
+        var task = RunDiscoveryAsync(agent, locate, streamJson is null ? SessionIdPollInterval : KnownTranscriptPollInterval);
         agent.DiscoveryTask = task;
         return task;
     }
 
     internal Task RunDiscoveryForTest(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
-        var task = RunDiscoveryAsync(agent, locate);
+        var task = RunDiscoveryAsync(agent, locate, SessionIdPollInterval);
         agent.DiscoveryTask = task;
         return task;
     }
 
-    async Task RunDiscoveryAsync(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate) {
+    async Task RunDiscoveryAsync(AgentInstance agent, Func<ISet<string>, (string SessionId, string Path)?> locate, TimeSpan interval) {
         try {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(
                 agent.ReadCts.Token, agent.ExitedCts.Token, _shutdownCts.Token);
-            var discovery = new TranscriptDiscovery(_time, SessionIdPollInterval);
+            var discovery = new TranscriptDiscovery(_time, interval);
 
             using var warnCts  = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
             var       warnTask = WarnIfStillUnlinkedAsync(agent, warnCts.Token);

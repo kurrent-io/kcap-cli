@@ -95,7 +95,7 @@ public class MuseHostedAgentRuntimeFactoryTests {
             processSource: (psi, _) => {
                 rig!.Spawned.Add(psi);
                 rig.MarkerFilesAtSpawn.Add(Directory.Exists(MarkerDir) ? Directory.GetFiles(MarkerDir) : []);
-                return Task.FromResult<IMuseMspProcess>(host.Process);
+                return Task.FromResult<IJsonLineProcess>(host.Process);
             },
             binaryExists: _ => binary,
             resolveVersion: _ => installed,

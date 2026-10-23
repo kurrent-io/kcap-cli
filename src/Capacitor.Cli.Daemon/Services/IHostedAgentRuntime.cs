@@ -58,6 +58,10 @@ internal interface IHostedAgentRuntime : IAsyncDisposable {
     /// </summary>
     bool EmitsTerminalOutput { get; }
 
+    /// <summary>True when the agent raises its permission prompts on its own channel and the runtime
+    /// answers them there, so a prompt its hook also reports to the bridge is not a second one.</summary>
+    bool AsksPermissionsOnStdin => false;
+
     /// <summary>
     /// Terminal byte stream consumed by the orchestrator read loop. PTY runtimes yield real
     /// terminal output; the ACP runtime yields an empty stream until a follow-up adds a terminal

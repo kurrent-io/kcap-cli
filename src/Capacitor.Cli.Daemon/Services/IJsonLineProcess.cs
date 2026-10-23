@@ -1,8 +1,8 @@
-namespace Capacitor.Cli.Daemon.Harness.Muse;
+namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// The long-lived <c>muse serve</c> child speaking MSP JSON-RPC over stdio: one process backs a
-/// hosted session and its stdin stays open for that whole lifetime.
+/// A long-lived vendor child speaking newline-delimited JSON over stdio: one process backs a hosted
+/// session and its stdin stays open for that whole lifetime.
 ///
 /// <para>Contracts a real implementation honors:</para>
 /// <para>0. <see cref="IAsyncDisposable.DisposeAsync"/> may kill a running child, so it is not exit
@@ -12,7 +12,7 @@ namespace Capacitor.Cli.Daemon.Harness.Muse;
 /// <para>3. <see cref="WriteLineAsync"/> calls are serialized, so concurrent writers never tear a
 /// line on stdin.</para>
 /// </summary>
-internal interface IMuseMspProcess : IAsyncDisposable {
+internal interface IJsonLineProcess : IAsyncDisposable {
     int Pid { get; }
 
     bool HasExited { get; }

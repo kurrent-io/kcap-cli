@@ -15,7 +15,7 @@ using Microsoft.Extensions.Logging;
 namespace Capacitor.Cli.Daemon.Services;
 
 internal readonly record struct PermissionAttribution(string? AgentId, string SessionId, string? Cwd);
-internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null, bool BridgedSinceStart = false);
+internal readonly record struct AttributedAgent(string AgentId, PolicySnapshot? PolicySnapshot = null, bool BridgedSinceStart = false, bool AsksOnStdin = false);
 
 /// <summary>
 /// Localhost-only HTTP bridge that fronts the server's permission flow for spawned
@@ -614,9 +614,7 @@ internal sealed partial class LocalPermissionBridge(
                 return;
             }
 
-            var toolName    = node["tool_name"]?.GetValue<string>();
-            var toolInput   = ExtractElement(node, "tool_input");
-            var suggestions = ExtractElement(node, "permission_suggestions");
+            var toolName = node["tool_name"]?.GetValue<string>();
 
             // HttpListener exposes no per-request "client disconnected" token: every leg below is
             // bound to the daemon-lifetime token, not the connection.
@@ -657,87 +655,16 @@ internal sealed partial class LocalPermissionBridge(
                 // Shared (interactive) token: the reserved channel's tool names are not special-cased
                 // here — an interactive session never legitimately carries that server, so an
                 // identically-named tool is untrusted and takes the normal prompt.
-                var canonicalSessionId = PermissionWire.Canonical(sessionId);
-                var attributed = canonicalSessionId is null ? null : AttributeHandler?.Invoke(new PermissionAttribution(
-                    node["agent_id"]?.GetValue<string>(), canonicalSessionId, node["cwd"]?.GetValue<string>()));
-                // Every prompt of a run this daemon launched fresh passes through here, so its refusals are all known.
-                if (attributed is { BridgedSinceStart: true }) _refusals.MarkBridgedSinceStart(canonicalSessionId!);
-                var pending = attributed is { } a
-                    ? BuildPending(Guid.NewGuid().ToString("N"), a.AgentId, canonicalSessionId!, vendor, toolName, toolInput, suggestions,
-                        time.GetUtcNow().ToString("O"), ToolUseIdOf(node))
-                    : null;
+                var attributed = Attribute(node, sessionId);
 
-                // The launched agent's own policy, and the judge for a call no rule decided, answer
-                // before a human is asked. Anything the evaluation throws leaves the request on the human lane.
-                if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
-                    ClaudeHostedPolicyResult? policy = null;
-                    try {
-                        var call = new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
-                            node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node));
-                        policy = vendor == "codex"
-                            ? await CodexPtyPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, JudgeBudget, logger, _refusals, ct)
-                            : await ClaudeHostedPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
-                    } catch (Exception ex) {
-                        LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
-                    }
-
-                    if (policy is { } decided) {
-                        if (decided.Outcome is PolicyOutcome.Allow or PolicyOutcome.Deny) {
-                            var behavior = decided.Outcome == PolicyOutcome.Allow
-                                ? PermissionSettlements.Allow
-                                : PermissionSettlements.Deny;
-                            _decisionLog?.Record(new PermissionDecisionRecord(
-                                time.GetUtcNow().ToString("O"), governed.AgentId, canonicalSessionId!, vendor,
-                                toolName ?? "", behavior, PermissionSettlements.SourcePolicy));
-                            _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
-                            // No Register: a call the policy answered raises no card, and the
-                            // decision log plus the run event are its audit trail.
-                            if (behavior == PermissionSettlements.Allow && pending is not null) _broker.OweCall(pending, SubagentIdOf(node));
-                            RecordRefusal(vendor, governed, canonicalSessionId, node, toolName, toolInput, behavior);
-                            await WriteResponseAsync(context, BuildHookResponseJson(new PermissionDecision(behavior, null, null), vendor), time);
-
-                            return;
-                        }
-
-                        _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
-                    }
-                }
-
-                if (pending is null) {
-                    // Server-only path.
-                    if (attributed is not null) LogPendingOutOfBounds(logger, sessionId);
-                    try {
-                        decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
-                    } catch (Exception ex) {
-                        LogRequestPermissionFailed(logger, ex, sessionId);
-                        decision = new PermissionDecision("deny", null, null);
-                    }
-
-                    RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, decision.Behavior);
-                } else {
-                    var settlementTask = _broker.Register(pending, SubagentIdOf(node));
-                    _ = RunServerLegAsync(pending, toolName, toolInput, suggestions, settlementTask, ct);
-
-                    PermissionSettlement settlement;
-                    try {
-                        settlement = await settlementTask.WaitAsync(ct);
-                    } catch (OperationCanceledException) {
-                        // Shutdown: claim rather than inspect. Losing means another party settled first.
-                        if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision,
-                                PermissionSettlements.Deny, PermissionSettlements.SourceDaemonShutdown)) {
-                            await WriteResponseAsync(context, BuildHookResponseJson(PermissionSettlements.DenyDecision, vendor), time);
-                            return;
-                        }
-                        settlement = await settlementTask;
-                    }
-
-                    _decisionLog?.Record(new PermissionDecisionRecord(
-                        time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
-                        pending.ToolName, settlement.Outcome, settlement.Source));
-                    RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, settlement.Decision.Behavior);
-                    await WriteResponseAsync(context, BuildHookResponseJson(settlement.Decision, vendor), time);
+                // Claude asks such an agent again on stdin whatever the hook answers, so a decision
+                // here would raise a second card for the same call. An empty answer is no decision.
+                if (attributed is { AsksOnStdin: true }) {
+                    await WriteResponseAsync(context, "{}", time);
                     return;
                 }
+
+                decision = await DecideAttendedAsync(node, sessionId, vendor, attributed, ct);
             }
 
             await WriteResponseAsync(context, BuildHookResponseJson(decision, vendor), time);
@@ -778,6 +705,108 @@ internal sealed partial class LocalPermissionBridge(
             context.Response.Abort();
             throw;
         }
+    }
+
+    /// <summary>Decides a request a hosted agent raised on its own channel instead of through its hook.
+    /// <paramref name="request"/> has the shape the hook posts here.</summary>
+    internal async Task<PermissionDecision> DecideAsync(JsonNode request, string vendor, CancellationToken ct) {
+        var sessionId = request["session_id"]?.GetValue<string>()?.Replace("-", "");
+        if (string.IsNullOrWhiteSpace(sessionId)) return PermissionSettlements.DenyDecision;
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts?.Token ?? CancellationToken.None);
+        return await DecideAttendedAsync(request, sessionId, vendor, Attribute(request, sessionId), linked.Token);
+    }
+
+    AttributedAgent? Attribute(JsonNode node, string sessionId) =>
+        PermissionWire.Canonical(sessionId) is { } canonical
+            ? AttributeHandler?.Invoke(new PermissionAttribution(
+                node["agent_id"]?.GetValue<string>(), canonical, node["cwd"]?.GetValue<string>()))
+            : null;
+
+    /// <summary>The agent's own policy, then the judge, then a human. Cancelling <paramref name="ct"/>
+    /// denies a request still waiting on a human.</summary>
+    async Task<PermissionDecision> DecideAttendedAsync(
+            JsonNode node, string sessionId, string vendor, AttributedAgent? attributed, CancellationToken ct) {
+        var canonicalSessionId = PermissionWire.Canonical(sessionId);
+        var toolName           = node["tool_name"]?.GetValue<string>();
+        var toolInput          = ExtractElement(node, "tool_input");
+        var suggestions        = ExtractElement(node, "permission_suggestions");
+        // Every prompt of a run this daemon launched fresh passes through here, so its refusals are all known.
+        if (attributed is { BridgedSinceStart: true }) _refusals.MarkBridgedSinceStart(canonicalSessionId!);
+        var pending = attributed is { } a
+            ? BuildPending(Guid.NewGuid().ToString("N"), a.AgentId, canonicalSessionId!, vendor, toolName, toolInput, suggestions,
+                time.GetUtcNow().ToString("O"), ToolUseIdOf(node))
+            : null;
+
+        // Anything the evaluation throws leaves the request on the human lane.
+        if (vendor is "claude" or "codex" && attributed is { PolicySnapshot: { IsEmpty: false } snapshot } governed) {
+            ClaudeHostedPolicyResult? policy = null;
+            try {
+                var call = new ClaudeHostedPermissionCall(canonicalSessionId!, governed.AgentId, toolName, toolInput,
+                    node["cwd"]?.GetValue<string>(), ToolUseIdOf(node), TranscriptPathOf(node));
+                policy = vendor == "codex"
+                    ? await CodexPtyPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, JudgeBudget, logger, _refusals, ct)
+                    : await ClaudeHostedPolicySeam.EvaluateAsync(call, snapshot, time, policyJudge, judgeState, JudgeBudget, logger, _refusals, ct);
+            } catch (Exception ex) {
+                LogPolicyEvaluationFailed(logger, ex, governed.AgentId);
+            }
+
+            if (policy is { } decided) {
+                if (decided.Outcome is PolicyOutcome.Allow or PolicyOutcome.Deny) {
+                    var behavior = decided.Outcome == PolicyOutcome.Allow
+                        ? PermissionSettlements.Allow
+                        : PermissionSettlements.Deny;
+                    _decisionLog?.Record(new PermissionDecisionRecord(
+                        time.GetUtcNow().ToString("O"), governed.AgentId, canonicalSessionId!, vendor,
+                        toolName ?? "", behavior, PermissionSettlements.SourcePolicy));
+                    _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
+                    // No Register: a call the policy answered raises no card, and the
+                    // decision log plus the run event are its audit trail.
+                    if (behavior == PermissionSettlements.Allow && pending is not null) _broker.OweCall(pending, SubagentIdOf(node));
+                    RecordRefusal(vendor, governed, canonicalSessionId, node, toolName, toolInput, behavior);
+
+                    return new PermissionDecision(behavior, null, null);
+                }
+
+                _ = server.AppendAgentRunEventAsync(governed.AgentId, decided.Event);
+            }
+        }
+
+        if (pending is null) {
+            if (attributed is not null) LogPendingOutOfBounds(logger, sessionId);
+            PermissionDecision decision;
+            try {
+                decision = await server.RequestPermissionAsync(sessionId, toolName, toolInput, suggestions, ct);
+            } catch (Exception ex) {
+                LogRequestPermissionFailed(logger, ex, sessionId);
+                decision = new PermissionDecision("deny", null, null);
+            }
+
+            RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, decision.Behavior);
+            return decision;
+        }
+
+        var settlementTask = _broker.Register(pending, SubagentIdOf(node));
+        _ = RunServerLegAsync(pending, toolName, toolInput, suggestions, settlementTask, ct);
+
+        PermissionSettlement settlement;
+        try {
+            settlement = await settlementTask.WaitAsync(ct);
+        } catch (OperationCanceledException) {
+            // Claim rather than inspect. Losing means another party settled first.
+            var (outcome, source) = _cts is { IsCancellationRequested: true }
+                ? (PermissionSettlements.Deny, PermissionSettlements.SourceDaemonShutdown)
+                : (PermissionSettlements.Withdrawn, PermissionSettlements.SourceAgentGone);
+            if (_broker.TrySettle(pending.RequestId, PermissionSettlements.DenyDecision, outcome, source))
+                return PermissionSettlements.DenyDecision;
+            settlement = await settlementTask;
+        }
+
+        _decisionLog?.Record(new PermissionDecisionRecord(
+            time.GetUtcNow().ToString("O"), pending.AgentId, pending.SessionId, pending.Vendor,
+            pending.ToolName, settlement.Outcome, settlement.Source));
+        RecordRefusal(vendor, attributed, canonicalSessionId, node, toolName, toolInput, settlement.Decision.Behavior);
+        return settlement.Decision;
     }
 
     internal static PermissionPendingDto? BuildPending(

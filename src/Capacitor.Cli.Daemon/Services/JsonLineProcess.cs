@@ -1,17 +1,16 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Capacitor.Cli.Daemon.Services;
 using Microsoft.Extensions.Logging;
 
-namespace Capacitor.Cli.Daemon.Harness.Muse;
+namespace Capacitor.Cli.Daemon.Services;
 
 /// <summary>
-/// <see cref="IMuseMspProcess"/> over a real <see cref="Process"/>. Stdin stays open for the child's
+/// <see cref="IJsonLineProcess"/> over a real <see cref="Process"/>. Stdin stays open for the child's
 /// lifetime; writes are serialized under <see cref="_stdinGate"/>, and the pid is captured at
 /// construction because <see cref="Process.Id"/> throws once the object is disposed.
 /// </summary>
-internal sealed partial class MuseMspProcess : IMuseMspProcess {
+internal sealed partial class JsonLineProcess : IJsonLineProcess {
     /// <summary>Over-cap stderr is dropped, never rotated: the explanation of a failed launch is at the start.</summary>
     internal const int DiagnosticsCap = 4096;
 
@@ -28,12 +27,12 @@ internal sealed partial class MuseMspProcess : IMuseMspProcess {
 
     bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
-    internal MuseMspProcess(ProcessStartInfo psi, ILogger logger, TimeProvider time)
+    internal JsonLineProcess(ProcessStartInfo psi, ILogger logger, TimeProvider time)
         : this(Process.Start(psi) ?? throw new InvalidOperationException(
-                   $"muse_msp_spawn_failed: '{psi.FileName}' did not start (Process.Start returned null)."),
+                   $"child_spawn_failed: '{psi.FileName}' did not start (Process.Start returned null)."),
                logger, time) { }
 
-    internal MuseMspProcess(Process process, ILogger logger, TimeProvider time) {
+    internal JsonLineProcess(Process process, ILogger logger, TimeProvider time) {
         _process = process;
         _logger  = logger;
         _time    = time;
@@ -216,6 +215,6 @@ internal sealed partial class MuseMspProcess : IMuseMspProcess {
         }
     }
 
-    [LoggerMessage(Level = LogLevel.Debug, Message = "Muse MSP stderr: {Length} chars")]
+    [LoggerMessage(Level = LogLevel.Debug, Message = "Child stderr: {Length} chars")]
     partial void LogStderrShape(int length);
 }

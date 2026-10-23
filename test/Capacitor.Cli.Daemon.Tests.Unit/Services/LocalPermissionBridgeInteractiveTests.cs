@@ -20,10 +20,10 @@ public class LocalPermissionBridgeInteractiveTests {
         public LocalPermissionBridge Bridge { get; }
         public HttpClient Client { get; } = new() { Timeout = TimeSpan.FromSeconds(30) };
 
-        public Harness(string? attributeTo = "agent-1") {
+        public Harness(string? attributeTo = "agent-1", bool asksOnStdin = false) {
             Log    = new PermissionDecisionLog(Tmp.Path, NullLogger.Instance);
             Bridge = new LocalPermissionBridge(Server, NullLogger<LocalPermissionBridge>.Instance, EphemeralLoopbackPortSource.Instance, TimeProvider.System, Broker, Log) {
-                AttributeHandler = attributeTo is null ? _ => null : _ => new AttributedAgent(attributeTo),
+                AttributeHandler = attributeTo is null ? _ => null : _ => new AttributedAgent(attributeTo, AsksOnStdin: asksOnStdin),
             };
         }
 
@@ -319,6 +319,61 @@ public class LocalPermissionBridgeInteractiveTests {
         await Assert.That(LocalPermissionBridge.BuildPending("r", "a1", Session, "claude", "Bash", null, null, "t", "toolu_1")!.ToolUseId).IsEqualTo("toolu_1");
         await Assert.That(LocalPermissionBridge.BuildPending("r", "a1", Session, "claude", "Bash", null, null, "t", new string('i', PermissionWire.MaxToolUseIdBytes + 1))!.ToolUseId).IsNull();
     }
+
+    /// Claude asks a stdin agent again on stdin whatever its hook is told, so the hook must get no
+    /// decision and raise no card of its own.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
+    public async Task A_hook_from_an_agent_that_asks_on_stdin_gets_no_decision_and_raises_nothing() {
+        await using var h = new Harness(asksOnStdin: true);
+        await h.StartAsync();
+
+        using var response = await h.PostAsync();
+
+        await Assert.That(await response.Content.ReadAsStringAsync()).IsEqualTo("{}");
+        await Assert.That(h.Broker.PendingSnapshot().Count).IsEqualTo(0);
+        await Assert.That(h.Server.Responds.Count).IsEqualTo(0);
+    }
+
+    [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
+    public async Task An_in_process_request_takes_the_brokered_path_and_returns_the_settlement() {
+        await using var h = new Harness(asksOnStdin: true);
+        h.Server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
+        await h.StartAsync();
+
+        var decision = h.Bridge.DecideAsync(Request(), "claude", CancellationToken.None);
+        await WaitUntil(() => h.Broker.PendingSnapshot().Count == 1, "the request is pending");
+        var pending = h.Broker.PendingSnapshot().Single();
+        await Assert.That(pending.ToolUseId).IsEqualTo("toolu_01X");
+
+        await Assert.That(h.Broker.TrySettle(pending.RequestId, Allow, "allow", "app")).IsTrue();
+
+        await Assert.That((await decision).Behavior).IsEqualTo("allow");
+    }
+
+    /// The agent withdrawing its request settles the card rather than leaving it for a human.
+    [Test, NotInParallel(nameof(LocalPermissionBridgeInteractiveTests))]
+    public async Task Cancelling_an_in_process_request_withdraws_it() {
+        await using var h = new Harness(asksOnStdin: true);
+        h.Server.AwaitScript = (_, ct) => new TaskCompletionSource<PermissionDecision>().Task.WaitAsync(ct);
+        await h.StartAsync();
+        using var cts = new CancellationTokenSource();
+
+        var decision = h.Bridge.DecideAsync(Request(), "claude", cts.Token);
+        await WaitUntil(() => h.Broker.PendingSnapshot().Count == 1, "the request is pending");
+        await cts.CancelAsync();
+
+        await Assert.That((await decision).Behavior).IsEqualTo("deny");
+        await WaitUntil(() => h.Broker.PendingSnapshot().Count == 0, "the request is withdrawn");
+    }
+
+    static System.Text.Json.Nodes.JsonObject Request() => new() {
+        ["session_id"]  = Session,
+        ["tool_name"]   = "Bash",
+        ["tool_input"]  = new System.Text.Json.Nodes.JsonObject { ["command"] = "ls" },
+        ["tool_use_id"] = "toolu_01X",
+        ["agent_id"]    = "agent-1",
+        ["cwd"]         = "/repo"
+    };
 
     static async Task WaitUntil(Func<bool> condition, string what) {
         var deadline = DateTime.UtcNow.AddSeconds(30);

@@ -2007,6 +2007,18 @@ KCAP_CODEX_TRANSPORT=app-server kcap daemon   # opt in; default is `pty`
 - **`app-server`** takes effect only for review-flow (unattended) launches and only when the installed Codex meets the minimum version (**0.146.0**); a lower build falls back to `pty` automatically. Interactive launches always use `pty` in this release.
 - Rollback is a restart with the value flipped back to `pty`; it governs new launches only.
 
+##### Claude transport (`KCAP_CLAUDE_TRANSPORT`)
+
+Interactive hosted Claude agents can run as `claude -p` over Claude Code's stream-json protocol instead of the interactive PTY. The prompt is then sent as the session's first message, never on the command line, so the chat shows what you typed whatever its length. It is opt-in and env-only:
+
+```bash
+KCAP_CLAUDE_TRANSPORT=stream-json kcap daemon   # opt in; default is `pty`
+```
+
+- **Default `pty`** — the interactive-terminal path, unchanged.
+- **`stream-json`** applies to interactive launches in a daemon-owned worktree. Reviews, review flows and private agents stay on `pty`. A stream-json agent has no terminal view; permission prompts and questions arrive as cards as usual.
+- Rollback is a restart with the value flipped back to `pty`; it governs new launches only.
+
 The Cursor CLI path (`cursor-agent` by default, used to spawn the `cursor` hosted-agent vendor) is env-only for now — there is no `daemon.cursor_path` profile key yet, so set it per-launch:
 
 ```bash

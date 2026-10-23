@@ -47,6 +47,41 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     /// aborts an in-flight PTY launch.
     /// </remarks>
     public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+        var launcherCtx = await PrepareAsync(launcher, ctx, ex => LogPrepareSoftFailure(ex, ctx.AgentId));
+
+        var launchArgs = launcher.BuildArgs(launcherCtx);
+
+        string? launchPrompt = null;
+        if (launcherCtx.Prompt is { Length: > 0 } prompt
+            && launchArgs.Args.Contains(prompt)
+            && !CommandLinePrompt.StaysInline(prompt, launchArgs.Args)) {
+            launcherCtx  = launcherCtx with { Prompt = null };
+            launchArgs   = launcher.BuildArgs(launcherCtx);
+            launchPrompt = prompt;
+            LogPromptPastedAfterSpawn(ctx.AgentId, prompt.Length);
+        }
+
+        var env = HostedEnv(ctx);
+
+        // Read before the spawn so a throw cannot orphan the PTY. Gates the multi-CR submit spray; see
+        // PtyHostedAgentRuntime.SubmitAsync.
+        var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
+
+        var pty     = ptyFactory.Spawn(launcher.CliPath, launchArgs.Args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
+        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
+
+        if (launchPrompt is not null) {
+            runtime.DeliverLaunchPrompt(launchPrompt);
+            _ = LogLaunchPromptOutcomeAsync(runtime.LaunchPromptDelivery!, ctx.AgentId);
+        }
+
+        return new HostedRuntimeStart(runtime, launchArgs.McpConfigPath);
+    }
+
+    /// <summary>Builds the launcher's context and runs its <see cref="IHostedAgentLauncher.Prepare"/>. A
+    /// failure the launch can survive goes to <paramref name="softFailure"/> and the launch carries on.</summary>
+    internal static async Task<LauncherContext> PrepareAsync(
+            IHostedAgentLauncher launcher, RuntimeStartContext ctx, Action<Exception> softFailure) {
         var launcherCtx = new LauncherContext(
             AgentId: ctx.AgentId,
             SourceRepoPath: ctx.SourceRepoPath,
@@ -83,26 +118,16 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             // Propagate — the orchestrator maps this to LaunchFailed + worktree cleanup.
             throw;
         } catch (Exception ex) {
-            LogPrepareSoftFailure(ex, ctx.AgentId);
+            softFailure(ex);
         } finally {
             if (owned) WorktreeManager.RecordDaemonBaseline(launcherCtx.Worktree.Path, before);
         }
 
-        var launchArgs = launcher.BuildArgs(launcherCtx);
+        return launcherCtx;
+    }
 
-        string? launchPrompt = null;
-        if (launcherCtx.Prompt is { Length: > 0 } prompt
-            && launchArgs.Args.Contains(prompt)
-            && !CommandLinePrompt.StaysInline(prompt, launchArgs.Args)) {
-            launcherCtx  = launcherCtx with { Prompt = null };
-            launchArgs   = launcher.BuildArgs(launcherCtx);
-            launchPrompt = prompt;
-            LogPromptPastedAfterSpawn(ctx.AgentId, prompt.Length);
-        }
-
-        var args          = launchArgs.Args;
-        var mcpConfigPath = launchArgs.McpConfigPath;
-
+    /// <summary>What the daemon exports into a hosted agent on top of what it inherits.</summary>
+    internal static Dictionary<string, string> HostedEnv(RuntimeStartContext ctx) {
         var env = new Dictionary<string, string>();
 
         // A private agent gets what a --private local spawn gets: nothing that ties its session to
@@ -113,10 +138,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             HostedLaunchMarkers.ApplyOverlay(env, ctx);
         }
 
-        // Phase B (D4 §6.4(3)): stamp the daemon-identity markers so a restarted daemon's
-        // OrphanReaper env-marker scan can reap a recordless survivor of a PRIOR incarnation of THIS
-        // daemon (same KCAP_DAEMON_ID, older KCAP_DAEMON_EPOCH) — and never touch another daemon's
-        // child or a live agent of the current incarnation.
+        // A restarted daemon reaps a recordless survivor only when these name it (same id, older
+        // epoch), so another daemon's child and a live agent of this incarnation are never touched.
         if (!string.IsNullOrEmpty(ctx.DaemonId))    env["KCAP_DAEMON_ID"]    = ctx.DaemonId;
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch)) env["KCAP_DAEMON_EPOCH"] = ctx.DaemonEpoch;
 
@@ -136,19 +159,7 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
             env["KCAP_REVIEW_PR"] = reviewEnv.PrNumber.ToString();
         }
 
-        // Read before the spawn so a throw cannot orphan the PTY. Gates the multi-CR submit spray; see
-        // PtyHostedAgentRuntime.SubmitAsync.
-        var disablesApprovalPrompts = launcher.DisablesApprovalPrompts(launcherCtx);
-
-        var pty     = ptyFactory.Spawn(launcher.CliPath, args, ctx.Worktree.Path, env, ctx.Cols, ctx.Rows);
-        var runtime = new PtyHostedAgentRuntime(ctx.Vendor, pty, time, disablesApprovalPrompts, logger);
-
-        if (launchPrompt is not null) {
-            runtime.DeliverLaunchPrompt(launchPrompt);
-            _ = LogLaunchPromptOutcomeAsync(runtime.LaunchPromptDelivery!, ctx.AgentId);
-        }
-
-        return new HostedRuntimeStart(runtime, mcpConfigPath);
+        return env;
     }
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Launcher Prepare soft-failure for agent {AgentId} (continuing)")]
