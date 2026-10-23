@@ -107,7 +107,10 @@ public sealed class CursorHookCommand(
             return 0;
         }
 
-        var budget = clock.Budget(Ceiling);
+        // Read before auth, so a sessionStart's longer ceiling covers its token refresh as well.
+        if (await ReadPayloadAsync(stdin) is not { } body) return 0;
+
+        var budget = clock.Budget(CeilingFor(body));
 
         using var cts = budget.CancelAtCeiling();
         HttpClient? client = null;
@@ -144,7 +147,7 @@ public sealed class CursorHookCommand(
             // No entry guard on the budget: the ceiling is measured from process entry, so a slow
             // resolve or spool drain can spend it before dispatch, and returning here would drop
             // the event outright. HandleCore's own per-step gates spool it instead of posting.
-            return await HandleCore(client, stdin, spool);
+            return await DispatchAsync(client, body, spool);
         } catch {
             // Fail-open contract: never crash Cursor. Covers auth timeout,
             // unreachable server, malformed config, etc.
@@ -176,21 +179,37 @@ public sealed class CursorHookCommand(
             HttpClient client,
             TextReader stdin,
             HookSpool  spool
-        ) {
-        // The payload is read first, on the longer ceiling, because it alone says which ceiling the
-        // rest of the dispatch gets. Unread by then, the kind is unknown and nothing is written.
-        string body;
-        using (var readCts = clock.Budget(SessionStartCeiling).CancelAtCeiling()) {
+        ) =>
+        await ReadPayloadAsync(stdin) is { } body ? await DispatchAsync(client, body, spool) : 0;
+
+    /// <summary>The payload, read before anything else because its kind picks the ceiling. Raced against the
+    /// ordinary ceiling rather than cancelled, since a reader need not honour a token; a read already done wins
+    /// the tie. Null when it did not arrive in time, and then nothing is written.</summary>
+    async Task<string?> ReadPayloadAsync(TextReader stdin) {
+        var read   = stdin.ReadToEndAsync(CancellationToken.None);
+        var winner = await Task.WhenAny(read, clock.Budget(Ceiling).CeilingReached());
+
+        if (winner == read) {
             try {
-                body = await stdin.ReadToEndAsync(readCts.Token);
-            } catch (OperationCanceledException) {
-                return 0;
+                return await read;
+            } catch {
+                // Fail-open: an unreadable payload must never crash Cursor's agent loop.
+                return null;
             }
         }
 
-        // Its own budget rather than the caller's: this is an entry point in its own right, and a
-        // budget is nothing but a ceiling read off the shared clock, so both name the same deadline.
-        var budget = clock.Budget(IsSessionStart(body) ? SessionStartCeiling : Ceiling);
+        _ = read.ContinueWith(static t => _ = t.Exception, CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+
+        return null;
+    }
+
+    static TimeSpan CeilingFor(string body) => IsSessionStart(body) ? SessionStartCeiling : Ceiling;
+
+    async Task<int> DispatchAsync(HttpClient client, string body, HookSpool spool) {
+        // Its own budget rather than the caller's: a budget is nothing but a ceiling read off the
+        // shared clock, so both name the same deadline.
+        var budget = clock.Budget(CeilingFor(body));
 
         using var cts = budget.CancelAtCeiling();
         var kindSignal = new ResolvedEventKindSignal();
@@ -207,8 +226,8 @@ public sealed class CursorHookCommand(
         // wall-clock moment regardless — but that internal timer racing this method's own
         // `using`-disposal at the very next statement is exactly that, a race, not a
         // guarantee. Calling Cancel() deterministically (rather than trusting the timer to
-        // have already fired) is what makes the inner's cancellation-aware stdin read /
-        // HTTP calls (both bound to cts.Token) actually observe cancellation promptly. This
+        // have already fired) is what makes the inner's cancellation-aware HTTP calls
+        // (bound to cts.Token) actually observe cancellation promptly. This
         // also cancels the linked memory CTS in RunMemoryOrchestrationAsync — a cancelled
         // fetch there leaves the lease uncommitted, which is already the intended, tested
         // behavior (see CancelledFetch_leaves_lease_uncommitted).

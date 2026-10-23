@@ -509,33 +509,37 @@ public class CursorHookCommandTests {
                 _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
                 () => fx.Spool);
 
-        // Nothing inside can end this, so spend the ceiling from here: the cap must still return.
-        clock.Advance(CursorHookCommand.SessionStartCeiling);
+        // Nothing inside can end this, so spend the ceiling from here: the cap must still return,
+        // well before the reader's own 10s, since the reader ignores the token it is handed.
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        clock.Advance(CursorHookCommand.Ceiling);
 
         var exit = await call;
+        await Assert.That(elapsed.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
     }
 
-    // Pins that the abandoned inner's token is cancelled by the time HandleCore returns on the
-    // deadline branch. The ceiling timer usually cancels it first, so this does not isolate the
-    // explicit Cancel() on its own.
+    /// <summary>A sessionStart's longer ceiling covers its auth step too: a token refresh slower than any other event
+    /// may take still reaches dispatch and answers, rather than dropping the event with no output.</summary>
     [Test, NotInParallel]
-    public async Task HandleCore_deadline_win_cancels_the_abandoned_inners_token() {
+    public async Task A_sessionStart_whose_auth_outlasts_the_ordinary_ceiling_still_answers() {
         using var capture = ConsoleOutput.StartCapture();
         using var fx = new Fixture(Config.Root);
-        var reader = new CancelObservingReader();
+        var auth  = new TaskCompletionSource<AuthAttempt>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clock = new FakeTimeProvider();
 
-        var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(fx.Client, reader, fx.Spool);
+        var call = new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new HookClock(clock), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+            .HandleWithDeps(
+                new StringReader("""{"hook_event_name":"sessionStart","session_id":"abc"}"""),
+                _ => auth.Task,
+                () => fx.Spool);
 
-        await Assert.That(exit).IsEqualTo(0);
-        // The read never resolved (no hook_event_name was ever parsed), so there is
-        // nothing to emit.
-        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("");
+        clock.Advance(CursorHookCommand.Ceiling + TimeSpan.FromSeconds(1));
+        auth.SetResult(new AuthAttempt(fx.Client, AuthStatus.Ok));
 
-        // Read synchronously at return: the reader's own continuation runs on the pool, which a
-        // loaded runner can starve for seconds after the cancel has already happened.
-        await Assert.That(reader.Token.IsCancellationRequested).IsTrue();
+        await Assert.That(await call).IsEqualTo(0);
+        await Assert.That(capture.GetCapturedOutput()).IsEqualTo("{}\n");
     }
 
     [Test, NotInParallel]
@@ -581,7 +585,7 @@ public class CursorHookCommandTests {
                 () => fx.Spool);
 
         // The auth attempt never resolves, so spend the ceiling from here: the cap must return.
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await call;
 
@@ -1069,20 +1073,6 @@ public class CursorHookCommandTests {
     sealed class NeverCompletingReader : TextReader {
         public override Task<string> ReadToEndAsync(CancellationToken cancellationToken) =>
             Task.Delay(TimeSpan.FromSeconds(10), CancellationToken.None).ContinueWith(_ => "", TaskScheduler.Default);
-    }
-
-    // Records the token it is handed and completes only when that token fires.
-    sealed class CancelObservingReader : TextReader {
-        public CancellationToken Token { get; private set; }
-
-        public override async Task<string> ReadToEndAsync(CancellationToken cancellationToken) {
-            Token = cancellationToken;
-            var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            await using (cancellationToken.Register(() => tcs.TrySetResult())) {
-                await tcs.Task;
-            }
-            throw new OperationCanceledException(cancellationToken);
-        }
     }
 
     // The memory-index GET never resolves on its own — it only ends via the caller's own
