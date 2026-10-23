@@ -136,6 +136,30 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>A branch whose name is all hex starts from that branch, not from a same-named tag that rev-parse
+    /// would resolve first when the name is read as a sha.</summary>
+    [Test]
+    public async Task CreateAsync_with_a_hex_named_branch_starts_from_the_branch_not_a_same_named_tag() {
+        using var repo = GitRepo.Create("hex-branch");
+
+        repo.CreateFile("a.txt", "a");
+        repo.CommitAll("first");
+        var first = repo.Head;
+        repo.Do("branch", "cafe1234");
+        repo.CreateFile("b.txt", "b");
+        repo.CommitAll("second");
+        repo.Do("tag", "cafe1234");
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(repo, name: "hex-branch", baseRef: "cafe1234");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
     [Test]
     public async Task CreateAsync_with_an_unknown_sha_falls_back_to_the_origin_fetch() {
         using var repo = MakeUpstreamWithSideRef("refs/pull/9/head", out _);
