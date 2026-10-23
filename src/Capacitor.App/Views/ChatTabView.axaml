@@ -116,7 +116,7 @@
                         <StackPanel Spacing="6">
                             <TextBlock Classes="toolKindChip" HorizontalAlignment="Left"
                                        Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle}" />
-                            <views:MarkdownView Text="{Binding Text}"
+                            <views:MarkdownView Text="{Binding Text}" Flavor="Prompt"
                                                 OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                 RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
                         </StackPanel>

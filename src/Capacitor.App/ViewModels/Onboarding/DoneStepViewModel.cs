@@ -91,7 +91,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         : Import is null         ? $"kcap stores what your coding agents do on {_current.MachineName} and lets them search it later. Next time you hit a problem, the fix you already found is stored in kcap"
         : Import.Running         ? "What has landed is already searchable"
         : Import.Imported > 0    ? "Your agents can search all of it. Ask one what you have already tried, and it looks here first"
-        :                          "No sessions were uploaded. Your history is still on this machine";
+        :                          "No sessions were imported. Your history is still on this machine";
 
     public bool ShowsFigures => Import is not null;
 
@@ -131,7 +131,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     public bool FailedVisible => Import is { State: ImportRunState.Failed or ImportRunState.Cancelled } or { Running: false, Failed: > 0 };
 
     public string FailedTitle => Import is { Failed: 0 } ? "History import did not finish"
-        : Import is { Failed: 1 } ? "1 session failed to upload" : $"{Import?.Failed ?? 0} sessions failed to upload";
+        : Import is { Failed: 1 } ? "1 session failed to import" : $"{Import?.Failed ?? 0} sessions failed to import";
 
     public string FailedBody => _current.Local
         ? $"Your history is still on {_current.MachineName}. Go back to History to retry"
