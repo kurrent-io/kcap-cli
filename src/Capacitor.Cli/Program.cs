@@ -27,6 +27,8 @@ if (args.Length < 1) {
 
 var command = args[0];
 
+NestedHarness.ShedInheritedHosting();
+
 // `skills sync --auto` outlives the hook that spawned it, and that hook closes the pipe read ends as
 // it exits: a write afterwards lands on a dead fd and can take the sync down with it. The writers
 // are replaced HERE rather than at dispatch because config and profile resolution sit in between and
