@@ -168,11 +168,17 @@ internal static class WizardComposition {
             // The status client reads a cancelled request as a transport failure.
             var status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
             ct.ThrowIfCancellationRequested();
+            if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
+                is PollVerdict.Failed or PollVerdict.ActiveNoOrg) {
+                failed(tenant.Label);
+                return answer;
+            }
             if (!ProvisioningPoll.IsPending(status.StatusCode, status.Body?.State)) return answer;
 
             waiting(tenant.Label);
             var deadline = time.GetUtcNow() + ProvisioningWaitLimit;
             while (time.GetUtcNow() < deadline) {
+                if (liveFound.ContainsKey(bearer)) return WorkspaceAnswer.Pending;
                 await Task.Delay(ProvisioningPollInterval, time, ct);
                 if (liveFound.ContainsKey(bearer)) return WorkspaceAnswer.Pending;
 

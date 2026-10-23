@@ -131,6 +131,7 @@ public class WizardCompositionCloudSignUpTests {
     [Arguments(new[] { "provisioning", "active" }, WorkspaceAnswer.Gone, true, true)]
     [Arguments(new[] { "provisioning", "401" }, WorkspaceAnswer.Pending, true, false)]
     [Arguments(new string[0], WorkspaceAnswer.Gone, false, false)]
+    [Arguments(new[] { "failed" }, WorkspaceAnswer.Gone, false, true)]
     public async Task A_workspace_still_being_created_is_waited_on_until_it_answers(
             string[] states, WorkspaceAnswer expected, bool waited, bool failed) {
         var time = new FakeTimeProvider();
@@ -172,6 +173,21 @@ public class WizardCompositionCloudSignUpTests {
         await Assert.That(other).IsEqualTo(siblingAnswer);
         await Assert.That(await pending.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(expected);
         await Assert.That(handler.StatusPolls).IsEqualTo(statusPolls);
+    }
+
+    /// A live workspace already found means the one still being created is left out at once, with no wait.
+    [Test]
+    public async Task A_live_workspace_found_first_leaves_one_still_being_created_out_at_once() {
+        using var handler = new ProvisioningHandler(["provisioning"], siblingOrigin: "https://older.kcap.ai");
+        var probe = WizardComposition.ProbeWorkspace(
+            new PlainHttpClientFactory(handler), AuthEndpoints.Defaults, _ => { }, _ => { }, new FakeTimeProvider());
+
+        var other   = await probe(new DiscoveredTenant { Origin = "https://older.kcap.ai", Slug = "older" }, "bearer", CancellationToken.None);
+        var pending = await probe(new DiscoveredTenant { Origin = "https://acme.kcap.ai", Slug = "acme" }, "bearer", CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        await Assert.That(other).IsEqualTo(WorkspaceAnswer.Live);
+        await Assert.That(pending).IsEqualTo(WorkspaceAnswer.Pending);
     }
 
     /// Of two workspaces still being created, the first to go live ends the wait on the other.
