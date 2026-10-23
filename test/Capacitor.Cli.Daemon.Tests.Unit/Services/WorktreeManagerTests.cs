@@ -111,8 +111,12 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>A commit is named whole when kcap's git hook recorded it, and by the abbreviation git printed when
+    /// the server read it off a shell <c>git commit</c>.</summary>
     [Test]
-    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote() {
+    [Arguments(40)]
+    [Arguments(7)]
+    public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote(int shaLength) {
         using var repo = GitRepo.Create("local-only");
 
         repo.CreateFile("a.txt", "a");
@@ -122,7 +126,7 @@ public class WorktreeManagerTests {
         repo.CommitAll("second");
 
         var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
-        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first);
+        var worktree = await manager.CreateAsync(repo, name: "local-sha", baseRef: first[..shaLength]);
 
         try {
             await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(first);

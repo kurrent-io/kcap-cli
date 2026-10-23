@@ -2281,6 +2281,9 @@ public readonly record struct DaemonConnect(
         // The daemon's ActiveCount and its version, read together, as on a status report.
         int?                                        ActiveCount = null,
         long?                                       ActiveCountVersion = null,
+        // A launch's base ref may be an abbreviated sha, which the daemon resolves among its own commits.
+        // False from a daemon predating it, which would fetch the abbreviation from origin and fail.
+        bool                                        SupportsAbbreviatedShaBaseRef = false,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
         // Null from a daemon predating the field, which the server reads as explore and edit only.
         string[]?                                   AcpPresets = null,

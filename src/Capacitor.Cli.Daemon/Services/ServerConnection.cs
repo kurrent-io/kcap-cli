@@ -771,6 +771,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
+            SupportsAbbreviatedShaBaseRef: true,
             ResumingAgents: GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version,

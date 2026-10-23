@@ -243,10 +243,10 @@ public partial class WorktreeManager(
             var noHooks = NoBranchHooks();
             if (!string.IsNullOrEmpty(baseRef)) {
                 // A commit that exists only locally (a fork's unpushed head) has nothing to fetch.
-                if (IsFullSha(baseRef) && await CommitExistsLocallyAsync(repoPath, baseRef)) {
+                if (await ResolveLocalCommitAsync(repoPath, baseRef) is { } commit) {
                     await WithWorktreeMetadataGate(repoPath, time, () =>
                         RunGit(repoPath, GitTimeout, time, noHooks,
-                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, baseRef));
+                            "worktree", "add", "--no-checkout", "-B", branch, worktreePath, commit));
                     LogWorktreeBase(worktreePath, baseRef, "local commit");
                     var local = new WorktreeInfo(worktreePath, branch, repoPath);
                     await StripOrRollBackAsync(local);
@@ -1826,13 +1826,15 @@ public partial class WorktreeManager(
         } catch { return false; }
     }
 
-    static bool IsFullSha(string value) =>
-        value.Length == 40 && value.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f');
+    /// <summary>The full sha of a commit this repository holds, named whole or by the abbreviation git printed
+    /// for it. An abbreviation two local objects share resolves to nothing.</summary>
+    async Task<string?> ResolveLocalCommitAsync(string repoPath, string sha) {
+        if (sha.Length is < 7 or > 40 || !sha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f')) return null;
 
-    async Task<bool> CommitExistsLocallyAsync(string repoPath, string sha) {
-        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, false, [], "cat-file", "-e", $"{sha}^{{commit}}");
+        var result = await RunGitCaptureResult(repoPath, GitTimeout, time, true, [],
+            "rev-parse", "--verify", "--quiet", $"{sha}^{{commit}}");
 
-        return result.ExitCode == 0;
+        return result.ExitCode == 0 && result.Stdout.Trim() is { Length: 40 } full ? full : null;
     }
 
     /// <summary>A base ref arrives over the hub. <c>check-ref-format --branch</c> also expands
