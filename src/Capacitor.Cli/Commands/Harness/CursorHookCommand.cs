@@ -44,9 +44,13 @@ public sealed class CursorHookCommand(
 
     /// <summary>2s of work is what kcap promises Cursor per hook so it never blocks the agent loop
     /// — its own promise, not a Cursor timeout, which is why it is written as the
-    /// work plus the reserve <see cref="HookBudget.Remaining"/> takes back off it. One ceiling for
-    /// every Cursor event: the budget is armed before the payload is parsed.</summary>
+    /// work plus the reserve <see cref="HookBudget.Remaining"/> takes back off it.</summary>
     internal static readonly TimeSpan Ceiling = TimeSpan.FromSeconds(2) + HookBudget.Safety;
+
+    /// <summary>cursor-agent holds the first model request until sessionStart answers (an 8s hook was
+    /// measured to land), and the guidelines fetch runs on whatever recording leaves, so 2s leaves it
+    /// nothing. Every other event keeps <see cref="Ceiling"/>.</summary>
+    internal static readonly TimeSpan SessionStartCeiling = TimeSpan.FromSeconds(6) + HookBudget.Safety;
 
     static readonly TimeSpan HookPostTimeout = TimeSpan.FromSeconds(1);
 
@@ -150,6 +154,14 @@ public sealed class CursorHookCommand(
         }
     }
 
+    static bool IsSessionStart(string body) {
+        try {
+            return JsonNode.Parse(body) is JsonObject node && TryGetString(node, "hook_event_name") == "sessionStart";
+        } catch (System.Text.Json.JsonException) {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Test-friendly core. Caller owns the <see cref="HttpClient"/> and
     /// <see cref="HookSpool"/>. Races the entire inner phase against this hook's one
@@ -165,14 +177,25 @@ public sealed class CursorHookCommand(
             TextReader stdin,
             HookSpool  spool
         ) {
+        // The payload is read first, on the longer ceiling, because it alone says which ceiling the
+        // rest of the dispatch gets. Unread by then, the kind is unknown and nothing is written.
+        string body;
+        using (var readCts = clock.Budget(SessionStartCeiling).CancelAtCeiling()) {
+            try {
+                body = await stdin.ReadToEndAsync(readCts.Token);
+            } catch (OperationCanceledException) {
+                return 0;
+            }
+        }
+
         // Its own budget rather than the caller's: this is an entry point in its own right, and a
         // budget is nothing but a ceiling read off the shared clock, so both name the same deadline.
-        var budget = clock.Budget(Ceiling);
+        var budget = clock.Budget(IsSessionStart(body) ? SessionStartCeiling : Ceiling);
 
         using var cts = budget.CancelAtCeiling();
         var kindSignal = new ResolvedEventKindSignal();
 
-        var inner    = HandleCoreInner(client, stdin, spool, cts.Token, kindSignal, budget);
+        var inner    = HandleCoreInner(client, new StringReader(body), spool, cts.Token, kindSignal, budget);
         var deadline = budget.CeilingReached();
         var winner   = await Task.WhenAny(inner, deadline);
 

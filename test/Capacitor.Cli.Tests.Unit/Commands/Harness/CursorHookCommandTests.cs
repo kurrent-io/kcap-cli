@@ -346,7 +346,7 @@ public class CursorHookCommandTests {
         // pre-dispatch leaves behind.
         var spent = new FakeTimeProvider();
         var clock = new HookClock(spent);          // anchors on construction — advance AFTER it
-        spent.Advance(CursorHookCommand.Ceiling - HookBudget.Safety);
+        spent.Advance(CursorHookCommand.SessionStartCeiling - HookBudget.Safety);
 
         var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .HandleWithDeps(
@@ -368,7 +368,7 @@ public class CursorHookCommandTests {
         // dispatcher must fail-open with return 0, never bubble the exception.
         var spent = new FakeTimeProvider();
         var clock = new HookClock(spent);
-        spent.Advance(CursorHookCommand.Ceiling);
+        spent.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await new CursorHookCommand(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), clock, Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(Fixture.StubUrl, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).HandleCore(
             fx.Client,
@@ -510,7 +510,7 @@ public class CursorHookCommandTests {
                 () => fx.Spool);
 
         // Nothing inside can end this, so spend the ceiling from here: the cap must still return.
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await call;
         await Assert.That(exit).IsEqualTo(0);
@@ -553,7 +553,7 @@ public class CursorHookCommandTests {
             _ => Task.FromResult(new AuthAttempt(fx.Client, AuthStatus.Ok)),
             () => fx.Spool);
 
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await call;
         await Assert.That(exit).IsEqualTo(0);
@@ -618,6 +618,27 @@ public class CursorHookCommandTests {
         await Assert.That(fragment).Contains("Team memory");
     }
 
+    /// <summary>A sessionStart whose recording spends every second any other event may work still has budget left
+    /// for the fragment, since cursor-agent waits for sessionStart's answer; any other event spending the same is
+    /// out of budget.</summary>
+    [Test, NotInParallel]
+    public async Task A_sessionStart_whose_recording_spends_the_ordinary_budget_still_emits_the_fragment() {
+        using var fx = new Fixture(Config.Root);
+        fx.MemoryIndexBody = """[{"memory_id":"m1","slug":"s","audience":"org","description":"d","kind":"preference"}]""";
+        fx.SpendOnPost     = CursorHookCommand.Ceiling - HookBudget.Safety;
+
+        using var capture = ConsoleOutput.StartCapture();
+        using var wsDir   = new TempDir("ws");
+        var ws  = wsDir.Path.Replace('\\', '/').TrimEnd('/');
+        var sid = Guid.NewGuid().ToString("N");
+
+        await fx.HandleAsync($$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}","workspace_roots":["{{ws}}"]}""");
+
+        var fragment = JsonNode.Parse(capture.GetCapturedOutput())!["additional_context"]?.GetValue<string>();
+        await Assert.That(fragment).IsNotNull().And.Contains("Team memory");
+        await Assert.That(CursorHookCommand.SessionStartCeiling).IsGreaterThan(CursorHookCommand.Ceiling);
+    }
+
     // [NotInParallel] for Console.Out, which the capture below redirects process-wide — matching
     // this file's precedent for every other capturing test above. The profile setting reaches the
     // hook through its own resolution, so nothing process-global carries it.
@@ -644,7 +665,7 @@ public class CursorHookCommandTests {
         using var capture = ConsoleOutput.StartCapture();
         // Spend the whole ceiling before dispatching: Remaining is then zero regardless of how fast
         // recording completes, so the skip is the guard's and not a scheduling accident.
-        fx.Clock.Advance(CursorHookCommand.Ceiling);
+        fx.Clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit = await fx.HandleAsync(
             $$"""{"hook_event_name":"sessionStart","session_id":"{{sid}}"}""");
@@ -821,7 +842,7 @@ public class CursorHookCommandTests {
         // Wait (bounded, real-time) for the request to ENTER the handler, then fire the budget clock.
         await handler.EnteredSignal.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-        clock.Advance(CursorHookCommand.Ceiling);
+        clock.Advance(CursorHookCommand.SessionStartCeiling);
 
         var exit1 = await call;
         elapsed.Stop();
@@ -863,7 +884,7 @@ public class CursorHookCommandTests {
         using var capture = ConsoleOutput.StartCapture();
         // The recording POST spends the whole budget, which is how production reaches this guard:
         // the memory stage runs last, on what is left, and here nothing is.
-        fx.SpendOnPost = CursorHookCommand.Ceiling;
+        fx.SpendOnPost = CursorHookCommand.SessionStartCeiling;
 
         var exit = await fx.HandleAsync(payload);
 
