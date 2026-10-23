@@ -29,9 +29,13 @@ public sealed partial class PullRequestContextViewModel {
     /// Stays while selected, so the tab under the reader does not vanish when a poll clears the conflict.
     public bool ShowsConflictsTab => HasConflicts || IsConflicts;
     public PullRequestStatus ConflictsStatus => HasConflicts ? new("Merge conflicts", "conflict") : new("");
-    public string ConflictsNote => HasConflicts
-        ? $"This branch has conflicts with {_overview?.BaseRef ?? "the base branch"} that must be resolved before it can merge."
-        : "This branch has no conflicts with the base branch.";
+    /// "No conflicts" only on a displayed overview that says so; an unknown or hidden answer is not a clean one.
+    public string ConflictsNote =>
+        !CanDisplay ? "Refresh access to open PR content."
+        : HasConflicts ? $"This branch has conflicts with {_overview?.BaseRef ?? "the base branch"} that must be resolved before it can merge."
+        : _overview is not { Lifecycle: "open" or "draft" } ? "This pull request is no longer open."
+        : _overview.Mergeable == true ? "This branch has no conflicts with the base branch."
+        : "GitHub has not reported whether this branch merges cleanly.";
     public bool IsChecks => _section == "checks";
     public bool IsReviewers => _section == "reviewers";
     public bool IsReviewSection => _section is "reviewers" or "reviews" or "threads" or "thread_comments";
@@ -41,7 +45,7 @@ public sealed partial class PullRequestContextViewModel {
     public IReadOnlyList<PullRequestRow> DiscussionRows => IsDiscussion ? _discussionRows : [];
     public string FreshnessLabel {
         get {
-            var time = IsOverview || HasStaleOverview ? FetchedLabel : SnapshotLabel;
+            var time = !ReadsRows || HasStaleOverview ? FetchedLabel : SnapshotLabel;
             return HasStaleOverview ? "Earlier snapshot" + (time.Length > 0 ? " · " + time : "") : time;
         }
     }

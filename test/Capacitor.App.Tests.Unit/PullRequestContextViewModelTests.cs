@@ -891,6 +891,23 @@ public class PullRequestContextViewModelTests {
             await Assert.That(h.Vm.ShowsLoading).IsFalse();
             await Assert.That(h.Vm.PageNote).IsEmpty();
             await Assert.That(h.Source.Pages).IsEqualTo(0);
+            await Assert.That(h.Vm.FreshnessLabel).IsEqualTo(h.Vm.FetchedLabel);
+            await Assert.That(h.Vm.FreshnessLabel).IsNotEmpty();
+        } finally { await h.Dispose(); }
+    });
+
+    /// Only a mergeable overview reads as clean: an unreported answer must not claim the conflicts are gone.
+    [Test]
+    [Arguments(true, "This branch has no conflicts with the base branch.")]
+    [Arguments(null, "GitHub has not reported whether this branch merges cleanly.")]
+    public Task The_conflicts_note_claims_a_clean_branch_only_when_reported(bool? mergeable, string note) => RunOnUiAsync(async () => {
+        var h = new Harness();
+        try {
+            h.Source.OverviewResponses.Enqueue(Outstanding(h, mergeable, unresolved: 0));
+            h.Push(); await h.Show();
+
+            await Assert.That(h.Vm.HasConflicts).IsFalse();
+            await Assert.That(h.Vm.ConflictsNote).IsEqualTo(note);
         } finally { await h.Dispose(); }
     });
 
