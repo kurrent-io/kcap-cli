@@ -232,13 +232,26 @@ public sealed class UnixPtyProcess : IPtyProcess {
 
     internal int MasterFdForTest => (int)_master.DangerousGetHandle();
 
+    /// <summary>Runs with the master fd held, just before the write itself.</summary>
+    internal Action? BeforeMasterWriteForTest { get; set; }
+
     public Task WriteAsync(string input) => WriteAsync(Encoding.UTF8.GetBytes(input));
 
-    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go.</summary>
+    /// <summary>A no-op once disposal has begun: input for a closing PTY has nowhere to go. That
+    /// includes a write that started first and fails because disposal took the child down under it.</summary>
     public Task WriteAsync(byte[] data) {
         if (Volatile.Read(ref _disposed) != 0) return Task.CompletedTask;
 
-        return Task.Run(() => _master.TryUse(fd => WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length))));
+        return Task.Run(() => {
+                try {
+                    _master.TryUse(fd => {
+                            BeforeMasterWriteForTest?.Invoke();
+                            WriteFully(data, chunk => UnixPtyInterop.write(fd, chunk.Span, chunk.Length));
+                        }
+                    );
+                } catch (IOException) when (Volatile.Read(ref _disposed) != 0) { }
+            }
+        );
     }
 
     /// <summary>A master write may take only part of the buffer, a signal may interrupt it before any
