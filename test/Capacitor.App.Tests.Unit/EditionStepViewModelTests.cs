@@ -185,6 +185,44 @@ public class EditionStepViewModelTests {
         await Assert.That(after).IsEqualTo(WizardStepId.SignIn);
     }
 
+    /// The footer sits inside a disabled button, whose template may fade everything it holds;
+    /// the reason is the one part of the card that must stay at full strength.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unavailable_local_card_says_why_in_its_own_footer() {
+        var (inCard, footerShown, enabled, help, footerOpacity, headOpacity) = await AvaloniaSession.DispatchAsync(async () => {
+            var edition = new EditionStepViewModel(
+                CliTelemetry.Disabled(TimeProvider.System).Funnel, () => EditionStepViewModel.UnsupportedPlatform);
+            var vm = new OnboardingViewModel([edition, new FakeWizardStep(WizardStepId.SignIn)]);
+            await vm.PendingEnterForTesting;
+
+            var window = new MainWindow { Onboarding = vm };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var local = window.GetVisualDescendants().OfType<Button>().First(c => c.Name == "LocalEditionButton");
+            var reason = window.GetVisualDescendants().OfType<TextBlock>().First(c => c.Name == "LocalUnavailableText");
+            var head = local.GetVisualDescendants().OfType<Grid>().First(g => g.Classes.Contains("onboardingEditionHead"));
+            var result = (reason.GetVisualAncestors().Contains(local), reason.IsEffectivelyVisible, local.IsEffectivelyEnabled,
+                Avalonia.Automation.AutomationProperties.GetHelpText(local), EffectiveOpacity(reason), EffectiveOpacity(head));
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+
+            return result;
+        });
+
+        await Assert.That(inCard).IsTrue();
+        await Assert.That(footerShown).IsTrue();
+        await Assert.That(enabled).IsFalse();
+        await Assert.That(help).IsEqualTo(EditionStepViewModel.UnsupportedPlatform);
+        await Assert.That(footerOpacity).IsEqualTo(1.0);
+        await Assert.That(headOpacity).IsEqualTo(0.5);
+
+        static double EffectiveOpacity(Avalonia.Visual visual) =>
+            visual.GetSelfAndVisualAncestors().Aggregate(1.0, (opacity, v) => opacity * v.Opacity);
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_notice_stays_until_the_next_choice() {
