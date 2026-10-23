@@ -158,6 +158,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
                     case "completed": outcome = RunOutcome.Done; break;
                     case "failed":    outcome = RunOutcome.Failed; break;
                     case "killed":    outcome = RunOutcome.Stopped; break;
+                    case "stopped":   outcome = RunOutcome.Stopped; break;
                     default:          return [];
                 }
                 return [new RunSignal.Finished(callId, agentId, outcome, evt.Timestamp)];
