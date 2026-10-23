@@ -122,6 +122,82 @@ public class WizardCompositionCloudSignUpTests {
         await Assert.That(handler.Requests).IsEquivalentTo(["https://acme.kcap.ai/auth/config"]);
     }
 
+    /// A discovered workspace kcap.ai is still creating is waited on, saying so, until its host answers;
+    /// one kcap.ai calls failed, or does not know, is left out.
+    [Test]
+    [Arguments(new[] { "provisioning" }, WorkspaceAnswer.Live, true)]
+    [Arguments(new[] { "provisioning", "failed" }, WorkspaceAnswer.Gone, true)]
+    [Arguments(new string[0], WorkspaceAnswer.Gone, false)]
+    public async Task A_workspace_still_being_created_is_waited_on_until_it_answers(
+            string[] states, WorkspaceAnswer expected, bool waited) {
+        var time = new FakeTimeProvider();
+        using var handler = new ProvisioningHandler(states);
+        var waitedFor = new List<string>();
+        var probe = WizardComposition.ProbeWorkspace(new PlainHttpClientFactory(handler), AuthEndpoints.Defaults, waitedFor.Add, time);
+
+        var answer = probe(new DiscoveredTenant { Origin = "https://acme.kcap.ai", Slug = "acme", DisplayName = "Acme" }, "bearer", CancellationToken.None);
+        for (var tick = 0; tick < 50 && !answer.IsCompleted; tick++) {
+            time.Advance(WizardComposition.ProvisioningPollInterval);
+            await Task.Delay(20);
+        }
+
+        await Assert.That(await answer.WaitAsync(TimeSpan.FromSeconds(10))).IsEqualTo(expected);
+        await Assert.That(waitedFor.Count > 0).IsEqualTo(waited);
+    }
+
+    /// Someone coming back from kcap.ai's sign-up opens on sign-in, without the sign-up page again;
+    /// everyone else starts on the edition choice.
+    [Test]
+    [Arguments(true, WizardStepId.SignIn)]
+    [Arguments(false, WizardStepId.Edition)]
+    public async Task A_relaunch_after_the_web_sign_up_opens_on_sign_in(bool resume, WizardStepId expected) {
+        using var harness = new WizardFixtures.GraphHarness(Config.Root);
+
+        var current = await AvaloniaSession.DispatchAsync(async () => {
+            var graph = WizardComposition.BuildGraph(harness.Options() with { ResumeWebSignUp = resume });
+            await graph.ViewModel.PendingEnterForTesting;
+
+            return graph.ViewModel.Current.Id;
+        });
+
+        await Assert.That(current).IsEqualTo(expected);
+        await Assert.That(harness.UrlOpener.Opened).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(0, true)]
+    [Arguments(23, true)]
+    [Arguments(25, false)]
+    [Arguments(-1, false)]
+    public async Task A_web_sign_up_is_resumed_only_within_a_day(int hoursAgo, bool expected) {
+        var now = new DateTimeOffset(2026, 10, 23, 12, 0, 0, TimeSpan.Zero);
+        var state = new Capacitor.App.Services.AppState(WebSignUpOpenedAt: now - TimeSpan.FromHours(hoursAgo));
+
+        await Assert.That(WizardComposition.ResumesWebSignUp(state, now)).IsEqualTo(expected);
+        await Assert.That(WizardComposition.ResumesWebSignUp(new Capacitor.App.Services.AppState(), now)).IsFalse();
+    }
+
+    /// The host 404s until it is live, after two status polls of a workspace that only provisions; kcap-web's
+    /// status answers each poll with the next scripted state, holding the last, and 404s when none is scripted.
+    sealed class ProvisioningHandler(string[] states) : HttpMessageHandler {
+        int _polls;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/auth/config") {
+                var live = states is ["provisioning"] && _polls >= 2;
+                return Task.FromResult(new HttpResponseMessage(live ? System.Net.HttpStatusCode.OK : System.Net.HttpStatusCode.NotFound));
+            }
+
+            if (states.Length == 0) return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+
+            var state = states[Math.Min(_polls++, states.Length - 1)];
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
+                Content = new StringContent($"{{\"state\":\"{state}\"}}", System.Text.Encoding.UTF8, "application/json"),
+            });
+        }
+    }
+
     sealed class StatusHandler(System.Net.HttpStatusCode status) : HttpMessageHandler {
         public readonly List<string> Requests = [];
 

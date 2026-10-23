@@ -570,6 +570,53 @@ public class SignInStepViewModelTests {
         await Assert.That(isError).IsFalse();
     }
 
+    /// A workspace kcap.ai is still creating is waited on inside the sign-in, saying so, never as a failure.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_workspace_still_being_created_is_a_wait_that_finishes_by_itself() {
+        var (waiting, status, isError, detail, satisfied) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            var live = new TaskCompletionSource<AuthResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            h.Connect.Choice = ConnectChoice.Discover;
+            h.Operation = (_, _) => {
+                h.Progress.ProvisioningWait("Acme");
+                return live.Task;
+            };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            var run = h.SignIn();
+            var during = (h.Vm.Busy, h.Vm.Status, h.Vm.StatusIsError, h.Vm.StatusDetail);
+            live.SetResult(Committed(AuthProvider.WorkOS));
+            await run;
+
+            return (during.Busy, during.Status, during.StatusIsError, during.StatusDetail, h.Vm.Satisfied);
+        });
+
+        await Assert.That(waiting).IsTrue();
+        await Assert.That(status).IsEqualTo(SignInStepViewModel.WorkspaceSettingUp);
+        await Assert.That(isError).IsFalse();
+        await Assert.That(detail).IsEqualTo(SignInStepViewModel.WorkspaceSettingUpDetail("Acme"));
+        await Assert.That(satisfied).IsTrue();
+    }
+
+    /// Opening kcap.ai's sign-up is remembered, so a relaunch can open on sign-in; a sign-in clears it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_the_sign_up_is_remembered_until_a_sign_in_commits() {
+        var (opened, now, afterCommit) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness { SigningUp = true };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            var opened = h.AppState.State.WebSignUpOpenedAt;
+
+            await h.Vm.ContinueAfterSignUpCommand.Execute().ToTask();
+
+            return (opened, h.Time.GetUtcNow(), h.AppState.State.WebSignUpOpenedAt);
+        });
+
+        await Assert.That(opened).IsEqualTo(now);
+        await Assert.That(afterCommit).IsNull();
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Reopening_the_sign_up_opens_the_same_page() {

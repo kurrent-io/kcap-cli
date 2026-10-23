@@ -94,11 +94,21 @@ internal sealed record WizardGraphOptions(
     // The app's one install controller, shared by every wizard it shows; null builds a graph-local one.
     LocalInstallController?                                                      Install = null,
     // Null, or already acknowledged, leaves the Privacy page out of the run.
-    UsageDataNotice?                                                             UsageNotice = null);
+    UsageDataNotice?                                                             UsageNotice = null,
+    // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
+    bool                                                                         ResumeWebSignUp = false);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
+    /// How long after setup opened kcap.ai's sign-up a relaunch still opens on sign-in.
+    internal static readonly TimeSpan WebSignUpResumeWindow = TimeSpan.FromDays(1);
+
+    /// A sign-up this app opened in the browser, recent enough that a relaunch is the user coming back
+    /// with a workspace to sign in to.
+    internal static bool ResumesWebSignUp(AppState state, DateTimeOffset now) =>
+        state.WebSignUpOpenedAt is { } opened && now >= opened && now - opened <= WebSignUpResumeWindow;
+
     /// Production bridges: one marshalling boundary, Avalonia's dispatcher in the app.
     internal static WizardBridges BuildBridges(Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints) =>
         new(post, telemetry, endpoints);
@@ -124,17 +134,53 @@ internal static class WizardComposition {
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
             bridges.Telemetry, bridges.Endpoints, time,
-            WizardAuthService.ArmingHook(claims), ProbeWorkspace(httpFactory, time), precondition));
+            WizardAuthService.ArmingHook(claims),
+            ProbeWorkspace(httpFactory, bridges.Endpoints, bridges.Progress.ProvisioningWait, time), precondition));
 
+    internal static readonly TimeSpan ProvisioningPollInterval = TimeSpan.FromSeconds(5);
+
+    /// How long sign-in waits on a workspace kcap.ai is still creating, the same as the browser sign-up's own wait.
+    internal static readonly TimeSpan ProvisioningWaitLimit = SignInStepViewModel.SignUpWait;
+
+    /// <summary>
     /// kcap-web adds the owner to a workspace's organization before the workspace is live, so discovery
-    /// can list one still provisioning. Its host 404s until then, and discovery leaves it out.
-    static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
-            IHttpClientFactory httpFactory, TimeProvider time) =>
-        async (tenant, _, ct) => {
+    /// can list one still provisioning, whose host 404s until then. kcap-web's own status for it tells
+    /// the two apart: a workspace still being created is waited for, so sign-in finishes on its own once
+    /// it is live, and only one that is gone or failed is left out.
+    /// </summary>
+    internal static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
+            IHttpClientFactory httpFactory, AuthEndpoints endpoints, Action<string> waiting, TimeProvider time) {
+        return async (tenant, bearer, ct) => {
+            var answer = await AskAsync(tenant, ct);
+            if (answer != WorkspaceAnswer.Gone || tenant.Slug is not { Length: > 0 } slug) return answer;
+
+            var provisioning = new TenantProvisioningClient(
+                httpFactory.CreateClient(nameof(TenantProvisioningClient)), ClientAgent.Desktop);
+            var status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+            if (!ProvisioningPoll.IsPending(status.StatusCode, status.Body?.State)) return answer;
+
+            waiting(tenant.Label);
+            var deadline = time.GetUtcNow() + ProvisioningWaitLimit;
+            while (time.GetUtcNow() < deadline) {
+                await Task.Delay(ProvisioningPollInterval, time, ct);
+                answer = await AskAsync(tenant, ct);
+                if (answer == WorkspaceAnswer.Live) return answer;
+
+                // The bearer outlives its few minutes only as a 401, which reads as still waiting.
+                status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+                if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
+                    is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden) return WorkspaceAnswer.Gone;
+            }
+
+            return WorkspaceAnswer.Gone;
+        };
+
+        async Task<WorkspaceAnswer> AskAsync(DiscoveredTenant tenant, CancellationToken ct) {
             using var client = httpFactory.CreateClient(CapacitorClients.Anonymous);
 
             return await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
-        };
+        }
+    }
 
     internal static LocalInstallController NewInstallController(WizardGraphOptions options) {
         var cli = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
@@ -246,6 +292,10 @@ internal static class WizardComposition {
         install.Settled += OnInstallSettled;
         if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);
 
+        OnboardingViewModel? shell = null;
+        // The daemon and its outcome lines change while Done is open; the page re-reads its facts on each.
+        var serviceChanged = daemon.WhenAnyValue(x => x.Satisfied, x => x.Busy, x => x.Status, x => x.Message, (_, _, _, _) => Unit.Default)
+            .Merge(options.Surface.WhenAnyValue(x => x.StatusText, x => x.AttentionText, (_, _) => Unit.Default));
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => {
             var recording = harnesses.Rows.Where(r => r is { Record: true, Succeeded: true }).ToList();
@@ -261,8 +311,13 @@ internal static class WizardComposition {
                 !local && Connected() ? options.ResolveIdentity()?.Server : null,
                 daemon.Problem,
                 local,
-                local ? LocalEndpoints.Read(root).Active?.ServerUrl : null);
-        }, options.UrlOpener);
+                local ? LocalEndpoints.Read(root).Active?.ServerUrl : null,
+                daemon.Busy,
+                options.Surface.AttentionText ?? options.Surface.StatusText);
+        }, options.UrlOpener, serviceChanged,
+            retryService: () => daemon.EnsureAsync(options.ShutdownToken),
+            // The same page Help and support → Set up kcap leads through to connect an agent.
+            addAgent: () => shell?.TryGoTo(WizardStepId.Harnesses));
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, new UsageDataStepViewModel(options.UsageNotice), done];
 
         // Before a server is connected the app has nothing to show, so deferring is offered only for the optional steps after.
@@ -270,8 +325,10 @@ internal static class WizardComposition {
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
             .Merge(durable.Select(_ => Unit.Default))
             .Select(_ => Connected());
-        var wizard = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, canFinishLater: canFinishLater, restate: durable.Select(_ => Unit.Default));
+        // Someone coming back from kcap.ai's sign-up already has a workspace; everyone else chooses first.
+        var startAt = options.ResumeWebSignUp && !signedInAtStart && !committedLocalAtStart ? WizardStepId.SignIn : (WizardStepId?)null;
+        var wizard = shell = new OnboardingViewModel(
+            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);

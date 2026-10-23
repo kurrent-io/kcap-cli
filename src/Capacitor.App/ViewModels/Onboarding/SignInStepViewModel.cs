@@ -23,6 +23,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
     public const string WorkspaceNotReady = "Your workspace isn't ready yet.";
 
+    public const string WorkspaceSettingUp = "Your workspace is still being set up";
+
     readonly WizardAuthService       _service;
     readonly ConnectChoiceViewModel  _connect;
     readonly WizardTenantPicker      _picker;
@@ -117,6 +119,12 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 : $"Enter the code {code} at {verificationUri}");
         };
         bridges.Progress.PollTicked += () => WaitingText = "Waiting for you to authorize…";
+        bridges.Progress.WorkspaceProvisioning += workspace => {
+            if (!Busy) return;
+
+            ClearTransient();
+            SetStatus(WorkspaceSettingUp, isError: false, WorkspaceSettingUpDetail(workspace));
+        };
 
         _picker.SelectionRequested += tenants => _post(() => {
             Tenants.Clear();
@@ -338,10 +346,26 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     void OpenSignUp() {
         try {
             _urlOpener.Open(_signUpUrl);
+            RememberWebSignUp(_time.GetUtcNow());
         } catch (Exception ex) {
             Append($"Couldn't open the browser: {ex.Message}");
             SetStatus("Couldn't open your browser.", isError: true,
                 $"Open {_signUpUrl} to create your workspace, then continue here.");
+        }
+    }
+
+    // A relaunch while the workspace is being created on kcap.ai opens on sign-in rather than on the edition choice.
+    void RememberWebSignUp(DateTimeOffset? openedAt) {
+        _ = PersistAsync();
+
+        async Task PersistAsync() {
+            try {
+                if (openedAt is null && (await _appState.LoadAsync().ConfigureAwait(false)).WebSignUpOpenedAt is null) return;
+
+                await _appState.UpdateAsync(state => state with { WebSignUpOpenedAt = openedAt }).ConfigureAwait(false);
+            } catch (Exception ex) {
+                Console.Error.WriteLine($"kcap: could not record the browser sign-up: {ex.Message}");
+            }
         }
     }
 
@@ -480,6 +504,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 _workspace = committed.CanonicalServer;
                 this.RaisePropertyChanged(nameof(ConnectionStatus));
                 Satisfied = true;
+                RememberWebSignUp(null);
                 SetStatus(CommittedStatus(committed), isError: false, _committedDetail);
 
                 break;
@@ -501,6 +526,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 break;
         }
     }
+
+    internal static string WorkspaceSettingUpDetail(string workspace) =>
+        $"{workspace} is still being created on kcap.ai. It usually takes a few minutes, and sign-in carries on by itself once it's ready";
 
     static string CommittedStatus(AuthResult.Committed committed) =>
         committed.Provider == AuthProvider.None

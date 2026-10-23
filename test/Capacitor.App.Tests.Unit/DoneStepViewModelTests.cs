@@ -1,3 +1,4 @@
+using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels.Onboarding;
@@ -40,8 +41,8 @@ public class DoneStepViewModelTests {
 
         await Assert.That(imported).IsEqualTo("Your work so far");
         await Assert.That(remembering).IsEqualTo("From now on, your agents remember");
-        await Assert.That(nothing).IsEqualTo("No new recording connections");
-        await Assert.That(blocked).IsEqualTo("No new recording connections");
+        await Assert.That(nothing).IsEqualTo("No new agents connected");
+        await Assert.That(blocked).IsEqualTo("No new agents connected");
     }
 
     [Test]
@@ -114,21 +115,6 @@ public class DoneStepViewModelTests {
         await Assert.That(calls).IsEqualTo(2);
     }
 
-    [Test]
-    [NotInParallel("AvaloniaSession")]
-    public async Task Open_your_workspace_opens_the_signed_in_server() {
-        var opened = await AvaloniaSession.DispatchAsync(async () => {
-            var opener = new RecordingUrlOpener();
-            var vm = new DoneStepViewModel(() => Facts(), opener);
-            await vm.OnEnterAsync(CancellationToken.None);
-            vm.OpenWorkspaceCommand.Execute().Subscribe();
-            Dispatcher.UIThread.RunJobs();
-            return opener.Opened.ToList();
-        });
-
-        await Assert.That(opened).IsEquivalentTo(["https://acme.kcap.ai"]);
-    }
-
     static DoneFacts LocalFacts(string? dashboardUrl = "http://localhost:5050", HistoryImportRun? import = null) =>
         new(["Claude Code"], false, false, import, true, "test-mac", null, null, true, dashboardUrl);
 
@@ -139,10 +125,10 @@ public class DoneStepViewModelTests {
             var run = await FinishedRun(30, 3);
             var all = new List<string>();
             foreach (var facts in new[] { LocalFacts(), LocalFacts(import: run), LocalFacts() with { Recording = [] },
-                         LocalFacts() with { DaemonRunning = false, DaemonProblem = null } }) {
+                         LocalFacts() with { DaemonRunning = false, DaemonProblem = "kcap isn't available on this machine." } }) {
                 var vm = new DoneStepViewModel(() => facts);
                 await vm.OnEnterAsync(CancellationToken.None);
-                all.AddRange([vm.Lede, vm.FooterLine ?? "", vm.DaemonLine, vm.FailedBody, vm.NextLabel ?? ""]);
+                all.AddRange([vm.Lede, vm.ImportHint ?? "", vm.ServiceBody, vm.FailedBody]);
             }
 
             return all;
@@ -155,34 +141,147 @@ public class DoneStepViewModelTests {
         }
     }
 
+    /// One primary, Open kcap, on either edition; the browser holds the web workspace or the local dashboard.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Local_done_opens_the_dashboard_only_on_request() {
-        var (onEntry, afterCommand, workspaceVisible, next) = await AvaloniaSession.DispatchAsync(async () => {
+    [Arguments(false, "https://acme.kcap.ai")]
+    [Arguments(true, "http://localhost:5050")]
+    public async Task Open_in_browser_opens_the_workspace_or_the_local_dashboard_only_on_request(bool local, string expected) {
+        var (onEntry, afterCommand, visible, next) = await AvaloniaSession.DispatchAsync(async () => {
             var opener = new RecordingUrlOpener();
-            var vm = new DoneStepViewModel(() => LocalFacts(), opener);
+            var vm = new DoneStepViewModel(() => local ? LocalFacts() : Facts(), opener);
             await vm.OnEnterAsync(CancellationToken.None);
             var entered = opener.Opened.Count;
-            vm.OpenDashboardCommand.Execute().Subscribe();
+            vm.OpenInBrowserCommand.Execute().Subscribe();
             Dispatcher.UIThread.RunJobs();
 
-            return (entered, opener.Opened.ToList(), vm.WorkspaceVisible, vm.NextLabel);
+            return (entered, opener.Opened.ToList(), vm.OpenInBrowserVisible, vm.NextLabel);
         });
 
         await Assert.That(onEntry).IsEqualTo(0);
-        await Assert.That(afterCommand).IsEquivalentTo(["http://localhost:5050"]);
-        await Assert.That(workspaceVisible).IsFalse();
-        await Assert.That(next).IsEqualTo("Continue");
+        await Assert.That(afterCommand).IsEquivalentTo([expected]);
+        await Assert.That(visible).IsTrue();
+        await Assert.That(next).IsEqualTo("Open kcap");
     }
 
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Local_done_hides_the_dashboard_when_its_url_is_unknown() {
+    public async Task Open_in_browser_is_hidden_when_there_is_nowhere_to_open() {
         var visible = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new DoneStepViewModel(() => LocalFacts(dashboardUrl: null), new RecordingUrlOpener());
             await vm.OnEnterAsync(CancellationToken.None);
 
-            return vm.DashboardVisible;
+            return vm.OpenInBrowserVisible;
+        });
+
+        await Assert.That(visible).IsFalse();
+    }
+
+    // ── the background service ───────────────────────────────────────────────
+
+    /// The eyebrow and the pill read the service; Finish later is offered only while it is not running.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(true, false, null, "Ready", "Running", false)]
+    [Arguments(false, false, null, "Finishing up", "Installing…", false)]
+    [Arguments(false, true, "The daemon service is not installed.", "Finishing up", "Installing…", false)]
+    [Arguments(false, false, "The daemon install failed (verify_viability).", "One thing left", "Not running", true)]
+    public async Task The_eyebrow_and_pill_follow_the_service(
+            bool running, bool busy, string? problem, string eyebrow, string pill, bool finishLater) {
+        var vm = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new DoneStepViewModel(() => Facts() with { DaemonRunning = running, DaemonBusy = busy, DaemonProblem = problem });
+            await vm.OnEnterAsync(CancellationToken.None);
+            return vm;
+        });
+
+        await Assert.That(vm.Eyebrow).IsEqualTo(eyebrow);
+        await Assert.That(vm.ServicePill).IsEqualTo(pill);
+        await Assert.That(vm.OffersFinishLater).IsEqualTo(finishLater);
+        await Assert.That(vm.ServiceFailed).IsEqualTo(finishLater);
+    }
+
+    /// The problem is the card's, with the daemon's own account behind See details; Retry runs the enable
+    /// again and the page follows the service as it changes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Retry_runs_the_enable_again_and_the_page_follows_the_service() {
+        var (details, shownDetails, failedBefore, retries, eyebrowAfter, detailsAfter) = await AvaloniaSession.DispatchAsync(async () => {
+            var facts = Facts() with {
+                DaemonRunning = false, DaemonProblem = "The daemon start failed (verify_viability).",
+                ServiceDetail = "The daemon start is not yet confirmed — check status.",
+            };
+            var changed = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+            var retries = 0;
+            var vm = new DoneStepViewModel(() => facts, restate: changed, retryService: () => {
+                retries++;
+                facts = facts with { DaemonRunning = true, DaemonProblem = null, ServiceDetail = null };
+                changed.OnNext(System.Reactive.Unit.Default);
+                return Task.CompletedTask;
+            });
+            await vm.OnEnterAsync(CancellationToken.None);
+            var failed = vm.ServiceFailed;
+
+            await vm.ToggleDetailsCommand.Execute().ToTask();
+            var shown = vm.DetailsVisible;
+            var text = vm.ServiceDetails;
+            await vm.RetryServiceCommand.Execute().ToTask();
+
+            return (text, shown, failed, retries, vm.Eyebrow, vm.DetailsVisible);
+        });
+
+        await Assert.That(failedBefore).IsTrue();
+        await Assert.That(shownDetails).IsTrue();
+        await Assert.That(details).Contains("verify_viability");
+        await Assert.That(details).Contains("not yet confirmed");
+        await Assert.That(retries).IsEqualTo(1);
+        await Assert.That(eyebrowAfter).IsEqualTo("Ready");
+        await Assert.That(detailsAfter).IsFalse();
+    }
+
+    /// The page re-reads its facts only once entered, so a service change before Done adds no reads.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_service_change_before_entry_reads_nothing() {
+        var reads = await AvaloniaSession.DispatchAsync(async () => {
+            var count = 0;
+            var changed = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+            var vm = new DoneStepViewModel(() => { count++; return Facts(); }, restate: changed);
+            changed.OnNext(System.Reactive.Unit.Default);
+            await vm.OnEnterAsync(CancellationToken.None);
+            changed.OnNext(System.Reactive.Unit.Default);
+            return count;
+        });
+
+        await Assert.That(reads).IsEqualTo(2);
+    }
+
+    // ── connected agents ─────────────────────────────────────────────────────
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Connected_agents_read_connected_and_say_the_next_session_is_the_first_stored() {
+        var (states, firstSession, label, added) = await AvaloniaSession.DispatchAsync(async () => {
+            var added = 0;
+            var vm = new DoneStepViewModel(() => Facts(recording: ["Claude Code", "Codex"]), addAgent: () => added++);
+            await vm.OnEnterAsync(CancellationToken.None);
+            await vm.AddAgentCommand.Execute().ToTask();
+
+            return (vm.Capture.Select(c => c.State).ToList(), vm.FirstSessionVisible, vm.AddAgentLabel, added);
+        });
+
+        await Assert.That(states).IsEquivalentTo(["Connected", "Connected"]);
+        await Assert.That(firstSession).IsTrue();
+        await Assert.That(label).IsEqualTo("Add another agent");
+        await Assert.That(added).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Adding_an_agent_is_offered_only_where_the_wizard_can_go_back_to_it() {
+        var visible = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new DoneStepViewModel(() => Facts());
+            await vm.OnEnterAsync(CancellationToken.None);
+            return vm.AddAgentVisible;
         });
 
         await Assert.That(visible).IsFalse();

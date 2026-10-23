@@ -20,7 +20,9 @@ public sealed record AppState(
     int? WindowX = null,
     int? WindowY = null,
     bool WindowMaximized = false,
-    double? UiScale = null);
+    double? UiScale = null,
+    // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
+    DateTimeOffset? WebSignUpOpenedAt = null);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();
