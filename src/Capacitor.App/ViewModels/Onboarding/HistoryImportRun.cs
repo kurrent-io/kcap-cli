@@ -23,6 +23,7 @@ public sealed partial class HistoryImportRun : ReactiveObject {
     int            _processed;
     int            _passImported;
     int            _passFailed;
+    int            _passProcessed;
 
     internal HistoryImportRun(int expected, int repositories, string windowCaption, int passes, Action<Action> post) {
         Expected      = expected;
@@ -90,8 +91,9 @@ public sealed partial class HistoryImportRun : ReactiveObject {
                 anyFailed |= result.ExitCode != 0 || result.TimedOut;
                 _post(() => {
                     // A pass that died before its totals line keeps its live counts; the next pass's totals must not net them out.
-                    _passImported = 0;
-                    _passFailed   = 0;
+                    _passImported  = 0;
+                    _passFailed    = 0;
+                    _passProcessed = 0;
                     PassesDone++;
                 });
             }
@@ -112,12 +114,15 @@ public sealed partial class HistoryImportRun : ReactiveObject {
 
         var text = line.Text.Trim();
         if (Totals().Match(text) is { Success: true } m &&
-            int.TryParse(m.Groups[1].Value, out var imported) && int.TryParse(m.Groups[3].Value, out var failed)) {
+            int.TryParse(m.Groups[1].Value, out var imported) && int.TryParse(m.Groups[2].Value, out var skipped) &&
+            int.TryParse(m.Groups[3].Value, out var failed)) {
             // The closing line is authoritative: it also counts what never printed a session line.
-            Imported      = Add(Imported, imported - _passImported);
-            Failed        = Add(Failed, failed - _passFailed);
-            _passImported = 0;
-            _passFailed   = 0;
+            Imported       = Add(Imported, imported - _passImported);
+            Failed         = Add(Failed, failed - _passFailed);
+            Processed      = Add(Processed, (long)imported + skipped + failed - _passProcessed);
+            _passImported  = 0;
+            _passFailed    = 0;
+            _passProcessed = 0;
             return;
         }
 
@@ -131,10 +136,11 @@ public sealed partial class HistoryImportRun : ReactiveObject {
             return;
         }
 
+        _passProcessed++;
         Processed = Add(Processed, 1);
     });
 
-    static int Add(int total, int delta) => (int)Math.Clamp((long)total + delta, 0, int.MaxValue);
+    static int Add(int total, long delta) => (int)Math.Clamp(total + delta, 0, int.MaxValue);
 
     // Each pass closes with this line.
     [GeneratedRegex(@"^(\d+) imported · (\d+) skipped · (\d+) failed$")]
