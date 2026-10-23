@@ -160,7 +160,9 @@ internal static class WizardComposition {
 
             var provisioning = new TenantProvisioningClient(
                 httpFactory.CreateClient(nameof(TenantProvisioningClient)), ClientAgent.Desktop);
+            // The status client reads a cancelled request as a transport failure.
             var status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+            ct.ThrowIfCancellationRequested();
             if (!ProvisioningPoll.IsPending(status.StatusCode, status.Body?.State)) return answer;
 
             waiting(tenant.Label);
@@ -172,9 +174,10 @@ internal static class WizardComposition {
 
                 // An expired bearer can no longer see a failure, so the wait ends there and sign-in offers another try.
                 status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+                ct.ThrowIfCancellationRequested();
                 if (status.StatusCode == 401) return WorkspaceAnswer.Pending;
                 if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
-                    is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden) {
+                    is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden or PollVerdict.ActiveNoOrg) {
                     failed(tenant.Label);
                     return WorkspaceAnswer.Gone;
                 }
@@ -333,7 +336,9 @@ internal static class WizardComposition {
             .Merge(durable.Select(_ => Unit.Default))
             .Select(_ => Connected());
         // Someone coming back from kcap.ai's sign-up already has a workspace; everyone else chooses first.
-        var startAt = options.ResumeWebSignUp && !signedInAtStart && !committedLocalAtStart ? WizardStepId.SignIn : (WizardStepId?)null;
+        var startAt = options.ResumeWebSignUp && !signedInAtStart && !OnLocalPath() && !Installed()
+            ? WizardStepId.SignIn
+            : (WizardStepId?)null;
         var wizard = shell = new OnboardingViewModel(
             steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {

@@ -192,6 +192,9 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public bool ServiceDetailsAvailable => ServiceDetails.Length > 0;
 
+    /// An outcome line the daemon reported while the service is not failed, which See details does not show.
+    public string? ServiceNote => ServiceFailed ? null : _current.ServiceDetail;
+
     public bool RetryAvailable => _prepare is not null;
 
     public bool DetailsVisible {
@@ -256,7 +259,10 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     }
 
     // Next finishes the wizard — the shell's own last-step handling raises CloseRequested.
-    public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) => Task.FromResult(true);
+    public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        _entered = false;
+        return Task.FromResult(true);
+    }
 
     void Refresh() {
         if (_current.Import is INotifyPropertyChanged before) before.PropertyChanged -= OnImportChanged;

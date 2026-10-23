@@ -123,10 +123,12 @@ public class WizardCompositionCloudSignUpTests {
     }
 
     /// A discovered workspace kcap.ai is still creating is waited on, saying so, until its host answers.
-    /// One kcap.ai calls failed or does not know is gone, and one it can no longer be asked about is pending.
+    /// One kcap.ai calls failed, does not know, or made live without an organization is gone, and one it can
+    /// no longer be asked about is pending.
     [Test]
     [Arguments(new[] { "provisioning" }, WorkspaceAnswer.Live, true, false)]
     [Arguments(new[] { "provisioning", "failed" }, WorkspaceAnswer.Gone, true, true)]
+    [Arguments(new[] { "provisioning", "active" }, WorkspaceAnswer.Gone, true, true)]
     [Arguments(new[] { "provisioning", "401" }, WorkspaceAnswer.Pending, true, false)]
     [Arguments(new string[0], WorkspaceAnswer.Gone, false, false)]
     public async Task A_workspace_still_being_created_is_waited_on_until_it_answers(

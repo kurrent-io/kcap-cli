@@ -34,7 +34,6 @@
     </UserControl.Styles>
 
     <StackPanel Spacing="14">
-        <!-- Figures, while the import runs and after. -->
         <Border Classes="onboardingCard" IsVisible="{Binding ShowsFigures}">
             <StackPanel Spacing="20">
                 <StackPanel Spacing="14">
@@ -152,6 +151,8 @@
                     </Border>
                 </Grid>
                 <TextBlock x:Name="ServiceBodyText" Classes="onboardingBody" FontSize="13" Text="{Binding ServiceBody}" />
+                <TextBlock x:Name="ServiceNoteText" Classes="onboardingNote" Text="{Binding ServiceNote}"
+                           IsVisible="{Binding ServiceNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
                 <Border x:Name="ServiceProblem" Classes="onboardingWarning" IsVisible="{Binding ServiceFailed}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">

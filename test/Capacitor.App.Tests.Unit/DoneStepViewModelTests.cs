@@ -242,16 +242,39 @@ public class DoneStepViewModelTests {
         await Assert.That(detailsAfter).IsFalse();
     }
 
-    /// The page re-reads its facts only once entered, so a service change before Done adds no reads.
+    /// An outcome line that arrives while the service is not failed still shows, beside the pill.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_service_change_before_entry_reads_nothing() {
+    public async Task An_outcome_line_shows_whatever_the_service_state() {
+        var (installing, failed) = await AvaloniaSession.DispatchAsync(async () => {
+            async Task<(string? Note, string Details)> For(DoneFacts facts) {
+                var vm = new DoneStepViewModel(() => facts);
+                await vm.OnEnterAsync(CancellationToken.None);
+                return (vm.ServiceNote, vm.ServiceDetails);
+            }
+
+            const string line = "A daemon is running outside the installed service.";
+            return (await For(Facts() with { DaemonRunning = false, ServiceDetail = line }),
+                await For(Facts() with { DaemonRunning = false, DaemonProblem = "The daemon start failed.", ServiceDetail = line }));
+        });
+
+        await Assert.That(installing.Note).IsEqualTo("A daemon is running outside the installed service.");
+        await Assert.That(failed.Note).IsNull();
+        await Assert.That(failed.Details).Contains("A daemon is running outside the installed service.");
+    }
+
+    /// The page re-reads its facts only while it is the current page, so a service change before or after adds no reads.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_service_change_off_the_page_reads_nothing() {
         var reads = await AvaloniaSession.DispatchAsync(async () => {
             var count = 0;
             var changed = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
             var vm = new DoneStepViewModel(() => { count++; return Facts(); }, restate: changed);
             changed.OnNext(System.Reactive.Unit.Default);
             await vm.OnEnterAsync(CancellationToken.None);
+            changed.OnNext(System.Reactive.Unit.Default);
+            await vm.CanLeaveAsync(WizardNavigation.Back, CancellationToken.None);
             changed.OnNext(System.Reactive.Unit.Default);
             return count;
         });
