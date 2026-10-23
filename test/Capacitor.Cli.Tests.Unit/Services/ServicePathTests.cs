@@ -38,4 +38,16 @@ public class ServicePathTests {
     public async Task No_current_path_means_no_rewrite() {
         await Assert.That(ServicePath.Refreshed("/usr/bin", null, HarnessRegistry.FromEnvironment(Home))).IsNull();
     }
+
+    /// <summary>Detection counts the Kiro IDE launcher, which no daemon can host.</summary>
+    [Test]
+    public async Task An_ide_launcher_alone_needs_no_rewrite() {
+        Skip.When(OperatingSystem.IsWindows(), "the stub is a POSIX script");
+
+        var baked = Tmp.CreateDir("baked").Path;
+        var fresh = Tmp.CreateDir("fresh").Path;
+        Tmp.CreateExecutable("fresh/kiro", "#!/bin/sh\n");
+
+        await Assert.That(ServicePath.Refreshed(baked, $"{fresh}{Sep}{baked}", HarnessRegistry.FromEnvironment(Home))).IsNull();
+    }
 }

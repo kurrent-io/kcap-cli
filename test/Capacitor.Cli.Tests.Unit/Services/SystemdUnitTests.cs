@@ -100,4 +100,11 @@ public class SystemdUnitTests {
     public async Task WithEnvironmentValue_is_null_when_the_value_is_already_set() {
         await Assert.That(SystemdUnit.WithEnvironmentValue(SystemdUnit.Unit(Spec()), "PATH", "/usr/bin")).IsNull();
     }
+
+    [Test]
+    public async Task WithEnvironmentValue_refuses_a_line_carrying_other_assignments() {
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin KCAP_PROFILE=work\nExecStart=/opt/kcap/kcap-daemon --name laptop\n";
+
+        await Assert.That(SystemdUnit.WithEnvironmentValue(unit, "PATH", "/usr/bin:/opt/agents")).IsNull();
+    }
 }

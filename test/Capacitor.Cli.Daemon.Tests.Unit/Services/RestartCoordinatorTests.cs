@@ -15,7 +15,7 @@ public class RestartCoordinatorTests {
         public RestartOutcome Restart() { Calls++; return Outcome; }
     }
 
-    RestartCoordinator NewCoordinator(SpyStrategy spy, Func<bool> isBusy, Func<BinaryStat?> stat) {
+    RestartCoordinator NewCoordinator(IRestartStrategy spy, Func<bool> isBusy, Func<BinaryStat?> stat) {
         var c = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System);
         c.IsBusy     = isBusy;
         c.StatBinary = stat;
@@ -399,5 +399,47 @@ public class RestartCoordinatorTests {
         size = 200;
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(2);
+    }
+
+    /// <summary>A when-idle request must not turn a pending update into one that waits for every agent.</summary>
+    [Test]
+    public async Task A_when_idle_request_keeps_a_pending_update_on_its_turn_boundary() {
+        var spy      = new SpyStrategy();
+        var size     = 100L;
+        var boundary = false;
+        var c        = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HasAgents      = () => true;
+        c.AtTurnBoundary = () => boundary;
+
+        size = 200;
+        c.Tick();
+        c.RequestRestart(force: false, whenIdle: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        boundary = true;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>A request that lands while a harness restart is running stays pending after its no-op.</summary>
+    [Test]
+    public async Task A_request_during_a_no_op_harness_restart_is_not_dropped() {
+        var c   = (RestartCoordinator?)null;
+        var spy = new ReentrantStrategy(() => c!.RequestRestart(force: false));
+        c = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.HarnessInstalled = () => true;
+
+        c.Tick();
+        c.Tick();
+
+        await Assert.That(spy.Calls).IsEqualTo(2);
+    }
+
+    sealed class ReentrantStrategy(Action duringFirst) : IRestartStrategy {
+        public int Calls;
+        public RestartOutcome Restart() {
+            if (++Calls == 1) duringFirst();
+            return RestartOutcome.NoOp;
+        }
     }
 }

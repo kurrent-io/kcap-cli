@@ -544,4 +544,26 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(error).Contains("disk full");
         await Assert.That(asked).IsFalse();
     }
+
+    /// <summary>A bootout can return before the old job is gone; a label still loaded then may be running
+    /// the old environment.</summary>
+    [Test]
+    public async Task A_label_still_loaded_after_bootstrap_drops_the_amendment() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path    = Seed(LaunchdUnit.Plist(Spec()));
+        var manager = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, content, _) => File.WriteAllText(p, content),
+            runBounded: (_, args, _) => args[0] switch {
+                "print"     => (0, Print("daemon (3)"), "", false),
+                "bootstrap" => (5, "", "Bootstrap failed: 5: Input/output error", false),
+                _           => (0, "", "", false),
+            });
+
+        var outcome = manager.RefreshUnit(
+            "test", () => true, Plenty, out _, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
 }

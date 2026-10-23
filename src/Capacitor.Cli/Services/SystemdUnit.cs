@@ -143,8 +143,11 @@ static class SystemdUnit {
         var assignment = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(value))}";
 
         var lines = unitText.Split('\n').ToList();
-        var index = lines.FindIndex(l => EnvFromUnit(l).ContainsKey(key));
-        if (index >= 0) {
+        if (current is not null) {
+            // Only the line Unit writes: a hand-written one may carry other assignments the rewrite would drop.
+            var ours  = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(current))}";
+            var index = lines.FindIndex(l => l.Trim() == ours);
+            if (index < 0) return null;
             lines[index] = assignment;
         } else {
             var exec = lines.FindIndex(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));

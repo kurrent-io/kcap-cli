@@ -210,7 +210,7 @@ public class SetupDaemonServiceTests {
 
     [Test]
     public async Task A_path_refresh_that_changed_nothing_prints_nothing() {
-        await Assert.That(await RefreshPathAsync(() => Task.FromResult<UnitRefresh?>(null))).IsNull();
+        await Assert.That(await RefreshPathAsync(() => Task.FromResult<PathRefresh?>(null))).IsNull();
     }
 
     [Test]
@@ -222,10 +222,10 @@ public class SetupDaemonServiceTests {
 
     [Test]
     public async Task A_reloaded_service_says_it_was_restarted() {
-        await Assert.That(await RefreshPathAsync(() => Task.FromResult<UnitRefresh?>(UnitRefresh.Reloaded))).Contains("Restarted");
+        await Assert.That(await RefreshPathAsync(() => Task.FromResult<PathRefresh?>(new(UnitRefresh.Reloaded)))).Contains("Restarted");
     }
 
-    static Task<string?> RefreshPathAsync(Func<Task<UnitRefresh?>> refresh) =>
+    static Task<string?> RefreshPathAsync(Func<Task<PathRefresh?>> refresh) =>
         SetupDaemonService.RefreshPathAsync(
             new ConfigRoot("/nonexistent-config-root"),
             new ProfileContext(new(ServerUrl, "default", null, null), new ProfileConfig()),
@@ -233,4 +233,20 @@ public class SetupDaemonServiceTests {
             TimeProvider.System,
             HarnessRegistry.Over(BinaryProbe.Searching(null)),
             refresh);
+
+    [Test]
+    public async Task A_busy_service_lock_asks_for_a_retry_not_a_reinstall() {
+        var line = await RefreshPathAsync(() => Task.FromResult<PathRefresh?>(new(UnitRefresh.Contended)));
+
+        await Assert.That(line).Contains("Run setup again shortly");
+        await Assert.That(line).DoesNotContain("Reinstall");
+    }
+
+    [Test]
+    public async Task A_failed_refresh_names_the_service_managers_error() {
+        var line = await RefreshPathAsync(() => Task.FromResult<PathRefresh?>(
+            new(UnitRefresh.Failed, "the daemon is not loaded — run `kcap daemon service start`")));
+
+        await Assert.That(line).Contains("the daemon is not loaded");
+    }
 }

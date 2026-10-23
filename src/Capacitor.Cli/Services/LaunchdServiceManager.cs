@@ -268,6 +268,8 @@ sealed partial class LaunchdServiceManager(
         // The label loaded from the plist on disk but launchd still reports the wrong band: a second
         // bootstrap over a loaded label fails, and the file already declares Standard, so nothing is rolled back.
         if (reload.After == LabelProbe.Loaded) {
+            // The loaded label may be the old job still exiting, so the amendment cannot be taken as applied.
+            if (amended is not null) _writeUnit(path, beforeAmend, null);
             error = reload.Error;
             return UnitRefresh.Failed;
         }

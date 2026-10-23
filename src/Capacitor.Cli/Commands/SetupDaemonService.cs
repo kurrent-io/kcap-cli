@@ -62,17 +62,17 @@ static class SetupDaemonService {
             UserHome                     home,
             TimeProvider                 time,
             HarnessRegistry              harnesses,
-            Func<Task<UnitRefresh?>>?    refresh = null) {
+            Func<Task<PathRefresh?>>?    refresh = null) {
         try {
             var run = refresh ?? (() => DaemonServiceCommands.FlowRefreshPathAsync(root, saved, home, time, harnesses));
 
             return PathLine(await run());
-        } catch (Exception) {
-            return PathLine(UnitRefresh.Failed);
+        } catch (Exception ex) {
+            return PathLine(new(UnitRefresh.Failed, ex.Message));
         }
     }
 
-    internal static string? PathLine(UnitRefresh? outcome) => outcome switch {
+    internal static string? PathLine(PathRefresh? refresh) => refresh?.Outcome switch {
         null or UnitRefresh.Current => null,
         UnitRefresh.Reloaded =>
             "  [dim]Restarted the daemon service with your current PATH, so it finds the harnesses setup found.[/]",
@@ -80,9 +80,12 @@ static class SetupDaemonService {
             "  [dim]The daemon service now has your current PATH; the daemon picks up the harnesses setup found when it next starts.[/]",
         UnitRefresh.Deferred =>
             "  [yellow]![/] The daemon was busy, so it keeps its old PATH and may not find every harness setup found. Run setup again once it is idle.",
+        UnitRefresh.Contended or UnitRefresh.Unverified =>
+            "  [yellow]![/] The daemon service could not be checked just now, so it keeps its old PATH and may not find every harness setup found. Run setup again shortly.",
         _ =>
-            "  [yellow]![/] The daemon service could not be given your current PATH, so it may not find every harness setup found. "
-          + "Reinstall it with [cyan]kcap daemon service install --replace --verify[/]",
+            "  [yellow]![/] The daemon service could not be given your current PATH, so it may not find every harness setup found"
+          + (refresh.Error is { } error ? $" ({Markup.Escape(error)})" : "")
+          + ". Reinstall it with [cyan]kcap daemon service install --replace --verify[/]",
     };
 
     static string? RenameLine(FlowEnsure outcome) => outcome switch {

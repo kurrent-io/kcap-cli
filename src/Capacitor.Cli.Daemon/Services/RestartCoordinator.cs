@@ -151,15 +151,20 @@ internal sealed partial class RestartCoordinator : BackgroundService {
     /// </summary>
     internal RestartRequestResult RequestRestart(bool force, bool whenIdle = false) {
         lock (_gate) {
-            _pending      = true;
-            _selfDetected = false;
-            _harnessOnly  = false;
-            _whenIdle     = whenIdle;
-            if (force) _force = true;
+            // A pending update already restarts at a turn boundary; waiting for every agent would only delay it.
+            var keepUpdate = whenIdle && !force && _pending && _selfDetected;
 
-            if (!force) {
-                DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "requested", _time.GetUtcNow()));
-                LogQueued(_logger, "requested");
+            if (!keepUpdate) {
+                _pending      = true;
+                _selfDetected = false;
+                _harnessOnly  = false;
+                _whenIdle     = whenIdle;
+                if (force) _force = true;
+
+                if (!force) {
+                    DaemonRestartMarker.Write(_store, _name, new DaemonRestartMarker(_version, "requested", _time.GetUtcNow()));
+                    LogQueued(_logger, "requested");
+                }
             }
         }
 
@@ -217,7 +222,11 @@ internal sealed partial class RestartCoordinator : BackgroundService {
         var outcome = Strategy.Restart();
 
         if (outcome == RestartOutcome.NoOp && harnessFire) {
-            lock (_gate) (_fired, _pending, _harnessOnly, _whenIdle, _harnessManual) = (false, false, false, false, true);
+            lock (_gate) {
+                (_fired, _harnessManual) = (false, true);
+                // A request that arrived while the strategy ran replaced the harness one and stays pending.
+                if (_harnessOnly) (_pending, _harnessOnly, _whenIdle) = (false, false, false);
+            }
             return RestartRequestResult.ManualRequired;
         }
 

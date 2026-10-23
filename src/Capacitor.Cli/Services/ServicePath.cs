@@ -16,7 +16,8 @@ static class ServicePath {
 
         var before = harnesses.Searching(BinaryProbe.Searching(baked));
         var after  = harnesses.Searching(BinaryProbe.Searching(current));
-        if (!after.Any(h => after.Detect(h.Id).BinaryFound && !before.Detect(h.Id).BinaryFound)) return null;
+        // The CLI only: detection also accepts IDE launchers, which no daemon can host.
+        if (!after.Any(h => after.ResolveExecutable(h.Id) is not null && before.ResolveExecutable(h.Id) is null)) return null;
 
         var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
