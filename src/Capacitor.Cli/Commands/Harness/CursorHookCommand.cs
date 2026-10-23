@@ -186,6 +186,8 @@ public sealed class CursorHookCommand(
     /// ordinary ceiling rather than cancelled, since a reader need not honour a token; a read already done wins
     /// the tie. Null when it did not arrive in time, and then nothing is written.</summary>
     async Task<string?> ReadPayloadAsync(TextReader stdin) {
+        // A reader that blocks inside its async overload, as Console.In does, blocks here before the race
+        // starts, so the entry point hands over a stream-backed reader instead.
         var read   = stdin.ReadToEndAsync(CancellationToken.None);
         var winner = await Task.WhenAny(read, clock.Budget(Ceiling).CeilingReached());
 

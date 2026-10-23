@@ -990,7 +990,10 @@ switch (command) {
             return codexExit;
         }
         if (args.Contains("--cursor")) {
-            return await Run<CursorHookCommand>().Handle(Console.In);
+            // Not Console.In: it reads synchronously inside ReadToEndAsync, so a held-open stdin would block
+            // before the hook's deadline race starts. A stream-backed reader awaits off the calling thread.
+            using var cursorStdin = new StreamReader(Console.OpenStandardInput(), Console.InputEncoding);
+            return await Run<CursorHookCommand>().Handle(cursorStdin);
         }
         if (args.Contains("--copilot")) {
             return await Run<CopilotHookCommand>().Handle(Console.In, args);
