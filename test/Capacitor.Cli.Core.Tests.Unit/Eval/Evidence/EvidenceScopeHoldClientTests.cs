@@ -52,11 +52,12 @@ public class EvidenceScopeHoldClientTests : IDisposable {
         await Assert.That(_stub.Requests("evidence-scope").Count(e => e.RequestMessage.Query?.ContainsKey("adopted_children") == true)).IsEqualTo(0);
     }
 
-    /// <summary>The server can commit a hold before a cancellation reaches it, so a hold request already sent runs to its
-    /// answer: the cancellation then lands on the next request, and disposing the client releases the hold it took.</summary>
+    /// <summary>The server can commit a hold whose answer never reaches the client, here because the caller cancelled
+    /// mid-request. Disposing the client replays the request under the same key, which answers the hold that key took,
+    /// and releases it.</summary>
     [Test]
-    public async Task A_cancellation_during_the_hold_request_still_releases_the_hold() {
-        _stub.Route("POST", "evidence-scope/holds", 200, Held(EvidenceServerStub.Manifest("v1", "tok-1", "c1", S0, S0.AddMinutes(30))),
+    public async Task A_hold_request_cancelled_mid_flight_is_recovered_and_released_on_dispose() {
+        _stub.Route("POST", "evidence-scope/holds", 200, Held(EvidenceServerStub.Manifest("v1", "tok-1", null, S0, S0.AddMinutes(30))),
             delay: TimeSpan.FromMilliseconds(500));
         _stub.Route("DELETE", "evidence-scope/hold", 204, "");
         var client = Client(new FakeTimeProvider(S0));
@@ -65,6 +66,21 @@ public class EvidenceScopeHoldClientTests : IDisposable {
         await Assert.That(async () => await client.ResolveAsync(cts.Token)).Throws<OperationCanceledException>();
         await client.DisposeAsync();
 
+        var keys = _stub.Requests("evidence-scope/holds").Select(e => JsonDocument.Parse(e.RequestMessage.Body!).RootElement.GetProperty("request_id").GetString()).ToList();
+        await Assert.That(keys.Count).IsEqualTo(2);
+        await Assert.That(keys.Distinct().Count()).IsEqualTo(1);
+        await Assert.That(ReleasedToken()).IsEqualTo("tok-1");
+    }
+
+    [Test]
+    public async Task An_answered_hold_request_is_never_replayed() {
+        ServeHold();
+        var client = Client(new FakeTimeProvider(S0));
+        await client.ResolveAsync(CancellationToken.None);
+
+        await client.DisposeAsync();
+
+        await Assert.That(_stub.Requests("evidence-scope/holds").Count).IsEqualTo(1);
         await Assert.That(ReleasedToken()).IsEqualTo("tok-1");
     }
 

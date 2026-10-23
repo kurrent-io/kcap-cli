@@ -21,7 +21,6 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     public static readonly TimeSpan CertificationHeadroom      = EvidenceCitationClient.CertificationBudget + RpcMargin;
     public static readonly TimeSpan RetrospectiveHeadroom      = RetrospectiveExcerptBudget + EvalService.RetrospectiveTimeout + DrainPersistBudget;
     public static readonly TimeSpan ReleaseTimeout             = TimeSpan.FromSeconds(10);
-    public static readonly TimeSpan HoldRequestTimeout         = TimeSpan.FromSeconds(30);
 
     /// <summary>Everything a question runs before the next renewal: setup, the harness, parsing and coverage, and certification.</summary>
     public static TimeSpan QuestionHeadroom(EvidenceRoute route) =>
@@ -42,6 +41,9 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     // The latest token of a hold this client took, owned from the first page that reported it, so a hold is released
     // even when a later page of its manifest failed.
     string? _heldToken;
+
+    // The body of a hold request no answer has reached yet; see TakeHoldAsync.
+    string? _unansweredHold;
 
     public async Task<EvidenceScopeStatus> ResolveAsync(CancellationToken ct) {
         var (status, fresh) = holds ? await FetchAllPagesAsync(TakeHoldAsync, ct) : await FetchAllPagesAsync(ct);
@@ -94,14 +96,30 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     /// <summary>Releases the hold this client took, if any, within <see cref="ReleaseTimeout"/>. Never throws: a release
     /// that fails for any reason leaves the hold to expire on the server, and the run's own cleanup still runs.</summary>
     public async ValueTask DisposeAsync() {
-        if (Interlocked.Exchange(ref _heldToken, null) is not { } token) return;
         using var timeout = new CancellationTokenSource(ReleaseTimeout, time);
+        if (Interlocked.Exchange(ref _heldToken, null) is not { } token) {
+            if (Interlocked.Exchange(ref _unansweredHold, null) is not { } unanswered) return;
+            token = await RecoverHoldAsync(unanswered, timeout.Token);
+            if (token is null) return;
+        }
         try {
             using var request = new HttpRequestMessage(HttpMethod.Delete, Route("hold")) { Content = HoldBody(token) };
             using var resp    = await http.SendAsync(request, timeout.Token);
             if (!resp.IsSuccessStatusCode) ReleaseFailure = $"could not release the evidence scope hold: HTTP {(int)resp.StatusCode}";
         } catch (Exception e) {
             ReleaseFailure = $"could not release the evidence scope hold: {e.Message}";
+        }
+    }
+
+    /// <summary>The token of the hold an unanswered request took, by replaying it under the same key; null when the
+    /// replay took or answered none.</summary>
+    async Task<string?> RecoverHoldAsync(string body, CancellationToken ct) {
+        try {
+            var (status, page) = await SendPageAsync(HttpMethod.Post, Route("holds"), HoldCreateBody(body), ct);
+            return status == EvidenceScopeStatus.Ok && page!.Held == true ? page.Token : null;
+        } catch (OperationCanceledException) {
+            ReleaseFailure = "could not recover the evidence scope hold to release it: the replay timed out";
+            return null;
         }
     }
 
@@ -113,21 +131,20 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
         new(JsonSerializer.Serialize(new EvidenceScopeHoldRequestDto { Token = token }, CapacitorJsonContext.Default.EvidenceScopeHoldRequestDto), Encoding.UTF8, "application/json");
 
     // One request key per resolution, so a redelivery of this request can never take a second hold. The server may commit
-    // the hold before the caller's cancellation lands, and a hold whose token never arrives cannot be released, so a
-    // started request is bounded by its own timeout and never abandoned for the caller: the caller's cancellation is
-    // honoured at the next request, by which time the hold is known and disposing the client releases it.
-    Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> TakeHoldAsync(CancellationToken ct) {
+    // a hold whose answer never arrives (the request was cancelled, timed out or lost its connection), so the request is
+    // kept until a token or a refusal answers it: disposing the client replays it, which answers the hold that key took.
+    async Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> TakeHoldAsync(CancellationToken ct) {
         ct.ThrowIfCancellationRequested();
         var body = JsonSerializer.Serialize(new EvidenceScopeHoldCreateRequestDto {
             RequestId = Guid.NewGuid().ToString("N"), Continuations = false, Delegates = true, AdoptedChildren = false, IncludePlans = true
         }, CapacitorJsonContext.Default.EvidenceScopeHoldCreateRequestDto);
-        return SendHoldAsync(new StringContent(body, Encoding.UTF8, "application/json"));
+        _unansweredHold = body;
+        var (status, page) = await SendPageAsync(HttpMethod.Post, Route("holds"), HoldCreateBody(body), ct);
+        if (page is not null) _unansweredHold = null;
+        return (status, page);
     }
 
-    async Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> SendHoldAsync(HttpContent content) {
-        using var timeout = new CancellationTokenSource(HoldRequestTimeout, time);
-        return await SendPageAsync(HttpMethod.Post, Route("holds"), content, timeout.Token);
-    }
+    static StringContent HoldCreateBody(string body) => new(body, Encoding.UTF8, "application/json");
 
     static TimeSpan Lifetime(EvidenceScopeManifestDto page) => page.IssuedAt is { } issued && page.ExpiresAt is { } expires ? expires - issued : ArtifactLifetime;
 
