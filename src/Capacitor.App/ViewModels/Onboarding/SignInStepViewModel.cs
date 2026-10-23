@@ -28,6 +28,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     readonly WizardAuthService       _service;
     readonly ConnectChoiceViewModel  _connect;
     readonly WizardTenantPicker      _picker;
+    readonly UiAuthProgress          _progress;
     readonly ConsentFlipClaims       _claims;
     readonly IAppStateStore          _appState;
     readonly IUrlOpener              _urlOpener;
@@ -61,7 +62,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     bool    _urlPanelVisible;
     bool    _statusIsReady;
     bool    _expireAfterRun;
-    string? _provisioningFailed;
 
     CancellationTokenSource? _signUpClock;
 
@@ -88,6 +88,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         _service         = service;
         _connect         = connect;
         _picker          = bridges.Picker;
+        _progress        = bridges.Progress;
         _claims          = claims;
         _appState        = appState;
         _urlOpener       = urlOpener;
@@ -125,9 +126,6 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
 
             ClearTransient();
             SetStatus(WorkspaceSettingUp, isError: false, WorkspaceSettingUpDetail(workspace));
-        };
-        bridges.Progress.WorkspaceProvisioningFailed += workspace => {
-            if (Busy) _provisioningFailed = workspace;
         };
 
         _picker.SelectionRequested += tenants => _post(() => {
@@ -498,6 +496,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void Apply(AuthResult result) {
+        var failedWorkspace = _progress.TakeProvisioningFailure();
         switch (result) {
             case AuthResult.Committed { CredentialSaved: false }:
                 SetStatus("Signed in, but the credential could not be saved.", isError: true,
@@ -521,8 +520,8 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 SetStatus(WorkspaceSettingUp, isError: false, WorkspaceStillSettingUpDetail);
 
                 break;
-            case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when _provisioningFailed is { } workspace:
-                SetStatus(WorkspaceNotCreated, isError: true, WorkspaceNotCreatedDetail(workspace));
+            case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when failedWorkspace is not null:
+                SetStatus(WorkspaceNotCreated, isError: true, WorkspaceNotCreatedDetail(failedWorkspace));
 
                 break;
             // A browser sign-up still provisioning: the wait goes on, so this is not a failed sign-in.
@@ -621,9 +620,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void ResetForRun(ConnectIntent intent) {
-        _running            = intent;
-        _lastReport         = null;
-        _provisioningFailed = null;
+        _running    = intent;
+        _lastReport = null;
+        _progress.TakeProvisioningFailure();
         Log.Clear();
         HidePrompts();
         ClearTransient();
