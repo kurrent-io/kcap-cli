@@ -24,6 +24,8 @@ static partial class SessionEvalsTool {
     [GeneratedRegex("^[A-Za-z0-9_-]{1,128}$")]
     private static partial Regex SessionIdPattern();
 
+    internal static bool IsSessionId(string id) => SessionIdPattern().IsMatch(id);
+
     internal static McpTool Definition => new(
         Name,
         "Get the eval state of up to 25 sessions in one call — the way to follow evals on sessions you already know the ids of, such as the ones a `kcap setup` import created. " +
