@@ -188,4 +188,58 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
 
         await Assert.That(await f.Orch.ResumeInterruptedAsync("reviewer-1", CancellationToken.None)).IsEqualTo("not_interrupted");
     }
+
+    [Test]
+    public async Task A_resumed_participant_launches_as_the_reviewer_it_was() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Participant(f, "reviewer-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var ctx = f.Factory.Contexts.Single();
+        await Assert.That(ctx.IsReviewFlow).IsTrue();
+        await Assert.That(ctx.McpAllowlist!).IsEquivalentTo(["kcap-flow-result"]);
+        await Assert.That(ctx.ResumeSessionId).IsEqualTo("vendor-session-1");
+        await Assert.That(ctx.Prompt).IsEqualTo(ReviewerResumeNudge.Build(entry.ResumingAt!.Value, "round 1"));
+        await Assert.That(ctx.Worktree.Path).IsEqualTo(entry.Launch.WorktreePath);
+        await Assert.That(ctx.FlowRole).IsEqualTo("reviewer");
+
+        var agent = f.Orch.GetAgentForTest("reviewer-1")!;
+        await Assert.That(agent.Kind).IsEqualTo(LaunchKind.ReviewFlow);
+        await Assert.That(agent.FlowRunId).IsEqualTo("flow-1");
+    }
+
+    [Test]
+    public async Task A_resumed_participant_continues_its_predecessors_clock() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Participant(f, "reviewer-1");
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var clock = f.Orch.GetAgentForTest("reviewer-1")!.ActivityClock.Snapshot();
+        await Assert.That(clock.ActivitySeq).IsGreaterThan(7UL);
+        await Assert.That(clock.AgeMs).IsGreaterThanOrEqualTo(1_000UL);
+    }
+
+    [Test]
+    public async Task A_certification_the_successor_does_not_meet_refuses_the_resume_before_spawn() {
+        var f = Build();
+        await using var _ = f.Orch;
+        var entry = Participant(f, "reviewer-1");
+        f.Orch.ParticipantLedger!.Write(entry with {
+            Participant = entry.Participant! with {
+                Certification = new ReviewerCertificationRequirement("claude", ">=1", "policy", "rev", "", "")
+            }
+        });
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Factory.Contexts).IsEmpty();
+        await Assert.That(f.Server.ShutdownReports.Single().Reason).StartsWith("resume_failed:");
+    }
 }

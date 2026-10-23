@@ -1079,12 +1079,13 @@ internal partial class AgentOrchestrator {
         using var hold = BeginLaunchHold();
 
         var input = new LaunchConsentInput(
-            entry.Launch.RequesterUserId, RequesterIsOwner: false, LaunchConsentEngine.KindToken(LaunchKind.Default),
+            entry.Launch.RequesterUserId, RequesterIsOwner: false, LaunchConsentEngine.KindToken(entry.Participant?.Kind ?? LaunchKind.Default),
             entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
-        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
+        var command = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId);
+        var outcome = await LaunchAdmittedAsync(command, consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
@@ -1255,7 +1256,7 @@ internal partial class AgentOrchestrator {
             InheritedAgentIds = [.. (entry.InheritedAgentIds ?? []), entry.AgentId]
         };
         var launch  = new ResumeLaunch(successor, ResumedWorktree(entry)) { AttemptOf = entry.AgentId, DefersLedger = true, Token = ct };
-        var cmd     = BuildResumeCommand(entry, LastAlive(entry, null)) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
+        var cmd     = BuildResumeCommand(entry, LastAlive(entry, null), _server.CurrentConnectionId) with { AgentId = agentId, Prompt = prompt, ResumeSessionId = null };
         var outcome = await LaunchAdmittedAsync(cmd, consent, hold, launch, cancel: CancellationToken.None); // the resume's own token ends its start
 
         return launch.Agent is not null && outcome.Kind == CommandOutcomeKind.LaunchExecuted ? launch : null;
@@ -1305,7 +1306,24 @@ internal partial class AgentOrchestrator {
         }
     }
 
-    static LaunchAgentCommand BuildResumeCommand(ResumeLedgerEntry entry, DateTimeOffset interruptedAt) {
+    /// <summary>A participant relaunches as the reviewer it was, its certification re-checked against this
+    /// connection: the predecessor's connection id no longer exists.</summary>
+    static LaunchAgentCommand BuildResumeCommand(ResumeLedgerEntry entry, DateTimeOffset interruptedAt, string? connectionId) {
+        var command = BuildInteractiveResumeCommand(entry, interruptedAt);
+
+        return entry.Participant is not { } participant ? command : command with {
+            Prompt                = ReviewerResumeNudge.Build(interruptedAt, participant.LastRoundInput),
+            Kind                  = participant.Kind,
+            McpAllowlist          = participant.McpAllowlist,
+            Tools                 = participant.Tools,
+            CodexPosture          = null,
+            ReviewerCertification = participant.Certification is { } certification
+                ? certification with { ExpectedDaemonConnectionId = connectionId ?? "" }
+                : null
+        };
+    }
+
+    static LaunchAgentCommand BuildInteractiveResumeCommand(ResumeLedgerEntry entry, DateTimeOffset interruptedAt) {
         var launch = entry.Launch;
 
         return new LaunchAgentCommand(

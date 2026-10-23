@@ -2184,8 +2184,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <see cref="SendStatusReportNowAsync"/>. EVERY launch path must route through here — a path that
     /// builds its own clock silently loses the stage-report wiring. Shared with
     /// <see cref="SeedAgentForTest"/> so tests exercise the same wiring, never a test-only hookup.</summary>
-    AgentActivityClock CreateActivityClock() =>
-        new(_time) {
+    AgentActivityClock CreateActivityClock(ulong initialSeq = 1, ulong priorAgeMs = 0) =>
+        new(_time, initialSeq, priorAgeMs) {
             OnLaunchStageChanged   = () => { _statusNotifier.Pulse(); _ = SendStatusReportNowAsync(); },
             OnTurnEnded            = () => _ = SendStatusReportNowAsync(),
             // The flag rides the local status payload; the clock already holds the new value when
@@ -2582,7 +2582,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Created here, ahead of the reviewer-token mint and the AgentInstance that will own it, so the
         // SAME instance reaches the permission-bridge grant, the ACP runtime and the AgentInstance —
         // one clock per launch, never three.
-        var activityClock = CreateActivityClock();
+        var activityClock = resume?.Entry.Participant is { } participant
+            ? CreateActivityClock(participant.ActivitySeq + 1, participant.AgeMs)
+            : CreateActivityClock();
 
         CapacityReservation? capacity = null;
 
