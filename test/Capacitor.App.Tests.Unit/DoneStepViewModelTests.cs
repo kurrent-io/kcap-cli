@@ -46,6 +46,26 @@ public class DoneStepViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task The_restart_line_shows_only_when_new_hooks_need_one() {
+        var (remote, local, nothing, blocked) = await AvaloniaSession.DispatchAsync(async () => {
+            async Task<string?> LineFor(DoneFacts facts) {
+                var vm = new DoneStepViewModel(() => facts);
+                await vm.OnEnterAsync(CancellationToken.None);
+                return vm.RestartLine;
+            }
+
+            return (await LineFor(Facts()), await LineFor(Facts() with { Local = true }),
+                await LineFor(Facts(recording: [])), await LineFor(Facts(hazard: true)));
+        });
+
+        await Assert.That(remote).Contains("your workspace after a restart");
+        await Assert.That(local).Contains("recording on test-mac after a restart");
+        await Assert.That(nothing).IsNull();
+        await Assert.That(blocked).IsNull();
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Failed_uploads_are_named_with_where_they_still_are() {
         var (visible, title, body, landed, unit) = await AvaloniaSession.DispatchAsync(async () => {
             var vm = new DoneStepViewModel(() => Facts(import: null));

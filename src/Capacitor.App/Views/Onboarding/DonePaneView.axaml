@@ -110,8 +110,8 @@
         </Border>
 
         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
-            <TextBlock Classes="onboardingNote" VerticalAlignment="Center"
-                       Text="Agents you already have open pick this up when they next start." />
+            <TextBlock Classes="onboardingNote" VerticalAlignment="Center" Text="{Binding RestartLine}"
+                       IsVisible="{Binding RestartLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             <Button Grid.Column="1" x:Name="OpenWorkspaceButton" Classes="onboardingLink"
                     AutomationProperties.Name="Open your workspace"
                     Command="{Binding OpenWorkspaceCommand}" IsVisible="{Binding WorkspaceVisible}">

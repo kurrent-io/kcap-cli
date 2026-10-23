@@ -103,6 +103,12 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         : Import is null              ? "kcap import brings your existing history over whenever you want."
         :                               null;
 
+    /// Hooks load at agent start, so an agent open since before setup records nothing until it restarts.
+    public string? RestartLine =>
+        !CapturePromised ? null
+        : _current.Local ? $"New hooks load when an agent starts, so agents you already have open start recording on {_current.MachineName} after a restart."
+        :                  "New hooks load when an agent starts, so agents you already have open start sending sessions to your workspace after a restart.";
+
     public IReadOnlyList<CaptureItem> Capture => [.. _current.Recording.Select(label => new CaptureItem(label, _current.PathHazard))];
 
     public bool CaptureVisible => _current.Recording.Count > 0;
