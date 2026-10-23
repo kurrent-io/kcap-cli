@@ -329,4 +329,71 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
         await Assert.That(f.Orch.ParticipantLedger!.TryRead(queued.AgentId)).IsNull();
     }
+
+    [Test]
+    public async Task Startup_is_incomplete_while_a_participant_is_unpublished_and_complete_after() {
+        var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource() });
+        await using var _ = f.Orch;
+        var baseline = f.Orch.ComputeStartupReapComplete();
+        Participant(f, "reviewer-1");
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => !f.Factory.Contexts.IsEmpty);
+
+        await Assert.That(f.Orch.ComputeStartupReapComplete()).IsFalse();
+        await Assert.That(f.Orch.TakeRecoverySnapshot().StartupReapComplete).IsFalse();
+
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.ComputeStartupReapComplete()).IsEqualTo(baseline);
+    }
+
+    [Test]
+    public async Task The_deadline_fails_a_stalled_participant_and_lifts_the_hold() {
+        var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource() });
+        await using var _ = f.Orch;
+        f.Orch.ParticipantRecoveryDeadline = TimeSpan.FromMilliseconds(200);
+        var baseline = f.Orch.ComputeStartupReapComplete();
+        Participant(f, "reviewer-1");
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await WaitHarness.PollUntilAsync(() => f.Server.ShutdownReports.Count == 1);
+        f.Factory.Gate!.TrySetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Server.ShutdownReports.Single().Reason).IsEqualTo("resume_failed:recovery_deadline");
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNull();
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+        await Assert.That(f.Orch.ComputeStartupReapComplete()).IsEqualTo(baseline);
+    }
+
+    [Test]
+    public async Task No_snapshot_reports_complete_while_a_participant_is_in_neither_list() {
+        var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource() });
+        await using var _ = f.Orch;
+        Participant(f, "reviewer-1");
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => !f.Factory.Contexts.IsEmpty);
+
+        var torn = 0;
+        using var stop = new CancellationTokenSource();
+        var reader = Task.Run(() => {
+            while (!stop.IsCancellationRequested) {
+                var snap = f.Orch.TakeRecoverySnapshot();
+                if (snap.StartupReapComplete && !snap.LiveIds.Contains("reviewer-1") && snap.Claims.All(c => c.AgentId != "reviewer-1")
+                 && f.Orch.ParticipantLedger!.TryRead("reviewer-1") is { State: ResumeState.Resuming })
+                    Interlocked.Increment(ref torn);
+            }
+        });
+
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await stop.CancelAsync();
+        await reader;
+
+        await Assert.That(torn).IsEqualTo(0);
+    }
 }

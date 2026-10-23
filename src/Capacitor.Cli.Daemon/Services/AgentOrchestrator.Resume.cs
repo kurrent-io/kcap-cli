@@ -624,6 +624,8 @@ internal partial class AgentOrchestrator {
     /// claims the candidates. False when the ledger could not be read: the keep-sets are then empty, and
     /// a sweep against them would delete what the ledger protects.</summary>
     internal bool LoadResumeLedger() {
+        _startedAt = _time.GetTimestamp();
+
         if (ResumeLedger is not { } ledger) return true;
 
         IReadOnlyList<ResumeLedgerEntry> entries;
@@ -700,6 +702,45 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Guarded by <see cref="_ledgerLock"/>.</summary>
     readonly Dictionary<string, HeldParticipantInput> _heldInput = new(StringComparer.Ordinal);
+
+    /// <summary>How long after start the server is kept from proving old participants absent while this
+    /// daemon resumes its own; every participant still unpublished then is failed.</summary>
+    internal TimeSpan ParticipantRecoveryDeadline { get; set; } = TimeSpan.FromSeconds(90);
+
+    /// <summary>When the ledger was loaded, which is daemon start for the deadline's purposes.</summary>
+    long _startedAt;
+
+    bool ParticipantRecoveryDeadlinePassed => _time.GetElapsedTime(_startedAt) >= ParticipantRecoveryDeadline;
+
+    /// <summary>A participant candidate not yet published: the server's absence proof ignores resume
+    /// claims, so it would record that participant dead.</summary>
+    bool ParticipantRecoveryPending() =>
+        !ParticipantRecoveryDeadlinePassed
+     && _resumeCandidates.Values.Any(e => e.Participant is not null && !_agents.ContainsKey(e.AgentId));
+
+    async Task ObserveDeadlineAsync(CancellationToken ct) {
+        try {
+            await EnforceParticipantDeadlineAsync(ct);
+        } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
+        } catch (Exception ex) {
+            LogResumeLaneFailed(ex);
+        }
+    }
+
+    async Task EnforceParticipantDeadlineAsync(CancellationToken ct) {
+        var left = ParticipantRecoveryDeadline - _time.GetElapsedTime(_startedAt);
+        if (left > TimeSpan.Zero) await Task.Delay(left, _time, ct);
+
+        foreach (var entry in _resumeCandidates.Values.Where(e => e.Participant is not null).ToList()) {
+            var discard = DiscardResumeEntry(entry.AgentId);
+            if (!discard.Discarded) continue;
+
+            if (!entry.Launch.IsPrivate) await ReportResumeFailedAsync(entry, "recovery_deadline", null, ct);
+            if (discard.LeavesResourcesToStop) await RemoveDiscardedResourcesAsync(entry);
+        }
+
+        _statusNotifier.Pulse();
+    }
 
     /// <summary>True when the input was held for a participant still resuming, false when its queue is
     /// full, null when it is not for one: it is delivered, or dropped, as any other input. Once a queue
@@ -985,6 +1026,8 @@ internal partial class AgentOrchestrator {
 
             foreach (var (entry, reason) in _participantFailuresAtBoot)
                 await FailParticipantAsync(entry, reason, null, ct);
+
+            if (_resumeCandidates.Values.Any(e => e.Participant is not null)) _ = ObserveDeadlineAsync(ct);
 
             await Task.WhenAll(_resumeOrder.Select(entry => RunResumeThroughLaneAsync(entry, ct)));
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {

@@ -130,6 +130,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
     public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
 
+    /// <summary>Live agents, claims and startup completeness in one read; when wired it supplies all
+    /// four on a connect.</summary>
+    internal Func<RecoverySnapshot>? GetRecoverySnapshot { get; set; }
+
     public Func<(int Count, long Version)>? GetActiveCount { get; set; }
 
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
@@ -712,8 +716,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
-    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) {
+    internal DaemonConnect BuildDaemonConnect(
+            string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents, RecoverySnapshot? recovery = null) {
         var activeCount = GetActiveCount?.Invoke();
+
+        if (recovery is not null) (liveIds, liveAgents) = (recovery.LiveIds, recovery.LiveAgents);
 
         return new(
             _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
@@ -722,7 +729,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // Re-reported on every connect until the server prunes it via AckResolvedCandidates.
             RecordlessSurvivorsImpossible: _config.RecordlessSurvivorsImpossible,
             ResolvedStartupCandidates: GetResolvedStartupCandidates?.Invoke(),
-            StartupReapComplete: GetStartupReapComplete?.Invoke(),
+            StartupReapComplete: recovery?.StartupReapComplete ?? GetStartupReapComplete?.Invoke(),
             UnresolvedStartupCandidates: GetUnresolvedStartupCandidates?.Invoke(),
             StartupDiscovery: GetStartupDiscovery?.Invoke(),
             Quarantined: GetQuarantined?.Invoke(),
@@ -745,7 +752,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             VendorModels: _config.VendorModels,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
-            ResumingAgents: GetResumingAgents?.Invoke(),
+            ResumingAgents: recovery?.Claims ?? GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
             ActiveCountVersion: activeCount?.Version);
     }
@@ -754,13 +761,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
-        var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
-        var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
+        var recovery   = GetRecoverySnapshot?.Invoke();
+        var liveIds    = recovery?.LiveIds ?? GetLiveAgentIds?.Invoke() ?? [];
+        var liveAgents = recovery?.LiveAgents ?? GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
 
         try {
             await _hub.InvokeAsync(
                 "DaemonConnect",
-                BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents),
+                BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents, recovery),
                 cancellationToken: _ct
             );
             _advertisedRepoStore = repoStore;

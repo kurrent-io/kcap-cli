@@ -957,11 +957,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // can't diverge from it even if config.DaemonEpoch were left unpinned (tests).
         _server.GetDaemonEpoch         =  () => _daemonEpoch;
 
-        _server.GetLiveAgentIds = () => [
-            .. _agents
-                .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
-                .Select(kvp => kvp.Key)
-        ];
+        _server.GetLiveAgentIds = LiveAgentIds;
+        _server.GetRecoverySnapshot = TakeRecoverySnapshot;
 
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
@@ -1450,8 +1447,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
     internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) {
         var (activeCount, activeCountVersion) = ActiveCountSnapshot();
+        var recovery = TakeRecoverySnapshot();
 
-        return new(activeCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
+        return new(activeCount, recovery.LiveAgents, [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
             // candidates ledger on every self-report until the server prunes it per-entry via
             // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch.
@@ -1466,7 +1464,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // blocked known-id set so a completion-false report carries its reason; StartupDiscovery
             // surfaces the recordless-survivor marker-scan state (Pending/Complete/Failed on Linux,
             // NotApplicable off it). Additive/inert until the paired server PR consumes them.
-            StartupReapComplete: ComputeStartupReapComplete(),
+            StartupReapComplete: recovery.StartupReapComplete,
             ResolvedStartupCandidates: [.. _resolvedLedger?.Snapshot() ?? []],
             UnresolvedStartupCandidates: [.. _orphanReaper?.BlockedCandidates() ?? []],
             StartupDiscovery: _orphanReaper?.CurrentDiscovery,
@@ -1478,7 +1476,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             HarnessInventory: CurrentHarnessInventory(),
             EchoNonce: echoNonce,
             ActiveCountVersion: activeCountVersion,
-            ResumingAgents: ResumingClaims());
+            ResumingAgents: recovery.Claims);
+    }
+
+    string[] LiveAgentIds() => [
+        .. _agents
+            .Where(kvp => (kvp.Value.Status is "Starting" or "Running") && !kvp.Value.IsServerSilent)
+            .Select(kvp => kvp.Key)
+    ];
+
+    /// <summary>Under the ledger lock a resume publishes and its candidate settles under.</summary>
+    internal RecoverySnapshot TakeRecoverySnapshot() {
+        lock (_ledgerLock) return new([.. LiveAgentIds()], [.. BuildLiveAgents()], ResumingClaims(), ComputeStartupReapComplete());
     }
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
@@ -1496,6 +1505,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// signal).</item>
     /// </list></summary>
     internal bool ComputeStartupReapComplete() {
+        if (ParticipantRecoveryPending()) return false;
+
         var blocked = _orphanReaper?.BlockedCandidates().Count ?? 0;
         if (blocked > 0) return false;
         if (OperatingSystem.IsLinux())
