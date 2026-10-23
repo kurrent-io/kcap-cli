@@ -122,6 +122,11 @@ internal interface IHostedAgentRuntimeFactory {
     /// probe has passed for the vendor and transport.</summary>
     bool SupportsRestartResume(string? runtimeTransport) => false;
 
+    /// <summary>Whether a flow-participant launch of this shape reopens its session across a daemon
+    /// restart: the reviewer shape (its MCP config, HOME, snapshot) is not the interactive one. Declared
+    /// only once a live probe of that exact shape has passed.</summary>
+    bool SupportsReviewerRestartResume(string? runtimeTransport, WorkLocation work) => false;
+
     /// <summary>The models this vendor can launch on this machine, or null when it publishes no
     /// catalog. Null is also every probe failure: consumers then fall through to their other sources
     /// instead of reading an empty list as "nothing usable".</summary>

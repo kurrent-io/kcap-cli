@@ -871,7 +871,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _attachmentFetcher = new AttachmentFetcher(
             httpClientFactory, _server.Credentials, logger);
         _pidRecords  = new AgentPidRecordStore(recordRoot, logger);
-        ResumeLedger = ResumeLedgerStore.For(config.Store, config.Name, time);
+        ResumeLedger      = ResumeLedgerStore.For(config.Store, config.Name, time);
+        ParticipantLedger = ResumeLedgerStore.ParticipantsFor(config.Store, config.Name, time);
         _failedLaunchLog = new FailedLaunchLog(recordRoot, time);
         _quarantine  = new AgentKillQuarantine(logger, time);
         _daemonId    = ComputeDaemonId(config.Name);
@@ -1024,7 +1025,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
      && (_agents.ContainsKey(agentId)
       || (_pidRecords?.Exists(agentId) ?? false)
       || _resumeCandidates.ContainsKey(agentId)
-      || (ResumeLedger is { } ledger && File.Exists(ledger.EntryPath(agentId))));
+      || (StoreFor(agentId) is { } ledger && File.Exists(ledger.EntryPath(agentId))));
 
     /// <summary>§3.3: snapshot the processor and, when it is still null, RESERVE the inline slot in the SAME
     /// critical section publication uses. Returns null to mean "run inline, then call
@@ -4792,6 +4793,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // output/ACP envelopes/turn transitions); a refused or failed write above skips it.
                 agent.ActivityClock.Advance();
                 agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                RecordRoundInput(agent, message);
 
                 // One report per successfully handled invocation (SendInputCommand carries no round
                 // identity, so a duplicate is tolerated and content-honest); fire-and-forget, contained,

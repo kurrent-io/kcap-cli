@@ -9,8 +9,10 @@ using Microsoft.Extensions.Logging;
 
 namespace Capacitor.Cli.Daemon.Services;
 
-/// The resume ledger: one durable entry per interactive agent, written at launch, rewritten as its
-/// session ids are learned, deleted at a normal end. Flow participants never get one.
+/// The resume ledger: one durable entry per interactive agent, and per flow participant whose vendor can
+/// reopen its reviewer session, written at launch, rewritten as its session ids are learned, deleted at a
+/// normal end. Participants' entries live in their own store, which a daemon that cannot resume them
+/// never reads.
 internal partial class AgentOrchestrator {
     /// The transport an entry records before its runtime exists: a value no factory maps, so a resume
     /// of such an entry takes the daemon's own route. The rewrite from the live instance replaces it.
@@ -20,7 +22,24 @@ internal partial class AgentOrchestrator {
 
     internal ResumeLedgerStore? ResumeLedger { get; }
 
+    internal ResumeLedgerStore? ParticipantLedger { get; }
+
+    /// <summary>The ids whose entries are in <see cref="ParticipantLedger"/>.</summary>
+    readonly ConcurrentDictionary<string, byte> _participantEntries = new(StringComparer.Ordinal);
+
+    ResumeLedgerStore? StoreFor(string agentId) =>
+        _participantEntries.ContainsKey(agentId) ? ParticipantLedger : ResumeLedger;
+
     static bool IsInteractive(AgentInstance a) => a.Kind == LaunchKind.Default;
+
+    /// <summary>A flow participant a successor can resume in place. A Codex app-server reviewer parks
+    /// instead, and a private one has no flow to continue.</summary>
+    bool IsResumableParticipant(AgentInstance a) =>
+        a.Kind == LaunchKind.ReviewFlow && !a.IsPrivate && !IsResumableReviewer(a)
+     && _runtimeFactories.TryGetValue(a.Vendor, out var factory)
+     && factory.SupportsReviewerRestartResume(a.RuntimeTransport, a.Work);
+
+    bool IsLedgered(AgentInstance a) => IsInteractive(a) || IsResumableParticipant(a);
 
     int _launchesInAdmission;
 
@@ -170,8 +189,8 @@ internal partial class AgentOrchestrator {
 
         await Task.WhenAll(live.Select(agent =>
             !keep                      ? TerminateForShutdownAsync(agent)
-          : IsInteractive(agent)       ? PrepareForShutdownResumeAsync(agent)
           : IsResumableReviewer(agent) ? ParkForShutdownAsync(agent, parkBudget.Token)
+          : IsLedgered(agent)          ? PrepareForShutdownResumeAsync(agent)
           :                              TerminateForShutdownAsync(agent)));
     }
 
@@ -246,22 +265,31 @@ internal partial class AgentOrchestrator {
     static readonly TimeSpan EntryLockWait = TimeSpan.FromSeconds(1);
 
     bool TryMarkResuming(AgentInstance agent) {
-        if (ResumeLedger is not { } ledger || !IsInteractive(agent)) return false;
+        if (StoreFor(agent.Id) is not { } ledger || !IsLedgered(agent)) return false;
 
         lock (_ledgerLock) {
             if (agent.IsCleanupStarted) return false;
 
-            var now = _time.GetUtcNow();
+            var now   = _time.GetUtcNow();
+            var clock = agent.ActivityClock.Snapshot();
             LockedUpdate result;
 
             try {
-                result = ledger.TryUpdateUnderLock(agent.Id, entry => EndCommittedForCurrentSession(entry, agent) ? null : entry with {
-                    State                 = ResumeState.Resuming,
-                    PredecessorInstanceId = _config.InstanceId,
-                    ResumingAt            = now,
-                    UpdatedAt             = now,
-                    SessionId             = agent.SessionId ?? entry.SessionId,
-                    VendorSession         = agent.VendorSession ?? entry.VendorSession
+                result = ledger.TryUpdateUnderLock(agent.Id, entry => {
+                    var vendorSession = agent.VendorSession ?? entry.VendorSession;
+
+                    // A participant has no kcap continue to fall back on, so one with no session to reopen ends here.
+                    if (EndCommittedForCurrentSession(entry, agent) || (entry.Participant is not null && vendorSession is null)) return null;
+
+                    return entry with {
+                        State                 = ResumeState.Resuming,
+                        PredecessorInstanceId = _config.InstanceId,
+                        ResumingAt            = now,
+                        UpdatedAt             = now,
+                        SessionId             = agent.SessionId ?? entry.SessionId,
+                        VendorSession         = vendorSession,
+                        Participant           = entry.Participant is { } p ? p with { ActivitySeq = clock.ActivitySeq, AgeMs = clock.AgeMs } : null
+                    };
                 }, EntryLockWait);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 LogResumeLedgerFailed(ex, "writing", agent.Id);
@@ -289,7 +317,7 @@ internal partial class AgentOrchestrator {
 
     /// Written through a temp file created owner-only, so the ring is never readable by anyone else.
     void TryWriteRing(string agentId, byte[] ring) {
-        var path = ResumeLedger!.RingPath(agentId);
+        var path = StoreFor(agentId)!.RingPath(agentId);
         var temp = path + ".tmp-" + Guid.NewGuid().ToString("N")[..8];
 
         try {
@@ -339,7 +367,35 @@ internal partial class AgentOrchestrator {
         return NewRunningEntry(agent.Id, agent.Vendor, agent.RuntimeTransport, agent.SessionId, agent.VendorSession, launch, prior) with {
             HasTerminal = agent.Runtime.EmitsTerminalOutput, TranscriptFormat = TranscriptFormatOf(agent),
             StartedAt = StartedAtOf(agent),
+            Participant = IsInteractive(agent) ? null : ParticipantOf(agent, cmd, prior?.Participant),
         };
+    }
+
+    /// <summary>The launch command is only at hand on the first write; a rewrite keeps what that one recorded.</summary>
+    static ParticipantResume ParticipantOf(AgentInstance agent, LaunchAgentCommand? cmd, ParticipantResume? prior) =>
+        new(agent.Kind,
+            cmd?.McpAllowlist ?? prior?.McpAllowlist,
+            cmd?.Tools ?? prior?.Tools,
+            cmd?.ReviewerCertification is { } certification
+                ? certification with { ExpectedDaemonConnectionId = "", ExpectedCliVersion = "" }
+                : prior?.Certification,
+            prior?.ActivitySeq ?? 0,
+            prior?.AgeMs ?? 0,
+            prior?.LastRoundInput,
+            prior?.LastRoundAt);
+
+    /// <summary>The round a participant was last sent, which only it carries the token of: a resume
+    /// repeats it.</summary>
+    void RecordRoundInput(AgentInstance agent, string input) {
+        if (!_participantEntries.ContainsKey(agent.Id)) return;
+
+        lock (_ledgerLock) {
+            if (agent.IsCleanupStarted || TryReadLedger(agent.Id) is not { Participant: { } participant } entry) return;
+
+            TryWriteLedger(agent.Id, () => entry with {
+                Participant = participant with { LastRoundInput = input, LastRoundAt = _time.GetUtcNow() }, UpdatedAt = _time.GetUtcNow()
+            });
+        }
     }
 
     /// The entry an admitted server launch records before its runtime starts, from the command and
@@ -411,10 +467,11 @@ internal partial class AgentOrchestrator {
             : null;
 
     internal void WriteLedger(AgentInstance agent, LaunchAgentCommand? cmd, string origin, LaunchConsentOutcome? consent) {
-        if (ResumeLedger is null || !IsInteractive(agent)) return;
+        if (ResumeLedger is null || !IsLedgered(agent)) return;
 
         lock (_ledgerLock) {
             if (agent.IsCleanupStarted) return;
+            if (!IsInteractive(agent)) _participantEntries[agent.Id] = 0;
             TryWriteLedger(agent.Id, () => BuildLedgerEntry(agent, cmd, origin, consent));
         }
     }
@@ -432,7 +489,7 @@ internal partial class AgentOrchestrator {
     }
 
     internal void UpdateLedgerSession(AgentInstance agent) {
-        if (ResumeLedger is null || !IsInteractive(agent)) return;
+        if (ResumeLedger is null || !IsLedgered(agent)) return;
 
         lock (_ledgerLock) {
             if (agent.IsCleanupStarted || TryReadLedger(agent.Id) is not { } entry) return;
@@ -452,11 +509,12 @@ internal partial class AgentOrchestrator {
     }
 
     void DeleteLedger(string agentId) {
-        if (ResumeLedger is not { } ledger) return;
+        if (StoreFor(agentId) is not { } ledger) return;
 
         lock (_ledgerLock) {
             try {
                 ledger.Delete(agentId);
+                _participantEntries.TryRemove(agentId, out _);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 LogResumeLedgerFailed(ex, "deleting", agentId);
             }
@@ -467,13 +525,14 @@ internal partial class AgentOrchestrator {
     /// <paramref name="newRun"/>: a resumed run starts with none.</summary>
     void TryWriteLedger(string agentId, Func<ResumeLedgerEntry> build, bool newRun = false) {
         try {
-            var result = ResumeLedger!.TryUpdateUnderLock(agentId, current => newRun ? build() : build() with {
+            var ledger = StoreFor(agentId)!;
+            var result = ledger.TryUpdateUnderLock(agentId, current => newRun ? build() : build() with {
                 EndCommittedAt      = current.EndCommittedAt,
                 EndCommittedEpoch   = current.EndCommittedEpoch,
                 EndCommittedSession = current.EndCommittedSession
             }, EntryLockWait);
 
-            if (result == LockedUpdate.NoEntry) ResumeLedger.Write(build());
+            if (result == LockedUpdate.NoEntry) ledger.Write(build());
             else if (result == LockedUpdate.LockTimeout) LogResumeLedgerFailed(new IOException("the entry stayed locked"), "writing", agentId);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogResumeLedgerFailed(ex, "writing", agentId);
@@ -482,7 +541,7 @@ internal partial class AgentOrchestrator {
 
     ResumeLedgerEntry? TryReadLedger(string agentId) {
         try {
-            return ResumeLedger?.TryRead(agentId);
+            return StoreFor(agentId)?.TryRead(agentId);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
             LogResumeLedgerFailed(ex, "reading", agentId);
             return null;
@@ -662,7 +721,7 @@ internal partial class AgentOrchestrator {
     internal bool TryDiscardResumeEntry(string agentId) => DiscardResumeEntry(agentId).Discarded;
 
     internal ResumeDiscard DiscardResumeEntry(string agentId) {
-        if (ResumeLedger is not { } ledger) return default;
+        if (StoreFor(agentId) is not { } ledger) return default;
 
         ResumeAttempt?     attempt;
         ResumeLedgerEntry? entry;
@@ -675,6 +734,7 @@ internal partial class AgentOrchestrator {
 
             try {
                 ledger.Delete(agentId);
+                _participantEntries.TryRemove(agentId, out _);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
                 LogResumeLedgerFailed(ex, "deleting", agentId);
                 return default;
@@ -1165,7 +1225,7 @@ internal partial class AgentOrchestrator {
 
     /// <summary>Replays the predecessor's persisted ring into a resumed agent, then removes it.</summary>
     void ReplayPersistedRing(AgentInstance agent) {
-        var path = ResumeLedger!.RingPath(agent.Id);
+        var path = StoreFor(agent.Id)!.RingPath(agent.Id);
         if (!File.Exists(path)) return;
 
         try {
