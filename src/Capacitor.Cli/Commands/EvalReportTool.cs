@@ -130,14 +130,14 @@ static class EvalReportTool {
         var result      = root.Obj("completed_result");
         var failureOnly = result is { } r && !Items(r, "categories").Any() && Items(r, "failed_questions").Any();
 
-        if (result is { } completed && !failureOnly) return (Cap(Markdown(sessionId, completed)), false);
+        if (result is { } completed && !failureOnly) return (Cap(Markdown(sessionId, completed, root)), false);
 
         if (failureOnly || root.Bool("is_terminal") == true || root.Obj("failed_result") is not null)
             return ($"The latest eval of session {sessionId} failed: {root.Str("failure_reason") ?? "every question failed to judge"}.", false);
         return ($"Session {sessionId} is being evaluated; no completed report yet.", false);
     }
 
-    static string Markdown(string sessionId, JsonElement result) {
+    static string Markdown(string sessionId, JsonElement result, JsonElement progress) {
         var md = new StringBuilder();
         md.Append("# Eval report: session ").Append(sessionId).Append('\n').Append('\n');
         md.Append("Overall ").Append(result.Num("overall_score")?.ToString(CultureInfo.InvariantCulture) ?? "?").Append("/5");
@@ -149,18 +149,23 @@ static class EvalReportTool {
         foreach (var category in Items(result, "categories")) {
             md.Append("## ").Append(category.Str("name")).Append(" (").Append(category.Num("score")?.ToString(CultureInfo.InvariantCulture) ?? "?").Append("/5)\n\n");
             foreach (var q in Items(category, "questions")) {
-                // A question the judge could not answer has an outcome in place of a score.
                 md.Append("- **").Append(q.Str("question_id")).Append("**: ")
-                  .Append(q.Num("score") is { } score ? $"{score}/5" : q.Str("outcome") ?? "not scored");
+                  .Append(q.Num("score") is { } score ? $"{score}/5" : "not scored");
                 if (q.Str("verdict") is { } verdict) md.Append(", ").Append(verdict);
                 md.Append('\n');
                 Line(md, "Finding", q.Str("finding"));
                 Line(md, "Evidence", q.Str("evidence"));
                 Line(md, "Recommendation", q.Str("recommendation"));
-                foreach (var o in Items(q, "obligations"))
-                    Line(md, $"Obligation {o.Str("title") ?? o.Str("id")} ({o.Str("status")})", o.Str("note") ?? "no note");
-                Line(md, "Obligations not reported", q.Str("obligations_not_reported"));
             }
+            md.Append('\n');
+        }
+
+        // The completed result keeps only assessed questions; the run's question list names the ones the judge
+        // answered without a score, and why.
+        var unscored = Items(progress, "questions").Where(q => q.Str("outcome") is { } o && o != "assessed").ToList();
+        if (unscored.Count > 0) {
+            md.Append("## Questions answered without a score\n\n");
+            foreach (var q in unscored) md.Append("- ").Append(q.Str("category")).Append('/').Append(q.Str("question_id")).Append(": ").Append(q.Str("outcome")).Append('\n');
             md.Append('\n');
         }
 
