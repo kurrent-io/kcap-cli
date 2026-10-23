@@ -173,7 +173,7 @@ internal partial class AgentOrchestrator {
         var checkout = AgentCheckout.Resolve(worktree, entry.Launch.Work, borrowedSnapshotSource: null);
 
         return new(
-            entry.AgentId, KindText(LaunchKind.Default), entry.Vendor, checkout.Repository, status,
+            entry.AgentId, KindText(entry.Participant?.Kind ?? LaunchKind.Default), entry.Vendor, checkout.Repository, status,
             entry.Launch.FlowRunId, entry.Launch.FlowRole, entry.Launch.RequesterUserId, entry.CreatedAt.UtcDateTime,
             string.IsNullOrWhiteSpace(entry.Launch.Model) ? null : entry.Launch.Model, entry.Launch.RequesterDisplay,
             HasTerminal: entry.HasTerminal, Title: entry.Launch.Title, WorktreePath: checkout.Worktree,
@@ -218,7 +218,13 @@ internal partial class AgentOrchestrator {
             // draining from the WhenAll above, and could misreport a stopped agent as skipped too.
             var skipped = all.Where(a => !force && a.Kind != LaunchKind.Default).Select(a => $"{a.Id}\tskipped");
 
-            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', stopped.Concat(skipped))), ct);
+            // A participant still resuming has no agent yet, but the same protection.
+            var resuming = PendingParticipantIds().Where(id => !_agents.ContainsKey(id)).ToList();
+            var pending  = force
+                ? await Task.WhenAll(resuming.Select(async id => $"{id}\t{StatusText(await WithdrawPendingAsync(id))}"))
+                : [.. resuming.Select(id => $"{id}\tskipped")];
+
+            await FrameCodec.WriteAsync(stream, LocalFrame.StopAck(string.Join('\n', stopped.Concat(skipped).Concat(pending))), ct);
 
             return;
         }
@@ -260,6 +266,14 @@ internal partial class AgentOrchestrator {
         if (starting.Length > 0) {
             var ok = await CancelStartingLaunchesAsync(agentId, starting);
             await FrameCodec.WriteAsync(stream, LocalFrame.StopAck($"{agentId}\t{StatusText(ok)}"), ct);
+
+            return;
+        }
+
+        if (!force && TryReadLedger(agentId) is { Participant: { } participant } ledgered) {
+            await FrameCodec.WriteAsync(stream, LocalFrame.Error(
+                $"{agentId} is a {ProtectionReason(participant.Kind.ToString(), ledgered.Launch.FlowRunId, ledgered.Launch.FlowRole)}. "
+              + "Stopping it mid-round leaves the flow without a participant. Pass --force to stop it anyway."), ct);
 
             return;
         }

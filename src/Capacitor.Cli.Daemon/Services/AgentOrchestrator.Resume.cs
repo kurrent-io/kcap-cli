@@ -718,6 +718,20 @@ internal partial class AgentOrchestrator {
         !ParticipantRecoveryDeadlinePassed
      && _resumeCandidates.Values.Any(e => e.Participant is not null && !_agents.ContainsKey(e.AgentId));
 
+    IReadOnlyList<string> PendingParticipantIds() =>
+        [.. _resumeCandidates.Values.Where(e => e.Participant is not null).Select(e => e.AgentId)];
+
+    /// <summary>Withdraws a participant still resuming, as a stop of it does. True once it can no longer
+    /// publish.</summary>
+    async Task<bool> WithdrawPendingAsync(string agentId) {
+        var discard = DiscardResumeEntry(agentId);
+
+        if (discard.Live is { } late) return await StopAgentCoreAsync(late);
+        if (discard is { LeavesResourcesToStop: true, Entry: { } entry }) await RemoveDiscardedResourcesAsync(entry);
+
+        return discard.Discarded;
+    }
+
     async Task ObserveDeadlineAsync(CancellationToken ct) {
         try {
             await EnforceParticipantDeadlineAsync(ct);

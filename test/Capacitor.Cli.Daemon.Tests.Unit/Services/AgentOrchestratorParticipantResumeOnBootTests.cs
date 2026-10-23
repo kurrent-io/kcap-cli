@@ -396,4 +396,71 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
 
         await Assert.That(torn).IsEqualTo(0);
     }
+
+    static async Task<LocalFrame> LocalStop(AgentOrchestrator orch, bool force, string agentId) {
+        using var stream = new MemoryStream();
+        await orch.HandleLocalStopV2Async(force, agentId, stream, CancellationToken.None);
+        stream.Position = 0;
+
+        return (await FrameCodec.ReadAsync(stream, CancellationToken.None))!;
+    }
+
+    [Test]
+    public async Task A_resuming_participant_is_listed_as_a_flow_agent() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        var row = f.Orch.SnapshotAgentsForStatus().Single(r => r.Id == "reviewer-1");
+
+        await Assert.That(row.Kind).IsEqualTo("review-flow");
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+    }
+
+    [Test]
+    public async Task An_unforced_stop_refuses_a_resuming_participant_and_keeps_its_recovery() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        var reply = await LocalStop(f.Orch, force: false, "reviewer-1");
+
+        await Assert.That(reply.Type).IsEqualTo(FrameType.Error);
+        await Assert.That(reply.Text).Contains("--force");
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNotNull();
+
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNotNull();
+    }
+
+    [Test]
+    public async Task A_forced_stop_withdraws_a_resuming_participant() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        var reply = await LocalStop(f.Orch, force: true, "reviewer-1");
+        f.Factory.Gate!.TrySetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(reply.Type).IsEqualTo(FrameType.StopAck);
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNull();
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+    }
+
+    [Test]
+    public async Task Stop_all_skips_a_resuming_participant_unless_forced() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        var skipped = await LocalStop(f.Orch, force: false, "");
+        await Assert.That(skipped.Text).Contains("reviewer-1\tskipped");
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNotNull();
+
+        var forced = await LocalStop(f.Orch, force: true, "");
+        f.Factory.Gate!.TrySetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(forced.Text).Contains("reviewer-1\tstopped");
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNull();
+    }
 }
