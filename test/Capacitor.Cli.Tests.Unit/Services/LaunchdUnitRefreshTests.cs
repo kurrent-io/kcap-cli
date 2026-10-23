@@ -581,4 +581,41 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(error).Contains("socket gone");
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
     }
+
+    /// <summary>The bootout already unloaded the job, so a bootstrap that throws must not leave it down.</summary>
+    [Test]
+    public async Task A_bootstrap_that_throws_after_bootout_reloads_the_previous_job() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path       = Seed(LaunchdUnit.Plist(Spec()));
+        var loaded     = true;
+        var bootstraps = 0;
+        var manager    = new LaunchdServiceManager(Home, TimeProvider.System,
+            writeUnit: (p, content, _) => File.WriteAllText(p, content),
+            runBounded: (_, args, _) => {
+                switch (args[0]) {
+                    case "print":
+                        return loaded ? (0, Print("daemon (3)"), "", false) : (113, "", "Could not find service", false);
+                    case "bootout":
+                        loaded = false;
+                        return (0, "", "", false);
+                    case "bootstrap" when ++bootstraps == 1:
+                        throw new System.ComponentModel.Win32Exception("launchctl could not start");
+                    case "bootstrap":
+                        loaded = true;
+                        return (0, "", "", false);
+                    default:
+                        return (0, "", "", false);
+                }
+            });
+
+        var outcome = manager.RefreshUnit(
+            "test", () => true, Plenty, out var error, amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("launchctl could not start");
+        await Assert.That(bootstraps).IsEqualTo(2);
+        await Assert.That(loaded).IsTrue();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
 }

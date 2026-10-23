@@ -265,9 +265,10 @@ sealed partial class LaunchdServiceManager(
             }
 
             reload = Bootstrap(serviceId, path, acceptAnySpawnType: false);
-        } catch when (amended is not null) {
+        } catch {
             // Same rule as every other path short of a reload: the file must not claim what launchd never loaded.
-            _writeUnit(path, beforeAmend, null);
+            if (amended is not null) _writeUnit(path, beforeAmend, null);
+            RecoverUnloadedJob(serviceId, path, upgraded is not null || amended is not null ? original : null);
             throw;
         }
 
@@ -295,6 +296,19 @@ sealed partial class LaunchdServiceManager(
         }
 
         return UnitRefresh.Failed;
+    }
+
+    /// <summary>A throw after the bootout would otherwise leave the daemon unloaded. Best effort, so the
+    /// caller's exception is the one reported.</summary>
+    void RecoverUnloadedJob(string serviceId, string path, string? restore) {
+        try {
+            if (Probe(serviceId).Label != LabelProbe.Absent) return;
+            if (restore is not null) _writeUnit(path, restore, null);
+            Bootstrap(serviceId, path, acceptAnySpawnType: true);
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException
+                                      or System.ComponentModel.Win32Exception) {
+            // The original failure is rethrown by the caller.
+        }
     }
 
     (LabelProbe Label, string StdOut) Probe(string serviceId) {

@@ -90,4 +90,16 @@ public class SystemdServiceManagerTests {
         await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<InvalidOperationException>();
         await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
     }
+
+    [Test]
+    public async Task A_systemctl_that_cannot_start_puts_the_previous_unit_back() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => throw new System.ComponentModel.Win32Exception("no systemctl"));
+
+        await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<System.ComponentModel.Win32Exception>();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
+    }
 }

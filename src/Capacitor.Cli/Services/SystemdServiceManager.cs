@@ -108,9 +108,14 @@ sealed class SystemdServiceManager(
         _writeUnit(path, rewritten, null);
         try {
             Reload();
-        } catch (InvalidOperationException) {
+        } catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception
+                                          or IOException or UnauthorizedAccessException) {
             _writeUnit(path, previous, null);
-            Systemctl(SystemdUnit.DaemonReloadArgs());
+            try {
+                Systemctl(SystemdUnit.DaemonReloadArgs());
+            } catch (Exception again) when (again is System.ComponentModel.Win32Exception or IOException) {
+                // The reload that failed is the one to report.
+            }
             throw;
         }
 
