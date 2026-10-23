@@ -2712,7 +2712,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
 
-            var resolution = ResolveAccount(cmd.Vendor, cmd.AccountId, resume?.Entry.Launch);
+            // A reviewer runs on the daemon's default account, where its MCP inventory and hooks are read.
+            var resolution = cmd.Kind != LaunchKind.Default && !string.IsNullOrEmpty(cmd.AccountId)
+                ? new AccountResolutionOutcome(null, $"{AccountResolution.Unavailable}: a {(isReview ? "review" : "review-flow")} launch runs on the default account")
+                : ResolveAccount(cmd.Vendor, cmd.AccountId, resume?.Entry.Launch);
 
             // A failure, not a rejection: the refusal reaches the caller by name, never as a generic rejection.
             if (resolution.Refusal is { } refusal) {
