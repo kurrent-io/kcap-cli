@@ -177,7 +177,10 @@ internal static class WizardComposition {
                 if (liveFound.ContainsKey(bearer)) return WorkspaceAnswer.Pending;
 
                 answer = await AskAsync(tenant, ct);
-                if (answer == WorkspaceAnswer.Live) return answer;
+                if (answer == WorkspaceAnswer.Live) {
+                    liveFound.TryAdd(bearer, 0);
+                    return answer;
+                }
 
                 // An expired bearer can no longer see a failure, so the wait ends there and sign-in offers another try.
                 status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
