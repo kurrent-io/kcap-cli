@@ -434,8 +434,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     readonly ObservableAsPropertyHelper<bool> _showsInterrupt;
     public bool ShowsInterrupt => _showsInterrupt.Value;
 
-    // Running alone, or background work while the parent waits, does not make Escape safe at its prompt.
-    public bool CanInterruptWithEscape => ShowsInterrupt && _awaitingInput == false;
+    readonly ObservableAsPropertyHelper<bool> _canInterruptWithEscape;
+    public bool CanInterruptWithEscape => _canInterruptWithEscape.Value;
 
     readonly ObservableAsPropertyHelper<string> _interruptLabel;
     public string InterruptLabel => _interruptLabel.Value;
@@ -501,6 +501,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     string _status = "";
     bool _ended;
     bool? _awaitingInput;
+    bool _turnAttested;
     bool _waitsOnUser;
     int? _liveSubagents;
     long? _workingSince;
@@ -566,7 +567,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
             answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount,
-            terminalDialog: _terminalDialog is not null, interruption: _interruption, agentId: _agentId);
+            terminalDialog: _terminalDialog is not null, interruption: _interruption, agentId: _agentId,
+            turnAttested: _turnAttested);
         StatusText = AgentStatus.Label;
     }
 
@@ -754,8 +756,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     && (AgentStatus.Kind == AgentStatusKind.Working || AgentStatus.IsRunningUnknownTurn))
             .DisposeWith(_disposables);
 
-        _interruptLabel = this.WhenAnyValue(x => x.ShowsInterrupt, x => x.AgentStatus,
-                (_, _) => CanInterruptWithEscape ? "Interrupt (Esc)" : "Interrupt")
+        // The button still interrupts an unproven turn; only the shortcut, which a user presses
+        // without looking, needs the daemon's proof that a prompt is not sitting idle.
+        _canInterruptWithEscape = this.WhenAnyValue(x => x.ShowsInterrupt, x => x.AgentStatus,
+                (shows, status) => shows && status.InForegroundTurn)
+            .ToProperty(this, x => x.CanInterruptWithEscape, initialValue: false)
+            .DisposeWith(_disposables);
+
+        _interruptLabel = this.WhenAnyValue(x => x.CanInterruptWithEscape,
+                escape => escape ? "Interrupt (Esc)" : "Interrupt")
             .ToProperty(this, x => x.InterruptLabel, initialValue: "Interrupt")
             .DisposeWith(_disposables);
 
@@ -948,6 +957,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (info.Ended)
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
+        _turnAttested = info.TurnAttested == true;
         _liveSubagents = info.LiveSubagents;
         _daemonWorkingSince = info.WorkingSince;
         if (!_feedReleased) _runs.SessionOver = info.Ended;

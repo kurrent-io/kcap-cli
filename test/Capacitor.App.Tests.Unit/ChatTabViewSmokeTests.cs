@@ -952,7 +952,9 @@ public class ChatTabViewSmokeTests {
             try {
                 var path = Tmp.CreateFile("escape.jsonl", [UserLine]);
                 var client = await host.AttachAsync(path);
-                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path, Status = "Running", AwaitingInput = false });
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                });
                 host.Type("keep this draft");
                 host.Chat.Tray.AddAll([new StagedAttachment("notes.txt", "text/plain", new byte[] { 1 })]);
                 if (button) Click(host, host.View.FindControl<Button>("InterruptButton")!);
@@ -967,34 +969,48 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    /// A Working status is not proof of a turn: an idle PTY prompt reports AwaitingInput false
+    /// until a Stop lands. The button stays, so the shortcut's own gate is what keeps Escape off it.
     [Test]
-    [Arguments(null, 0)]
-    [Arguments(true, 0)]
-    [Arguments(true, 1)]
+    [Arguments(false, null, 0)]
+    [Arguments(false, false, 0)]
+    [Arguments(true, false, 1)]
     [NotInParallel("AvaloniaSession")]
-    public async Task Escape_does_not_reach_a_prompt_without_a_confirmed_foreground_turn(bool? awaitingInput, int liveSubagents) {
+    public async Task Escape_does_not_reach_a_prompt_without_a_confirmed_foreground_turn(
+            bool? awaitingInput, bool? turnAttested, int liveSubagents) {
         await RunOnUiAsync(async () => {
             var host = new Host();
             try {
                 var path = Tmp.CreateFile("escape-idle.jsonl", [UserLine]);
                 var client = await host.AttachAsync(path);
+                var ancestorSawEscape = false;
+                host.Window.KeyDown += (_, e) => ancestorSawEscape |= e.Key == Key.Escape;
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
-                    TranscriptPath = path, Status = "Running", AwaitingInput = awaitingInput, LiveSubagents = liveSubagents,
+                    TranscriptPath = path, Status = "Running", AwaitingInput = awaitingInput, TurnAttested = turnAttested,
+                    LiveSubagents = liveSubagents,
                 });
+                host.Settle();
+                await Assert.That(host.Chat.ShowsInterrupt).IsTrue();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsFalse();
+                await Assert.That(host.View.FindControl<Button>("InterruptButton")!.Content).IsEqualTo("Interrupt");
                 host.Type("keep this draft");
                 host.Press(PhysicalKey.Escape);
                 await Assert.That(client.SentInput).IsEmpty();
+                await Assert.That(ancestorSawEscape).IsFalse();
                 await Assert.That(host.Composer.Text).IsEqualTo("keep this draft");
-                // A known working turn may be interrupted; the same shortcut goes inert as soon as it ends.
+                // An attested turn may be interrupted; the same shortcut goes inert as soon as it ends.
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
-                    TranscriptPath = path, Status = "Running", AwaitingInput = false,
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
+                    LiveSubagents = liveSubagents,
                 });
                 host.Settle();
+                await Assert.That(host.View.FindControl<Button>("InterruptButton")!.Content).IsEqualTo("Interrupt (Esc)");
                 host.Press(PhysicalKey.Escape);
                 await Assert.That(client.SentInput).Count().IsEqualTo(1);
                 await Assert.That(client.SentInput[0]).IsEquivalentTo(new byte[] { 0x1b });
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
-                    TranscriptPath = path, Status = "Running", AwaitingInput = true,
+                    TranscriptPath = path, Status = "Running", AwaitingInput = true, TurnAttested = false,
+                    LiveSubagents = liveSubagents,
                 });
                 host.Settle();
                 host.Press(PhysicalKey.Escape);
@@ -1014,8 +1030,10 @@ public class ChatTabViewSmokeTests {
                 var path = Tmp.CreateFile("escape-child.jsonl", [UserLine]);
                 var client = await host.AttachAsync(path);
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
-                    TranscriptPath = path, Status = "Running", AwaitingInput = false,
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
                 });
+                host.Settle();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsTrue();
                 host.Type("keep this draft");
                 var consumed = false;
                 host.Composer.KeyDown += (_, e) => {
@@ -1040,8 +1058,10 @@ public class ChatTabViewSmokeTests {
                 var path = Tmp.CreateFile("escape-menu.jsonl", [UserLine]);
                 var client = await host.AttachAsync(path);
                 host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
-                    TranscriptPath = path, Status = "Running", AwaitingInput = false,
+                    TranscriptPath = path, Status = "Running", AwaitingInput = false, TurnAttested = true,
                 });
+                host.Settle();
+                await Assert.That(host.Chat.CanInterruptWithEscape).IsTrue();
                 host.Type("keep this draft");
                 var item = new MenuItem { Header = "Copy" };
                 var menu = new ContextMenu { ItemsSource = new[] { item } };

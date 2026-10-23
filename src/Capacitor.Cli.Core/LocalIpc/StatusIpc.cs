@@ -111,7 +111,12 @@ public sealed record AgentStatusDto(
     string? Interruption = null,
     // UTC instant the daemon last saw the agent stop waiting, while Running and not waiting. Lets a
     // freshly built view show the turn's real elapsed time. Null from an older daemon.
-    DateTime? WorkingSince = null);
+    DateTime? WorkingSince = null,
+    // The daemon has positive evidence that a turn is running: an ACP turn gate, or a PTY vendor's
+    // relayed prompt submit or tool call since its last turn end. AwaitingInput == false is not
+    // that evidence; an idle PTY prompt reports it too. False and null (an older daemon) both mean
+    // unproven, so a client must not send a keystroke that is safe only mid-turn.
+    bool? TurnAttested = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

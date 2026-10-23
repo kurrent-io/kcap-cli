@@ -626,7 +626,10 @@ public partial class ChatTabView : UserControl {
     protected override void OnKeyDown(KeyEventArgs e) {
         base.OnKeyDown(e);
         if (e.Handled || e.Key != Key.Escape || e.KeyModifiers != KeyModifiers.None || OriginatesFromPendingCard(e)) return;
-        if (TryInterrupt()) e.Handled = true;
+        // A composer Escape stops here even with nothing to interrupt, so an ancestor's Escape
+        // binding never fires while the user is typing.
+        if (TryInterrupt() || e.Source is Visual source && (source == ComposerInput || ComposerInput.IsVisualAncestorOf(source)))
+            e.Handled = true;
     }
 
     bool TryInterrupt() {

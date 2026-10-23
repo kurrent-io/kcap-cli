@@ -2192,6 +2192,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 _statusNotifier.Pulse();
                 RescheduleQuietTurn();
             },
+            OnTurnAttestedChanged  = _statusNotifier.Pulse,
         };
 
     /// <summary>Test-only seam — insert a minimal <see cref="AgentInstance"/> (Noop
