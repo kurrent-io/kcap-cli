@@ -236,10 +236,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool HistoryImportVisible => HistoryImport is not null;
     public bool HistoryImportRunning => HistoryImport is { Running: true };
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
-        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.Running ? $"Importing history · {run.Imported:N0} sessions processed"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
-            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
-        : $"History imported · {run.Imported:N0} sessions uploaded";
+            ? $"History import didn't finish · {run.Imported:N0} sessions processed. Reopen setup to retry."
+        : $"History imported · {run.Imported:N0} sessions processed";
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
