@@ -77,6 +77,21 @@ public class EvalReportToolTests {
     }
 
     [Test]
+    public async Task A_completed_run_with_no_assessed_question_reports_its_outcomes_not_a_failure() {
+        const string body = """
+            {"is_terminal":true,"completed_result":null,"failed_result":null,"failure_reason":null,
+             "questions":[{"category":"process","question_id":"tracked","status":"completed","outcome":"insufficient_evidence"}]}
+            """;
+
+        var (text, isError) = EvalReportTool.Render("s-1", HttpStatusCode.OK, body);
+
+        await Assert.That(isError).IsFalse();
+        await Assert.That(text).Contains("completed without a score");
+        await Assert.That(text).Contains("- process/tracked: insufficient_evidence");
+        await Assert.That(text).DoesNotContain("failed");
+    }
+
+    [Test]
     public async Task A_completed_run_with_no_categories_still_reports_its_score_and_retrospective() {
         const string body = """
             {"is_terminal":true,"completed_result":{"overall_score":4,"summary":"Fine.","categories":[],"failed_questions":[],

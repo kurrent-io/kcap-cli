@@ -132,6 +132,14 @@ static class EvalReportTool {
 
         if (result is { } completed && !failureOnly) return (Cap(Markdown(sessionId, completed, root)), false);
 
+        // A completed run with no assessed question has no score, so the server sends no result; its question list
+        // still says what the judge answered.
+        if (!failureOnly && root.Bool("is_terminal") == true && root.Obj("failed_result") is null && root.Str("failure_reason") is null) {
+            var md = new StringBuilder($"# Eval report: session {sessionId}\n\nThe latest eval completed without a score: the judge assessed no question.\n\n");
+            Unscored(md, root);
+            return (md.ToString().TrimEnd() + "\n", false);
+        }
+
         if (failureOnly || root.Bool("is_terminal") == true || root.Obj("failed_result") is not null)
             return ($"The latest eval of session {sessionId} failed: {root.Str("failure_reason") ?? "every question failed to judge"}.", false);
         return ($"Session {sessionId} is being evaluated; no completed report yet.", false);
@@ -160,14 +168,7 @@ static class EvalReportTool {
             md.Append('\n');
         }
 
-        // The completed result keeps only assessed questions; the run's question list names the ones the judge
-        // answered without a score, and why.
-        var unscored = Items(progress, "questions").Where(q => q.Str("outcome") is { } o && o != "assessed").ToList();
-        if (unscored.Count > 0) {
-            md.Append("## Questions answered without a score\n\n");
-            foreach (var q in unscored) md.Append("- ").Append(q.Str("category")).Append('/').Append(q.Str("question_id")).Append(": ").Append(q.Str("outcome")).Append('\n');
-            md.Append('\n');
-        }
+        Unscored(md, progress);
 
         var failed = Items(result, "failed_questions").ToList();
         if (failed.Count > 0) {
@@ -186,6 +187,16 @@ static class EvalReportTool {
         }
 
         return md.ToString().TrimEnd() + "\n";
+    }
+
+    // The completed result keeps only assessed questions; the run's question list names the ones the judge answered
+    // without a score, and why.
+    static void Unscored(StringBuilder md, JsonElement progress) {
+        var unscored = Items(progress, "questions").Where(q => q.Str("outcome") is { } o && o != "assessed").ToList();
+        if (unscored.Count == 0) return;
+        md.Append("## Questions answered without a score\n\n");
+        foreach (var q in unscored) md.Append("- ").Append(q.Str("category")).Append('/').Append(q.Str("question_id")).Append(": ").Append(q.Str("outcome")).Append('\n');
+        md.Append('\n');
     }
 
     static void Line(StringBuilder md, string label, string? text) {
