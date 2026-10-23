@@ -152,6 +152,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
     public ActivityViewModel Activity { get; }
+    public WebWorkspaceViewModel? Web { get; init; }
+    public ReactiveCommand<Unit, Unit> OpenLaunchApprovalsCommand { get; }
 
     /// The launcher pane's view model, built at the composition root over the SAME
     /// IDaemonClientService instance this window uses, never a second daemon connection. Null
@@ -232,6 +234,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool CanOpenSetup { get; }
     public HistoryImportRun? HistoryImport { get; }
     public bool HistoryImportVisible => HistoryImport is not null;
+    public bool HistoryImportRunning => HistoryImport is { Running: true };
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
         : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
@@ -337,10 +340,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
-            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null) {
         _service = service;
         Time = time;
         Activity = activity;
+        OpenLaunchApprovalsCommand = ReactiveCommand.Create(openLaunchApprovals ?? (() => { }),
+            Observable.Return(openLaunchApprovals is not null));
         Home = home;
         _navigation = navigation ?? new NavigationGate();
         _trackTeardown = trackWorkspaceTeardown ?? RunUntracked;
@@ -417,7 +422,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             if (historyImport is not null)
                 historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
                     .ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .Subscribe(_ => {
+                        this.RaisePropertyChanged(nameof(HistoryImportStatus));
+                        this.RaisePropertyChanged(nameof(HistoryImportRunning));
+                    })
                     .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);

@@ -74,6 +74,31 @@ public class AgentAttachClientTests {
     }
 
     [Test]
+    public async Task Attach_without_resize_keeps_input_available_and_leaves_sizing_to_the_viewer() {
+        var (server, tmp) = NewServer();
+        await using var _s = server; using var _t = tmp;
+        var rec = new Recorder();
+        await using var client = new AgentAttachClient(server.Path, AgentId, rec.OnAttached, rec.OnOutput,
+            resizeOnAttach: false);
+
+        var run = client.RunAsync(80, 24, CancellationToken.None);
+        await server.AcceptAndPumpInboundAsync();
+        await server.SendAttachedAsync(AgentId, []);
+        await rec.AttachedObserved.Task;
+        await client.SendInputAsync([42]);
+        await client.ResizeAsync(137, 41);
+        await server.SendExitedAsync(0);
+        await run;
+        await client.DisposeAsync();
+        await server.InboundDrained;
+
+        var received = server.SnapshotReceived();
+        await Assert.That(received.Single(f => f.Type == FrameType.Stdin).Bytes).IsEquivalentTo(new byte[] { 42 });
+        var resize = received.Single(f => f.Type == FrameType.Resize);
+        await Assert.That((resize.Cols, resize.Rows)).IsEqualTo(((ushort)137, (ushort)41));
+    }
+
+    [Test]
     public async Task Read_only_attach_carries_the_reason_and_sends_no_resize_nudge() {
         var (server, tmp) = NewServer();
         await using var _s = server; using var _t = tmp;

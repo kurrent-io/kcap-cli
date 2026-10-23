@@ -15,6 +15,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
     bool _closed;
     bool _navigating;
     bool _advancePending;
+    bool _finishLaterAllowed = true;
 
     internal bool Closed => _closed;
 
@@ -65,6 +66,8 @@ public sealed class OnboardingViewModel : ReactiveObject {
     public bool BackVisible => Current.BackVisible && PreviousShownIndex() >= 0;
     public bool FooterVisible => BackVisible || NextVisible || SkipVisible || TenantActionsVisible
         || ShowLifecycleStatus || ShowLifecycleAttention;
+    /// Hidden, not disabled, where setup cannot be left half-done.
+    public bool FinishLaterVisible => _finishLaterAllowed;
     public bool CanGoNext => !Navigating && !_closed && Current.CanContinue;
     public bool CanGoSkip => !Navigating && !_closed && Current.CanSkip && _index < Steps.Count - 1;
 
@@ -140,8 +143,13 @@ public sealed class OnboardingViewModel : ReactiveObject {
             this.WhenAnyValue(x => x.CanGoSkip));
         NextCommand = ReactiveCommand.CreateFromTask(() => NavigateAsync(WizardNavigation.Next),
             this.WhenAnyValue(x => x.CanGoNext));
+        var finishLaterAllowed = (canFinishLater ?? Observable.Return(true))
+            .Do(allowed => {
+                _finishLaterAllowed = allowed;
+                this.RaisePropertyChanged(nameof(FinishLaterVisible));
+            });
         FinishLaterCommand = ReactiveCommand.Create(RequestClose,
-            idle.CombineLatest(canFinishLater ?? Observable.Return(true), (notBusy, allowed) => notBusy && allowed));
+            idle.CombineLatest(finishLaterAllowed, (notBusy, allowed) => notBusy && allowed));
 
         // State other steps' PassThrough reads, changed outside the current step.
         restate?.Subscribe(_ => RestateActions());
@@ -212,6 +220,7 @@ public sealed class OnboardingViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(NextVisible));
         this.RaisePropertyChanged(nameof(SkipVisible));
         this.RaisePropertyChanged(nameof(BackVisible));
+        this.RaisePropertyChanged(nameof(FinishLaterVisible));
         this.RaisePropertyChanged(nameof(FooterVisible));
         this.RaisePropertyChanged(nameof(NextIsPrimary));
         this.RaisePropertyChanged(nameof(NextIsSecondary));

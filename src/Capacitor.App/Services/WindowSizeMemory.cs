@@ -9,6 +9,8 @@ public static class WindowSizeMemory {
     public const double DefaultHeight = 760;
     public const double MinWidth = 1200;
     public const double MinHeight = 560;
+    public const double OnboardingMinWidth = 720;
+    public const double OnboardingMinHeight = 600;
 
     static readonly TimeSpan Quiet = TimeSpan.FromMilliseconds(400);
 

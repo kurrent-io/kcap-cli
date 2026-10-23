@@ -25,9 +25,16 @@
                             <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}" Text="{Binding RepositoriesCaption}" />
                         </StackPanel>
                     </Grid>
-                    <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
-                                 Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}"
-                                 IsVisible="{Binding Running}" />
+                    <StackPanel Spacing="8" IsVisible="{Binding Running}">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <views:AppIcon Kind="LoaderCircle" Size="14" Classes.kcapSpinning="{Binding Running}"
+                                           Foreground="{StaticResource OnboardingAccentBrush}" VerticalAlignment="Center" />
+                            <TextBlock x:Name="ActivityLineText" Classes="onboardingDetail" VerticalAlignment="Center"
+                                       Foreground="{StaticResource OnboardingMutedBrush}" Text="{Binding ActivityLine}" />
+                        </StackPanel>
+                        <ProgressBar Height="2" MinHeight="2" Minimum="0" Maximum="100" Value="{Binding ProgressValue}"
+                                     Background="{StaticResource OnboardingDividerBrush}" Foreground="{StaticResource OnboardingAccentBrush}" />
+                    </StackPanel>
                 </StackPanel>
 
                 <Border Classes="onboardingWarning" IsVisible="{Binding FailedVisible}">

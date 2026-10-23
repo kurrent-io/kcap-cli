@@ -39,24 +39,31 @@ public static class AntigravityHooksInstaller {
 
     public static void Remove(string hooksPath) {
         if (File.Exists(hooksPath)) {
-            JsonObject? root = null;
-            try { root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject; } catch { /* malformed → leave file untouched, just drop marker */ }
+            var root = JsonNode.Parse(File.ReadAllText(hooksPath)) as JsonObject
+                ?? throw new IOException($"Antigravity hooks at {hooksPath} are not a JSON object.");
 
-            if (root is not null && root.Remove(AntigravityHooks.BlockName)) {
+            if (root.Remove(AntigravityHooks.BlockName) || root.Count == 0) {
                 // hooks.json lives in the kcap-owned plugin dir. If nothing but the kcap block
                 // was there, drop the now-empty file rather than leaving an orphan {} behind;
                 // otherwise write back the user-authored blocks we're preserving.
-                if (root.Count == 0) TryDelete(hooksPath);
+                if (root.Count == 0) File.Delete(hooksPath);
                 else Write(hooksPath, root);
             }
         }
         // plugin.json is load-bearing: keep it while a hooks.json remains for the GUI to load
-        // (e.g. user-authored blocks we just preserved, or a file we couldn't parse) — deleting
+        // (e.g. user-authored blocks we just preserved) — deleting
         // it would silently disable those remaining hooks. Only drop the manifest once the hooks
         // file is gone, i.e. the whole kcap plugin has been removed. The version marker is kcap's
         // own bookkeeping, so it's always cleared.
-        if (!File.Exists(hooksPath)) DeletePluginManifest(hooksPath);
-        DeleteMarker(hooksPath);
+        if (Path.GetDirectoryName(hooksPath) is { } directory) {
+            if (!File.Exists(hooksPath)) DeleteIfPresent(Path.Combine(directory, PluginManifestFileName));
+            DeleteIfPresent(Path.Combine(directory, MarkerFileName));
+        }
+    }
+
+    static void DeleteIfPresent(string path) {
+        try { File.Delete(path); }
+        catch (DirectoryNotFoundException) { } // a vendor that was never installed
     }
 
     /// <summary>Marker present, or the kcap block is detectable in the file.</summary>
@@ -110,17 +117,6 @@ public static class AntigravityHooksInstaller {
             AntigravityHooks.BuildPluginManifest().ToJsonString(WriteOptions));
     }
 
-    static void TryDelete(string path) {
-        try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
-    }
-
-    static void DeletePluginManifest(string hooksPath) {
-        var dir = Path.GetDirectoryName(hooksPath);
-        if (string.IsNullOrEmpty(dir)) return;
-        var manifest = Path.Combine(dir, PluginManifestFileName);
-        try { if (File.Exists(manifest)) File.Delete(manifest); } catch { /* best effort */ }
-    }
-
     static void WriteMarker(string hooksPath) {
         var dir = Path.GetDirectoryName(hooksPath);
         if (string.IsNullOrEmpty(dir)) return;
@@ -130,10 +126,4 @@ public static class AntigravityHooksInstaller {
         } catch { /* best effort */ }
     }
 
-    static void DeleteMarker(string hooksPath) {
-        var dir = Path.GetDirectoryName(hooksPath);
-        if (string.IsNullOrEmpty(dir)) return;
-        var marker = Path.Combine(dir, MarkerFileName);
-        try { if (File.Exists(marker)) File.Delete(marker); } catch { /* best effort */ }
-    }
 }

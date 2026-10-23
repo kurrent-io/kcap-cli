@@ -20,7 +20,7 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _disposables = new();
     readonly ObservableAsPropertyHelper<bool> _visible;
     readonly ObservableAsPropertyHelper<bool> _serverDown;
-    readonly ObservableAsPropertyHelper<bool> _isStarting;
+    bool _isStarting;
     int _running;
     string? _message;
 
@@ -55,10 +55,8 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.Visible, initialValue: false)
             .DisposeWith(_disposables);
 
-        StartCommand = ReactiveCommand.CreateFromTask(RunStartAsync);
-        _isStarting = StartCommand.IsExecuting
-            .ToProperty(this, x => x.IsStarting, initialValue: false)
-            .DisposeWith(_disposables);
+        StartCommand = ReactiveCommand.CreateFromTask(async () => { await StartAsync(); },
+            this.WhenAnyValue(x => x.IsStarting).Select(starting => !starting));
     }
 
     public bool IsLocalServer { get; }
@@ -68,9 +66,12 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
     /// The server lane's own reading, whether or not Start is offered.
     public bool ServerDown => _serverDown.Value;
 
-    public bool IsStarting => _isStarting.Value;
+    public bool IsStarting {
+        get => _isStarting;
+        private set => this.RaiseAndSetIfChanged(ref _isStarting, value);
+    }
 
-    /// The CLI's own output from the last failed start; null once a start succeeds or a new one begins.
+    /// The last start or reconnect failure; cleared when a new start begins.
     public string? Message {
         get => _message;
         private set => this.RaiseAndSetIfChanged(ref _message, value);
@@ -78,19 +79,20 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> StartCommand { get; }
 
-    async Task RunStartAsync() {
+    public async Task<bool> StartAsync() {
         // ReactiveCommand's executing gate only disables a bound button; ICommand.Execute still runs.
-        if (Interlocked.Exchange(ref _running, 1) == 1) return;
+        if (Interlocked.Exchange(ref _running, 1) == 1) return false;
+        IsStarting = true;
         try {
             Message = null;
             ProcessResult result;
             try {
                 result = await _start(_shutdown);
             } catch (OperationCanceledException) when (_shutdown.IsCancellationRequested) {
-                return;
+                return false;
             } catch (Exception ex) {
                 Message = $"kcap local start could not run: {ex.Message}";
-                return;
+                return false;
             }
 
             if (result is { ExitCode: 0, TimedOut: false }) {
@@ -99,12 +101,15 @@ public sealed class LocalServerRecoveryViewModel : ReactiveObject, IDisposable {
                 } catch (Exception) when (_shutdown.IsCancellationRequested) {
                 } catch (Exception ex) {
                     Message = $"The local server started, but reconnecting failed: {ex.Message}";
+                    return false;
                 }
-                return;
+                return !_shutdown.IsCancellationRequested;
             }
 
             Message = MessageFor(result);
+            return false;
         } finally {
+            IsStarting = false;
             Volatile.Write(ref _running, 0);
         }
     }

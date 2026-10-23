@@ -34,13 +34,19 @@ jobs:
       matrix:
         include:
           - { os: ubuntu-latest,  modules: 3, tests: 4 }
-          - { os: macos-latest,   modules: 3, tests: 4 }
+          - { os: getmac,         modules: 3, tests: 4 }
           # Narrower: at three-by-four this leg spent a 20s service-readiness budget and a 1s
           # memory-fetch budget inside the code under test with nothing actually slow.
           - { os: windows-latest, modules: 2, tests: 2 }
 
     steps:
       - uses: actions/checkout@v7
+
+      # GetMac VMs leave TMPDIR empty, and dotnet's named mutexes then fail on first run. The suite's
+      # socket paths need a short, symlink-free root, so not runner.temp.
+      - name: Set TMPDIR
+        if: runner.os == 'macOS'
+        run: '[ -n "${TMPDIR:-}" ] || echo "TMPDIR=/private/tmp" >> "$GITHUB_ENV"'
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
@@ -167,7 +173,9 @@ jobs:
     uses: ./.github/workflows/cli-build.yml
     with:
       version: ${{ needs.version.outputs.version }}
-      rids: osx-arm64 win-x64 linux-x64
+      # macOS runners are the org's scarcest pool, so PRs skip the macOS CLI and app. Pushes keep
+      # building both, because release waits on the tag's run.
+      rids: ${{ github.event_name == 'push' && 'osx-arm64 win-x64 linux-x64' || 'win-x64 linux-x64' }}
 
   desktop:
     name: Desktop
@@ -175,8 +183,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS runners are the org's scarcest pool, so PRs skip the macOS app. The tag push must
-        # keep building it, because release waits on this run.
         rid: ${{ github.event_name == 'push' && fromJSON('["osx-arm64","win-x64","linux-x64"]') || fromJSON('["win-x64","linux-x64"]') }}
     uses: ./.github/workflows/desktop.yml
     with:

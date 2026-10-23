@@ -265,10 +265,11 @@ internal static class WizardComposition {
         }, options.UrlOpener);
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, new UsageDataStepViewModel(options.UsageNotice), done];
 
-        var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
+        // Before a server is connected the app has nothing to show, so deferring is offered only for the optional steps after.
+        var canFinishLater = signIn.WhenAnyValue(x => x.Satisfied).Select(_ => Unit.Default)
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
             .Merge(durable.Select(_ => Unit.Default))
-            .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
+            .Select(_ => Connected());
         var wizard = new OnboardingViewModel(
             steps, options.ShutdownToken, options.Surface, canFinishLater: canFinishLater, restate: durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {

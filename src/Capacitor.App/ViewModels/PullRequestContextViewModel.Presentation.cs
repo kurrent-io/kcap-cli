@@ -8,7 +8,7 @@ public sealed partial class PullRequestContextViewModel {
     public bool HasMultipleChoices => _choices.Count > 1;
     /// Always plural: identity lives on the card; the eyebrow only names how many are linked.
     public string SectionEyebrow => "PULL REQUESTS";
-    public string SectionMeta => _choices.Count.ToString(CultureInfo.InvariantCulture);
+    public string SectionMeta => _choices.Count > 0 ? _choices.Count.ToString(CultureInfo.InvariantCulture) : "";
     public string RepositoryLabel => _selected is { } choice ? $"{choice.Link.Owner}/{choice.Link.RepoName}" : "";
     public string NumberLabel => _selected is { } choice ? "#" + choice.Link.Number.ToString(CultureInfo.InvariantCulture) : "";
     public bool HasNumberLabel => NumberLabel.Length > 0;

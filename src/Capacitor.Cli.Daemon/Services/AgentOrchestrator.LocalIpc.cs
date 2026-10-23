@@ -165,6 +165,8 @@ internal partial class AgentOrchestrator {
                 LiveSubagents: a.ActivityClock.LiveSubagents is { } live ? (a.Status == "Running" ? live : 0) : null,
                 UsageLimit: a.Status == "Running" ? a.UsageLimit : null,
                 TerminalDialog: a.Status == "Running" ? a.TerminalDialog : null,
+                WorkingSince: a.Status == "Running" && a.ActivityClock.WorkingFor is { } working
+                    ? (_time.GetUtcNow() - working).UtcDateTime : null,
                 AccountDirectory: a.Account?.Directory, AccountId: a.Account?.AccountId, AccountLabel: a.Account?.Label))];
 
     /// The checkout is resolved as the live agent's is, so a row keeps its rail group across the handoff.
@@ -707,9 +709,12 @@ internal partial class AgentOrchestrator {
                         // before the write so a wait that begins during it survives.
                         var waitGeneration = agent.ActivityClock.WaitGeneration;
 
+                        var submit = IsSubmit(f.Bytes);
+                        if (!submit) agent.ActivityClock.NoteViewerInput();
+
                         try {
                             await agent.Runtime.SendRawInputAsync(f.Bytes);
-                            if (IsSubmit(f.Bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+                            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
                         } catch (NotSupportedException) {
                             // ACP-backed runtimes (e.g. cursor) have no raw-input surface —
                             // AcpHostedAgentRuntime.SendRawInputAsync throws by design. Tell the
@@ -792,6 +797,9 @@ internal partial class AgentOrchestrator {
         }
 
         if (c > 0 && r > 0) {
+            // Arm before Resize: a PTY can produce the redraw on another thread immediately.
+            // All viewers (local, web, and a departing smaller viewer) share this path.
+            agent.ActivityClock.NoteViewerInput();
             agent.Runtime.Resize(c, r);
             agent.CurrentCols = c;
             agent.CurrentRows = r;

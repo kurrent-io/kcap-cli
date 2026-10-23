@@ -132,7 +132,7 @@ public class LocalSetupProgressTests {
         await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Running);
         await Assert.That(p.Embeddings.Pulling).IsTrue();
         await Assert.That(p.Embeddings.PullFraction).IsEqualTo(0.25);
-        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading mxbai-embed-large… 25%");
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading the Ollama model mxbai-embed-large… 25%");
         await Assert.That(p.Embeddings.Summary).IsNull();
     }
 
@@ -145,19 +145,19 @@ public class LocalSetupProgressTests {
         await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
         await Assert.That(p.Embeddings.Pulling).IsFalse();
         await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with nomic-embed-text.");
-        await Assert.That(p.Embeddings.ReembedNote!).Contains("embedded again with nomic-embed-text in the background");
+        await Assert.That(p.Embeddings.ReembedNote!).Contains("rebuilt with nomic-embed-text in the background");
     }
 
     /// The CLI's skip message is written for a terminal; the row keeps its cause and drops its advice.
     [Test]
     public async Task A_skip_ends_in_keyword_search_with_its_reason_and_fails_nothing() {
         var p = Run(
-            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"No Ollama answers on http://localhost:11434; search works by keyword.\"}",
+            "{\"v\":1,\"event\":\"embeddings_skipped\",\"code\":\"ollama_not_found\",\"message\":\"Ollama is not responding on http://localhost:11434; search works by keyword. Start Ollama, then run kcap setup --local again to turn on search by meaning.\"}",
             "{\"v\":1,\"event\":\"starting\",\"unit\":\"u\"}");
 
         await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Skipped);
         await Assert.That(p.Embeddings.Skipped).IsTrue();
-        await Assert.That(p.Embeddings.Summary).IsEqualTo("No Ollama answers on http://localhost:11434; search works by keyword.");
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Ollama is not responding on http://localhost:11434; search works by keyword.");
         await Assert.That(p.FailedCode).IsNull();
         await Assert.That(p.FirstStart.State).IsEqualTo(RowState.Running);
     }
@@ -186,7 +186,7 @@ public class LocalSetupProgressTests {
     public async Task A_configured_model_with_nothing_replaced_still_says_stored_sessions_are_embedded() {
         var p = Run("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}");
 
-        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("What is already stored is embedded with mxbai-embed-large in the background.");
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("The search index for saved information is being built with mxbai-embed-large in the background.");
     }
 
     [Test]

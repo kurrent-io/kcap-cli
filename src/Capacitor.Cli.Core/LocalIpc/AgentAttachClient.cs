@@ -14,6 +14,7 @@ public sealed class AgentAttachClient : IAsyncDisposable {
     readonly string _socketPath;
     readonly string _agentId;
     readonly bool _requestRuntime;
+    readonly bool _resizeOnAttach;
     readonly Func<AttachAck, CancellationToken, Task> _onAttached;
     readonly Func<byte[], CancellationToken, Task> _onOutput;
     readonly Action<string, Exception>? _diagnostics;
@@ -38,10 +39,12 @@ public sealed class AgentAttachClient : IAsyncDisposable {
             Func<AttachAck, CancellationToken, Task> onAttachedAsync,
             Func<byte[], CancellationToken, Task> onOutputAsync,
             Action<string, Exception>? diagnostics = null,
-            bool requestRuntime = false) {
+            bool requestRuntime = false,
+            bool resizeOnAttach = true) {
         _socketPath = socketPath;
         _agentId = agentId;
         _requestRuntime = requestRuntime;
+        _resizeOnAttach = resizeOnAttach;
         _onAttached = onAttachedAsync;
         _onOutput = onOutputAsync;
         _diagnostics = diagnostics;
@@ -99,7 +102,7 @@ public sealed class AgentAttachClient : IAsyncDisposable {
                         _attachedAny = true;
                         _attachedReadWrite = true;
                         if (!await InvokeCallbackAsync(() => _onAttached(new AttachAck(snapshot, null, _runtimeStartedAt), _lifetime.Token))) goto done;
-                        await WriteLockedAsync(SizeFrame(cols, rows)).ConfigureAwait(false);  // repaint nudge
+                        if (_resizeOnAttach) await WriteLockedAsync(SizeFrame(cols, rows)).ConfigureAwait(false);
                         break;
                     }
                     case FrameType.AttachedReadOnly: {

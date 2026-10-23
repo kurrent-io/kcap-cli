@@ -7,8 +7,8 @@ namespace Capacitor.App.ViewModels.Onboarding;
 
 /// <summary>
 /// The History page's import, which outlives the page: one <c>kcap import</c> pass per level
-/// (<c>--private</c> is per invocation), counted from each pass's own closing line. Cancelled only
-/// by the app shutting down.
+/// (<c>--private</c> is per invocation), counted live from its per-session lines and settled by each
+/// pass's own closing line. Cancelled only by the app shutting down.
 /// </summary>
 public sealed partial class HistoryImportRun : ReactiveObject {
     internal const int LogLimit = 500;
@@ -20,6 +20,9 @@ public sealed partial class HistoryImportRun : ReactiveObject {
     int            _imported;
     int            _failed;
     int            _passesDone;
+    int            _processed;
+    int            _passImported;
+    int            _passFailed;
 
     internal HistoryImportRun(int expected, int repositories, string windowCaption, int passes, Action<Action> post) {
         Expected      = expected;
@@ -60,6 +63,12 @@ public sealed partial class HistoryImportRun : ReactiveObject {
         private set => this.RaiseAndSetIfChanged(ref _passesDone, value);
     }
 
+    /// Sessions this run has settled so far, whatever their outcome.
+    public int Processed {
+        get => _processed;
+        private set => this.RaiseAndSetIfChanged(ref _processed, value);
+    }
+
     public List<string> Log { get; } = [];
 
     internal Task Completion { get; private set; } = Task.CompletedTask;
@@ -79,7 +88,12 @@ public sealed partial class HistoryImportRun : ReactiveObject {
                 _cts.Token.ThrowIfCancellationRequested();
                 var result = await cli.ImportAsync(pass, OnLine, _cts.Token).ConfigureAwait(false);
                 anyFailed |= result.ExitCode != 0 || result.TimedOut;
-                _post(() => PassesDone++);
+                _post(() => {
+                    // A pass that died before its totals line keeps its live counts; the next pass's totals must not net them out.
+                    _passImported = 0;
+                    _passFailed   = 0;
+                    PassesDone++;
+                });
             }
 
             _cts.Token.ThrowIfCancellationRequested();
@@ -96,14 +110,44 @@ public sealed partial class HistoryImportRun : ReactiveObject {
         Log.Add(line.Text);
         if (Log.Count > LogLimit) Log.RemoveAt(0);
 
-        if (Totals().Match(line.Text.Trim()) is { Success: true } m &&
+        var text = line.Text.Trim();
+        if (Totals().Match(text) is { Success: true } m &&
             int.TryParse(m.Groups[1].Value, out var imported) && int.TryParse(m.Groups[3].Value, out var failed)) {
-            Imported = (int)Math.Min(int.MaxValue, (long)Imported + imported);
-            Failed = (int)Math.Min(int.MaxValue, (long)Failed + failed);
+            // The closing line is authoritative: it also counts what never printed a session line.
+            Imported      = Add(Imported, imported - _passImported);
+            Failed        = Add(Failed, failed - _passFailed);
+            _passImported = 0;
+            _passFailed   = 0;
+            return;
         }
+
+        if (Landed().IsMatch(text)) {
+            _passImported++;
+            Imported = Add(Imported, 1);
+        } else if (Errored().IsMatch(text)) {
+            _passFailed++;
+            Failed = Add(Failed, 1);
+        } else if (!Settled().IsMatch(text)) {
+            return;
+        }
+
+        Processed = Add(Processed, 1);
     });
 
-    // Each pass closes with this line; it is the only count the run prints that is not a diagnostic.
+    static int Add(int total, int delta) => (int)Math.Clamp((long)total + delta, 0, int.MaxValue);
+
+    // Each pass closes with this line.
     [GeneratedRegex(@"^(\d+) imported · (\d+) skipped · (\d+) failed$")]
     private static partial Regex Totals();
+
+    // The per-session lines of redirected output: file-backed sources (Claude, Codex) report through the chain
+    // worker's "Loading <id>... <n> lines [..]" and "Skipping <id> [reason]"; the rest through the routed loop's forms.
+    [GeneratedRegex(@"^Loading [^\s()]+(?:\.\.\. \d+ lines \[.*\]| \(.*\))$")]
+    private static partial Regex Landed();
+
+    [GeneratedRegex(@"^(?:Failed [^\s()]+|Skipping [^\s()\[\]]+ \[.*\])$")]
+    private static partial Regex Errored();
+
+    [GeneratedRegex(@"^(?:Skipping|Already loaded|Refreshed) [^\s()]+ \(.*\)$")]
+    private static partial Regex Settled();
 }

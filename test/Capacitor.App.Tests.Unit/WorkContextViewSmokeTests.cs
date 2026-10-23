@@ -894,7 +894,7 @@ public class WorkContextViewSmokeTests {
 
     /// The card is the pane's live PR surface: its picker switches between the linked PRs and its
     /// checks and review rows read without opening the reader tab. Once the list settles empty
-    /// the card yields to the pane's own empty copy rather than standing as a bare frame.
+    /// the card keeps the empty message and hides its picker, status rows and count.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_pull_request_card_shows_its_picker_and_status_rows_in_the_pane() {
@@ -935,8 +935,13 @@ public class WorkContextViewSmokeTests {
                 await WorkspaceFixtures.WaitUntilAsync(() => !pullRequests.HasPullRequest && !pullRequests.IsReading, what: "PRs unlinked");
                 Dispatcher.UIThread.RunJobs();
                 host.Window.UpdateLayout();
-                await Assert.That(card.IsEffectivelyVisible).IsFalse();
-                await Assert.That(host.Find<TextBlock>("PullRequestEmptyText").IsEffectivelyVisible).IsTrue();
+                await Assert.That(card.IsEffectivelyVisible).IsTrue();
+                await Assert.That(pullRequests.Notice).IsEqualTo("No pull requests yet.");
+                await Assert.That(meta.IsEffectivelyVisible).IsFalse();
+                await Assert.That(picker.IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.Find<Button>("SidebarChecksButton").IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.Find<Button>("SidebarReviewsButton").IsEffectivelyVisible).IsFalse();
+                await Assert.That(host.Find<TextBlock>("PullRequestEmptyText").IsEffectivelyVisible).IsFalse();
             } finally {
                 await pullRequests.TeardownAsync();
             }

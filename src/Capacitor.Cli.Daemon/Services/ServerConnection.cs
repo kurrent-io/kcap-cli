@@ -135,6 +135,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// goes out through <see cref="AccountsChangedAsync"/>.</summary>
     public Func<AccountsSnapshotDto?>? GetAccountsSnapshot { get; set; }
 
+    public Func<(int Count, long Version)>? GetActiveCount { get; set; }
+
     /// <summary>The server prunes the daemon's durable resolved-candidates ledger per-entry (sparse,
     /// deliver-once). One-way server→daemon receive; the handler (<see cref="AgentOrchestrator"/>) is
     /// SYNCHRONOUS (the ledger Ack is void).</summary>
@@ -729,8 +731,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
-    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) =>
-        new(
+    internal DaemonConnect BuildDaemonConnect(string platform, string[] repoPaths, string[] liveIds, LiveAgentInfo[]? liveAgents) {
+        var activeCount = GetActiveCount?.Invoke();
+
+        return new(
             _config.Name, platform, repoPaths, _config.MaxConcurrentAgents, liveIds,
             _config.InstanceId, _config.Version, _config.SupportedVendors, new MachineId(_config.ConfigRoot).Get(), liveAgents,
             _config.UnattendedVendors,
@@ -762,8 +766,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
             ResumingAgents: GetResumingAgents?.Invoke(),
+            ActiveCount: activeCount?.Count,
+            ActiveCountVersion: activeCount?.Version,
             SupportsAccountLaunches: true,
             Accounts: GetAccountsSnapshot?.Invoke());
+    }
 
     async Task DaemonConnectCoreAsync() {
         var platform  = $"{RuntimeInformation.OSDescription} {RuntimeInformation.OSArchitecture}";
@@ -992,9 +999,10 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
             string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null,
             string? accountDirectory = null, string? accountId = null, string? accountLabel = null) {
+        var activeCount = GetActiveCount?.Invoke();
         var registration = new AgentRegistered(
             agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-            title?.Text, title?.Derived ?? false, vendor, accountDirectory, accountId, accountLabel);
+            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor, accountDirectory, accountId, accountLabel);
         var connection = CurrentConnectionId ?? "";
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
@@ -1097,7 +1105,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     }
 
     public virtual Task AgentUnregisteredAsync(string agentId, string? stopReason = null)
-        => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, stopReason), cancellationToken: _ct);
+        => _hub.InvokeAsync("AgentUnregistered", BuildAgentUnregistered(agentId, stopReason), cancellationToken: _ct);
+
+    AgentUnregistered BuildAgentUnregistered(string agentId, string? stopReason) {
+        var activeCount = GetActiveCount?.Invoke();
+
+        return new(agentId, activeCount?.Count, activeCount?.Version, stopReason);
+    }
 
     /// <summary>Tells the server this daemon dropped a dispatched input rather than delivering it.
     /// Without it a drop is visible only in this log, while the sender is shown a message that was
@@ -1144,7 +1158,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             agentId, "session-end");
 
         await SafeShutdownStepAsync(
-            () => _hub.InvokeAsync("AgentUnregistered", new AgentUnregistered(agentId, reason), cancellationToken: ct),
+            () => _hub.InvokeAsync("AgentUnregistered", BuildAgentUnregistered(agentId, reason), cancellationToken: ct),
             agentId, "unregister");
     }
 
