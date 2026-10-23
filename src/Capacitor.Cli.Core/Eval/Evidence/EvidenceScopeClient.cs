@@ -21,6 +21,7 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     public static readonly TimeSpan CertificationHeadroom      = EvidenceCitationClient.CertificationBudget + RpcMargin;
     public static readonly TimeSpan RetrospectiveHeadroom      = RetrospectiveExcerptBudget + EvalService.RetrospectiveTimeout + DrainPersistBudget;
     public static readonly TimeSpan ReleaseTimeout             = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan HoldRequestTimeout         = TimeSpan.FromSeconds(30);
 
     /// <summary>Everything a question runs before the next renewal: setup, the harness, parsing and coverage, and certification.</summary>
     public static TimeSpan QuestionHeadroom(EvidenceRoute route) =>
@@ -111,12 +112,21 @@ public sealed class EvidenceScopeClient(HttpClient http, string baseUrl, string 
     static StringContent HoldBody(string token) =>
         new(JsonSerializer.Serialize(new EvidenceScopeHoldRequestDto { Token = token }, CapacitorJsonContext.Default.EvidenceScopeHoldRequestDto), Encoding.UTF8, "application/json");
 
-    // One request key per resolution, so a redelivery of this request can never take a second hold.
+    // One request key per resolution, so a redelivery of this request can never take a second hold. The server may commit
+    // the hold before the caller's cancellation lands, and a hold whose token never arrives cannot be released, so a
+    // started request is bounded by its own timeout and never abandoned for the caller: the caller's cancellation is
+    // honoured at the next request, by which time the hold is known and disposing the client releases it.
     Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> TakeHoldAsync(CancellationToken ct) {
+        ct.ThrowIfCancellationRequested();
         var body = JsonSerializer.Serialize(new EvidenceScopeHoldCreateRequestDto {
             RequestId = Guid.NewGuid().ToString("N"), Continuations = false, Delegates = true, AdoptedChildren = false, IncludePlans = true
         }, CapacitorJsonContext.Default.EvidenceScopeHoldCreateRequestDto);
-        return SendPageAsync(HttpMethod.Post, Route("holds"), new StringContent(body, Encoding.UTF8, "application/json"), ct);
+        return SendHoldAsync(new StringContent(body, Encoding.UTF8, "application/json"));
+    }
+
+    async Task<(EvidenceScopeStatus, EvidenceScopeManifestDto?)> SendHoldAsync(HttpContent content) {
+        using var timeout = new CancellationTokenSource(HoldRequestTimeout, time);
+        return await SendPageAsync(HttpMethod.Post, Route("holds"), content, timeout.Token);
     }
 
     static TimeSpan Lifetime(EvidenceScopeManifestDto page) => page.IssuedAt is { } issued && page.ExpiresAt is { } expires ? expires - issued : ArtifactLifetime;

@@ -52,6 +52,22 @@ public class EvidenceScopeHoldClientTests : IDisposable {
         await Assert.That(_stub.Requests("evidence-scope").Count(e => e.RequestMessage.Query?.ContainsKey("adopted_children") == true)).IsEqualTo(0);
     }
 
+    /// <summary>The server can commit a hold before a cancellation reaches it, so a hold request already sent runs to its
+    /// answer: the cancellation then lands on the next request, and disposing the client releases the hold it took.</summary>
+    [Test]
+    public async Task A_cancellation_during_the_hold_request_still_releases_the_hold() {
+        _stub.Route("POST", "evidence-scope/holds", 200, Held(EvidenceServerStub.Manifest("v1", "tok-1", "c1", S0, S0.AddMinutes(30))),
+            delay: TimeSpan.FromMilliseconds(500));
+        _stub.Route("DELETE", "evidence-scope/hold", 204, "");
+        var client = Client(new FakeTimeProvider(S0));
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.That(async () => await client.ResolveAsync(cts.Token)).Throws<OperationCanceledException>();
+        await client.DisposeAsync();
+
+        await Assert.That(ReleasedToken()).IsEqualTo("tok-1");
+    }
+
     [Test]
     [Arguments(200, "v2")]
     [Arguments(409, "v1")]
