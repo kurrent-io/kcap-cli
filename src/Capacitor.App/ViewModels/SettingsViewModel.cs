@@ -1,4 +1,5 @@
 using System.Reactive;
+using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
@@ -33,6 +34,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     string _name;
     decimal? _capacity;
     bool _isBusy;
+    bool _windowsServiceVisible;
+    bool _windowsServiceOffered;
+    string? _windowsServiceMessage;
     bool _needsAppRestart;
     bool _notifyOnPermissions = true;
     bool _notifyOnQuestions = true;
@@ -55,7 +59,8 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
             Task startupSettled, Func<MutationRequest, CancellationToken, Task<bool>> canRetire,
             bool nameOverridden = false, bool needsAppRestart = false, CancellationToken appLifetime = default,
             NotificationSettingsService? notificationSettings = null,
-            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null) {
+            IDesktopNotificationAccess? notificationAccess = null, ProfilesSettingsViewModel? profiles = null,
+            Func<CancellationToken, Task<ServiceSnapshot?>>? serviceStatus = null) {
         _settings = settings;
         _ops = ops;
         _runningName = service.DaemonName;
@@ -84,6 +89,9 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
         SaveCommand = ReactiveCommand.CreateFromTask(SaveAsync, this.WhenAnyValue(x => x.CanSave)).DisposeWith(_subscriptions);
         RenameCommand = ReactiveCommand.CreateFromTask(RenameAsync, this.WhenAnyValue(x => x.CanRename)).DisposeWith(_subscriptions);
         NotificationAccessCommand = ReactiveCommand.CreateFromTask(ResolveNotificationAccessAsync).DisposeWith(_subscriptions);
+        WindowsServiceCommand = ReactiveCommand.CreateFromTask(InstallWindowsServiceAsync,
+            this.WhenAnyValue(x => x.IsBusy, x => x.WindowsServiceOffered, (busy, offered) => !busy && offered)).DisposeWith(_subscriptions);
+        if (serviceStatus is not null && OperatingSystem.IsWindows()) _ = LoadWindowsServiceOfferAsync(serviceStatus);
         service.Status.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
             _status = status;
             if (status.State != AttachState.Connected) _snapshot = null;
@@ -254,6 +262,67 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> SaveCommand { get; }
     public ReactiveCommand<Unit, Unit> RenameCommand { get; }
     public ReactiveCommand<Unit, Unit> NotificationAccessCommand { get; }
+    public ReactiveCommand<Unit, Unit> WindowsServiceCommand { get; }
+
+    /// The card shows once the service was found installable and stays for the outcome line.
+    public bool WindowsServiceVisible {
+        get => _windowsServiceVisible;
+        private set => this.RaiseAndSetIfChanged(ref _windowsServiceVisible, value);
+    }
+
+    /// A Scheduled Task supervises the daemon and this install carries the Windows service: the way back to
+    /// the service after its one-time offer was declined.
+    public bool WindowsServiceOffered {
+        get => _windowsServiceOffered;
+        private set => this.RaiseAndSetIfChanged(ref _windowsServiceOffered, value);
+    }
+
+    public string? WindowsServiceMessage {
+        get => _windowsServiceMessage;
+        private set => this.RaiseAndSetIfChanged(ref _windowsServiceMessage, value);
+    }
+
+    async Task LoadWindowsServiceOfferAsync(Func<CancellationToken, Task<ServiceSnapshot?>> serviceStatus) {
+        ServiceSnapshot? snap;
+        try {
+            snap = await serviceStatus(_lifetime.Token);
+        } catch (Exception) {
+            return;
+        }
+        if (snap is not { Supervisor: "windows_scheduled_task", WindowsServiceInstallable: true }) return;
+        RxSchedulers.MainThreadScheduler.Schedule(() => {
+            WindowsServiceOffered = true;
+            WindowsServiceVisible = true;
+        });
+    }
+
+    async Task InstallWindowsServiceAsync() {
+        IsBusy = true;
+        WindowsServiceMessage = null;
+        try {
+            if (!await _confirm(new LifecyclePrompt(LifecyclePrompt.KindWindowsService, null, null, false,
+                    DaemonLifecycleController.WindowsServiceDisclosure), _lifetime.Token)) return;
+            var refused = MutationRequestFactory.TryBuild(MutationVerb.InstallWindowsService, _settings.ProfileName,
+                _settings.ServerUrl, DaemonStore.Sanitize(_runningName), out var request);
+            if (refused is not null) {
+                WindowsServiceMessage = "Could not resolve the profile for the daemon. Restart the app and try again.";
+                return;
+            }
+            WindowsServiceMessage = "Waiting for administrator approval…";
+            var outcome = await _runMutation(request!, _lifetime.Token);
+            WindowsServiceMessage = outcome switch {
+                MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout => "The daemon now runs under the kcap Windows service.",
+                MutationOutcome.Refused { Reason: "elevation_declined" } => "The administrator prompt was declined; nothing changed.",
+                MutationOutcome.UnconfirmedNoAttach =>
+                    "The administrator prompt was not answered in time, so nothing changed. Run it again from here when you can approve it.",
+                _ => "The Windows service could not take the daemon over; it keeps its Scheduled Task.",
+            };
+            if (outcome is MutationOutcome.Succeeded or MutationOutcome.SucceededAfterTimeout) WindowsServiceOffered = false;
+        } catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) {
+        } catch (Exception ex) {
+            WindowsServiceMessage = $"Could not install the Windows service: {ex.Message}";
+        } finally { IsBusy = false; }
+    }
 
     async Task SaveAsync() {
         if (!CanSave) return;

@@ -2,7 +2,7 @@ using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services.Mutation;
 
-public enum MutationVerb { Install, Replace, StartVerified, DetachedStart, Reload }
+public enum MutationVerb { Install, Replace, StartVerified, DetachedStart, Reload, InstallWindowsService }
 
 public sealed record MutationRequest(
     MutationVerb Verb, string Profile, string CanonicalServer, string DaemonName, string? RetireServiceId = null);

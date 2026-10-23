@@ -1752,6 +1752,179 @@ public class DaemonLifecycleControllerTests {
         }
     }
 
+    // ---- a daemon nothing supervises ----
+
+    [Test]
+    public async Task An_unsupervised_daemon_is_reported_and_offered_to_the_service() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(daemonPid: 4242));
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the supervision offer");
+        await Assert.That(h.Surface.AttentionMessages).IsEquivalentTo([DaemonLifecycleController.UnsupervisedAttention]);
+        await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindTakeover);
+        await Assert.That(h.Surface.Prompts[0].Disclosure).IsEqualTo(DaemonLifecycleController.UnsupervisedDisclosure);
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    [Test]
+    public async Task Accepting_the_offer_replaces_the_daemon_through_the_lane_and_withdraws_the_line() {
+        await using var h = new Harness();
+        var replaced = false;
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            replaced ? Snap(unitPresent: true, state: "running", jobPid: 77, daemonPid: 77) : Snap(daemonPid: 4242));
+        h.Lane.Behavior = (_, _) => {
+            replaced = true;
+            return Task.FromResult<MutationOutcome>(new MutationOutcome.Succeeded());
+        };
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Withdrawn.Count == 1, what: "the withdrawn attention line");
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.Replace);
+        await Assert.That(h.Surface.Withdrawn).IsEquivalentTo([DaemonLifecycleController.UnsupervisedAttention]);
+    }
+
+    /// The takeover it leads to ends a standalone owner only on the Windows CLI, so elsewhere nothing changes
+    [Test]
+    public async Task Off_windows_an_unsupervised_daemon_is_neither_reported_nor_offered() {
+        await using var h = new Harness { OffersSupervision = false };
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(daemonPid: 4242));
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation query");
+        await h.Controller.PhaseClosed;
+        await Task.Delay(50);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Surface.AttentionMessages).IsEmpty();
+    }
+
+    [Test]
+    public async Task A_busy_unsupervised_daemon_is_reported_but_not_offered() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(Snap(daemonPid: 4242));
+        h.Start();
+        h.PushSnapshot(activeAgents: 1);
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.AttentionMessages.Count == 1, what: "the unsupervised attention");
+        await Task.Delay(50); // a negative: give a prompt every chance to appear
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Lane.Requests).IsEmpty();
+    }
+
+    [Test]
+    [Arguments(true, "not_installed", 4242)] // a unit on disk: the existing coexistence line, no offer
+    [Arguments(true, "running", 4242)]
+    [Arguments(false, "not_installed", null)]
+    public async Task Supervised_or_absent_daemons_get_no_offer(bool unitPresent, string state, int? daemonPid) {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: unitPresent, state: state, jobPid: state == "running" ? daemonPid : null, daemonPid: daemonPid));
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation query");
+        await h.Controller.PhaseClosed;
+        await Task.Delay(50);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.Surface.AttentionMessages).DoesNotContain(DaemonLifecycleController.UnsupervisedAttention);
+    }
+
+    // ---- the Windows service ----
+
+    static ServiceSnapshot TaskSupervised(bool installable = true) =>
+        Snap(unitPresent: true, state: "running", jobPid: 77, daemonPid: 77) with {
+            Supervisor = "windows_scheduled_task", WindowsServiceInstallable = installable,
+        };
+
+    [Test]
+    public async Task A_task_supervised_daemon_is_offered_the_windows_service_and_accepting_installs_it() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Surface.ConfirmBehavior = (_, _) => Task.FromResult(true);
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Lane.Requests.Count == 1, what: "the Windows service install");
+        await Assert.That(h.Surface.Prompts.Single().Kind).IsEqualTo(LifecyclePrompt.KindWindowsService);
+        await Assert.That(h.Surface.Prompts.Single().Disclosure).IsEqualTo(DaemonLifecycleController.WindowsServiceDisclosure);
+        await Assert.That(h.Lane.Requests[0].Verb).IsEqualTo(MutationVerb.InstallWindowsService);
+    }
+
+    [Test]
+    public async Task Declining_the_windows_service_is_remembered_and_not_asked_again() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.DeclinesRemembered == 1, what: "the remembered decline");
+        await Assert.That(h.Lane.Requests).IsEmpty();
+
+        await using var later = new Harness { WindowsServiceDeclined = true };
+        later.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised());
+        later.Start();
+        later.PushConnected();
+        await WaitUntilAsync(() => later.Cli.StatusCallCount == 1, what: "the reconciliation query");
+        await later.Controller.PhaseClosed;
+        await Task.Delay(50);
+        await Assert.That(later.Surface.Prompts).IsEmpty();
+    }
+
+    [Test]
+    public async Task An_older_installed_service_is_offered_an_update_and_a_decline_is_not_remembered() {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(
+            Snap(unitPresent: true, state: "running", jobPid: 77, daemonPid: 77) with { Supervisor = "windows_service", ServiceUpgradeAvailable = true });
+        h.Start();
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Surface.Prompts.Count == 1, what: "the update offer");
+        await Assert.That(h.Surface.Prompts[0].Kind).IsEqualTo(LifecyclePrompt.KindWindowsServiceUpdate);
+        await Task.Delay(50);
+        await Assert.That(h.DeclinesRemembered).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(false, false)] // nothing to offer: the bundle carries no service
+    [Arguments(true, true)]   // a busy daemon: the install would end its agents
+    public async Task No_windows_service_offer(bool installable, bool busy) {
+        await using var h = new Harness();
+        h.Cli.StatusBehavior = _ => Task.FromResult<ServiceSnapshot?>(TaskSupervised(installable));
+        h.Start();
+        if (busy) h.PushSnapshot(activeAgents: 1);
+
+        h.PushConnected();
+
+        await WaitUntilAsync(() => h.Cli.StatusCallCount == 1, what: "the reconciliation query");
+        await h.Controller.PhaseClosed;
+        await Task.Delay(50);
+        await Assert.That(h.Surface.Prompts).IsEmpty();
+        await Assert.That(h.DeclinesRemembered).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task The_explicit_action_installs_the_windows_service_through_the_lane() {
+        await using var h = new Harness();
+        h.Start();
+
+        await h.Controller.InstallWindowsServiceAsync(CancellationToken.None);
+
+        await Assert.That(h.Lane.Requests.Single().Verb).IsEqualTo(MutationVerb.InstallWindowsService);
+    }
+
     sealed class Harness : IAsyncDisposable {
         public readonly FakeDaemonClientService Client = new();
         public readonly FakeKcapCli Cli = new();
@@ -1765,6 +1938,9 @@ public class DaemonLifecycleControllerTests {
 
         public string? ProfileName = "default";
         public bool NeedsAppRestart;
+        public bool WindowsServiceDeclined;
+        public bool OffersSupervision = true;
+        public int DeclinesRemembered;
 
         public Harness(
                 string? canonicalServer = "https://kcap.example.com:443", bool autoActionsPermanentlyClosed = false) {
@@ -1772,7 +1948,9 @@ public class DaemonLifecycleControllerTests {
             Time  = new TimerCountingTimeProvider(Clock);
             Controller = new DaemonLifecycleController(
                 Client, Cli, Probe, Surface, () => Task.FromResult<string?>(ProfileName), Time,
-                CanonicalServer, Lane.RunAsync, autoActionsPermanentlyClosed, () => NeedsAppRestart);
+                CanonicalServer, Lane.RunAsync, autoActionsPermanentlyClosed, () => NeedsAppRestart,
+                () => Task.FromResult(WindowsServiceDeclined),
+                () => { DeclinesRemembered++; return Task.CompletedTask; }) { OffersSupervision = () => OffersSupervision };
         }
 
         public void Start() => Controller.Start();
@@ -1856,6 +2034,13 @@ sealed class FakeKcapCli : IKcapCli {
         LastInstallReplace = replace;
         LastRetireServiceId = retireServiceId;
         return InstallVerifiedBehavior(replace, ct);
+    }
+
+    public int InstallWindowsServiceCallCount;
+    public Func<CancellationToken, Task<ProcessResult>> InstallWindowsServiceBehavior = _ => Task.FromResult(new ProcessResult(0, "", "", false));
+    public Task<ProcessResult> ServiceInstallWindowsServiceAsync(CancellationToken ct) {
+        InstallWindowsServiceCallCount++;
+        return InstallWindowsServiceBehavior(ct);
     }
 
     public int DetachedStartCallCount;

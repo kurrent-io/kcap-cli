@@ -290,6 +290,7 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
             MutationVerb.StartVerified => executor.ServiceStartVerifiedAsync(ct),
             MutationVerb.DetachedStart => executor.DetachedStartAsync(attemptId!, ct),
             MutationVerb.Reload        => executor.ServiceReloadAsync(ct),
+            MutationVerb.InstallWindowsService => executor.ServiceInstallWindowsServiceAsync(ct),
             // Fail closed, never permissive: an unnamed enum value must halt, not silently pick a verb.
             _ => throw new ArgumentOutOfRangeException(nameof(request), request.Verb, "unknown MutationVerb"),
         };
@@ -314,6 +315,9 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
         if (result.TimedOut) return new MutationOutcome.UnconfirmedNoAttach();
 
         if (result.ExitCode == 0) return await ClassifyServiceSuccessAsync(request, executor, observation, ct).ConfigureAwait(false);
+
+        if (result.ExitCode == VerifyExitCodes.ElevationDeclined)
+            return new MutationOutcome.Refused("elevation_declined", RecoverySurface.Attention);
 
         if (result.ExitCode == VerifyExitCodes.RetireRefused)
             return new MutationOutcome.Failed(result.ExitCode, ReasonLine.TrySingle(result.Stderr, "retire_reason="), RecoverySurface.Attention);

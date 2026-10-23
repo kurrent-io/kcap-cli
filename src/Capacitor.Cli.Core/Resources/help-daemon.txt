@@ -93,7 +93,14 @@ Subcommands for service (per-user; auto-restarts on crash/SIGKILL, starts at log
                           contended, never taken over.
                           --no-start cannot be combined with --verify (verify
                           proves the STARTED daemon is ready).
+  install --system [...]  Windows: first install or update the machine's
+                          kcap-service (one administrator prompt), then hand
+                          this daemon to it. Needs the desktop app's install,
+                          which carries kcap-service.exe. A declined prompt
+                          exits 1223 and changes nothing.
   uninstall [--name N]    Stop and remove the service unit.
+  uninstall --system      Windows: hand this daemon back, then remove the
+                          machine's kcap-service (one administrator prompt).
   uninstall --under DIR   Stop and remove every unit whose daemon binary is
                           inside DIR, and no other. The desktop app's
                           uninstaller runs this for its own folder.
