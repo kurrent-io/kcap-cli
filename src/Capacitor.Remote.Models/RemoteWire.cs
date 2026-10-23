@@ -4,6 +4,7 @@ namespace Capacitor.Remote.Models;
 /// so every method's arity is frozen — new capability means a NEW method taking one record.
 public static class HubMethods {
     public const string GetConnectedDaemons    = "GetConnectedDaemons";
+    public const string TryLaunchAgent         = "TryLaunchAgent";
     public const string RequestLaunchAgentV2   = "RequestLaunchAgentV2";
     public const string RequestStopAgent       = "RequestStopAgent";
     public const string SendUserInput          = "SendUserInput";
