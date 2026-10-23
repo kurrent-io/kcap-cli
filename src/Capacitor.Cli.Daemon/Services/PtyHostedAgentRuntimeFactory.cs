@@ -29,6 +29,8 @@ internal sealed partial class PtyHostedAgentRuntimeFactory(
     public bool   SupportsPrReview   => launcher.SupportsPrReview;
     public bool   SupportsBorrowedReviewFlow => launcher.SupportsBorrowedReviewFlow;
     public bool   SupportsRestartResume(string? runtimeTransport) => launcher.SupportsResume;
+    public bool   SupportsReviewerRestartResume(string? runtimeTransport, Core.LocalIpc.WorkLocation work) =>
+        work == Core.LocalIpc.WorkLocation.OwnedWorktree && launcher.SupportsReviewerResume;
     public string? BorrowedReviewContainment => launcher.BorrowedReviewContainment;
 
     /// <summary>PTY factories delegate reviewer-model resolution to their launcher-owned policy — the
