@@ -26,6 +26,7 @@ internal sealed class EvalRunner {
     readonly AdmissionFence       _admission;
 
     // Each evidence phase bounds itself one RPC margin inside the server's route-keyed deadline; settable so tests can shorten it.
+    internal TimeSpan PreparePhaseBudget  { get; init; } = EvidencePhaseTimeouts.DaemonPrepare;
     internal TimeSpan QuestionPhaseBudget { get; init; } = EvidencePhaseTimeouts.DaemonQuestion;
     internal TimeSpan FinalizePhaseBudget { get; init; } = EvidencePhaseTimeouts.DaemonFinalize;
     internal string?  TempRoot            { get; init; }
@@ -79,19 +80,33 @@ internal sealed class EvalRunner {
 
     async Task<PrepareResult> HandleAdmittedPrepareAsync(PrepareEvalCommand cmd) {
         // SignalR's On<T1, TResult> gives no per-call token: only shutdown cancels here, and a response the server has
-        // already timed out is discarded on its side.
-        var httpClient = await _http.ForBackgroundAsync(_shutdownToken);
+        // already timed out is discarded on its side. The catalog read and the evidence prepare bound themselves inside that
+        // timeout; the legacy context load does not.
+        using var budget = new CancellationTokenSource(PreparePhaseBudget, _time);
+        using var phase  = CancellationTokenSource.CreateLinkedTokenSource(_shutdownToken, budget.Token);
+        HttpClient httpClient;
+        try {
+            httpClient = await _http.ForBackgroundAsync(phase.Token);
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return PrepareOverBudget;
+        }
         var observer   = new DaemonEvalObserver(_connection, cmd.EvalRunId, cmd.SessionId, _logger);
         var handedOver = false;
 
         try {
-            var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _time, _shutdownToken);
+            var catalog = await EvalCatalogClient.FetchAsync(_baseUrl, httpClient, observer, _time, phase.Token);
             if (catalog is null) return new(false, "catalog load failed", null, 0, 0, 0, 0, 0);
 
             if (catalog.EvidenceRetrieval is not null && !cmd.Chain) {
                 var setup = await EvalService.PrepareEvidenceAsync(_baseUrl, httpClient, _profiles.Resolution.Profile, _harnesses, cmd.SessionId, cmd.Questions,
-                    catalog, cmd.Model, observer, _time, _shutdownToken, cmd.EvalRunId, TempRoot);
+                    catalog, cmd.Model, observer, _time, phase.Token, cmd.EvalRunId, TempRoot);
                 if (setup is null) return new(false, "evidence scope preparation failed", null, 0, 0, 0, 0, 0);
+                if (budget.IsCancellationRequested) {
+                    // The setup announced its start; the run it started ends here.
+                    observer.OnFailed(PrepareOverBudget.Error!);
+                    await EvalService.DisposeSetupAsync(setup, observer);
+                    return PrepareOverBudget;
+                }
 
                 // The setup's scope, read and citation clients send through this client, so it lives as long as the entry.
                 _cache.Put(cmd.EvalRunId, setup, httpClient);
@@ -133,6 +148,8 @@ internal sealed class EvalRunner {
                 ctx.ContextResult.Compaction.BytesSaved,
                 Route: EvidenceRouteExtensions.LegacyWire
             );
+        } catch (OperationCanceledException) when (budget.IsCancellationRequested && !_shutdownToken.IsCancellationRequested) {
+            return PrepareOverBudget;
         } catch (Exception ex) {
             _logger.LogError(ex, "PrepareEval failed for {RunId}", cmd.EvalRunId);
 
@@ -141,6 +158,8 @@ internal sealed class EvalRunner {
             if (!handedOver) httpClient.Dispose();
         }
     }
+
+    static readonly PrepareResult PrepareOverBudget = new(false, "evidence prepare exceeded its budget", null, 0, 0, 0, 0, 0);
 
     async Task<QuestionResult> HandleRunQuestionAsync(RunQuestionCommand cmd) {
         var ctx = _cache.Get(cmd.EvalRunId);
