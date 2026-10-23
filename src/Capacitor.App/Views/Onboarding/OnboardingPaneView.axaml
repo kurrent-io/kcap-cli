@@ -104,11 +104,26 @@
         <Ellipse Width="900" Height="900" HorizontalAlignment="Center" VerticalAlignment="Center"
                  Fill="{StaticResource OnboardingBloomBrush}" IsHitTestVisible="False" />
 
+        <Grid RowDefinitions="44,*">
+        <!-- The title bar: close, minimize and zoom sit over its left end, and its empty space drags the
+             window. The page scrolls beneath it, never under the buttons; the rule shows once it has. -->
+        <Border x:Name="TitleBar" Background="Transparent" PointerPressed="OnChromePointerPressed">
+            <Border x:Name="TitleBarRule" Height="1" VerticalAlignment="Bottom" Opacity="0" IsHitTestVisible="False"
+                    Background="{StaticResource OnboardingDividerBrush}">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.14" />
+                    </Transitions>
+                </Border.Transitions>
+            </Border>
+        </Border>
+
         <!-- The footer scrolls with the page, so its actions sit below everything the step says; on a short
              step the viewport-high grid still pins it to the bottom. -->
-        <ScrollViewer x:Name="StepScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+        <ScrollViewer x:Name="StepScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      ScrollChanged="OnStepScrolled">
         <Grid RowDefinitions="*,Auto" MinHeight="{Binding #StepScroll.Viewport.Height}">
-            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,60,32,24" Spacing="26">
+            <StackPanel MaxWidth="620" HorizontalAlignment="Stretch" Margin="32,16,32,24" Spacing="26">
                 <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,-8">
                     <app:ProductWordmark HorizontalAlignment="Left" />
                     <Button Grid.Column="1" Classes="onboardingQuiet" Content="Finish later"
@@ -156,8 +171,6 @@
         </Border>
         </Grid>
         </ScrollViewer>
-
-        <!-- The pane covers the window's own drag strip. -->
-        <Border Height="40" VerticalAlignment="Top" Background="Transparent" PointerPressed="OnChromePointerPressed" />
+        </Grid>
     </Panel>
 </UserControl>
