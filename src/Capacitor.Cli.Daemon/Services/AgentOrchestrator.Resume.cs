@@ -219,9 +219,26 @@ internal partial class AgentOrchestrator {
             // entry, which nothing live would delete and the next start would resume.
             foreach (var entry in LedgerEntriesForEndAgents())
                 if (entry.State != ResumeState.Interrupted && !_agents.ContainsKey(entry.AgentId)) DeleteLedger(entry.AgentId);
+
+            // A tombstone stays: it holds a worktree until its process is proven gone.
+            foreach (var entry in ParticipantEntriesForEndAgents()) {
+                if (IsTombstone(entry) || _agents.ContainsKey(entry.AgentId)) continue;
+
+                _participantEntries[entry.AgentId] = 0;
+                DeleteLedger(entry.AgentId);
+            }
         }
 
         foreach (var attempt in withdrawn) attempt.Cancel();
+    }
+
+    IReadOnlyList<ResumeLedgerEntry> ParticipantEntriesForEndAgents() {
+        try {
+            return ParticipantLedger?.ReadAll() ?? [];
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeLedgerFailed(ex, "reading", "*");
+            return [];
+        }
     }
 
     IReadOnlyList<ResumeLedgerEntry> LedgerEntriesForEndAgents() {
@@ -681,6 +698,56 @@ internal partial class AgentOrchestrator {
 
     readonly List<(ResumeLedgerEntry Entry, string Reason)> _participantFailuresAtBoot = [];
 
+    /// <summary>Guarded by <see cref="_ledgerLock"/>.</summary>
+    readonly Dictionary<string, HeldParticipantInput> _heldInput = new(StringComparer.Ordinal);
+
+    /// <summary>True when the input was held for a participant still resuming, false when its queue is
+    /// full, null when it is not for one: it is delivered, or dropped, as any other input. Once a queue
+    /// exists every later input joins it, so release keeps arrival order.</summary>
+    bool? TryHoldForResume(SendInputCommand cmd) {
+        lock (_ledgerLock) {
+            if (!_heldInput.TryGetValue(cmd.AgentId, out var held)) {
+                if (_agents.ContainsKey(cmd.AgentId)
+                 || !_resumeCandidates.TryGetValue(cmd.AgentId, out var entry) || entry.Participant is null) return null;
+
+                _heldInput[cmd.AgentId] = held = new HeldParticipantInput();
+            }
+
+            return held.TryHold(cmd);
+        }
+    }
+
+    /// <summary>Delivers what was held for a participant that has resumed, oldest first.</summary>
+    async Task ReleaseHeldInputAsync(string agentId) {
+        while (true) {
+            SendInputCommand next;
+
+            lock (_ledgerLock) {
+                if (!_heldInput.TryGetValue(agentId, out var held)) return;
+
+                if (!held.TryTake(out next)) {
+                    _heldInput.Remove(agentId);
+                    return;
+                }
+            }
+
+            await DeliverSendInputAsync(next);
+        }
+    }
+
+    /// <summary>A participant whose resume ended unpublished is gone, which is what each held input is told.</summary>
+    async Task DropHeldInputAsync(string agentId) {
+        List<SendInputCommand> dropped = [];
+
+        lock (_ledgerLock) {
+            if (!_heldInput.Remove(agentId, out var held)) return;
+
+            while (held.TryTake(out var cmd)) dropped.Add(cmd);
+        }
+
+        foreach (var cmd in dropped) await ReportInputDroppedAsync(cmd, SendInputDropReason.UnknownAgent);
+    }
+
     /// <summary>The one end of a participant that will not be resumed: reported failed so the server
     /// records its death and the flow heals, then removed — or, while a process of it may still be running,
     /// kept as a tombstone that holds its worktree until the reaper resolves it.</summary>
@@ -968,6 +1035,8 @@ internal partial class AgentOrchestrator {
 
             _statusNotifier.Pulse();
 
+            if (!_agents.ContainsKey(entry.AgentId)) await DropHeldInputAsync(entry.AgentId);
+
             // Whatever the attempt had started is ended by now, so nothing still runs in the worktree.
             if (discarded) await RemoveDiscardedResourcesAsync(entry);
 
@@ -1117,6 +1186,8 @@ internal partial class AgentOrchestrator {
             // A shutdown that began meanwhile has marked the agent for its own resume.
             if (!agent.IsCleanupStarted && !_shutdownCts.IsCancellationRequested) agent.ResumePending = false;
         }
+
+        await ReleaseHeldInputAsync(entry.AgentId);
 
         return null;
     }

@@ -4577,6 +4577,18 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     async Task HandleSendInput(SendInputCommand cmd) {
+        switch (TryHoldForResume(cmd)) {
+            case true:
+                return;
+            case false:
+                await ReportInputDroppedAsync(cmd, SendInputDropReason.QueueFull);
+                return;
+        }
+
+        await DeliverSendInputAsync(cmd);
+    }
+
+    async Task DeliverSendInputAsync(SendInputCommand cmd) {
         var (agentId, text, attachmentIds, _) = cmd;
 
         if (!_agents.TryGetValue(agentId, out var agent)) {

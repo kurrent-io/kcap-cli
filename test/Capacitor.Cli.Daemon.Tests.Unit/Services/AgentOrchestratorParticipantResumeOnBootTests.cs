@@ -15,6 +15,9 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
 
     [TempDir] public required TempDir Tmp { get; init; }
 
+    /// The harness deletes its own daemon store on dispose, so what a shutdown leaves is read from this one.
+    [TempDaemonPaths] public required TempDaemonStore Store { get; init; }
+
     sealed class ReviewerFactory : IHostedAgentRuntimeFactory {
         public string CliPath => "unused";
         public string Vendor => "cursor";
@@ -23,12 +26,17 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
         public bool SupportsReviewerRestartResume(string? runtimeTransport, WorkLocation work) => true;
         public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
         public bool Fails { get; init; }
+        public TaskCompletionSource? Gate { get; init; }
+        public FakeHostedAgentRuntime? LastRuntime { get; private set; }
 
-        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
+        public async Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) {
             Contexts.Enqueue(ctx);
+            if (Gate is { } gate) await gate.Task.WaitAsync(ct);
             if (Fails) throw new InvalidOperationException("the reviewer could not reopen its session");
 
-            return Task.FromResult(new HostedRuntimeStart(new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: true), McpConfigPath: null, Transcript: null));
+            LastRuntime = new FakeHostedAgentRuntime(Vendor, emitsTerminalOutput: false);
+
+            return new HostedRuntimeStart(LastRuntime, McpConfigPath: null, Transcript: null);
         }
     }
 
@@ -42,6 +50,7 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
             server, new SpyPtyProcessFactory(), new Dictionary<string, IHostedAgentLauncher>(),
             allowedRepoPath: repo, extraRuntimeFactories: [factory],
             configure: c => {
+                c.Store                 = Store.Store;
                 c.InstanceId            = "instance-now";
                 c.PriorInstanceId       = "instance-old";
                 c.ResumeReadinessWindow = TimeSpan.FromMilliseconds(100);
@@ -241,5 +250,83 @@ public class AgentOrchestratorParticipantResumeOnBootTests {
 
         await Assert.That(f.Factory.Contexts).IsEmpty();
         await Assert.That(f.Server.ShutdownReports.Single().Reason).StartsWith("resume_failed:");
+    }
+
+    static SendInputCommand Round(string text) => new("reviewer-1", text, null, Guid.NewGuid());
+
+    async Task<(Fixture F, Task Lane)> StartHandshake(bool fails = false) {
+        var f = Build(new ReviewerFactory { Gate = new TaskCompletionSource(), Fails = fails });
+        Participant(f, "reviewer-1");
+        f.Orch.LoadResumeLedger();
+        var lane = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await WaitHarness.PollUntilAsync(() => !f.Factory.Contexts.IsEmpty);
+
+        return (f, lane);
+    }
+
+    [Test]
+    public async Task A_round_sent_during_the_handshake_is_delivered_after_publication() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        await f.Orch.HandleSendInputForTest(Round("round 2"));
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Server.InputRejections).IsEmpty();
+        await Assert.That(f.Factory.LastRuntime!.UserInputs.Any(i => i.Contains("round 2"))).IsTrue();
+    }
+
+    [Test]
+    public async Task A_round_for_a_participant_whose_resume_failed_is_reported_unknown_agent() {
+        var (f, lane) = await StartHandshake(fails: true);
+        await using var _ = f.Orch;
+        var round = Round("round 2");
+
+        await f.Orch.HandleSendInputForTest(round);
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Server.InputRejections).IsEquivalentTo([(round.DispatchId!.Value, "reviewer-1", "unknown_agent")]);
+    }
+
+    [Test]
+    public async Task The_ninth_held_round_is_reported_queue_full() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        for (var i = 0; i < 9; i++) await f.Orch.HandleSendInputForTest(Round($"round {i}"));
+
+        await Assert.That(f.Server.InputRejections.Select(r => r.Reason)).IsEquivalentTo(["queue_full"]);
+        f.Factory.Gate!.SetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+    }
+
+    [Test]
+    public async Task A_server_stop_withdraws_a_participant_that_is_still_resuming() {
+        var (f, lane) = await StartHandshake();
+        await using var _ = f.Orch;
+
+        await f.Orch.HandleStopAgent("reviewer-1");
+        f.Factory.Gate!.TrySetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNull();
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+    }
+
+    [Test]
+    public async Task An_end_agents_shutdown_withdraws_participants_still_resuming() {
+        var (f, lane) = await StartHandshake();
+        var queued = Participant(f, "reviewer-2");
+        f.Orch.ShutdownIntent = ShutdownIntent.EndAgents;
+
+        await f.Orch.DisposeAsync();
+        f.Factory.Gate!.TrySetResult();
+        await WaitHarness.WaitBoundedAsync(lane, "the resume lane");
+
+        await Assert.That(f.Orch.GetAgentForTest("reviewer-1")).IsNull();
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead("reviewer-1")).IsNull();
+        await Assert.That(f.Orch.ParticipantLedger!.TryRead(queued.AgentId)).IsNull();
     }
 }
