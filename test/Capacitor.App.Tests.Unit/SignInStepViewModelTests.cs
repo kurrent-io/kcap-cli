@@ -599,6 +599,30 @@ public class SignInStepViewModelTests {
         await Assert.That(satisfied).IsTrue();
     }
 
+    /// A wait that ends before the workspace is live is still not a failed sign-in.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_wait_that_ends_before_the_workspace_is_live_is_not_an_error() {
+        var (status, isError, detail) = await AvaloniaSession.DispatchAsync(async () => {
+            using var h = new Harness();
+            h.Connect.Choice = ConnectChoice.Discover;
+            h.Operation = (_, _) => {
+                h.Progress.ProvisioningWait("Acme");
+                return Task.FromResult<AuthResult>(
+                    new AuthResult.Failed("No kcap tenants are linked to your account.", AuthFailureReason.NoTenantsFound));
+            };
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            await h.SignIn();
+
+            return (h.Vm.Status, h.Vm.StatusIsError, h.Vm.StatusDetail);
+        });
+
+        await Assert.That(status).IsEqualTo(SignInStepViewModel.WorkspaceSettingUp);
+        await Assert.That(isError).IsFalse();
+        await Assert.That(detail).IsEqualTo(SignInStepViewModel.WorkspaceStillSettingUpDetail);
+    }
+
     /// Opening kcap.ai's sign-up is remembered, so a relaunch can open on sign-in; a sign-in clears it.
     [Test]
     [NotInParallel("AvaloniaSession")]

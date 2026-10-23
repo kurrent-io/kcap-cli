@@ -61,6 +61,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     bool    _urlPanelVisible;
     bool    _statusIsReady;
     bool    _expireAfterRun;
+    bool    _provisioningSeen;
 
     CancellationTokenSource? _signUpClock;
 
@@ -122,6 +123,7 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
         bridges.Progress.WorkspaceProvisioning += workspace => {
             if (!Busy) return;
 
+            _provisioningSeen = true;
             ClearTransient();
             SetStatus(WorkspaceSettingUp, isError: false, WorkspaceSettingUpDetail(workspace));
         };
@@ -512,6 +514,11 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 SetStatus("Sign-in cancelled.", isError: false);
 
                 break;
+            // The wait on a workspace still being created ran out before it went live.
+            case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when _provisioningSeen:
+                SetStatus(WorkspaceSettingUp, isError: false, WorkspaceStillSettingUpDetail);
+
+                break;
             // A browser sign-up still provisioning: the wait goes on, so this is not a failed sign-in.
             case AuthResult.Failed { Reason: AuthFailureReason.NoTenantsFound } when _signingUp():
                 SetStatus(WorkspaceNotReady, isError: false,
@@ -526,6 +533,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
                 break;
         }
     }
+
+    internal const string WorkspaceStillSettingUpDetail =
+        "It's taking longer than usual. Sign in again in a few minutes, once kcap.ai says it's ready";
 
     internal static string WorkspaceSettingUpDetail(string workspace) =>
         $"{workspace} is still being created on kcap.ai. It usually takes a few minutes, and sign-in carries on by itself once it's ready";
@@ -600,8 +610,9 @@ public sealed class SignInStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void ResetForRun(ConnectIntent intent) {
-        _running    = intent;
-        _lastReport = null;
+        _running          = intent;
+        _lastReport       = null;
+        _provisioningSeen = false;
         Log.Clear();
         HidePrompts();
         ClearTransient();

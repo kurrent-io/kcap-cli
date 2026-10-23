@@ -166,8 +166,9 @@ internal static class WizardComposition {
                 answer = await AskAsync(tenant, ct);
                 if (answer == WorkspaceAnswer.Live) return answer;
 
-                // The bearer outlives its few minutes only as a 401, which reads as still waiting.
+                // An expired bearer can no longer see a failure, so the wait ends there and sign-in offers another try.
                 status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+                if (status.StatusCode == 401) return WorkspaceAnswer.Gone;
                 if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
                     is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden) return WorkspaceAnswer.Gone;
             }

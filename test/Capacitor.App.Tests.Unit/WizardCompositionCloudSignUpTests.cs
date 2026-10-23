@@ -123,10 +123,11 @@ public class WizardCompositionCloudSignUpTests {
     }
 
     /// A discovered workspace kcap.ai is still creating is waited on, saying so, until its host answers;
-    /// one kcap.ai calls failed, or does not know, is left out.
+    /// one kcap.ai calls failed, does not know, or can no longer be asked about, is left out.
     [Test]
     [Arguments(new[] { "provisioning" }, WorkspaceAnswer.Live, true)]
     [Arguments(new[] { "provisioning", "failed" }, WorkspaceAnswer.Gone, true)]
+    [Arguments(new[] { "provisioning", "401" }, WorkspaceAnswer.Gone, true)]
     [Arguments(new string[0], WorkspaceAnswer.Gone, false)]
     public async Task A_workspace_still_being_created_is_waited_on_until_it_answers(
             string[] states, WorkspaceAnswer expected, bool waited) {
@@ -178,7 +179,8 @@ public class WizardCompositionCloudSignUpTests {
     }
 
     /// The host 404s until it is live, after two status polls of a workspace that only provisions; kcap-web's
-    /// status answers each poll with the next scripted state, holding the last, and 404s when none is scripted.
+    /// status answers each poll with the next scripted state, holding the last ("401" is an expired bearer),
+    /// and 404s when none is scripted.
     sealed class ProvisioningHandler(string[] states) : HttpMessageHandler {
         int _polls;
 
@@ -192,6 +194,7 @@ public class WizardCompositionCloudSignUpTests {
             if (states.Length == 0) return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
 
             var state = states[Math.Min(_polls++, states.Length - 1)];
+            if (state == "401") return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
             return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) {
                 Content = new StringContent($"{{\"state\":\"{state}\"}}", System.Text.Encoding.UTF8, "application/json"),
             });
