@@ -29,7 +29,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
     public IReadOnlyList<string> LiteralInputs(CanonicalEvent evt, AcpEventEnvelope raw) {
         if (raw.Kind != AcpEventKind.UserMessage || raw.Text is not { Length: > 0 } text) return [];
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
-        if (SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
+        if (SchemaExtensions.Text(slug, ClaudeCodeExtension.LocalCommand) is not null
+            || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsMeta)
             || SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsCompactSummary)
             || SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) is not (null or "human")) return [];
@@ -48,6 +49,8 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
             || PeerMessage(slug, raw.Text) is not null) return null;
 
         var text = raw.Text ?? "";
+        if (SchemaExtensions.Text(slug, ClaudeCodeExtension.LocalCommand) is { } localCommand)
+            return SchemaExtensions.Text(slug, ClaudeCodeExtension.OriginKind) is null or "human" ? localCommand : null;
         if (BashCommand(text) is { } command) return "!" + command;
         var name = CommandName().Match(text).Groups[1].Value.Trim();
         if (name.StartsWith('/')) {
@@ -59,6 +62,7 @@ public sealed partial class ClaudeChatRules : IChatDisplayRules {
 
     public AcpEventEnvelope? Filter(CanonicalEvent evt, AcpEventEnvelope envelope) {
         var slug = SchemaExtensions.Slug(evt.Payload, ClaudeCodeExtension.Slug);
+        if (SchemaExtensions.Text(slug, ClaudeCodeExtension.LocalCommand) is not null) return null;
         if (!_ownTranscript && SchemaExtensions.Flag(slug, ClaudeCodeExtension.IsSidechain)) return null;
         // A peer message delivered while the session is idle is a meta record, and it is the
         // only record of that message.

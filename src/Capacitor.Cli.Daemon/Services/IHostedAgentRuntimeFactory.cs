@@ -209,6 +209,8 @@ internal sealed record RuntimeStartContext(
         // and reap it. Empty when a test/legacy caller omits them — the markers are simply not written.
         string             DaemonId    = "",
         string             DaemonEpoch = "",
+        // This daemon's name, which selects its control socket among the daemons on the machine.
+        string             DaemonName  = "",
         // Extra servers for an interactive ACP launch's session/new, sent after kcap's own set where the
         // descriptor injects one. Ignored by a review flow, whose list the factory builds, and by a
         // descriptor without SupportsMcpServers.

@@ -90,4 +90,17 @@ public class GitHookInstallerTests {
         await Assert.That(Entry("hook.kcap.command")).IsNull();
         await Assert.That(Entry("user.name")).IsEqualTo("t");
     }
+
+    /// <summary>With no git to run, no git reads the entry either, so uninstall must not stay incomplete
+    /// over it — while a working git that cannot read the config still fails.</summary>
+    [Test, NotInParallel]
+    public async Task Remove_succeeds_when_no_git_can_run() {
+        Home.CreateFile(".gitconfig", "[hook ");
+        var empty = Home.CreateDir("empty-path").Path;
+
+        using (EnvScope.Exclusive("PATH", empty))
+            await Assert.That(Installer.Remove()).IsTrue();
+
+        await Assert.That(Installer.Remove()).IsFalse();
+    }
 }

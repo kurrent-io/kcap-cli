@@ -53,7 +53,7 @@
             <StackPanel x:Name="DestinationPanel" IsVisible="False" Margin="0,18,0,0" Spacing="8">
                 <TextBlock Text="Install location" Foreground="{StaticResource KcapTextBrush}" />
                 <ComboBox x:Name="DestinationPicker" Classes="kcapField" HorizontalAlignment="Stretch"
-                          FontFamily="{StaticResource OnboardingMonoFont}" FontSize="12"
+                          FontSize="12"
                           PlaceholderText="Select a destination…" />
             </StackPanel>
 

@@ -203,7 +203,7 @@ public class McpSessionsServerTests : IDisposable {
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(10);
+            await Assert.That(tools!.Count).IsEqualTo(12);
 
             var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
             await Assert.That(names.Contains("search_sessions")).IsTrue();
@@ -215,6 +215,8 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(names.Contains("list_repo_plans")).IsTrue();
             await Assert.That(names.Contains("get_declared_plans")).IsTrue();
             await Assert.That(names.Contains("get_session_evals")).IsTrue();
+            await Assert.That(names.Contains("get_eval_report")).IsTrue();
+            await Assert.That(names.Contains("list_eval_runs")).IsTrue();
             await Assert.That(names.Contains("get_connection")).IsTrue();
 
             // Hard gates: the routing cue, the query shape that can actually hit, and the
@@ -228,6 +230,35 @@ public class McpSessionsServerTests : IDisposable {
             await Assert.That(listDesc).Contains("defaults to active");
             await Assert.That(listDesc).Contains("next_cursor");
             await Assert.That(listDesc).Contains("idle inside it");
+        } finally {
+            await ShutdownAsync(proc);
+        }
+    }
+
+    /// <summary>With no session, the report is of the cwd repository's most recently evaluated session: its eval-trends
+    /// read names the session, and its eval-progress read supplies the report.</summary>
+    [Test]
+    public async Task Get_eval_report_without_a_session_reports_the_repos_latest_evaluated_session() {
+        using var repo = CwdRepo("acme", "widgets");
+        var       hash = RepoHashHelper.ComputeRepoHash("acme", "widgets");
+
+        _server.Given(Request.Create().WithPath($"/api/repositories/{hash}/eval-trends").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"repo_hash":"h","sessions_evaluated":2,"category_trends":[{"category":"testing","average_score":3,"points":[{"session_id":"s-old","evaluated_at":"2026-09-01T10:00:00+00:00","score":2},{"session_id":"s-new","evaluated_at":"2026-10-01T10:00:00+00:00","score":4}]}],"repeat_findings":[],"aggregated_facts":[]}"""));
+        _server.Given(Request.Create().WithPath("/api/sessions/s-new/eval-progress").UsingGet())
+            .RespondWith(Response.Create().WithStatusCode(200).WithBody(
+                """{"eval_run_id":"r1","is_terminal":true,"questions":[],"completed_result":{"eval_run_id":"r1","judge_model":"sonnet","evaluated_at":"2026-10-01T10:00:00+00:00","overall_score":4,"summary":"ok","categories":[{"name":"testing","score":4,"verdict":"pass","questions":[{"category":"testing","question_id":"wrote_tests","score":4,"verdict":"pass","finding":"Tests cover the fix.","recommendation":"Keep it up."}]}],"retrospective":null,"facts_used":[]}}"""));
+
+        using var proc = SpawnMcpServer(workingDirectory: repo.Path);
+        try {
+            await SendRequest(proc, InitializeRequest(1));
+
+            var response = await SendRequest(proc, ToolsCallRequest(2, "get_eval_report", new JsonObject()));
+            var text     = response["result"]?["content"]?[0]?["text"]?.GetValue<string>();
+
+            await Assert.That(response["result"]?["isError"]).IsNull();
+            await Assert.That(text).StartsWith("# Eval report: session s-new");
+            await Assert.That(text).Contains("Finding: Tests cover the fix.");
         } finally {
             await ShutdownAsync(proc);
         }

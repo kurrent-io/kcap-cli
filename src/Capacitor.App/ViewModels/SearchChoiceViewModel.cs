@@ -1,34 +1,122 @@
+using System.Reactive;
+using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
 using Capacitor.Cli.Core.LocalEdition;
 using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// Search by meaning with the suggested Ollama model, with another one, or search by keyword only.
+/// Keyword or meaning-based search, with an Ollama model choice beneath the latter.
 public sealed class SearchChoiceViewModel : ReactiveObject {
-    public const string Explainer =
-        "Search by meaning runs through Ollama on this Mac. The model fixes the shape of what is stored, so " +
-        "changing it later means everything is embedded again in the background.";
-    public const string DefaultLabel  = $"Use Ollama with {LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
-    public const string DefaultDetail = "Downloaded into Ollama if it doesn't have it yet. Without Ollama running, search works by keyword.";
-    public const string KeywordDetail = "Search by meaning can be turned on later from kcap local in the sidebar.";
+    public const string Explainer = "Choose how to find information saved in kcap.";
+    public const string MeaningDetail = "Finds related information even when you use different words. Uses an AI model that runs in Ollama on this Mac.";
+    public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later from kcap local in the sidebar.";
+    public const string DefaultLabel = $"{LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
+    public const string DefaultDetail = "Downloaded into Ollama if it is not there yet.";
+    public const string OllamaDownloadUrl = "https://ollama.com/download";
+    public const string ModelChangeDetail = "Changing the model rebuilds the search index in the background. Your saved information is kept.";
 
-    bool _useDefault = true, _useOther, _useKeyword;
+    readonly Func<CancellationToken, Task<bool>> _ollamaAvailable;
+    readonly Func<bool> _ollamaInstalled;
+    readonly IUrlOpener _opener;
+    bool _useMeaning, _useOther, _checking, _ollamaInstalledNow;
+    // Until someone picks, or a recorded choice is loaded, the selection follows whether Ollama answers.
+    bool _followOllama = true;
+    bool _recordedMeaning;
+    bool? _ollamaRunning;
     string _otherModel = "";
 
+    public SearchChoiceViewModel(
+            Func<CancellationToken, Task<bool>>? ollamaAvailable = null, Func<bool>? ollamaInstalled = null, IUrlOpener? opener = null) {
+        _ollamaAvailable = ollamaAvailable ?? LocalOllamaAvailability.CheckAsync;
+        _ollamaInstalled = ollamaInstalled ?? LocalOllamaAvailability.Installed;
+        _opener          = opener ?? new ShellUrlOpener();
+        CheckOllamaCommand     = ReactiveCommand.CreateFromTask(CheckOllamaAsync);
+        OpenOllamaSiteCommand  = ReactiveCommand.Create(() => _opener.Open(OllamaDownloadUrl));
+    }
+
+    /// Changing an installation's search, where a new model rebuilds an index that already exists.
+    public bool Reconfiguring { get; init; }
+
+    public bool UseMeaning {
+        get => _useMeaning;
+        set {
+            // A radio echoing a selection back is not a pick.
+            if (_useMeaning == value) return;
+            _followOllama = false;
+            SelectMeaning(value);
+        }
+    }
+
+    public bool UseKeyword {
+        get => !UseMeaning;
+        set { if (value) UseMeaning = false; }
+    }
+
+    /// Picking a model is a pick of search by meaning, so it stops the selection following Ollama too.
     public bool UseDefault {
-        get => _useDefault;
-        set => Pick(ref _useDefault, value);
+        get => !_useOther;
+        set {
+            if (!value || !_useOther) return;
+            _followOllama = false;
+            _useOther     = false;
+            RestateChoice();
+        }
     }
 
     public bool UseOther {
         get => _useOther;
-        set => Pick(ref _useOther, value);
+        set {
+            if (!value || _useOther) return;
+            _followOllama = false;
+            _useOther     = true;
+            RestateChoice();
+        }
     }
 
-    public bool UseKeyword {
-        get => _useKeyword;
-        set => Pick(ref _useKeyword, value);
+    public bool Checking {
+        get => _checking;
+        private set => this.RaiseAndSetIfChanged(ref _checking, value);
+    }
+
+    bool OllamaRunning => _ollamaRunning == true;
+
+    /// A model can only be pulled through a running Ollama; a recorded model stays selectable, so a
+    /// switch to keyword can be undone while Ollama is stopped.
+    public bool MeaningEnabled => OllamaRunning || UseMeaning || _recordedMeaning;
+
+    public bool ModelChoiceVisible => UseMeaning && OllamaRunning;
+
+    /// Stays up through a re-check, so the line does not jump while the button says it is checking.
+    public bool OllamaMissing => _ollamaRunning == false;
+
+    public string CheckLabel => Checking ? "Checking…" : "Check again";
+
+    /// The state beside Check again; what search by meaning needs stays in the option's own description.
+    public string? OllamaStatus => _ollamaRunning switch {
+        null when Checking => "Looking for Ollama…",
+        false              => _ollamaInstalledNow ? "Ollama is installed but not running. Open it." : "Ollama isn't installed.",
+        _ => null,
+    };
+
+    public bool OllamaLinkVisible => OllamaMissing && !_ollamaInstalledNow;
+
+    public ReactiveCommand<Unit, Unit> OpenOllamaSiteCommand { get; }
+
+    public ReactiveCommand<Unit, Unit> CheckOllamaCommand { get; }
+
+    async Task CheckOllamaAsync(CancellationToken ct) {
+        if (Checking) return;
+        Checking = true;
+        RestateOllama();
+        try {
+            _ollamaRunning      = await _ollamaAvailable(ct);
+            _ollamaInstalledNow = _ollamaRunning == true || _ollamaInstalled();
+        } finally {
+            Checking = false;
+            if (_followOllama && _ollamaRunning is { } running) SelectMeaning(running);
+            RestateOllama();
+        }
     }
 
     public string OtherModel {
@@ -44,10 +132,10 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
 
     bool NamedValid => LocalEmbeddingModelName.IsValid(Named);
 
-    public bool Valid => !UseOther || NamedValid;
+    public bool Valid => !UseMeaning || !UseOther || NamedValid;
 
     /// Shown once something is typed: an empty field only keeps the button disabled.
-    public string? OtherModelError => UseOther && Named.Length > 0 && !NamedValid
+    public string? OtherModelError => UseMeaning && UseOther && Named.Length > 0 && !NamedValid
         ? "Not an Ollama model name: letters, digits and . _ : / - only, starting with a letter or digit."
         : null;
 
@@ -56,30 +144,52 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         : UseOther && NamedValid ? new LocalEmbeddingChoice(Named)
         : LocalEmbeddingChoice.Default;
 
-    /// Starts from what an earlier setup recorded, so a plain confirmation changes nothing.
+    /// Starts from what an earlier setup recorded, so a plain confirmation changes nothing. With
+    /// nothing recorded, the selection follows whether Ollama is running.
     public void Prefill(LocalEmbeddingSetting? recorded) {
+        _followOllama    = recorded is null;
+        _recordedMeaning = recorded?.Model is not null;
         switch (recorded) {
+            case null:
+                _useOther = false;
+                SelectMeaning(OllamaRunning);
+                break;
             case { Model: null }:
-                UseKeyword = true;
+                SelectMeaning(false);
                 break;
             case { Model: { } model } when model != LocalEmbeddingChoice.DefaultModel:
                 OtherModel = model;
-                UseOther   = true;
+                _useOther  = true;
+                SelectMeaning(true);
                 break;
             default:
-                UseDefault = true;
+                _useOther = false;
+                SelectMeaning(true);
                 break;
         }
     }
 
-    void Pick(ref bool field, bool value) {
-        if (!value || field) return;
+    void SelectMeaning(bool value) {
+        _useMeaning = value;
+        RestateChoice();
+    }
 
-        _useDefault = _useOther = _useKeyword = false;
-        field = true;
+    void RestateOllama() {
+        this.RaisePropertyChanged(nameof(OllamaMissing));
+        this.RaisePropertyChanged(nameof(CheckLabel));
+        this.RaisePropertyChanged(nameof(OllamaStatus));
+        this.RaisePropertyChanged(nameof(OllamaLinkVisible));
+        this.RaisePropertyChanged(nameof(MeaningEnabled));
+        this.RaisePropertyChanged(nameof(ModelChoiceVisible));
+    }
+
+    void RestateChoice() {
+        this.RaisePropertyChanged(nameof(UseMeaning));
         this.RaisePropertyChanged(nameof(UseDefault));
         this.RaisePropertyChanged(nameof(UseOther));
         this.RaisePropertyChanged(nameof(UseKeyword));
+        this.RaisePropertyChanged(nameof(MeaningEnabled));
+        this.RaisePropertyChanged(nameof(ModelChoiceVisible));
         this.RaisePropertyChanged(nameof(Valid));
         this.RaisePropertyChanged(nameof(OtherModelError));
         this.RaisePropertyChanged(nameof(Choice));

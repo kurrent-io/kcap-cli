@@ -2579,6 +2579,44 @@ public class ChatTabViewModelTests {
         });
     }
 
+    /// Navigating away and back builds a new pane mid-turn; it shows the turn's real elapsed time.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pane_opened_mid_turn_counts_from_the_daemons_turn_start() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            var started = h.Time.GetUtcNow().UtcDateTime - TimeSpan.FromSeconds(65);
+            var dto = Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false, WorkingSince = started };
+            await h.PushAsync(dto);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
+            h.Time.Advance(TimeSpan.FromSeconds(10));
+            await h.PushAsync(dto);
+            await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 15s");
+            await h.TeardownAsync();
+        });
+    }
+
+    /// A pane opened behind a pending card still excludes the time the card stays up.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_pane_opened_behind_a_card_excludes_the_blocked_time() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            try {
+                h.Permissions.Add(PermissionEntries.Entry("r1", "a1"));
+                var started = h.Time.GetUtcNow().UtcDateTime - TimeSpan.FromSeconds(65);
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false, WorkingSince = started });
+                await WaitUntilAsync(() => h.Chat.HasPendingCards, what: "the blocking card");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
+
+                h.Time.Advance(TimeSpan.FromMinutes(10));
+                h.Permissions.Remove("r1");
+                await WaitUntilAsync(() => !h.Chat.HasPendingCards, what: "the card removed");
+                await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Working_time_ticks_without_a_transcript_and_resets_for_each_turn() {
@@ -2921,6 +2959,36 @@ public class ChatTabViewModelTests {
                 await h.TickAsync();
                 await Assert.That(h.Chat.Items.OfType<ShellCommandItem>().Single()).IsSameReferenceAs(shell);
                 await Assert.That(shell.Output).IsEqualTo("web");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_local_command_result_settles_one_send_without_a_chat_row() {
+        await RunOnUiAsync(async () => {
+            var input = new ScriptedInput();
+            var h = new Harness(TranscriptChat.For("claude"), input: input);
+            try {
+                const string result = """{"type":"system","subtype":"local_command","commandRun":{"command":"rename","args":"receipt check"},"content":"<local-command-stdout>Session renamed to: receipt check</local-command-stdout>"}""";
+                var path = Tmp.CreateFile("local-command.jsonl", [result]);
+                await h.PushAsync(Dto(path));
+                for (var i = 0; i < 2; i++) {
+                    h.Chat.ComposerText = "/rename receipt check";
+                    var send = h.Chat.SendCommand.Execute().ToTask();
+                    input.Pending!.SetResult(ChatSendOutcome.Accepted);
+                    await send;
+                }
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(2);
+                File.AppendAllText(path, """{"type":"system","subtype":"local_command","content":"<command-name>/rename</command-name><command-args>receipt check</command-args>"}""" + "\n");
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.QueuedMessages).Count().IsEqualTo(1);
+                await Assert.That(h.Chat.Items).IsEmpty();
+                File.AppendAllText(path, result + "\n");
+                await h.TickAsync();
+                await Assert.That(h.Chat.HasQueuedMessages).IsFalse();
+                await Assert.That(h.Chat.Items).IsEmpty();
             } finally { await h.TeardownAsync(); }
         });
     }

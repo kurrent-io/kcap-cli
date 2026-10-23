@@ -152,6 +152,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
     public ActivityViewModel Activity { get; }
+    public WebWorkspaceViewModel? Web { get; init; }
+    public ReactiveCommand<Unit, Unit> OpenLaunchApprovalsCommand { get; }
 
     /// The launcher pane's view model, built at the composition root over the SAME
     /// IDaemonClientService instance this window uses, never a second daemon connection. Null
@@ -257,7 +259,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> StartDaemonCommand { get; }
     public ReactiveCommand<Unit, Unit> RetryCommand { get; }
 
-    readonly TimeProvider _time;
+    public TimeProvider Time { get; }
 
     /// <param name="shutdownToken">
     /// Abandons StartDaemonAsync's WAIT (never the spawned daemon) on app shutdown. Must be linked
@@ -337,10 +339,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
-            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null) {
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null) {
         _service = service;
-        _time = time;
+        Time = time;
         Activity = activity;
+        OpenLaunchApprovalsCommand = ReactiveCommand.Create(openLaunchApprovals ?? (() => { }),
+            Observable.Return(openLaunchApprovals is not null));
         Home = home;
         _navigation = navigation ?? new NavigationGate();
         _trackTeardown = trackWorkspaceTeardown ?? RunUntracked;

@@ -45,7 +45,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
     }
 
     (EvalRunner Runner, ServerConnection Connection, EvalContextCache Cache) Daemon(FakeClaudeOnPath? claude = null, TimeSpan? question = null, TimeSpan? finalize = null,
-            TimeProvider? time = null) {
+            TimeProvider? time = null, TimeSpan? prepare = null) {
         var config     = new DaemonConfig { Name = "t", ServerUrl = _stub.Url, ConfigRoot = Config.Root, Profiles = Resolutions.At(_stub.Url, Config.Root) };
         var connection = new ServerConnection(config, new FixedCredentialSource(), NullLoggerFactory.Instance, NullLogger<ServerConnection>.Instance, TimeProvider.System);
         var cache      = new EvalContextCache(TimeProvider.System);
@@ -53,6 +53,7 @@ public class EvalRunnerEvidenceTests : IDisposable {
         var runner = new EvalRunner(connection, cache, TestHarnesses.Under(Home, probe), config, new FixedCapacitorHttpClient(), new NoopLifetime(),
             NullLogger<EvalRunner>.Instance, time ?? TimeProvider.System,
             new AdmissionFence(Path.Combine(RunRoot, "retiring.json"), null, TimeProvider.System, NullLogger<AdmissionFence>.Instance)) {
+            PreparePhaseBudget  = prepare ?? EvidencePhaseTimeouts.DaemonPrepare,
             QuestionPhaseBudget = question ?? EvidencePhaseTimeouts.DaemonQuestion,
             FinalizePhaseBudget = finalize ?? EvidencePhaseTimeouts.DaemonFinalize,
             TempRoot            = RunRoot
@@ -270,6 +271,21 @@ public class EvalRunnerEvidenceTests : IDisposable {
         await Assert.That(finalize.Success).IsFalse();
         await Assert.That(_stub.Requests("judge-facts")).IsEmpty();
         await Assert.That(_stub.Requests("evals/v4")).IsEmpty();
+        await Assert.That(NoRunDirectory()).IsTrue();
+    }
+
+    /// <summary>The server stops waiting for an evidence prepare after 60 s, so the daemon's own bound sits inside it, and
+    /// an over-budget prepare leaves no run behind for a server that has already given up on it.</summary>
+    [Test]
+    public async Task A_prepare_that_trips_its_budget_answers_failure_and_leaves_no_run() {
+        Serve(1);
+        var (_, connection, cache) = Daemon(prepare: TimeSpan.Zero);
+
+        var result = await connection.PrepareEvalHandler!(Prepare());
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(result.Error).IsEqualTo("evidence prepare exceeded its budget");
+        await Assert.That(cache.LeaseEvidence("run-1")).IsNull();
         await Assert.That(NoRunDirectory()).IsTrue();
     }
 

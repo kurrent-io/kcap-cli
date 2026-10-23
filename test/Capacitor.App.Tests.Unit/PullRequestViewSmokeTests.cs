@@ -61,7 +61,7 @@ public class PullRequestViewSmokeTests {
     });
 
     [Test]
-    public Task The_tab_and_sidebar_card_show_only_while_a_PR_is_linked() => RunOnUiAsync(async () => {
+    public Task The_tab_requires_a_linked_PR_while_the_sidebar_keeps_the_empty_state() => RunOnUiAsync(async () => {
         var daemon = new FakeDaemonClientService();
         var time = new FakeTimeProvider();
         var source = new FakePullRequestSource(time) { Links = [] };
@@ -81,10 +81,10 @@ public class PullRequestViewSmokeTests {
             await WaitUntilAsync(() => source.Lists == 1 && !vm.PullRequests.IsReading, what: "empty PR list applied");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
-            await Assert.That(section.IsVisible).IsFalse();
-            await Assert.That(card.IsEffectivelyVisible).IsFalse();
+            await Assert.That(section.IsVisible).IsTrue();
+            await Assert.That(card.IsEffectivelyVisible).IsTrue();
             await Assert.That(vm.PullRequests.Title).IsEqualTo("");
-            await Assert.That(vm.PullRequests.Notice).IsEqualTo("");
+            await Assert.That(vm.PullRequests.Notice).IsEqualTo("No pull requests yet.");
             await Assert.That(vm.WorkContext.ShowsPullRequestEmpty).IsFalse();
 
             source.Links = [FakePullRequestSource.Link(1)];
@@ -103,8 +103,11 @@ public class PullRequestViewSmokeTests {
             await WaitUntilAsync(() => !vm.PullRequests.HasPullRequest, what: "PR unlinked");
             Dispatcher.UIThread.RunJobs();
             await Assert.That(tab.IsVisible).IsFalse();
-            await Assert.That(section.IsVisible).IsFalse();
-            await Assert.That(card.IsEffectivelyVisible).IsFalse();
+            await Assert.That(section.IsVisible).IsTrue();
+            await Assert.That(card.IsEffectivelyVisible).IsTrue();
+            await Assert.That(vm.PullRequests.Notice).IsEqualTo("No pull requests yet.");
+            await Assert.That(vm.WorkContext.ShowsPullRequestEmpty).IsFalse();
+            await Assert.That(pane.FindControl<TextBlock>("PullRequestNumberMeta")!.IsEffectivelyVisible).IsFalse();
             await Assert.That(vm.IsChatActive).IsTrue();
         } finally { window.Close(); await vm.TeardownAsync(); }
     });

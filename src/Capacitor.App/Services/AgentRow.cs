@@ -28,6 +28,8 @@ public sealed record AgentRow(
         // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
         string? Interruption = null) {
 
+    public string? OwnerUserId { get; init; }
+
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
         Vendor: dto.Vendor, Status: dto.Status, CreatedAt: dto.CreatedAt, RepoPath: dto.RepoPath,
@@ -41,13 +43,13 @@ public sealed record AgentRow(
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";
         var repo = RepoIdentityResolver.ForRemote(dto.RepoOwner, dto.RepoName, dto.RepoPath, daemonKey);
-        return new(
+        return new AgentRow(
             Key: $"remote:{dto.AgentId}", Origin: AgentOrigin.Remote, Id: dto.AgentId, SessionId: dto.SessionId,
             Kind: "agent", Vendor: dto.Vendor ?? "", Status: CanonicalRemoteStatus(dto.Status), CreatedAt: dto.RegisteredAt,
             RepoPath: dto.RepoPath, Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
-            CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}");
+            CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}") { OwnerUserId = dto.OwnerUserId };
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

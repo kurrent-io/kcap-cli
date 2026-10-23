@@ -2,8 +2,10 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Commands;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Telemetry;
 using Capacitor.Cli.PrDetection;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
@@ -18,6 +20,30 @@ public class McpWorkItemsServerTests {
     static ValueTask<string?> NoRepo() => ValueTask.FromResult<string?>(null);
 
     static JsonObject Args(string json) => JsonNode.Parse(json)!.AsObject();
+
+    /// <summary>A daemon-hosted agent's MCP server has no session in its environment, so the daemon is
+    /// asked, through the lookup production runs; the ambient KCAP_SESSION_ID it inherited loses.</summary>
+    [Test, NotInParallel]
+    [ExcludeOn(OS.Windows)] // Unix-domain socket path
+    public async Task Declare_without_a_session_sends_the_hosted_agents_and_an_explicit_one_wins() {
+        using var daemons = new TempDaemonStore();
+        await using var daemon = new FakeAgentSessionDaemon(
+            daemons.Store.SocketPath("daemon-a"), [AgentSessionIpc.Capability], "ses_01JC7QY3VZ8K");
+        using var dir       = EnvScope.Exclusive(DaemonStore.DaemonsDirEnvVar, daemons.Directory);
+        using var name      = EnvScope.Exclusive(DaemonNameResolver.NameVar, "daemon-a");
+        // Unique per run: a bound session is kept for the life of the process.
+        using var agent     = EnvScope.Exclusive(HostedAgent.DaemonAgentIdVar, $"agent-{Guid.NewGuid():N}");
+        using var claude    = EnvScope.Exclusive("CLAUDE_CODE_SESSION_ID", null);
+        using var codex     = EnvScope.Exclusive("CODEX_THREAD_ID", null);
+        using var grok      = EnvScope.Exclusive("GROK_SESSION_ID", null);
+        using var inherited = EnvScope.Exclusive("KCAP_SESSION_ID", "22222222222222222222222222222222");
+
+        var defaulted  = McpWorkItemsServer.BuildDeclareBody(Args("""{"pr_number":123}"""));
+        var explicitly = McpWorkItemsServer.BuildDeclareBody(Args("""{"session_id":"s1","pr_number":123}"""));
+
+        await Assert.That(defaulted["session_id"]!.GetValue<string>()).IsEqualTo("ses_01JC7QY3VZ8K");
+        await Assert.That(explicitly["session_id"]!.GetValue<string>()).IsEqualTo("s1");
+    }
 
     [Test]
     public async Task Declare_body_carries_session_id_and_issue_key() {

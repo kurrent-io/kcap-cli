@@ -22,12 +22,17 @@ public static class TerminalGlyphSubstitution {
 
     static readonly SearchValues<char> Targets = SearchValues.Create(Map.Select(m => m.From).ToArray());
 
-    public static string Apply(string text) {
-        var first = text.AsSpan().IndexOfAny(Targets);
-        if (first < 0) return text;
+    public static string Apply(string text) => Apply(text, 0, text.Length);
 
-        return string.Create(text.Length, (text, first), static (dest, state) => {
-            state.text.AsSpan().CopyTo(dest);
+    /// The <paramref name="length"/> characters from <paramref name="start"/>, rewritten; the
+    /// text itself when that is all of it and nothing needs swapping.
+    public static string Apply(string text, int start, int length) {
+        var slice = text.AsSpan(start, length);
+        var first = slice.IndexOfAny(Targets);
+        if (first < 0) return length == text.Length ? text : slice.ToString();
+
+        return string.Create(length, (text, start, first), static (dest, state) => {
+            state.text.AsSpan(state.start, dest.Length).CopyTo(dest);
             for (var i = state.first; i < dest.Length; i++) {
                 foreach (var (from, to) in Map) {
                     if (dest[i] != from) continue;

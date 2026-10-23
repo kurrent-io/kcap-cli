@@ -114,7 +114,8 @@
                     <Border HorizontalAlignment="Right" MaxWidth="520" Margin="0,8,0,12" Padding="14,11" CornerRadius="10"
                             Background="{StaticResource KcapSurfaceRaisedBrush}">
                         <StackPanel Spacing="6">
-                            <TextBlock Classes="toolKindChip" Text="You" HorizontalAlignment="Left" />
+                            <TextBlock Classes="toolKindChip" HorizontalAlignment="Left"
+                                       Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle}" />
                             <views:MarkdownView Text="{Binding Text}" Flavor="Prompt"
                                                 OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                 RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
@@ -159,7 +160,8 @@
                                 Background="{StaticResource KcapSurfaceRaisedBrush}"
                                 IsVisible="{Binding HasCommand}">
                             <StackPanel Spacing="6">
-                                <TextBlock Classes="toolKindChip" Text="You" HorizontalAlignment="Left" />
+                                <TextBlock Classes="toolKindChip" HorizontalAlignment="Left"
+                                           Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle}" />
                                 <SelectableTextBlock Classes="toolLine" Text="{Binding Command}" />
                             </StackPanel>
                         </Border>

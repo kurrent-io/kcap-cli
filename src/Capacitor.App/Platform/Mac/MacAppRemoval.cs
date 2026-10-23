@@ -20,15 +20,18 @@ public sealed partial class MacAppRemoval : IAppRemoval {
     readonly UserHome              _home;
     readonly string                _bundleRoot;
     readonly IReadOnlyList<string> _linkFolders;
+    readonly MacUpdaterFiles?      _updaterFiles;
 
     public MacAppRemoval(IProcessRunner runner, UserHome home, string bundleRoot)
-        : this(runner, home, bundleRoot, KcapLinkFolders.For(home)) { }
+        : this(runner, home, bundleRoot, KcapLinkFolders.For(home), MacUpdaterFiles.ForCurrentBundle(bundleRoot, home)) { }
 
-    internal MacAppRemoval(IProcessRunner runner, UserHome home, string bundleRoot, IReadOnlyList<string> linkFolders) {
+    internal MacAppRemoval(IProcessRunner runner, UserHome home, string bundleRoot, IReadOnlyList<string> linkFolders,
+            MacUpdaterFiles? updaterFiles = null) {
         _runner      = runner;
         _home        = home;
         _bundleRoot  = bundleRoot;
         _linkFolders = linkFolders;
+        _updaterFiles = updaterFiles;
     }
 
     public async Task<IReadOnlyList<string>> RemoveLinksAsync(CancellationToken ct) {
@@ -79,7 +82,7 @@ public sealed partial class MacAppRemoval : IAppRemoval {
                      Path.Combine(library, "Caches", id),
                      Path.Combine(library, "HTTPStorages", id),
                      Path.Combine(library, "Saved Application State", id + ".savedState"),
-                 }) {
+                 }.Concat(_updaterFiles?.Directories ?? [])) {
             try {
                 if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
             } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
@@ -87,11 +90,13 @@ public sealed partial class MacAppRemoval : IAppRemoval {
             }
         }
 
-        var preferences = Path.Combine(library, "Preferences", id + ".plist");
-        try {
-            File.Delete(preferences);
-        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            Console.Error.WriteLine($"kcap: could not remove {preferences}: {ex.Message}");
+        foreach (var path in new[] { Path.Combine(library, "Preferences", id + ".plist") }.Concat(_updaterFiles?.Logs ?? [])) {
+            try {
+                File.Delete(path);
+            } catch (DirectoryNotFoundException) {
+            } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                Console.Error.WriteLine($"kcap: could not remove {path}: {ex.Message}");
+            }
         }
     }
 

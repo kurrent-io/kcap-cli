@@ -450,6 +450,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// Small title on assistant prose: the harness name once the session has one, else a role.
     public string AssistantTitle => string.IsNullOrEmpty(_vendorLabel) ? "Assistant" : _vendorLabel;
 
+    bool _isOwnedByCurrentUser;
+    public string UserTitle => _origin == AgentOrigin.Local || _isOwnedByCurrentUser ? "You" : "User";
+
     string _modelLabel = "default";
     public string ModelLabel { get => _modelLabel; private set => this.RaiseAndSetIfChanged(ref _modelLabel, value); }
 
@@ -496,6 +499,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int? _liveSubagents;
     long? _workingSince;
     TimeSpan _worked;
+    DateTime? _daemonWorkingSince;
+    bool _turnBaselined;
 
     void RefreshActivityNote() {
         var inTurn = SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
@@ -503,7 +508,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (!inTurn) {
             _workingSince = null;
             _worked = TimeSpan.Zero;
-        } else if (working) {
+            _turnBaselined = false;
+        } else if (!_turnBaselined) {
+            // A pane built mid-turn picks up the time the daemon has already seen pass, read when the
+            // turn is first seen so time spent behind a card afterwards stays excluded.
+            _turnBaselined = true;
+            if (_daemonWorkingSince is { } started && _time.GetUtcNow().UtcDateTime - started is { Ticks: > 0 } before)
+                _worked = before;
+        }
+        if (working) {
             _workingSince ??= _time.GetTimestamp();
         } else if (_workingSince is { } pausedAt) {
             _worked += _time.GetElapsedTime(pausedAt);
@@ -901,6 +914,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void OnSession(ChatSessionInfo info) {
+        if (_isOwnedByCurrentUser != info.IsOwnedByCurrentUser) {
+            _isOwnedByCurrentUser = info.IsOwnedByCurrentUser;
+            this.RaisePropertyChanged(nameof(UserTitle));
+        }
         ReadOnlyNotice = info.ReadOnlyNotice;
         IsReadOnlyParticipant = info.ReadOnlyNotice.Length > 0;
         TakesAttachments = info.TakesAttachments;
@@ -921,6 +938,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
+        _daemonWorkingSince = info.WorkingSince;
         if (!_feedReleased) _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,

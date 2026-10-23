@@ -9,6 +9,46 @@ namespace Capacitor.App.Tests.Unit;
 public class InstallLocationWindowTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_denied_shared_install_offers_a_per_user_retry() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            const string userApps = "/Users/example/Applications";
+            var chosen = "/Applications";
+            var attempts = new List<string>();
+            static ApplicationsInstallPlan Plan(string path) => new(ApplicationsInstallAction.Install, path + "/kcap.app");
+            var window = new InstallLocationWindow("Install kcap.",
+                () => {
+                    attempts.Add(chosen);
+                    return Task.FromResult(chosen == "/Applications"
+                        ? new MoveOutcome(false, null, "Permission denied", PermissionDenied: true)
+                        : new MoveOutcome(true, chosen + "/kcap.app", null));
+                }, () => { }, plan: Plan(chosen),
+                selectDestination: path => { chosen = path; return Plan(path); },
+                userApplicationsDirectory: userApps);
+            window.Show();
+            try {
+                var button = window.FindControl<Button>("MoveButton")!;
+                await Assert.That(window.FindControl<StackPanel>("DestinationPanel")!.IsVisible).IsFalse();
+                await Assert.That(button.Content).IsEqualTo("Install and open");
+
+                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(chosen).IsEqualTo(userApps);
+                await Assert.That(window.FindControl<SelectableTextBlock>("ErrorText")!.Text).Contains("cannot write to /Applications");
+                await Assert.That(window.FindControl<TextBlock>("Explanation")!.Text).Contains(userApps + "/kcap.app");
+                await Assert.That(button.Content).IsEqualTo("Install for me only");
+                await Assert.That(button.IsEnabled).IsTrue();
+
+                button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(attempts.SequenceEqual(["/Applications", userApps])).IsTrue();
+            } finally {
+                window.Close();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Destination_selection_controls_the_install_action_and_a_failure_allows_retry() {
         await AvaloniaSession.DispatchAsync(async () => {
             var calls = 0;

@@ -6,9 +6,12 @@ namespace Capacitor.App.ViewModels.Onboarding;
 
 /// One repository on the History page and how far its history goes.
 public sealed class HistoryRepoRow : ReactiveObject {
-    ImportLevel _level = ImportLevel.Shared;
+    ImportLevel _level;
 
-    internal HistoryRepoRow(ImportDiscoveryRepo repo) {
+    /// <param name="local">The local edition has no other readers, so its one import stop is private.</param>
+    internal HistoryRepoRow(ImportDiscoveryRepo repo, bool local = false) {
+        _level        = local ? ImportLevel.OnlyMe : ImportLevel.Shared;
+        LastStop      = local ? (int)ImportLevel.OnlyMe : (int)ImportLevel.Shared;
         Owner         = repo.Owner;
         Name          = repo.Name;
         Sessions      = repo.Sessions;
@@ -39,11 +42,14 @@ public sealed class HistoryRepoRow : ReactiveObject {
         }
     }
 
+    /// The highest stop the track offers.
+    public int LastStop { get; }
+
     /// The level as the track's stop index.
     public int Stop {
         get => (int)Level;
         set {
-            if (value is < 0 or > 2) return;
+            if (value < 0 || value > LastStop) return;
             Level = (ImportLevel)value;
         }
     }
