@@ -554,7 +554,7 @@ public sealed class ClaudeHookCommand(
 
                 node["home_dir"] = home.Path;
 
-                var agentHostId = hosted.LinkedAgentId();
+                var agentHostId = hosted.AgentId;
 
                 if (agentHostId is not null) {
                     node["agent_host_id"] = agentHostId;

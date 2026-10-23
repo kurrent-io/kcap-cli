@@ -5,7 +5,8 @@ namespace Capacitor.Cli;
 /// <summary>
 /// Whether this process runs under a coding agent that another coding agent started, such as a <c>codex exec</c> a
 /// hosted Claude runs. The nested agent inherits the hosted agent's environment, <c>KCAP_AGENT_ID</c> included, but its
-/// sessions are its own, so it must not link them to the hosted agent.
+/// sessions are its own: it must not link them to the hosted agent, route its approvals through the hosted agent's
+/// daemon bridge, or have its session end held back by the hosted agent's resume.
 /// </summary>
 public static class NestedHarness {
     /// <summary>The CLI's own executables, the daemon's among them. Those this process was launched through (the npm
@@ -22,12 +23,30 @@ public static class NestedHarness {
     /// same-vendor parent of theirs is a second agent.</summary>
     static readonly string[] LauncherVendors = ["codex"];
 
-    static readonly Lazy<bool> CurrentProcess = new(() =>
-        ProcessHelpers.GetParentPid() is { } parent
-     && IsNested(parent, ProcessHelpers.NestableAgents, ProcessHelpers.GetProcessInfo));
+    /// <summary>The process names of the coding agents.</summary>
+    static readonly string[] AgentNames = [..ProcessHelpers.NestableAgents, "muse"];
 
-    /// <summary>The hosted agent's id when a hook may link this process's session to it.</summary>
-    public static string? LinkedAgentId(this HostedAgent hosted) => hosted.AgentId is { } id && !CurrentProcess.Value ? id : null;
+    /// <summary>What a daemon puts into a hosted agent's environment to name it as the host.</summary>
+    static readonly string[] HostingVars = [
+        HostedAgent.AgentIdVar, HostedAgent.DaemonAgentIdVar, HostedAgent.RenderedVar, HostedAgent.BridgeUrlVar,
+        HostedAgent.SessionKindVar, HostedAgent.FlowRoleVar,
+    ];
+
+    /// <summary>Removes the inherited hosting variables from this process's environment when it is nested, so it reads
+    /// as a terminal session and so does every process it starts, a detached watcher included. Runs before anything
+    /// reads them.</summary>
+    public static void ShedInheritedHosting() =>
+        Shed(Environment.GetEnvironmentVariable, Environment.SetEnvironmentVariable,
+             () => ProcessHelpers.GetParentPid() is { } parent && IsNested(parent, AgentNames, ProcessHelpers.GetProcessInfo));
+
+    /// <summary>Walks the ancestry only when a hosting variable is present.</summary>
+    internal static bool Shed(Func<string, string?> get, Action<string, string?> set, Func<bool> nested) {
+        if (HostingVars.All(name => string.IsNullOrEmpty(get(name))) || !nested()) return false;
+
+        foreach (var name in HostingVars) set(name, null);
+
+        return true;
+    }
 
     /// <summary>Walks the ancestry from <paramref name="startPid"/> to the daemon, or as far as it can be read, and
     /// reports whether it holds more than one coding agent; <paramref name="agentNames"/> are the agents' process names. An

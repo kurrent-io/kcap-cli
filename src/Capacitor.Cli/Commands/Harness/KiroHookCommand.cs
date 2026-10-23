@@ -281,7 +281,7 @@ sealed class KiroHookCommand(
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
 
-        if (hosted.LinkedAgentId() is { } agentHostId) {
+        if (hosted.AgentId is { } agentHostId) {
             forwarded["agent_host_id"] = agentHostId;
         }
 

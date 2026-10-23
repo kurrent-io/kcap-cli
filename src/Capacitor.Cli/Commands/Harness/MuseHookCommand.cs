@@ -151,7 +151,7 @@ sealed class MuseHookCommand(
         if (log is not null) forwarded["transcript_path"] = log;
         if (cwd is not null && GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         var marker      = MuseHostedSessionMarker.TryRead(home, sessionId);
-        var agentHostId = hosted.LinkedAgentId() ?? marker?.AgentId;
+        var agentHostId = hosted.AgentId ?? marker?.AgentId;
         var markerKind  = HostedSessionKinds.Parse(marker?.SessionKind);
         var audience    = SessionStartAudience.From(hosted with {
             AgentId = agentHostId,
@@ -252,7 +252,7 @@ sealed class MuseHookCommand(
         };
 
         if (cwd is not null) forwarded["cwd"] = cwd;
-        if ((hosted.LinkedAgentId() ?? MuseHostedSessionMarker.TryRead(home, sessionId)?.AgentId) is { } agentHostId)
+        if ((hosted.AgentId ?? MuseHostedSessionMarker.TryRead(home, sessionId)?.AgentId) is { } agentHostId)
             forwarded["agent_host_id"] = agentHostId;
 
         if (Paths.ResolveSessionLog(session.ToString("D"), today) is { } log && HookHttp.IsPostable(Url)) {

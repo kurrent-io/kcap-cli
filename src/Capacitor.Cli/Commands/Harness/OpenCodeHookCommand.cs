@@ -120,7 +120,7 @@ sealed class OpenCodeHookCommand(
         if (GetArg(args, "--provider") is { } provider) forwarded["provider_id"]      = provider;
         if (GetArg(args, "--version")  is { } version)  forwarded["opencode_version"] = version;
 
-        if (hosted.LinkedAgentId() is { } agentHostId) {
+        if (hosted.AgentId is { } agentHostId) {
             forwarded["agent_host_id"] = agentHostId;
         }
 

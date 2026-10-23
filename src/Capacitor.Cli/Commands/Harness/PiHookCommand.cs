@@ -138,7 +138,7 @@ sealed class PiHookCommand(
             if (GitRepository.FindRoot(cwd) is { } workspaceRoot) forwarded["workspace_root"] = workspaceRoot;
         }
         if (startedAt is { } ts) forwarded["started_at"] = ts.ToString("O");
-        if (hosted.LinkedAgentId() is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
         // Stamp default visibility BEFORE enrichment so it survives the
         // JsonString round-trip (same rationale as the Codex/Copilot dispatchers).
@@ -224,7 +224,7 @@ sealed class PiHookCommand(
         };
 
         if (cwd is not null) forwarded["cwd"] = cwd;
-        if (hosted.LinkedAgentId() is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
+        if (hosted.AgentId is { } agentHostId) forwarded["agent_host_id"] = agentHostId;
 
         // AuthLapsed / Posted → clean exit (0); a real failure keeps the prior non-zero exit.
         return await PostHookAsync("session-end/pi", forwarded.ToJsonString()) == HookPostOutcome.Failed ? 1 : 0;

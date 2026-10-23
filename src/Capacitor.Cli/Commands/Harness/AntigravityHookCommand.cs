@@ -163,7 +163,7 @@ sealed class AntigravityHookCommand(
         if (Str(payload, "antigravityVersion") is { } version)
             forwarded["antigravity_version"] = version;
 
-        if (hosted.LinkedAgentId() is { } agentHostId)
+        if (hosted.AgentId is { } agentHostId)
             forwarded["agent_host_id"] = agentHostId;
 
         // Stamp default visibility BEFORE enrichment so it survives the JsonString
