@@ -104,10 +104,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
         :                               null;
 
     /// Hooks load at agent start, so an agent open since before setup records nothing until it restarts.
-    public string? RestartLine =>
-        !CapturePromised ? null
-        : _current.Local ? $"New hooks load when an agent starts, so agents you already have open start recording on {_current.MachineName} after a restart."
-        :                  "New hooks load when an agent starts, so agents you already have open start sending sessions to your workspace after a restart.";
+    public string? RestartLine => CapturePromised ? "Agents load new hooks when they start. Restart any that are already open." : null;
 
     public IReadOnlyList<CaptureItem> Capture => [.. _current.Recording.Select(label => new CaptureItem(label, _current.PathHazard))];
 

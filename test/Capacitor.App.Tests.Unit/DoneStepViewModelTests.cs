@@ -58,8 +58,8 @@ public class DoneStepViewModelTests {
                 await LineFor(Facts(recording: [])), await LineFor(Facts(hazard: true)));
         });
 
-        await Assert.That(remote).Contains("your workspace after a restart");
-        await Assert.That(local).Contains("recording on test-mac after a restart");
+        await Assert.That(remote).Contains("Restart any that are already open");
+        await Assert.That(local).IsEqualTo(remote);
         await Assert.That(nothing).IsNull();
         await Assert.That(blocked).IsNull();
     }
