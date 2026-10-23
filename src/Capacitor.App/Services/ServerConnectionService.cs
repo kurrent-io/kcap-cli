@@ -508,22 +508,14 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             var hub = _hub;
             if (hub is not { State: HubConnectionState.Connected })
                 return new LaunchOutcome(false, null, "Not connected to the server.");
-            var agentId = await hub.InvokeAsync<string>(
-                HubMethods.RequestLaunchAgentV2, LaunchPayload.For(request), ct).ConfigureAwait(false);
-            return new LaunchOutcome(Started: true, AgentId: agentId, Error: null);
-        } catch (HubException ex) {
-            return new LaunchOutcome(false, null, ServerMessage(ex));
+            var response = await hub.InvokeAsync<LaunchResponse>(
+                HubMethods.TryLaunchAgent, LaunchPayload.For(request), ct).ConfigureAwait(false);
+            return response.AgentId is { } id
+                ? new LaunchOutcome(Started: true, AgentId: id, Error: null)
+                : new LaunchOutcome(false, null, response.Refusal);
         } catch (Exception ex) {
             return new LaunchOutcome(false, null, ex.Message, IsUnauthorized(ex));
         }
-    }
-
-    /// The text a server method threw, without the "An unexpected error occurred invoking '…' on the
-    /// server. HubException: " SignalR puts in front of it.
-    internal static string ServerMessage(HubException ex) {
-        const string marker = "HubException: ";
-        var at = ex.Message.IndexOf(marker, StringComparison.Ordinal);
-        return at < 0 ? ex.Message : ex.Message[(at + marker.Length)..];
     }
 
     /// Walks the chain because SignalR surfaces the negotiate failure wrapped as often as bare.
