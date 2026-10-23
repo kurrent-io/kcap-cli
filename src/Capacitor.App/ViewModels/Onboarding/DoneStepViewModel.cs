@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Globalization;
 using System.Reactive;
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using ReactiveUI.Reactive;
 
@@ -14,15 +15,24 @@ namespace Capacitor.App.ViewModels.Onboarding;
 public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     readonly Func<DoneFacts> _facts;
     readonly IUrlOpener?     _opener;
+    readonly Func<bool, Task<WorkspaceReadiness>>? _prepare;
 
     DoneFacts _current = DoneFacts.Empty;
+    WorkspaceReadiness _readiness;
+    bool _preparing;
 
-    public DoneStepViewModel(Func<DoneFacts> facts, IUrlOpener? opener = null) {
-        _facts  = facts;
-        _opener = opener;
+    /// <param name="prepare">Brings the daemon up and reports the install, answering whether the
+    /// dashboard may open; true asks it to try again. Null when there is nothing to wait for.</param>
+    public DoneStepViewModel(Func<DoneFacts> facts, IUrlOpener? opener = null, Func<bool, Task<WorkspaceReadiness>>? prepare = null) {
+        _facts     = facts;
+        _opener    = opener;
+        _prepare   = prepare;
+        _readiness = prepare is null ? WorkspaceReadiness.Ready : WorkspaceReadiness.Preparing;
 
-        OpenWorkspaceCommand = ReactiveCommand.Create(OpenWorkspace);
-        OpenDashboardCommand = ReactiveCommand.Create(OpenDashboard);
+        var ready = this.WhenAnyValue(x => x.Readiness).Select(r => r == WorkspaceReadiness.Ready);
+        OpenWorkspaceCommand = ReactiveCommand.Create(OpenWorkspace, ready);
+        OpenDashboardCommand = ReactiveCommand.Create(OpenDashboard, ready);
+        RetryCommand         = ReactiveCommand.CreateFromTask(() => PrepareAsync(retry: true));
     }
 
     public WizardStepId Id         => WizardStepId.Done;
@@ -120,22 +130,80 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
             ? $"{problem} The app tries again once setup closes."
             : $"The daemon is being set up as a service on {_current.MachineName}. The app keeps it running from here.";
 
-    public bool WorkspaceVisible => !_current.Local && !string.IsNullOrEmpty(_current.WorkspaceUrl);
+    public WorkspaceReadiness Readiness {
+        get => _readiness;
+        private set {
+            if (_readiness == value) return;
+            _readiness = value;
+            this.RaisePropertyChanged();
+            Restate();
+        }
+    }
 
-    public bool DashboardVisible => _current.Local && !string.IsNullOrEmpty(_current.DashboardUrl);
+    bool WorkspaceKnown => !_current.Local && !string.IsNullOrEmpty(_current.WorkspaceUrl);
+
+    bool DashboardKnown => _current.Local && !string.IsNullOrEmpty(_current.DashboardUrl);
+
+    bool Opens => WorkspaceKnown || DashboardKnown;
+
+    public bool WorkspaceVisible => WorkspaceKnown && Readiness == WorkspaceReadiness.Ready;
+
+    public bool DashboardVisible => DashboardKnown && Readiness == WorkspaceReadiness.Ready;
+
+    public bool PreparingVisible => Opens && Readiness == WorkspaceReadiness.Preparing;
+
+    public string PreparingLine => _current.Local ? "Getting your dashboard ready…" : "Getting your workspace ready…";
+
+    public bool NotReadyVisible => Opens && Readiness is WorkspaceReadiness.DaemonNotRunning or WorkspaceReadiness.Unreported;
+
+    public string NotReadyTitle => _current.Local ? "The dashboard can't open yet" : "Your workspace can't open yet";
+
+    public string NotReadyBody => Readiness == WorkspaceReadiness.DaemonNotRunning
+        ? $"It opens once the daemon is running on {_current.MachineName}."
+        : _current.Local
+            ? "kcap couldn't reach the local server to register this machine."
+            : "kcap couldn't reach your workspace to register this machine. Check your connection.";
 
     public ReactiveCommand<Unit, Unit> OpenWorkspaceCommand { get; }
 
     public ReactiveCommand<Unit, Unit> OpenDashboardCommand { get; }
 
+    public ReactiveCommand<Unit, Unit> RetryCommand { get; }
+
     /// Re-read on every entry: Back-then-forward can change what the earlier pages did.
     public Task OnEnterAsync(CancellationToken ct) {
+        Refresh();
+        if (Readiness != WorkspaceReadiness.Ready) _ = PrepareAsync(retry: false);
+
+        return Task.CompletedTask;
+    }
+
+    void Refresh() {
         if (_current.Import is INotifyPropertyChanged before) before.PropertyChanged -= OnImportChanged;
         _current = _facts();
         if (_current.Import is INotifyPropertyChanged after) after.PropertyChanged += OnImportChanged;
         Restate();
+    }
 
-        return Task.CompletedTask;
+    /// Ready is never revoked: once the server has the install, a later failure cannot make it ask again.
+    async Task PrepareAsync(bool retry) {
+        if (_prepare is null || _preparing || Readiness == WorkspaceReadiness.Ready) return;
+
+        _preparing = true;
+        Readiness  = WorkspaceReadiness.Preparing;
+        WorkspaceReadiness result;
+        try {
+            result = await _prepare(retry).ConfigureAwait(true);
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: could not get the workspace ready: {ex.Message}");
+            result = WorkspaceReadiness.Unreported;
+        } finally {
+            _preparing = false;
+        }
+
+        // The daemon line reads the run that just settled.
+        Refresh();
+        Readiness = result == WorkspaceReadiness.Preparing ? WorkspaceReadiness.Unreported : result;
     }
 
     // Next finishes the wizard — the shell's own last-step handling raises CloseRequested.
@@ -144,6 +212,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     void OnImportChanged(object? sender, PropertyChangedEventArgs e) => Restate();
 
     void OpenWorkspace() {
+        if (Readiness != WorkspaceReadiness.Ready) return;
         if (_current.WorkspaceUrl is not { Length: > 0 } url || _opener is null) return;
         try {
             _opener.Open(url);
@@ -153,6 +222,7 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
     }
 
     void OpenDashboard() {
+        if (Readiness != WorkspaceReadiness.Ready) return;
         if (_current.DashboardUrl is not { Length: > 0 } url || _opener is null) return;
         try {
             _opener.Open(url);

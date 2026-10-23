@@ -1,3 +1,5 @@
+using System.Reactive.Linq;
+using System.Reactive.Threading.Tasks;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels.Onboarding;
@@ -147,6 +149,66 @@ public class DoneStepViewModelTests {
         });
 
         await Assert.That(opened).IsEquivalentTo(["https://acme.kcap.ai"]);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_workspace_opens_only_once_this_machine_is_registered() {
+        var (preparing, early, openedEarly, ready, opened, prepares) = await AvaloniaSession.DispatchAsync(async () => {
+            var opener = new RecordingUrlOpener();
+            var registered = new TaskCompletionSource<WorkspaceReadiness>();
+            var calls = 0;
+            var vm = new DoneStepViewModel(() => Facts(), opener, _ => {
+                calls++;
+                return registered.Task;
+            });
+            await vm.OnEnterAsync(CancellationToken.None);
+            var (preparingVisible, workspaceVisible) = (vm.PreparingVisible, vm.WorkspaceVisible);
+            vm.OpenWorkspaceCommand.Execute().Subscribe(_ => { }, _ => { });
+            Dispatcher.UIThread.RunJobs();
+            var before = opener.Opened.Count;
+
+            registered.SetResult(WorkspaceReadiness.Ready);
+            await vm.WhenAnyValue(x => x.Readiness).FirstAsync(r => r == WorkspaceReadiness.Ready).ToTask();
+            await vm.OnEnterAsync(CancellationToken.None);
+            vm.OpenWorkspaceCommand.Execute().Subscribe();
+            Dispatcher.UIThread.RunJobs();
+
+            return (preparingVisible, workspaceVisible, before, vm.WorkspaceVisible && !vm.PreparingVisible, opener.Opened.ToList(), calls);
+        });
+
+        await Assert.That(preparing).IsTrue();
+        await Assert.That(early).IsFalse();
+        await Assert.That(openedEarly).IsEqualTo(0);
+        await Assert.That(ready).IsTrue();
+        await Assert.That(opened).IsEquivalentTo(["https://acme.kcap.ai"]);
+        await Assert.That(prepares).IsEqualTo(1);
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_machine_that_is_not_registered_offers_a_retry() {
+        var (notReady, title, body, linkWhileFailed, linkAfterRetry, calls) = await AvaloniaSession.DispatchAsync(async () => {
+            var calls = new List<bool>();
+            var vm = new DoneStepViewModel(() => Facts(), new RecordingUrlOpener(), retry => {
+                calls.Add(retry);
+                return Task.FromResult(calls.Count == 1 ? WorkspaceReadiness.DaemonNotRunning : WorkspaceReadiness.Ready);
+            });
+            await vm.OnEnterAsync(CancellationToken.None);
+            await vm.WhenAnyValue(x => x.Readiness).FirstAsync(r => r != WorkspaceReadiness.Preparing).ToTask();
+            var failed = (vm.NotReadyVisible, vm.NotReadyTitle, vm.NotReadyBody, vm.WorkspaceVisible);
+
+            await vm.RetryCommand.Execute().ToTask();
+
+            return (failed.NotReadyVisible, failed.NotReadyTitle, failed.NotReadyBody, failed.WorkspaceVisible, vm.WorkspaceVisible, calls);
+        });
+
+        await Assert.That(notReady).IsTrue();
+        await Assert.That(title).IsEqualTo("Your workspace can't open yet");
+        await Assert.That(body).Contains("daemon is running on test-mac");
+        await Assert.That(linkWhileFailed).IsFalse();
+        await Assert.That(linkAfterRetry).IsTrue();
+        await Assert.That(calls).IsEquivalentTo([false, true]);
     }
 
     static DoneFacts LocalFacts(string? dashboardUrl = "http://localhost:5050", HistoryImportRun? import = null) =>
