@@ -248,21 +248,29 @@ sealed partial class LaunchdServiceManager(
         // Before the stop: a write that fails once the daemon has exited would leave it down.
         if (amended is not null) _writeUnit(path, amended, null);
 
-        // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
-        var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
-        if (running && !stopForReload()) {
-            if (amended is not null) _writeUnit(path, beforeAmend, null);
-            return UnitRefresh.Deferred;
+        (string? Error, LabelProbe? After) reload;
+        try {
+            // A loaded job with no running daemon hosts nothing, and there is no socket to ask.
+            var running = LaunchdUnit.StatusFromPrint(printExit, printOut) == ServiceState.Running;
+            if (running && !stopForReload()) {
+                if (amended is not null) _writeUnit(path, beforeAmend, null);
+                return UnitRefresh.Deferred;
+            }
+
+            var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
+            if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
+                if (amended is not null) _writeUnit(path, beforeAmend, null);
+                error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";
+                return UnitRefresh.Failed;
+            }
+
+            reload = Bootstrap(serviceId, path, acceptAnySpawnType: false);
+        } catch when (amended is not null) {
+            // Same rule as every other path short of a reload: the file must not claim what launchd never loaded.
+            _writeUnit(path, beforeAmend, null);
+            throw;
         }
 
-        var (bootoutExit, _, _, bootoutTimedOut) = RunCtl(RefreshCtlTimeout, LaunchdUnit.BootoutArgs(Uid(), serviceId));
-        if ((bootoutTimedOut || bootoutExit != 0) && Probe(serviceId).Label == LabelProbe.Loaded) {
-            if (amended is not null) _writeUnit(path, beforeAmend, null);
-            error = "launchctl bootout did not unload the job, so it keeps running in the background band until the next update";
-            return UnitRefresh.Failed;
-        }
-
-        var reload = Bootstrap(serviceId, path, acceptAnySpawnType: false);
         if (reload.Error is null) return UnitRefresh.Reloaded;
 
         // The label loaded from the plist on disk but launchd still reports the wrong band: a second

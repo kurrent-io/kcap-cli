@@ -77,4 +77,17 @@ public class SystemdServiceManagerTests {
         await Assert.That(SystemdUnit.EnvFromUnit(File.ReadAllText(path))["PATH"]).IsEqualTo("/usr/bin:/opt/agents");
         await Assert.That(manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).IsNull();
     }
+
+    /// <summary>A line kcap did not write is left alone, and that is a failure, not "already current".</summary>
+    [Test]
+    public async Task A_line_it_cannot_rewrite_is_reported_rather_than_read_as_current() {
+        var path = SystemdUnit.UnitPath(Home, "test");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const string unit = "[Service]\nEnvironment=PATH=/usr/bin KCAP_PROFILE=work\nExecStart=/opt/kcap/kcap-daemon --name test\n";
+        File.WriteAllText(path, unit);
+        var manager = new SystemdServiceManager(Home, runProcess: (_, _) => (0, "", ""));
+
+        await Assert.That(() => manager.SetEnvironment("test", "PATH", "/usr/bin:/opt/agents")).Throws<InvalidOperationException>();
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(unit);
+    }
 }

@@ -566,4 +566,19 @@ public class LaunchdUnitRefreshTests {
         await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
         await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
     }
+
+    [Test]
+    public async Task A_stop_that_throws_drops_the_amendment() {
+        Skip.When(OperatingSystem.IsWindows(), "getuid is POSIX-only");
+
+        var path = Seed(LaunchdUnit.Plist(Spec()));
+
+        var outcome = Manager([], "daemon (3)").RefreshUnit(
+            "test", () => throw new InvalidOperationException("socket gone"), Plenty, out var error,
+            amend: plist => LaunchdUnit.WithEnvironmentValue(plist, "PATH", "/opt/agents"));
+
+        await Assert.That(outcome).IsEqualTo(UnitRefresh.Failed);
+        await Assert.That(error).Contains("socket gone");
+        await Assert.That(File.ReadAllText(path)).IsEqualTo(LaunchdUnit.Plist(Spec()));
+    }
 }
