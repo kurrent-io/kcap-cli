@@ -679,11 +679,12 @@ public partial class App : Application {
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time, localRoot: _localRoot);
         var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var senders = new ServerMessageSenderSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
         var readers = new PullRequestReaderRegistry(pullRequests, [_gh = new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
-        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts);
+        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts, senders);
 
         var machineId = new MachineId(_config).ReadPersisted();
         var sessionHttp = ServerHttp(profiles);
@@ -834,7 +835,7 @@ public partial class App : Application {
             commands: commands, drafts: drafts, inputSending: attention.ReplySending,
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
-            pullRequestLinksChanged: pullRequestTones.Refresh);
+            pullRequestLinksChanged: pullRequestTones.Refresh, senders: senders);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -844,7 +845,8 @@ public partial class App : Application {
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
-                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent)
+                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
+                    senders: senders)
                 : null;
 
         _coordinator = new MainWindowCoordinator(

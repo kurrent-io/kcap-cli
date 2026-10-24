@@ -249,7 +249,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             Action? requestSignIn = null, Action? linkGitHub = null, IObservable<Unit>? signInCompleted = null, IPlanSource? plans = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             LastReads<PullRequestSnapshot>? pullRequestSnapshots = null, Action<string>? pullRequestLinksChanged = null,
-            SubagentEventsReader? readSubagent = null) {
+            SubagentEventsReader? readSubagent = null, IMessageSenderSource? senders = null) {
         _drafts = drafts;
         _time = time;
         _permissions = permissions;
@@ -308,7 +308,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
                     : lane.PendingInputChanged.Where(u => u.SessionId == sid).Select(u => u.Items))),
-            planActivity: planActivity, openCard: OpenCard, drafts: drafts) { InputSending = inputSending };
+            planActivity: planActivity, openCard: OpenCard, drafts: drafts, senders: senders) { InputSending = inputSending };
         lane.Status.Select(s => s.Subject).DistinctUntilChanged()
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Subscribe(subject => {
