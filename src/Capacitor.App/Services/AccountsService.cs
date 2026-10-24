@@ -11,7 +11,7 @@ namespace Capacitor.App.Services;
 /// One lock guards the snapshot, the waiters, the loop token and the disposed flag, so a waiter
 /// registered after a publish sees that snapshot and one registered before it is released by it.
 public sealed class AccountsService : IAccountsService, IDisposable {
-    const string Capability = "accounts/1";
+    internal const string Capability = "accounts/1";
     static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(1);
 
     sealed class Waiter(long revision) {

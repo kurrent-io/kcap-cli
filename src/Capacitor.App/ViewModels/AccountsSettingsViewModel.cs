@@ -13,6 +13,7 @@ namespace Capacitor.App.ViewModels;
 /// Only a confirmed outcome reads as done: the next snapshot shows what an unconfirmed one left behind.
 public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     static readonly HarnessId[] Vendors = [HarnessId.Claude, HarnessId.Codex];
+    const string UpdateKcap = "Update kcap on this machine to manage accounts";
 
     readonly Func<MutationRequest, CancellationToken, Task<MutationOutcome>> _runMutation;
     readonly string _daemonName;
@@ -24,7 +25,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _subscriptions = new();
     AccountsSnapshotDto? _snapshot;
     bool _supported;
-    bool _connected;
+    bool _lacksCapability;
     bool _canManage;
     IReadOnlyList<AccountVendorGroup> _groups = [];
     IReadOnlyList<AccountCandidate> _candidates = [];
@@ -59,8 +60,10 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             (manage, busy, row, draft) => manage && !busy && RenameChanges(row, draft));
         CommitRenameCommand = ReactiveCommand.CreateFromTask(CommitRenameAsync, renamable).DisposeWith(_subscriptions);
 
+        // The notice reads the capability off the status itself: Supported arrives on a stream of its
+        // own, and on a disconnect it can land a dispatcher job before the status does.
         daemonStatus.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
-            _connected = status.State == AttachState.Connected;
+            _lacksCapability = status.State == AttachState.Connected && status.Capabilities?.Contains(AccountsService.Capability) != true;
             Refresh();
         }).DisposeWith(_subscriptions);
         accounts.Supported.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(supported => {
@@ -85,7 +88,7 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
     }
 
     public string? ReadOnlyNotice =>
-        _connected && !_supported ? "Update kcap on this machine to manage accounts"
+        _lacksCapability ? UpdateKcap
         : _snapshot is null ? "Accounts are listed once the daemon is connected"
         : null;
 
@@ -145,11 +148,21 @@ public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
             MutationOutcome.Succeeded                   => $"{done} {label}",
             MutationOutcome.Failed { Reason: { } why }  => $"Could not {infinitive} {label}: {why}",
             MutationOutcome.Failed failed               => $"Could not {infinitive} {label} (exit code {failed.ExitCode})",
-            MutationOutcome.Refused refused             => $"Could not {infinitive} {label}: {refused.Reason}",
+            MutationOutcome.Refused { Reason: var why } => RefusalRemedy(why) is { } remedy
+                ? $"Could not {infinitive} {label}. {remedy}"
+                : $"Could not {infinitive} {label}: {why}",
             // Unconfirmed, and every case the lane never produces for an account verb: none reads as done.
             _                                           => $"{doing} {label} could not be confirmed; the list shows the current state",
         };
     }
+
+    // The lane's checks before it runs the CLI.
+    static string? RefusalRemedy(string reason) => reason switch {
+        "cli_below_floor" or "cli_version_unknown" or "cli_override_missing" => UpdateKcap,
+        "cli_not_found"                                                        => "Install the kcap command line to manage accounts",
+        "daemon_renamed_restart_app"                                           => "Restart the app to manage accounts",
+        _                                                                      => null,
+    };
 
     static (string Done, string Infinitive, string Doing) Words(MutationVerb verb) => verb switch {
         MutationVerb.AccountAdd    => ("Added", "add", "Adding"),

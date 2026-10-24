@@ -123,6 +123,9 @@ public class AccountsSettingsViewModelTests {
         var vm = rig.Vm;
         const string notice = "Accounts are listed once the daemon is connected";
 
+        // Connected with accounts/1 while Supported is still false, as on a disconnect: the status decides.
+        await Assert.That(vm.ReadOnlyNotice).IsEqualTo(notice);
+
         rig.Status.OnNext(new AttachStatus(AttachState.Unreachable, null, null));
         await Assert.That(vm.ReadOnlyNotice).IsEqualTo(notice);
         await Assert.That(vm.CanManage).IsFalse();
@@ -224,7 +227,7 @@ public class AccountsSettingsViewModelTests {
 
         rig.Outcome = _ => Task.FromResult<MutationOutcome>(new MutationOutcome.Refused("cli_below_floor", RecoverySurface.Attention));
         await vm.AddDefaultCommand.Execute(rig.Row(".codex")).ToTask();
-        await Assert.That(vm.Message).IsEqualTo("Could not add .codex: cli_below_floor");
+        await Assert.That(vm.Message).IsEqualTo("Could not add .codex. Update kcap on this machine to manage accounts");
         await Assert.That(rig.Requests.Count).IsEqualTo(4);
     });
 
@@ -241,6 +244,17 @@ public class AccountsSettingsViewModelTests {
         await Assert.That(AccountsSettingsViewModel.OutcomeMessage(MutationVerb.AccountRemove, "work", new MutationOutcome.UnconfirmedNoAttach()))
             .IsEqualTo("Removing work could not be confirmed; the list shows the current state");
     }
+
+    [Test]
+    [Arguments("cli_below_floor", "Could not add work. Update kcap on this machine to manage accounts")]
+    [Arguments("cli_version_unknown", "Could not add work. Update kcap on this machine to manage accounts")]
+    [Arguments("cli_override_missing", "Could not add work. Update kcap on this machine to manage accounts")]
+    [Arguments("cli_not_found", "Could not add work. Install the kcap command line to manage accounts")]
+    [Arguments("daemon_renamed_restart_app", "Could not add work. Restart the app to manage accounts")]
+    [Arguments("some_new_refusal", "Could not add work: some_new_refusal")]
+    public async Task A_refusal_reads_as_what_to_do_and_an_unknown_one_keeps_its_reason(string reason, string expected) =>
+        await Assert.That(AccountsSettingsViewModel.OutcomeMessage(
+            MutationVerb.AccountAdd, "work", new MutationOutcome.Refused(reason, RecoverySurface.Attention))).IsEqualTo(expected);
 
     [Test]
     public Task Rename_needs_a_changed_non_blank_label() => AvaloniaSession.RunOnUiAsync(async () => {
