@@ -374,8 +374,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // null = local (daemon.Snapshots governs Harnesses); non-null = the remote machine's own
     // advertised vendors, set by SelectMachineAsync.
     readonly BehaviorSubject<string[]?> _remoteVendorOverride = new(null);
-    // Frozen at selection time — ListRepositoriesAsync's remote branch reads it rather than
-    // re-resolving the daemon list on every menu open.
+    // Frozen at selection time; ListRepositoriesAsync falls back to it only when the live registry
+    // no longer lists the machine.
     MachineOption? _selectedRemoteMachine;
 
     readonly ObservableAsPropertyHelper<bool> _machinePickerVisible;
@@ -997,14 +997,19 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// offered only when that list is empty — with real repos, an empty selection adopts the
     /// most recently used known path instead.
     ///
-    /// A remote machine selection swaps this entirely: only that machine's own advertised
-    /// RepoPaths are offered (no known-repos merge, no scratch adoption — a remote path is never
-    /// verified locally), each labelled DefaultVendor since there is no per-repo remembered
-    /// harness for a machine that is not this one.
+    /// A remote machine selection swaps this entirely: that machine's advertised RepoPaths as the
+    /// registry reports them now, plus a typed path not yet among them (no known-repos merge, no
+    /// scratch adoption — a remote path is never verified locally), each labelled DefaultVendor
+    /// since there is no per-repo remembered harness for a machine that is not this one.
     public async Task<IReadOnlyList<RepositoryOption>> ListRepositoriesAsync() {
         if (RemoteMachineSelected) {
             var remoteSelected = SelectedRepoPath;
-            return (_selectedRemoteMachine?.RepoPaths ?? [])
+            var advertised = FindMachine(_currentDaemons, SelectedMachine, _lastViewerId)?.RepoPaths
+                          ?? _selectedRemoteMachine?.RepoPaths ?? [];
+            var remotePaths = advertised.ToList();
+            if (remoteSelected.Length > 0 && !remotePaths.Contains(remoteSelected, PathComparer))
+                remotePaths.Add(remoteSelected);
+            return remotePaths
                 .Select(p => new RepositoryOption(p, DefaultVendor, PathComparer.Equals(p, remoteSelected)))
                 .ToList();
         }
@@ -1230,6 +1235,24 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         SetVendor(Lookup(saved.HarnessByRepo, SelectedRepoPath) ?? DefaultVendor);
         RevalidateVendor(Harnesses);
     }
+
+    /// A remote machine's repository is typed rather than picked: the local folder picker would hand
+    /// it a path from this machine. Returns the reason a path was refused, or null once it is
+    /// selected. Only shape is checked; existence and the daemon's allowed-repo list are judged by
+    /// the daemon at launch.
+    public async Task<string?> EnterRemoteRepositoryAsync(string path) {
+        var trimmed = path.Trim();
+        if (!RemoteMachineSelected) return "Pick a remote machine first.";
+        if (!LooksAbsolute(trimmed)) return $"Enter the full path of the repository on {SelectedMachine}.";
+        await SelectRepositoryAsync(trimmed);
+        return null;
+    }
+
+    /// Absolute on any platform the remote machine might run, which need not be this one's.
+    internal static bool LooksAbsolute(string path) =>
+        path.StartsWith('/')
+     || path.StartsWith(@"\\", StringComparison.Ordinal)
+     || path is [_, ':', '\\' or '/', ..] && char.IsAsciiLetter(path[0]);
 
     /// Read against the draft's machine, not the current selection, which may have moved during an upload.
     string? HarnessErrorFor(LaunchDraft draft) {

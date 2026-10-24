@@ -1789,6 +1789,67 @@ public class HomeViewModelTests {
         });
     }
 
+    /// Pins the remote repository menu to the registry as it stands at menu open: a path the machine
+    /// advertises after it was selected (its first launch there) is offered without re-selecting it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task RemoteRepositoryMenuReadsTheMachinesCurrentAdvertisement() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
+            ]);
+            using var vm = new HomeViewModel(
+                new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo", "/w/new"] },
+            ]);
+
+            var repos = await vm.ListRepositoriesAsync();
+            await Assert.That(repos.Select(r => r.RepoPath)).IsEquivalentTo(["/w/repo", "/w/new"]);
+        });
+    }
+
+    /// Pins the typed remote path: a full path on any platform is selected, offered in the menu
+    /// before the machine advertises it, and never written to the local store; anything else is
+    /// refused with the selection left alone.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task EnteringARemoteRepositorySelectsAFullPathAndRefusesARelativeOne() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            var store = new AppStateStore(path);
+            var remote = new FakeRemoteAgents();
+            remote.DaemonsSubject.OnNext([
+                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
+            ]);
+            using var vm = new HomeViewModel(
+                new FakeDaemonClientService(), store, new RecordingLaunchClient(), Known(), TimeProvider.System,
+                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"));
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+
+            await Assert.That(await vm.EnterRemoteRepositoryAsync("git/other")).IsNotNull();
+            await Assert.That(await vm.EnterRemoteRepositoryAsync("  ")).IsNotNull();
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/w/repo");
+
+            await Assert.That(await vm.EnterRemoteRepositoryAsync("  /srv/other  ")).IsNull();
+            await Assert.That(vm.SelectedRepoPath).IsEqualTo("/srv/other");
+            var repos = await vm.ListRepositoriesAsync();
+            await Assert.That(repos.Single(r => r.Selected).RepoPath).IsEqualTo("/srv/other");
+            await Assert.That(repos.Count).IsEqualTo(2);
+
+            await Assert.That(await vm.EnterRemoteRepositoryAsync(@"C:\src\repo")).IsNull();
+            await Assert.That(await vm.EnterRemoteRepositoryAsync(@"\\host\share\repo")).IsNull();
+
+            var saved = await store.LoadAsync();
+            await Assert.That(saved.HarnessByRepo is null || saved.HarnessByRepo.Count == 0).IsTrue();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task LaunchCarriesTheSelectedMachine() {
