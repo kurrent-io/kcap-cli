@@ -533,7 +533,7 @@ public class WorkspaceViewSmokeTests {
                 var working = StatusMark(window);
                 await Assert.That(working.IsEffectivelyVisible).IsTrue();
                 var workingWord = working.FindControl<TextBlock>("StatusWord")!;
-                await Assert.That(workingWord.Text).IsEqualTo("Working");
+                await Assert.That(workingWord.Text).StartsWith("Thinking…");
                 await Assert.That(workingWord.Foreground).IsSameReferenceAs(window.FindResource("KcapPurpleBrush"));
                 await Assert.That(workingWord.Bounds.Width).IsGreaterThan(workingWord.Bounds.Height);
                 var path = Find<TextBlock>(window, "WorkspaceSubtitle")!;
@@ -542,7 +542,7 @@ public class WorkspaceViewSmokeTests {
                 await Assert.That(RightOf(workingWord)).IsLessThanOrEqualTo(RightOf(working) + 1);
                 await Assert.That(LeftOf(path)).IsGreaterThanOrEqualTo(RightOf(working) - 1);
                 var workingLines = TipLines(working);
-                await Assert.That(workingLines[0]).StartsWith("Working for ");
+                await Assert.That(workingLines[0]).IsEqualTo(workingWord.Text);
                 await Assert.That(workingLines[1]).IsEqualTo("Status");
                 await Assert.That(AutomationProperties.GetName(working)).IsEqualTo(workingLines[0]);
                 await Assert.That(Visible(window, "ChatActivityNote")).IsFalse();

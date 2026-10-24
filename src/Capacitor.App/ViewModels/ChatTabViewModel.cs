@@ -565,12 +565,32 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var elapsed = ActivityNote.StartsWith("Working for ", StringComparison.Ordinal) ? ActivityNote : null;
         var stage = ActivityNote.StartsWith("Starting ", StringComparison.Ordinal) ? ActivityNote : null;
         var answerExpected = Cards.PendingCards.Any(static c => c is QuestionCardViewModel or AcpQuestionCardViewModel);
-        AgentStatus = SessionStatusDots.Present(
+        var presented = SessionStatusDots.Present(
             _status, _awaitingInput, _waitsOnUser, _liveSubagents, HasPendingCards,
             question ? _usageLimit!.Summary : null, stage, elapsed,
             answerExpected: answerExpected, ended: _ended, liveCommands: _runs.RunningCommandCount,
             terminalDialog: _terminalDialog is not null, interruption: _interruption, agentId: _agentId);
+        if (presented.Kind == AgentStatusKind.Working && _awaitingInput == false && _workingSince is { } since) {
+            var running = _pendingTools.Values.Where(static call => call.IsRunning).ToList();
+            var label = ForegroundLabel(running, _worked + _time.GetElapsedTime(since));
+            var facts = presented.Facts.ToList();
+            facts[0] = new(label, "Status");
+            if (elapsed is not null) facts.Insert(1, new(elapsed, "Elapsed"));
+            presented = presented with { Label = label, Facts = facts, Tip = SessionStatusDots.FormatTip(facts) };
+        }
+        AgentStatus = presented;
         StatusText = AgentStatus.Label;
+    }
+
+    internal static string ForegroundLabel(IReadOnlyList<ToolCallItem> running, TimeSpan elapsed) {
+        if (running.Count == 1) {
+            var call = running[0];
+            var subject = call.HasDetail ? call.Detail : call.HasLabel ? call.Label! : call.Name;
+            if (subject.Length > 42) subject = subject[..41] + "…";
+            return "Running: " + subject;
+        }
+        if (running.Count > 1) return $"Running {running.Count} tools…";
+        return $"Thinking… {RunRow.Duration(elapsed)}";
     }
 
     static string WorkingNote(TimeSpan elapsed) => $"Working for {RunRow.Duration(elapsed)}";

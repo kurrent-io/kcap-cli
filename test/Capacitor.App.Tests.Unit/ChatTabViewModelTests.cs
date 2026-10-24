@@ -25,6 +25,47 @@ namespace Capacitor.App.Tests.Unit;
 public class ChatTabViewModelTests {
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Running_tool_detail_is_the_accessible_status_and_preserves_elapsed_time() {
+        await RunOnUiAsync(async () => {
+            var h = Claude();
+            try {
+                var path = Tmp.CreateFile("running.jsonl", [UserLine, ToolCallLine]);
+                await h.PushAsync(Dto(path) with { Status = "Running", AwaitingInput = false });
+                h.Time.Advance(TimeSpan.FromSeconds(2));
+                await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Running: ls -la");
+                await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo(h.Chat.AgentStatus.Label);
+                await Assert.That(h.Chat.AgentStatus.Facts[0].Text).IsEqualTo(h.Chat.AgentStatus.Label);
+                await Assert.That(h.Chat.AgentStatus.Facts[1].Text).IsEqualTo("Working for 2s");
+                await Assert.That(h.Chat.AgentStatus.Tip).Contains("Working for 2s");
+            } finally { await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Foreground_activity_updates_accessibility_and_stops_after_teardown() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness(TranscriptChat.Journal);
+            var tornDown = false;
+            try {
+                await h.PushAsync(Agent("a1", "pi", hasTerminal: false) with { Status = "Running", AwaitingInput = false });
+                h.Time.Advance(TimeSpan.FromSeconds(65));
+                await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Thinking… 1m 05s");
+                await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo(h.Chat.AgentStatus.Label);
+                await Assert.That(h.Chat.AgentStatus.Facts[0].Text).IsEqualTo(h.Chat.AgentStatus.Label);
+                await Assert.That(h.Chat.AgentStatus.Facts[1].Text).IsEqualTo("Working for 1m 05s");
+                var status = h.Chat.AgentStatus;
+                await h.TeardownAsync();
+                tornDown = true;
+                h.Time.Advance(TimeSpan.FromSeconds(5));
+                Dispatcher.UIThread.RunJobs();
+                await Assert.That(h.Chat.AgentStatus).IsEqualTo(status);
+            } finally { if (!tornDown) await h.TeardownAsync(); }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task A_remote_feed_switch_drains_after_the_previous_read_without_a_poll() => RunOnUiAsync(async () => {
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
@@ -2857,6 +2898,10 @@ public class ChatTabViewModelTests {
                 await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 0s");
                 h.Time.Advance(TimeSpan.FromSeconds(65));
                 await Assert.That(h.Chat.ActivityNote).IsEqualTo("Working for 1m 05s");
+                await Assert.That(h.Chat.AgentStatus.Label).IsEqualTo("Working");
+                await Assert.That(h.Chat.AgentStatus.AccessibleName).IsEqualTo("Working for 1m 05s");
+                await Assert.That(h.Chat.AgentStatus.Facts.Any(fact => fact.Text == "Waiting for input.")).IsTrue();
+                await Assert.That(h.Chat.AgentStatus.Facts.Any(fact => fact.Text == "2 subagents running")).IsTrue();
 
                 await h.PushAsync(waiting with { LiveSubagents = 0 });
                 await Assert.That(h.Chat.ActivityNote).IsEqualTo("");
