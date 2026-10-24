@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
+using Docker.DotNet;
 using DotNet.Testcontainers.Configurations;
 using DotNet.Testcontainers.Containers;
 
@@ -15,15 +16,8 @@ public class ContainerHostPortsTests {
     [Test]
     [NotInParallel]
     public async Task A_full_cycle_of_picks_stays_in_range_and_never_hands_out_a_held_port() {
-        var held = ContainerHostPorts.Next() + 1;
-        if (held > ContainerHostPorts.Last) held = ContainerHostPorts.First;
-
-        using var holder = new TcpListener(IPAddress.Any, held);
-        try {
-            holder.Start();
-        } catch (SocketException) {
-            // something else already holds it, which serves as well
-        }
+        var (held, holder) = HoldTheNextPort();
+        using var _ = holder;
 
         var drawn = Enumerable.Range(0, ContainerHostPorts.Last - ContainerHostPorts.First + 1)
             .Select(_ => (int)ContainerHostPorts.Next())
@@ -32,6 +26,28 @@ public class ContainerHostPortsTests {
         await Assert.That(drawn).DoesNotContain(held);
         await Assert.That(drawn.All(p => p is >= ContainerHostPorts.First and < EphemeralFloor)).IsTrue();
     }
+
+    /// <summary>Docker publishes on IPv6 as well as IPv4, so a port something holds on IPv6 alone is just as taken.</summary>
+    [Test]
+    [NotInParallel]
+    public async Task A_port_held_on_ipv6_alone_is_passed_over() {
+        Skip.When(!Socket.OSSupportsIPv6, "this host has no IPv6");
+
+        var (held, holder) = HoldTheNextPort(ipv6Only: true);
+        using var _ = holder;
+
+        await Assert.That((int)ContainerHostPorts.Next()).IsNotEqualTo(held);
+    }
+
+    /// <summary>Docker refuses a taken host port in two words: the kernel's, when another process holds it, and its own,
+    /// when another container already published it.</summary>
+    [Test]
+    [Arguments("failed to bind port 0.0.0.0:33201/tcp: Error starting userland proxy: listen tcp4 0.0.0.0:33201: bind: address already in use", true)]
+    [Arguments("Bind for 0.0.0.0:20417 failed: port is already allocated", true)]
+    [Arguments("could not kill container: abc is zombie and can not be killed", false)]
+    public async Task Only_a_bind_refusal_is_a_host_port_clash(string message, bool clash) =>
+        await Assert.That(ContainerHostPorts.IsClash(new DockerApiException(HttpStatusCode.InternalServerError,
+            $"{{\"message\":\"driver failed programming external connectivity on endpoint gifted_wozniak (8b56): {message}\"}}"))).IsEqualTo(clash);
 
     /// <summary>The resource reaper starts with the first container of the process, so it is running by the time the
     /// emulator is up.</summary>
@@ -52,5 +68,22 @@ public class ContainerHostPortsTests {
 
         await Assert.That(new Uri(emulator.BaseUrl).Port).IsLessThan(EphemeralFloor);
         await Assert.That(reaperPort).IsLessThan(EphemeralFloor);
+    }
+
+    /// <summary>Holds the port one past the latest pick, which is the one the next pick lands on.</summary>
+    static (int Port, TcpListener Holder) HoldTheNextPort(bool ipv6Only = false) {
+        var port = ContainerHostPorts.Next() + 1;
+        if (port > ContainerHostPorts.Last) port = ContainerHostPorts.First;
+
+        var holder = new TcpListener(ipv6Only ? IPAddress.IPv6Any : IPAddress.Any, port);
+        if (ipv6Only) holder.Server.DualMode = false;
+
+        try {
+            holder.Start();
+        } catch (SocketException) {
+            // something else already holds it, which serves as well
+        }
+
+        return (port, holder);
     }
 }

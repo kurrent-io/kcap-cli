@@ -65,19 +65,35 @@ public static class ContainerHostPorts {
         }
     }
 
-    static bool IsClash(Exception ex) =>
+    /// <summary>"address already in use" when a process holds the picked port, "port is already allocated" when another
+    /// container published it first.</summary>
+    internal static bool IsClash(Exception ex) =>
         ex is DockerApiException { StatusCode: HttpStatusCode.InternalServerError } api
-     && api.ResponseBody.Contains("address already in use", StringComparison.Ordinal);
+     && (api.ResponseBody.Contains("address already in use", StringComparison.Ordinal)
+      || api.ResponseBody.Contains("port is already allocated", StringComparison.Ordinal));
 
+    // Docker publishes on IPv6 as well as IPv4, so a port held on either is taken. A host without IPv6 refuses that
+    // bind for its own reasons, which say nothing about the port.
     static bool IsFree(int port) {
         try {
-            var listener = new TcpListener(IPAddress.Any, port);
-            listener.Start();
-            listener.Stop();
+            using var v4 = new TcpListener(IPAddress.Any, port);
+            v4.Start();
+        } catch (SocketException) {
+            return false;
+        }
 
+        if (!Socket.OSSupportsIPv6) return true;
+
+        try {
+            using var v6 = new TcpListener(IPAddress.IPv6Any, port);
+            v6.Server.DualMode = false;
+            v6.Start();
+        } catch (SocketException ex) when (ex.SocketErrorCode != SocketError.AddressAlreadyInUse) {
             return true;
         } catch (SocketException) {
             return false;
         }
+
+        return true;
     }
 }
