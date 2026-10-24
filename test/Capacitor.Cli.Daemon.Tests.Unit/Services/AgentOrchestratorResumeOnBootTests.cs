@@ -195,8 +195,8 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("Named by the caller", Derived: false));
     }
 
-    /// <summary>An entry written without the flag cannot say which kind its title is. The session already
-    /// holds that title from its first registration, so a placeholder re-send changes nothing there.</summary>
+    /// <summary>An entry without the flag cannot say which kind its title is, so it resumes as derived: a resumed
+    /// session already holds its start title, and a placeholder never displaces it.</summary>
     [Test]
     public async Task A_resumed_title_without_the_flag_registers_as_derived() {
         var f = Build();
