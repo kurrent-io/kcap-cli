@@ -1840,7 +1840,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         var hooksFailed = false;
         var hooksCurrent = refreshOnly && File.Exists(agentPath) && KiroHooksInstaller.ReadMarker(agentPath) == CapacitorVersion.Current();
         if (!hooksCurrent) {
-            if (InstallKiroHooks(agentPath, env.Harnesses)) {
+            if (InstallKiroHooks(agentPath, env.Harnesses, env.Stderr)) {
                 var clonedFrom = KiroHooksInstaller.ReadPreviousDefault(agentPath) ?? "your default agent";
                 await env.Stdout.WriteLineAsync(
                     refreshOnly
@@ -2059,7 +2059,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
     /// <c>chat.defaultAgent</c> to kcap. The replaced default is recorded in the
     /// marker for <c>plugin remove --kiro</c> to restore. Idempotent.
     /// </summary>
-    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses) {
+    public static bool InstallKiroHooks(string agentJsonPath, HarnessRegistry harnesses, TextWriter stderr) {
         try {
             var settingsPath    = KiroSettingsPathFor(agentJsonPath);
             var currentDefault  = KiroSettings.ReadDefaultAgent(settingsPath) ?? "kiro_default";
@@ -2106,7 +2106,7 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
                 // previous default + paths so the user can restore it by hand,
                 // rather than returning the same opaque false as "kiro-cli missing".
                 if (!KiroSettings.SetDefaultAgent(settingsPath, recordedDefault)) {
-                    Console.Error.WriteLine(
+                    stderr.WriteLine(
                         $"[kcap] Kiro install could not be completed OR rolled back. "
                       + $"chat.defaultAgent may still be '{KiroAgentName}' with no install marker. "
                       + $"Your previous default agent was '{recordedDefault}' — restore it manually "
@@ -2771,8 +2771,8 @@ public sealed class PluginCommand(PluginEnvironment env, WorkingDirectory workdi
         return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
     }
 
-    static int PrintUsage() {
-        Console.Error.WriteLine(
+    int PrintUsage() {
+        env.Stderr.WriteLine(
             "Usage: kcap plugin <install|remove> [--project] [--codex|--cursor|--copilot|--gemini|--kiro|--pi|--opencode|--antigravity|--skills] [--tools-only] [--if-installed]"
         );
 
