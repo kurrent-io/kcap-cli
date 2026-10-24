@@ -41,6 +41,10 @@
                 <StackPanel Spacing="4" IsVisible="{Binding HasRepos}">
                     <TextBlock x:Name="FoundLineText" Classes="onboardingLabel" FontSize="15" TextWrapping="Wrap" Text="{Binding FoundLine}" />
                     <TextBlock x:Name="ImportLineText" Classes="onboardingBody" FontSize="13" TextWrapping="Wrap" Text="{Binding ImportLine}" />
+                    <TextBlock x:Name="SharingLineText" Classes="onboardingNote" TextWrapping="Wrap" Text="{Binding SharingLine}"
+                               IsVisible="{Binding SharingLine, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    <TextBlock x:Name="UnmatchedNoteText" Classes="onboardingNote" TextWrapping="Wrap" Text="{Binding UnmatchedNote}"
+                               IsVisible="{Binding UnmatchedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     <Button x:Name="CustomizeButton" Classes="onboardingLink" HorizontalAlignment="Left" Margin="0,4,0,0"
                             Command="{Binding ToggleCustomizeCommand}" AutomationProperties.Name="{Binding CustomizeLabel}">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -128,8 +132,6 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
 
-                    <TextBlock Classes="onboardingNote" Text="{Binding UnmatchedNote}" Margin="0,10,0,0"
-                               IsVisible="{Binding UnmatchedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
 
                 <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}"

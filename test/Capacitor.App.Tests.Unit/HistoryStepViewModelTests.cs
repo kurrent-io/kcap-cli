@@ -76,6 +76,7 @@ public class HistoryStepViewModelTests {
         await h.Vm.Run!.Completion;
 
         await Assert.That(h.Vm.LocalLevels).IsTrue();
+        await Assert.That(h.Vm.SharingLine).IsNull();
         await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r is { Level: ImportLevel.OnlyMe, LastStop: 1 })).IsTrue();
         await Assert.That(h.Cli.ImportRequests.Single().Private).IsTrue();
         await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
@@ -105,8 +106,13 @@ public class HistoryStepViewModelTests {
         foreach (var w in h.Vm.Windows) w.IsSelected = w.Since is null; // the pane's radio group does this
         var narrowed = h.Vm.ImportLine;
 
+        var sharedNoted = h.Vm.SharingLine;
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.OnlyMe;
+        var privateNoted = h.Vm.SharingLine;
         foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.Skip;
 
+        await Assert.That(sharedNoted).IsNotNull();
+        await Assert.That(privateNoted).IsNull();
         await Assert.That(found).IsEqualTo("Found 53 sessions in 3 repositories on test-mac");
         await Assert.That(byDefault).IsEqualTo("kcap imports 27 sessions from all 3 repositories, covering the last 90 days");
         await Assert.That(narrowed).IsEqualTo("kcap imports 13 sessions from 2 of 3 repositories, covering your whole history");
@@ -429,12 +435,13 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.TitlingOffered).IsFalse();
     }
 
-    /// The tracks wait behind Customize; opening it draws one per owner and one per repository.
+    /// The tracks wait behind Customize; opening it draws one per owner and one per repository. What
+    /// Next would leave out or share stays in view either way.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task The_pane_draws_a_track_per_owner_and_per_repository_once_customizing() {
-        var (before, after) = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Report());
+        var (before, after, notes) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Report(unmatched: 4));
             var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
             await h.Vm.Discovery;
@@ -445,6 +452,8 @@ public class HistoryStepViewModelTests {
 
             int Shown() => window.GetVisualDescendants().OfType<ImportTrack>().Count(t => t.IsEffectivelyVisible);
             var collapsed = Shown();
+            var notesShown = window.GetVisualDescendants().OfType<TextBlock>()
+                .Count(t => t.Name is "UnmatchedNoteText" or "SharingLineText" && t.IsEffectivelyVisible);
             window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "CustomizeButton").Command!.Execute(null);
             Dispatcher.UIThread.RunJobs();
             var open = Shown();
@@ -452,10 +461,11 @@ public class HistoryStepViewModelTests {
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return (collapsed, open);
+            return (collapsed, open, notesShown);
         });
 
         await Assert.That(before).IsEqualTo(0);
+        await Assert.That(notes).IsEqualTo(2);
         await Assert.That(after).IsEqualTo(5); // two owners, three repositories
     }
 }

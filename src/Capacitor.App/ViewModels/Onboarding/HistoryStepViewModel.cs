@@ -177,6 +177,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
+    /// Who can read a Shared import, said outside Customize because Shared is the cloud default.
+    public string? SharingLine =>
+        !_discoveredLocal && Groups.SelectMany(g => g.Repos).Any(r => r.Level == ImportLevel.Shared)
+            ? "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me"
+            : null;
+
     /// Titling runs your own agent, so it is a choice only where a harness that titles is in scope.
     public bool TitlingOffered => HasRepos && FromHarnesses.Any(h => h is HarnessId.Claude or HarnessId.Codex);
 
@@ -393,6 +399,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(FoundLine));
         this.RaisePropertyChanged(nameof(ImportLine));
+        this.RaisePropertyChanged(nameof(SharingLine));
     }
 
     string? CountFor(HistoryWindowOption window) {
