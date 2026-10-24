@@ -44,6 +44,15 @@ public class ClaudeLauncherResumeTests {
         await Assert.That(args).DoesNotContain("--session-id");
     }
 
+    /// <summary>A session id learned from a transcript file name is stored in kcap's dashless form; Claude
+    /// reads anything but its own dashed form as a picker search and resumes nothing.</summary>
+    [Test]
+    public async Task Resume_passes_a_dashless_session_id_in_claude_form() {
+        var args = NewLauncher().BuildArgs(NewCtx(null, Resume.Replace("-", ""))).Args;
+
+        await Assert.That(args[Array.IndexOf(args, "--resume") + 1]).IsEqualTo(Resume);
+    }
+
     [Test]
     public async Task Resume_keeps_the_other_flags_in_order() {
         var args = NewLauncher().BuildArgs(NewCtx(null, Resume)).Args;
