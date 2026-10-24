@@ -2,7 +2,6 @@ using Capacitor.Cli.Commands;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
-[NotInParallel]
 public class CleanupCommandTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
@@ -19,14 +18,14 @@ public class CleanupCommandTests {
         await File.WriteAllTextAsync(pidFile, $"{watcher.Pid}\n{PidIdentity.Capture(watcher.Pid)}");
 
         int exit;
-        using var capture = ConsoleOutput.StartCapture();
+        var stdout = new StringWriter();
 
         using (new FileStream(pidFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
-            exit = await new CleanupCommand(watchers).HandleCleanup();
+            exit = await new CleanupCommand(watchers, new StandardStreams(stdout, TextWriter.Null, TextReader.Null)).HandleCleanup();
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(File.Exists(pidFile)).IsTrue();
-        await Assert.That(capture.GetCapturedOutput()).Contains("Could not stop watcher s-a");
-        await Assert.That(capture.GetCapturedOutput()).DoesNotContain("Cleaned up stale PID file for s-a");
+        await Assert.That(stdout.ToString()).Contains("Could not stop watcher s-a");
+        await Assert.That(stdout.ToString()).DoesNotContain("Cleaned up stale PID file for s-a");
     }
 }

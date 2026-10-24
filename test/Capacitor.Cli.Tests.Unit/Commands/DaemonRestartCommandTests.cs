@@ -8,20 +8,21 @@ public class DaemonRestartCommandTests {
     [TempConfigRoot]  public required TempConfigRoot  Config  { get; init; }
     [TempHome]        public required TempHome        Home    { get; init; }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task An_accepted_restart_says_the_agents_resume_on_the_new_daemon() {
         Skip.When(OperatingSystem.IsWindows(), "the control socket is a unix socket");
         var received = FakeControlSocket.AnswerOnce(Daemons.Store, "rs", LocalFrame.RestartAck("restarting"));
-        using var console = ConsoleOutput.StartCapture();
+        var stdout   = new StringWriter();
 
         var exit = await new DaemonCommands(
                 Daemons.Store, Config.Root, Resolutions.None(Config.Root), Home,
-                TestHarnesses.All(), TestBinaries.None, TimeProvider.System)
+                TestHarnesses.All(), TestBinaries.None, TimeProvider.System,
+                new StandardStreams(stdout, TextWriter.Null, TextReader.Null))
             .HandleAsync(["daemon", "restart", "--name", "rs"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That((await received.WaitAsync(TimeSpan.FromSeconds(30)))?.Text).IsEqualTo("now");
-        await Assert.That(console.GetCapturedOutput().Trim())
+        await Assert.That(stdout.ToString().Trim())
             .IsEqualTo("Daemon 'rs': restart accepted; agents are stopped and resumed on the new daemon.");
     }
 

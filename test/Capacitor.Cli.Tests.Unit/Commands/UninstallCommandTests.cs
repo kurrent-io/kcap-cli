@@ -709,20 +709,46 @@ public class UninstallCommandTests {
         return (new KcapLinkRemover([folder], binary), link, binary);
     }
 
+    static WatcherPaths WatchersOf(Fixture f) => new(f.Root.Path("watchers"));
+
+    /// What the daemon and watcher stop step reports reaches the command's own writers, the survivor
+    /// that fails the uninstall included.
+    [Test]
+    public async Task A_watcher_the_stop_step_cannot_end_is_reported_on_the_commands_own_writers() {
+        await using var fixture = await Fixture.CreateAsync();
+        var paths = WatchersOf(fixture);
+        Directory.CreateDirectory(paths.Directory);
+
+        using var watcher = DummyProcess.StartSleep(30);
+        var       pidFile = paths.PidFile("s-a");
+        await File.WriteAllTextAsync(pidFile, $"{watcher.Pid}\n{PidIdentity.Capture(watcher.Pid)}");
+
+        int exit;
+        // Held exclusively, the pid file can be neither read to stop the watcher nor deleted.
+        using (new FileStream(pidFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            exit = await NewCommand(fixture).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(fixture.Out.ToString()).Contains("No daemons are running.");
+        await Assert.That(fixture.Out.ToString()).Contains("Could not stop watcher s-a");
+        await Assert.That(fixture.Err.ToString()).Contains("Watcher s-a is still running.");
+    }
+
     UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null, string stdin = "") {
         var userHome = home ?? f.UserHome;
         var profiles = Resolutions.None(f.Root);
         var daemons  = store ?? Daemons.Store;
-        var watchers = TestWatchers.For(f.Root, profiles, new FixedCapacitorHttpClient());
+        var watchers = TestWatchers.In(WatchersOf(f), f.Root, profiles, new FixedCapacitorHttpClient());
         var harness  = TestHarnesses.Under(userHome);
+        var console  = new StandardStreams(f.Out, f.Err, new StringReader(stdin));
 
         return new(
             daemons, f.Root, userHome, harness, TestBinaries.None, new AgentsPaths(userHome),
             new WorkingDirectory(workdir ?? AppContext.BaseDirectory),
-            recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System),
+            recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System, console),
             stacks ?? new EmptyStackFactory(userHome, f.Root),
             links ?? new KcapLinkRemover([], ""),
-            new StandardStreams(f.Out, f.Err, new StringReader(stdin)));
+            console);
     }
 
     sealed class EmptyStackFactory(UserHome home, ConfigRoot config) : ILocalStackFactory {
