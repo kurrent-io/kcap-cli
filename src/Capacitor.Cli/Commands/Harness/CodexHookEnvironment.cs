@@ -10,5 +10,5 @@ namespace Capacitor.Cli.Commands.Harness;
 /// <param name="HostedAppServer">An envelope-sourced hosted session: the daemon owns its transcript and its approvals.</param>
 sealed record CodexHookEnvironment(TextWriter Stdout, TextWriter Stderr, bool Skip, bool HostedAppServer) {
     public static CodexHookEnvironment FromProcess(Func<string, string?> getEnv) =>
-        new(Console.Out, Console.Error, getEnv("KCAP_SKIP") is "1", getEnv(HostedAgent.HostedAppServerVar) is "1");
+        new(Console.Out, Console.Error, getEnv(HostedAgent.SkipVar) is "1", getEnv(HostedAgent.HostedAppServerVar) is "1");
 }

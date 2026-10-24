@@ -48,7 +48,7 @@ sealed class CodexHookCommand(
         GitProviderRouter router, WorkingDirectory workdir) {
     readonly SessionStartAudience audience = SessionStartAudience.From(hosted);
 
-    readonly AgentHookPoster _poster = new(config, profiles, http, watchers, clock.Time);
+    AgentHookPoster Poster(CodexHookEnvironment env) => new(config, profiles, http, watchers, clock.Time, env.Stderr);
 
     string Url => profiles.Resolution.ServerUrl!;
 
@@ -245,7 +245,7 @@ sealed class CodexHookCommand(
         await NotifyToolSettledAsync(node, eventName);
 
         if (eventName switch { "Stop" => true, "UserPromptSubmit" or "PreToolUse" => false, _ => (bool?) null } is { } waiting)
-            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling).Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "codex", TryGetString(node, "session_id"), TryGetString(node, "cwd"), waiting, clock.Budget(Ceiling));
 
         // After `kcap disable`, no POST and no watcher restart: the next Stop would otherwise re-send
         // a session whose data was just deleted server-side.
@@ -294,7 +294,7 @@ sealed class CodexHookCommand(
             // CLI's top-level guard would exit 0 with empty stdout and Codex would
             // report "invalid hook output". Emit the
             // event-appropriate fallback here first, and record for diagnosis.
-            CrashReporter.Record(config, "hook", ex, clock.Time);
+            CrashReporter.Record(config, "hook", ex, clock.Time, env.Stderr);
             EmitFallbackOutput(env, eventName);
             return 0;
         }
@@ -308,7 +308,7 @@ sealed class CodexHookCommand(
         var sessionId  = TryGetString(node, "session_id");
         var cwd        = TryGetString(node, "cwd");
         var subagentId = SubagentIdOf(node);
-        var budget     = clock.Budget(Ceiling).Remaining;
+        var budget     = clock.Budget(Ceiling);
         var sentAt     = clock.Time.GetUtcNow().ToUnixTimeMilliseconds();
 
         return eventName switch {
@@ -407,7 +407,7 @@ sealed class CodexHookCommand(
             budget.Remaining);
 
         var spool = new HookSpool(config, clock.Time);
-        var outcome = await _poster.PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
+        var outcome = await Poster(env).PostOrSpoolAsync("session-start/codex", enriched, "codex-hook", spool,
             sessionId: sessionId ?? "", route: "session-start/codex");
 
         // After the post, so a fault here cannot lose the session-start record; before the stdout handshake, because
@@ -441,7 +441,7 @@ sealed class CodexHookCommand(
             HookSpool spool, JsonNode? enrichedNode, string? sessionId, HookPostOutcome outcome, CodexHookEnvironment env) {
         var transcriptSpool = new TranscriptSpool(config, clock.Time);
 
-        _ = _poster.DrainSpoolsAsync(spool, transcriptSpool, sessionId);
+        _ = Poster(env).DrainSpoolsAsync(spool, transcriptSpool, sessionId);
 
         if (!AgentHookPoster.ShouldSpawnAfter(outcome, Url)) return Task.CompletedTask;
 
@@ -451,7 +451,7 @@ sealed class CodexHookCommand(
         return sessionId is not null && transcript is not null && !env.HostedAppServer
             ? watchers.EnsureWatcherRunning(sessionId, transcript,
                 agentId: null, sessionIdOverride: null, cwd: cwd,
-                skipTitle: false, vendor: "codex")
+                skipTitle: false, vendor: "codex", stderr: env.Stderr)
             : Task.CompletedTask;
     }
 
@@ -478,7 +478,7 @@ sealed class CodexHookCommand(
             if (!env.HostedAppServer) {
                 await watchers.EnsureWatcherRunning(sessionId, transcript,
                     agentId: null, sessionIdOverride: null, cwd: cwd,
-                    skipTitle: false, vendor: "codex"
+                    skipTitle: false, vendor: "codex", stderr: env.Stderr
                 );
             }
 

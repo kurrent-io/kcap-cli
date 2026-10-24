@@ -11,9 +11,8 @@ using WireMock.Server;
 namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 
 /// The tool-settled relay a daemon-hosted Codex session sends its daemon so a prompt answered in
-/// Codex's terminal is retired. Bare <c>[NotInParallel]</c>: the relay silently drops its POST once
-/// <see cref="DaemonBridgeRelay.Cap"/> is spent, which a loaded test host spends before the bridge answers.
-[NotInParallel]
+/// Codex's terminal is retired. On a clock that never moves unless a test ages it, so the relay's cap
+/// cannot run out under a loaded host.
 public class CodexHookToolSettledRelayTests {
     [TempHome] public required TempHome Home { get; init; }
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
@@ -47,7 +46,7 @@ public class CodexHookToolSettledRelayTests {
 
     async Task<int> RunAsync(HostedAgent hosted, string eventName, HookClock? clock = null, string extraFields = "") {
         var payload = $$$"""{"hook_event_name":"{{{eventName}}}","session_id":"019e0322-05fc-7570-be65-75719c3ea861","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"ls"}{{{extraFields}}}}""";
-        return await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+        return await new CodexHookCommand(Config.Root, Resolutions.At("http://server.example", Config.Root), clock ?? new HookClock(new FakeTimeProvider()), Home, TestHarnesses.Under(Home), hosted, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At("http://server.example", Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
             .Handle(new StringReader(payload), new CodexHookEnvironment(TextWriter.Null, TextWriter.Null, Skip: false, HostedAppServer: false));
     }
 

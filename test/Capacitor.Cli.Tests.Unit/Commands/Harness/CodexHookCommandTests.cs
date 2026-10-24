@@ -172,6 +172,17 @@ public class CodexHookCommandTests : IDisposable {
         await Assert.That(sw.Elapsed).IsLessThan(TimeSpan.FromSeconds(5));
     }
 
+    /// What the hook's poster reports goes to the run's own stderr, which Codex reads as the hook's result.
+    [Test]
+    public async Task SessionStart_reports_an_unusable_server_on_the_runs_own_stderr() {
+        var exit = await RunAsync("""{"hook_event_name":"SessionStart","session_id":"abc","cwd":"/tmp"}""",
+            serverUrl: "localhost:5108", spawner: new FakeWatcherSpawner());
+
+        await Assert.That(exit).IsEqualTo(0);
+        await Assert.That(_stderr.ToString()).Contains("session-start/codex spooled, not sent");
+        await Assert.That(JsonDocument.Parse(Stdout).RootElement.GetProperty("continue").GetBoolean()).IsTrue();
+    }
+
     // A scheme-less server URL is refused before any client is built, and the hook still answers.
     [Test]
     public async Task Stop_with_malformed_base_url_still_emits_continue_and_returns_zero() {
