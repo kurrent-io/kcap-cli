@@ -25,6 +25,12 @@ public sealed class RailPreferencesStore(IAppStateStore store) {
         return For(await store.LoadAsync().ConfigureAwait(false), serverUrl, userId);
     }
 
+    /// The user this profile last resolved to, if any.
+    public async Task<string?> LastUserAsync(string serverUrl, string profileName) {
+        var state = await store.LoadAsync().ConfigureAwait(false);
+        return state.LastUserByProfile is { } users && users.TryGetValue(ProfileKey(serverUrl, profileName), out var userId) ? userId : null;
+    }
+
     public Task SaveAsync(string serverUrl, string userId, RailPreferences preferences) =>
         store.UpdateAsync(state => state with {
             RailPreferencesByUser = new Dictionary<string, RailPreferences>(state.RailPreferencesByUser ?? new Dictionary<string, RailPreferences>(), StringComparer.Ordinal) {

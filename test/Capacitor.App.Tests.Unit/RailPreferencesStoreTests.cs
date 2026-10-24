@@ -33,6 +33,16 @@ public class RailPreferencesStoreTests {
     }
 
     [Test]
+    public async Task Last_user_is_null_until_a_profile_binds_one() {
+        using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+        var store = new RailPreferencesStore(new AppStateStore(path));
+
+        await Assert.That(await store.LastUserAsync(Url, "kurrent")).IsNull();
+        await store.BindUserAsync(Url, "kurrent", "u1");
+        await Assert.That(await store.LastUserAsync(Url, "kurrent")).IsEqualTo("u1");
+    }
+
+    [Test]
     public async Task Two_users_on_one_profile_keep_separate_sets() {
         using var tmp = TempDir.WithPathTo("app-state.json", out var path);
         var store = new RailPreferencesStore(new AppStateStore(path));

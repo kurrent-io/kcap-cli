@@ -61,10 +61,15 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         set {
             if (_scope == value) return;
             this.RaiseAndSetIfChanged(ref _scope, value);
+            this.RaisePropertyChanged(nameof(IsMine));
+            this.RaisePropertyChanged(nameof(IsTeam));
             if (_sessions is not null) _sessions.Scope = value;
             Persist();
         }
     }
+
+    public bool IsMine => _scope == RailScope.Mine;
+    public bool IsTeam => _scope == RailScope.Team;
 
     RailState _state;
     public RailState State {
@@ -72,10 +77,17 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         set {
             if (_state == value) return;
             this.RaiseAndSetIfChanged(ref _state, value);
+            this.RaisePropertyChanged(nameof(IsAll));
+            this.RaisePropertyChanged(nameof(IsLive));
+            this.RaisePropertyChanged(nameof(IsEnded));
             _stateFilter.OnNext(StateFilter());
             Persist();
         }
     }
+
+    public bool IsAll => _state == RailState.All;
+    public bool IsLive => _state == RailState.Live;
+    public bool IsEnded => _state == RailState.Ended;
 
     RailGrouping _grouping;
     public RailGrouping Grouping {
@@ -83,6 +95,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         set {
             if (_grouping == value) return;
             this.RaiseAndSetIfChanged(ref _grouping, value);
+            this.RaisePropertyChanged(nameof(GroupingLabel));
             _groupComparer.OnNext(GroupComparer(value));
             _groupingChanges.OnNext(value);
             _regroup.OnNext(Unit.Default);
@@ -90,16 +103,34 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         }
     }
 
+    public string GroupingLabel => GroupingName(_grouping);
+
+    public static string GroupingName(RailGrouping grouping) => grouping switch {
+        RailGrouping.None => "No grouping",
+        RailGrouping.Repository => "Repository",
+        RailGrouping.Date => "Date",
+        _ => "Status",
+    };
+
     RailSort _sort;
     public RailSort Sort {
         get => _sort;
         set {
             if (_sort == value) return;
             this.RaiseAndSetIfChanged(ref _sort, value);
+            this.RaisePropertyChanged(nameof(SortLabel));
             _rowComparer.OnNext(RowComparer(value, Descending));
             Persist();
         }
     }
+
+    public string SortLabel => SortName(_sort);
+
+    public static string SortName(RailSort sort) => sort switch {
+        RailSort.LastUpdated => "Last updated",
+        RailSort.Created => "Created",
+        _ => "Title",
+    };
 
     bool _descending;
     public bool Descending {
@@ -107,10 +138,19 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         set {
             if (_descending == value) return;
             this.RaiseAndSetIfChanged(ref _descending, value);
+            this.RaisePropertyChanged(nameof(DirectionLabel));
             _rowComparer.OnNext(RowComparer(Sort, value));
             Persist();
         }
     }
+
+    public string DirectionLabel => _descending ? "Descending" : "Ascending";
+
+    public ReactiveCommand<RailScope, Unit> SetScopeCommand { get; }
+    public ReactiveCommand<RailState, Unit> SetStateCommand { get; }
+    public ReactiveCommand<RailGrouping, Unit> SetGroupingCommand { get; }
+    public ReactiveCommand<RailSort, Unit> SetSortCommand { get; }
+    public ReactiveCommand<Unit, Unit> ToggleDirectionCommand { get; }
 
     public RailPreferences Preferences =>
         new(Scope, State, Grouping, Sort, Descending, [.. _collapsed.Order(StringComparer.Ordinal)]);
@@ -143,7 +183,8 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             Action<string>? openServerSession = null,
             IServerSessionsService? sessions = null,
             RailPreferences? preferences = null,
-            Action<RailPreferences>? persistPreferences = null) {
+            Action<RailPreferences>? persistPreferences = null,
+            Func<string, Task<RailPreferences>>? bindUserPreferences = null) {
         _directory = directory;
         _sessions = sessions;
         _persist = persistPreferences;
@@ -157,6 +198,11 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         _collapsed = new HashSet<string>(initial.Collapsed, StringComparer.Ordinal);
         _today = LocalDay(_time.GetUtcNow());
         if (sessions is not null) sessions.Scope = _scope;
+        SetScopeCommand = ReactiveCommand.Create<RailScope>(scope => Scope = scope).DisposeWith(_disposables);
+        SetStateCommand = ReactiveCommand.Create<RailState>(state => State = state).DisposeWith(_disposables);
+        SetGroupingCommand = ReactiveCommand.Create<RailGrouping>(grouping => Grouping = grouping).DisposeWith(_disposables);
+        SetSortCommand = ReactiveCommand.Create<RailSort>(sort => Sort = sort).DisposeWith(_disposables);
+        ToggleDirectionCommand = ReactiveCommand.Create(() => { Descending = !Descending; }).DisposeWith(_disposables);
         _stateFilter = new BehaviorSubject<Func<AgentRow, bool>>(StateFilter()).DisposeWith(_disposables);
         _rowComparer = new BehaviorSubject<IComparer<RailSessionViewModel>>(RowComparer(_sort, _descending)).DisposeWith(_disposables);
         _groupComparer = new BehaviorSubject<IComparer<RailGroupViewModel>>(GroupComparer(_grouping)).DisposeWith(_disposables);
@@ -210,6 +256,18 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.LiveNotShownText, initialValue: null).DisposeWith(_disposables);
         ShowMoreCommand = ReactiveCommand.CreateFromTask(
             () => sessions?.ShowMoreAsync() ?? Task.CompletedTask, paging.Select(p => p.CanShowMore)).DisposeWith(_disposables);
+
+        // The lane names the viewer after the rail has opened in the last user's shape; a read that
+        // fails keeps the shape already showing.
+        if (sessions is not null && bindUserPreferences is not null)
+            sessions.ViewerUserId
+                .Where(id => id is { Length: > 0 })
+                .DistinctUntilChanged()
+                .Select(id => Observable.FromAsync(() => bindUserPreferences(id!)).Catch(Observable.Empty<RailPreferences>()))
+                .Merge()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(ApplyPreferences)
+                .DisposeWith(_disposables);
 
         Groups = new ReadOnlyObservableCollection<RailGroupViewModel>(_groupsSource);
         directory.Rows.Connect()

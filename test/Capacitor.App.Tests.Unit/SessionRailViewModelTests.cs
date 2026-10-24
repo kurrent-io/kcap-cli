@@ -431,6 +431,30 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_named_viewer_applies_that_users_remembered_shape_without_persisting_it() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var directory = new FakeAgentDirectory();
+            var sessions = new FakeServerSessionsService();
+            var persisted = new List<RailPreferences>();
+            var bound = new List<string>();
+            var teams = RailPreferences.Default with { Scope = RailScope.Team, Grouping = RailGrouping.Date };
+            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System,
+                sessions: sessions, persistPreferences: persisted.Add,
+                bindUserPreferences: id => { bound.Add(id); return Task.FromResult(teams); });
+            using (directory) using (sessions) using (rail) {
+                sessions.ViewerUserIdSubject.OnNext("u1");
+
+                await WorkspaceFixtures.WaitUntilAsync(() => rail.Scope == RailScope.Team, what: "the viewer's shape applied");
+                await Assert.That(rail.Grouping).IsEqualTo(RailGrouping.Date);
+                await Assert.That(sessions.Scope).IsEqualTo(RailScope.Team);
+                await Assert.That(bound).IsEquivalentTo(new[] { "u1" });
+                await Assert.That(persisted).IsEmpty();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Date_grouping_names_today_and_yesterday_and_regroups_at_midnight() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (directory, sessions, time, _, rail) = BuildWithControls();
