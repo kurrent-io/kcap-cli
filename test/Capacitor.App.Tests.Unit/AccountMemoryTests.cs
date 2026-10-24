@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.App.Services;
 
 namespace Capacitor.App.Tests.Unit;
@@ -38,6 +39,7 @@ public class AccountMemoryTests {
 
         await Assert.That(cleared.Count).IsEqualTo(0);
         await Assert.That(AccountMemory.Lookup(cleared, Host, "claude", "/home/a/kcap-cli")).IsNull();
+        await Assert.That(cleared).IsSameReferenceAs(FrozenDictionary<string, string>.Empty);
     }
 
     [Test]

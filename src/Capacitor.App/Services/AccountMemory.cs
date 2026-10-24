@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
 
 namespace Capacitor.App.Services;
@@ -33,7 +34,7 @@ public static class AccountMemory {
                     next[entry.Key] = entry.Value;
 
         if (accountId is not null) next[KeyFor(hostId, vendor, repoPath)] = accountId;
-        return next;
+        return next.Count == 0 ? FrozenDictionary<string, string>.Empty : next;
     }
 
     static bool Matches(string key, string hostId, string vendor, string repoPath) {
