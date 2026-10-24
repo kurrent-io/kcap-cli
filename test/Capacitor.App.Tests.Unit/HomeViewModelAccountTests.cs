@@ -77,7 +77,7 @@ public class HomeViewModelAccountTests {
 
         public async Task<HomeViewModel> StartAsync(
                 (string Host, string Vendor, string Repo, string Id)[]? memory = null, IRemoteAgentsService? remote = null,
-                DaemonStatusDto? local = null) {
+                DaemonStatusDto? local = null, Func<CancellationToken, Task<string?>>? viewerId = null) {
             if (memory is not null)
                 await Store.UpdateAsync(s => s with {
                     AccountByRepo = memory.ToDictionary(m => AccountMemory.KeyFor(m.Host, m.Vendor, m.Repo), m => m.Id),
@@ -87,7 +87,7 @@ public class HomeViewModelAccountTests {
             var listings = remote ?? Remote;
             Vm = new HomeViewModel(
                 Daemon, Store, Launch, () => Task.FromResult<string[]>([]), TimeProvider.System,
-                daemons: Remote.Daemons, viewerId: _ => Task.FromResult<string?>(Viewer), laneStatus: Lane,
+                daemons: Remote.Daemons, viewerId: viewerId ?? (_ => Task.FromResult<string?>(Viewer)), laneStatus: Lane,
                 listing: listings.Listing, daemonAccounts: listings.DaemonAccounts, localAccounts: LocalAccounts,
                 retryListing: () => OnRetry());
             return Vm;
@@ -574,12 +574,18 @@ public class HomeViewModelAccountTests {
             rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName, accounts: false)));
 
             await Assert.That(vm.SelectedAccountLabel).IsEqualTo("work — unavailable");
-            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
-            await Assert.That(vm.StartButtonTip).IsEqualTo(Refusal("work"));
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+            await Assert.That(vm.StartButtonTip).IsEqualTo("Start");
             await vm.StartCommand.Execute();
             await Assert.That(rig.Launch.Requests).IsEmpty();
             await Assert.That(vm.StartError).IsEqualTo(Refusal("work"));
             await Assert.That(vm.StartErrorOffersDefault).IsTrue();
+
+            // Picking a row answers the refusal, even a row that is still unavailable.
+            await vm.PickAccountAsync("a2");
+            await Assert.That(vm.StartError).IsNull();
+            await Assert.That(vm.StartErrorOffersDefault).IsFalse();
+            await Assert.That(vm.SelectedAccountLabel).IsEqualTo("work — unavailable");
 
             rig.Remote.ListingSubject.OnNext(new DaemonListing(null, 2, false));
             await Assert.That(vm.SelectedAccountLabel).IsEqualTo("work — unavailable");
@@ -634,6 +640,7 @@ public class HomeViewModelAccountTests {
             await Assert.That(SelectedRows(vm)).IsEqualTo("removed:a2");
             await Assert.That(vm.AccountRows.Any(c => c.Row is { Id: null, IsDefault: true })).IsTrue();
 
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
             await vm.StartCommand.Execute();
             await Assert.That(rig.Launch.Requests).IsEmpty();
             await Assert.That(vm.StartError).IsEqualTo(Refusal("work"));
@@ -646,6 +653,31 @@ public class HomeViewModelAccountTests {
             await Assert.That(vm.AccountSection).IsFalse();
             await Assert.That(rig.Launch.Requests).IsEmpty();
 
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+            await vm.StartCommand.Execute();
+            await Assert.That(rig.Launch.Requests.Single().AccountId).IsNull();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_listing_answered_before_the_viewer_id_resolved_is_read_again_once_it_does() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var viewer = new TaskCompletionSource<string?>();
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.StartAsync(viewerId: _ => viewer.Task);
+            await vm.SelectRepositoryAsync(Repo);
+            rig.LocalAccounts.OnNext(Snapshot("h1", 1, Home, Work));
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName)));
+
+            await Assert.That(vm.AccountPendingText).IsEqualTo(Loading);
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+
+            viewer.SetResult(Viewer);
+            await Eventually(() => vm.AccountPendingText is null);
+
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+            vm.Goal = "g";
             await vm.StartCommand.Execute();
             await Assert.That(rig.Launch.Requests.Single().AccountId).IsNull();
         });

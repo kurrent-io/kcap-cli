@@ -348,8 +348,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     DaemonListing _currentListing = new(null, 0, false);
     IReadOnlyList<DaemonAccountsDto> _currentDaemonAccounts = [];
     AccountsSnapshotDto? _currentLocalAccounts;
-    readonly BehaviorSubject<bool> _accountResolved = new(true);
+    readonly BehaviorSubject<bool> _accountPending = new(false);
     readonly BehaviorSubject<string?> _accountTip = new(null);
+    // The account pipeline's copy of _lastViewerId: support read before the id resolved is read again once it does.
+    readonly BehaviorSubject<string?> _viewerIds = new(null);
     readonly BehaviorSubject<(string Vendor, string AccountId)?> _accountCatalogKey = new(null);
 
     bool _accountSection;
@@ -645,7 +647,6 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
 
         // The account choice follows the target: support from the server's listing (this machine's
         // daemon through its own row in it, never the socket), that host's snapshot, and memory.
-        // After the picker above, whose first daemons emission resolves the viewer id SupportFor reads.
         _accountChooser = new AccountChooser(
             (hostId, vendor, repoPath) => AccountMemory.Lookup(_accountMemory, hostId, vendor, repoPath), RememberAccount);
         _accountChooser.Changed += PublishAccountChoice;
@@ -662,9 +663,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     listing.StartWith(new DaemonListing(null, 0, false)),
                     remoteAccounts.StartWith((IReadOnlyList<DaemonAccountsDto>) []),
                     localSnapshots.StartWith((AccountsSnapshotDto?) null),
-                    (sel, repoPath, vendor, answer, remote, local) => (sel, repoPath, vendor, answer, remote, local))
+                    _viewerIds.DistinctUntilChanged(),
+                    (sel, repoPath, vendor, answer, remote, local, viewer) => (sel, repoPath, vendor, answer, remote, local, viewer))
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .Subscribe(i => ApplyAccountInputs(i.sel, i.repoPath, i.vendor, i.answer, i.remote, i.local))
+                .Subscribe(i => ApplyAccountInputs(i.sel, i.repoPath, i.vendor, i.answer, i.remote, i.local, i.viewer))
                 .DisposeWith(_disposables);
             Observable.FromAsync(() => _state.LoadAsync())
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
@@ -761,8 +763,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 stagedCount.CombineLatest(canAttach, (count, attach) => count == 0 || attach),
                 _uploadingChanges,
                 noHarnesses,
-                _accountResolved.DistinctUntilChanged(),
-                (ready, attachable, uploading, none, account) => ready && attachable && !uploading && !none && account);
+                _accountPending.DistinctUntilChanged(),
+                (ready, attachable, uploading, none, pending) => ready && attachable && !uploading && !none && !pending);
 
         // Explicit ObserveOn: ReactiveCommand does NOT reschedule the supplied canExecute, and a
         // Status event arrives on the daemon client's pump thread (MainWindowViewModel's canStart
@@ -1038,7 +1040,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         };
 
     /// Repo gate first (IsEnabled), then the connection/sign-in notice StartCommand also gates on,
-    /// then an account still resolving or refused.
+    /// then an account still resolving.
     internal static string TipFor(string? repoPath, string? connectionNotice, string? accountNotice) =>
         string.IsNullOrEmpty(repoPath) ? "Select a repository to start"
         : connectionNotice ?? accountNotice ?? "Start";
@@ -1270,6 +1272,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     async Task<IReadOnlyList<DaemonInfo>> OwnDaemonsAsync(IReadOnlyList<DaemonInfo> all) {
         var viewer = await _viewerId(_shutdown);
         _lastViewerId = viewer;
+        _viewerIds.OnNext(viewer);
         if (viewer is null) return [];
         return all.Where(d => d.OwnerUserId == viewer && !IsLocalTwin(d)).ToList();
     }
@@ -1381,7 +1384,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// call would drop the person's pick; nothing is published until support and snapshot follow.
     void ApplyAccountInputs(
             (string Name, bool Remote) sel, string repoPath, string vendor, DaemonListing listing,
-            IReadOnlyList<DaemonAccountsDto> remoteAccounts, AccountsSnapshotDto? localAccounts) {
+            IReadOnlyList<DaemonAccountsDto> remoteAccounts, AccountsSnapshotDto? localAccounts, string? viewerId) {
         var machine = AccountMachine(sel.Name, sel.Remote);
         _applyingAccountInputs = true;
         try {
@@ -1390,7 +1393,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _accountTarget = (repoPath, vendor, machine, sel.Remote);
                 _accountChooser.EnterTarget(repoPath, vendor);
             }
-            _accountChooser.SetSupport(SupportFor(listing, machine, _lastViewerId), listing.FetchFailed);
+            _accountChooser.SetSupport(SupportFor(listing, machine, viewerId), listing.FetchFailed);
             _accountChooser.SetSnapshot(AccountsSnapshotFor(sel.Remote, machine, remoteAccounts, localAccounts));
         } finally {
             _applyingAccountInputs = false;
@@ -1412,9 +1415,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         AccountPendingText = chooser.PendingText;
         AccountRetryVisible = chooser.OffersRetry;
         SelectedAccountLabel = chooser.SelectedLabel;
-        _accountResolved.OnNext(chooser.IsResolved);
-        _accountTip.OnNext(chooser.PendingText
-            ?? (chooser.State == AccountSelectionState.ExplicitInvalid ? AccountRefusal(chooser.InvalidReason!) : null));
+        _accountPending.OnNext(chooser.State == AccountSelectionState.Pending);
+        _accountTip.OnNext(chooser.PendingText);
         _accountCatalogKey.OnNext(chooser.State == AccountSelectionState.ExplicitValid && _accountTarget is { } target
             ? (target.Vendor, chooser.SelectedAccountId!) : null);
     }
@@ -1431,11 +1433,12 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         });
     }
 
-    /// The Default-badged row follows the daemon's default rather than pinning its account. The
-    /// task completes once the choice is persisted.
+    /// The Default-badged row follows the daemon's default rather than pinning its account. Any
+    /// pick answers an account refusal. The task completes once the choice is persisted.
     public Task PickAccountAsync(string? accountId) {
         var defaultRow = _accountChooser.Rows.Any(c => c.Row.IsDefault && c.Row.Id == accountId);
         _accountChooser.Pick(defaultRow ? null : accountId);
+        if (StartErrorOffersDefault) StartError = null;
         return _accountMemoryWrites;
     }
 
@@ -1444,10 +1447,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         StartError = null;
     }
 
-    static string AccountRefusal(string reason) => $"{reason}. Use the default account or pick another.";
-
     void RefuseAccount(string reason) {
-        StartError = AccountRefusal(reason);
+        StartError = $"{reason}. Use the default account or pick another.";
         StartErrorOffersDefault = true;
     }
 
