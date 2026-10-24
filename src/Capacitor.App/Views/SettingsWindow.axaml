@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:Capacitor.App.ViewModels"
         xmlns:views="clr-namespace:Capacitor.App.Views"
+        xmlns:services="clr-namespace:Capacitor.App.Services.LocalSetup"
         x:Class="Capacitor.App.Views.SettingsWindow"
         x:DataType="vm:SettingsViewModel"
         Title="kcap — Settings"
@@ -180,6 +181,48 @@
                                    Text="{Binding NotificationMessage}" TextWrapping="Wrap"
                                    Foreground="{StaticResource KcapDangerBrush}"
                                    IsVisible="{Binding NotificationMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem x:Name="SearchTab" Classes="kcapSettingsTab" Header="Search"
+                     IsVisible="{Binding Search, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,18,0,0">
+                    <StackPanel Spacing="16" DataContext="{Binding Search}" x:DataType="vm:LocalSearchViewModel">
+                        <StackPanel Spacing="10">
+                            <TextBlock Classes="kcapTitle" Text="Search" LineHeight="22" />
+                            <TextBlock x:Name="SearchCurrentText" Classes="kcapSubtitle" TextWrapping="Wrap"
+                                       Text="{Binding CurrentText}" />
+                        </StackPanel>
+
+                        <Border Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
+                                BorderThickness="1" CornerRadius="12" Padding="20">
+                            <StackPanel Spacing="12">
+                                <StackPanel Spacing="10" IsEnabled="{Binding !Running}">
+                                    <views:SearchChoiceView x:Name="SearchChoice" DataContext="{Binding Choice}" />
+                                    <Button x:Name="SearchApplyButton" Classes="kcapChip" HorizontalAlignment="Left"
+                                            Content="{Binding ApplyLabel}" Command="{Binding ApplyCommand}"
+                                            IsEnabled="{Binding CanApply}" />
+                                </StackPanel>
+                                <TextBlock Classes="kcapHint" Text="Setting up search…" TextWrapping="Wrap" IsVisible="{Binding Running}" />
+                                <StackPanel Spacing="6" DataContext="{Binding Embeddings}" x:DataType="services:LocalEmbeddingProgress">
+                                    <StackPanel Spacing="4" IsVisible="{Binding Pulling}">
+                                        <TextBlock x:Name="SearchPullText" Classes="kcapHint" Text="{Binding PullText}" TextWrapping="Wrap" />
+                                        <ProgressBar x:Name="SearchPullBar" Height="3" Minimum="0" Maximum="1"
+                                                     Value="{Binding PullFraction, FallbackValue=0, TargetNullValue=0}"
+                                                     IsIndeterminate="{Binding PullFraction, Converter={x:Static ObjectConverters.IsNull}}"
+                                                     Foreground="{StaticResource KcapMutedBrush}" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="SearchSummaryText" Classes="kcapHint" Text="{Binding Summary}" TextWrapping="Wrap"
+                                               IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                    <TextBlock Classes="kcapHint" Text="{Binding ReembedNote}" TextWrapping="Wrap"
+                                               IsVisible="{Binding ReembedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                                </StackPanel>
+                                <SelectableTextBlock x:Name="SearchFailureText" Text="{Binding FailureText}" FontSize="12"
+                                                     TextWrapping="Wrap" Foreground="{StaticResource KcapDangerBrush}"
+                                                     IsVisible="{Binding FailureText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>

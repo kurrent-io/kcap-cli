@@ -24,6 +24,8 @@ public class LocalSearchViewModelTests {
         /// What `data/embedding.json` holds; the view model reads it again once a run settles.
         public LocalEmbeddingSetting? Setting;
 
+        public int SettingsOpened;
+
         public Harness(LocalEmbeddingSetting? setting) {
             Setting = setting;
             Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
@@ -31,7 +33,7 @@ public class LocalSearchViewModelTests {
             Vm = new LocalSearchViewModel(() => Setting, Status, Search, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
-            }, CancellationToken.None, ImmediateScheduler.Instance);
+            }, CancellationToken.None, ImmediateScheduler.Instance, openSettings: () => SettingsOpened++);
         }
 
         public async Task ApplyAsync(int exitCode, params string[] lines) {
@@ -52,6 +54,18 @@ public class LocalSearchViewModelTests {
             await Assert.That(keyword.Vm.StateText).IsEqualTo("keyword search");
             await Assert.That(meaning.Vm.StateText).IsEqualTo("search by meaning");
             await Assert.That(meaning.Vm.CurrentText).IsEqualTo("Searches by meaning with mxbai-embed-large.");
+        });
+    }
+
+    /// <summary>The rail's search word is the way into the Settings tab that changes it.</summary>
+    [Test]
+    public async Task The_rail_word_opens_search_settings() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(null);
+
+            await h.Vm.OpenSettingsCommand.Execute().ToTask();
+
+            await Assert.That(h.SettingsOpened).IsEqualTo(1);
         });
     }
 

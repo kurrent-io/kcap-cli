@@ -11,8 +11,8 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels;
 
 /// <summary>
-/// How the local server searches, beside its version in the rail, and a flyout that changes it by running
-/// setup again. An upgrade and a search change cannot run together, so each holds the other off.
+/// How the local server searches: a word beside its version in the rail, which opens the Settings tab that
+/// changes it by running setup again. An upgrade and a search change cannot run together, so each holds the other off.
 /// </summary>
 public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public const string BusyText = "Another local setup, upgrade or uninstall is running on this Mac. Try again once it has finished.";
@@ -35,9 +35,11 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
+    /// <param name="openSettings">Opens Settings on its Search tab.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, IObservable<ServerLaneStatus> status, LocalSearchController search,
-            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
+            LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null,
+            Action? openSettings = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
@@ -70,7 +72,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
             .Subscribe(_ => ReadSetting())
             .DisposeWith(_disposables);
 
-        ApplyCommand = ReactiveCommand.CreateFromTask(ApplyAsync);
+        ApplyCommand        = ReactiveCommand.CreateFromTask(ApplyAsync);
+        OpenSettingsCommand = ReactiveCommand.Create(() => openSettings?.Invoke());
     }
 
     public SearchChoiceViewModel Choice { get; }
@@ -106,6 +109,8 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
         : null;
 
     public ReactiveCommand<Unit, Unit> ApplyCommand { get; }
+
+    public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
 
     string? CurrentModel => _current?.Model;
 
