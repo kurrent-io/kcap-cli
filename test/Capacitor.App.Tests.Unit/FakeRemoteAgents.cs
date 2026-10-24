@@ -10,7 +10,10 @@ namespace Capacitor.App.Tests.Unit;
 sealed class FakeRemoteAgents : IRemoteAgentsService, IDisposable {
     public readonly SourceCache<AgentInstanceDto, string> Cache = new(a => a.AgentId);
     public readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> DaemonsSubject = new([]);
+    /// True unless a test is about retained rows: the cache a test edits is what the registry says now.
+    public readonly BehaviorSubject<bool> CurrentSubject = new(true);
     public IObservableCache<AgentInstanceDto, string> Agents => Cache.AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons => DaemonsSubject;
+    public IObservable<bool> Current => CurrentSubject;
     public void Dispose() => Cache.Dispose();
 }

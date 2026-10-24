@@ -286,4 +286,65 @@ public class RemoteAgentsServiceTests {
         await Assert.That(daemonsWhenAgentsPublished.Count).IsEqualTo(1);
         await Assert.That(svc.Agents.Count).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task Current_is_true_after_a_successful_fetch_and_false_after_a_failed_one() {
+        var lane = new FakeServerLane();
+        var answers = new Queue<RemoteFetch>([new RemoteFetch([]), new RemoteFetch(null)]);
+        using var svc = new RemoteAgentsService(lane, _ => Task.FromResult(answers.Count > 0 ? answers.Dequeue() : new RemoteFetch(null)), TimeSpan.Zero);
+        var seen = new List<bool>();
+        using var _ = svc.Current.Subscribe(seen.Add);
+
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        await Eventually(() => seen.Contains(true));
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => seen[^1] == false);
+    }
+
+    /// A read that outlives its connection reports on a lane that is no longer there.
+    [Test]
+    public async Task A_read_finishing_after_the_lane_drops_does_not_report_current() {
+        var lane = new FakeServerLane();
+        var gate = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var svc = new RemoteAgentsService(lane, _ => gate.Task, TimeSpan.Zero);
+        var seen = new List<bool>();
+        using var _ = svc.Current.Subscribe(seen.Add);
+
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        gate.SetResult(new RemoteFetch([]));
+
+        await Task.Delay(100);
+        await Assert.That(seen).DoesNotContain(true);
+    }
+
+    /// A read admitted after the lane dropped is as stale as one that outlived it.
+    [Test]
+    public async Task A_refresh_admitted_after_the_lane_dropped_does_not_report_current() {
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, _ => Task.FromResult(new RemoteFetch([])), TimeSpan.Zero);
+        var seen = new List<bool>();
+        using var _ = svc.Current.Subscribe(seen.Add);
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        await Eventually(() => seen.Contains(true));
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+
+        await Task.Delay(100);
+        await Assert.That(seen[^1]).IsFalse();
+    }
+
+    [Test]
+    public async Task Current_drops_when_the_lane_leaves_connected() {
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, _ => Task.FromResult(new RemoteFetch([])), TimeSpan.Zero);
+        var seen = new List<bool>();
+        using var _ = svc.Current.Subscribe(seen.Add);
+
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        await Eventually(() => seen.Contains(true));
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        await Assert.That(seen[^1]).IsFalse();
+    }
 }
