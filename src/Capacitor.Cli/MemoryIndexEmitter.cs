@@ -103,7 +103,8 @@ static class MemoryIndexEmitter {
                     o["description"]?.GetValue<string>(),
                     o["kind"]?.GetValue<string>() ?? "feedback",
                     o["scope_kind"]?.GetValue<string>(),
-                    o["project_slug"]?.GetValue<string>()));
+                    o["project_slug"]?.GetValue<string>(),
+                    o["open_entries"] is JsonValue open && open.TryGetValue<int>(out var n) ? n : null));
             } catch {
                 continue; // skip a malformed entry rather than dropping the whole block
             }

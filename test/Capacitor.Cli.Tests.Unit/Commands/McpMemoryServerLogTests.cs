@@ -71,6 +71,22 @@ public class McpMemoryServerLogTests {
     }
 
     [Test]
+    [Arguments("append_memory_entry", """{"id_or_slug":"inbox","title":42,"body":"b"}""", "title")]
+    [Arguments("append_memory_entry", """{"id_or_slug":"inbox","title":"t","body":{"text":"b"}}""", "body")]
+    [Arguments("append_memory_entry", """{"id_or_slug":"inbox","title":"t","body":"b","idempotency_key":7}""", "idempotency_key")]
+    [Arguments("settle_memory_entry", """{"id":"ID","entry_id":42}""", "entry_id")]
+    [Arguments("settle_memory_entry", """{"id":"ID","entry_id":"E","resolution":true}""", "resolution")]
+    [Arguments("reopen_memory_entry", """{"id":"ID","entry_id":["E"]}""", "entry_id")]
+    [Arguments("list_memory_entries", """{"id":"ID","status":1}""", "status")]
+    public async Task A_wrong_typed_argument_is_refused_by_name_and_sends_nothing(string tool, string arguments, string field) {
+        var call = await CallAsync(tool, arguments.Replace("\"ID\"", $"\"{MemoryId}\"").Replace("\"E\"", $"\"{EntryId}\""));
+
+        await Assert.That(call.IsError).IsTrue();
+        await Assert.That(call.Text).IsEqualTo($"Error: '{field}' must be a string.");
+        await Assert.That(call.Request).IsNull();
+    }
+
+    [Test]
     public async Task Settle_posts_the_resolution_to_the_entry_of_that_log() {
         var call = await CallAsync("settle_memory_entry", $$"""{"id":"{{MemoryId}}","entry_id":"{{EntryId}}","resolution":"Rotated."}""");
 

@@ -86,6 +86,19 @@ public class MemoryIndexEmitterTests {
     }
 
     [Test]
+    public async Task Counts_a_logs_open_entries_and_ignores_a_count_that_is_not_a_number() {
+        var index = new JsonArray(
+            new JsonObject { ["memory_id"] = "i1", ["slug"] = "inbox", ["audience"] = "org", ["description"] = "d", ["kind"] = "project", ["scope_kind"] = "repo", ["open_entries"] = 2 },
+            new JsonObject { ["memory_id"] = "i2", ["slug"] = "odd",   ["audience"] = "org", ["description"] = "d", ["kind"] = "project", ["open_entries"] = JsonNode.Parse("\"2\"") }
+        );
+
+        var fragment = MemoryIndexEmitter.BuildFragment(index, disabled: false)!;
+
+        await Assert.That(fragment).Contains("- inbox (2 open) [repo]: d");
+        await Assert.That(fragment).Contains("- odd: d");
+    }
+
+    [Test]
     public async Task Missing_scope_renders_untagged_for_an_older_server() {
         // A server that predates scope on the index sends no scope_kind — the line renders exactly as before.
         var fragment = MemoryIndexEmitter.BuildFragment(Index(("legacy", "org", "d")), disabled: false)!;

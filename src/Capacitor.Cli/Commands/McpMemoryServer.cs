@@ -187,7 +187,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
 
     /// <summary>A server that predates logs ignores <c>form</c> and saves an ordinary memory; its answer names no form.</summary>
     internal static string WithLogFormNotice(JsonObject? args, string body) {
-        if (args?["form"]?.GetValue<string>() != "log") return body;
+        if (args?["form"] is not JsonValue form || !form.TryGetValue<string>(out var f) || f != "log") return body;
 
         try {
             if (JsonNode.Parse(body) is JsonObject { } answer && answer["memory"]?["form"] is not null) return body;
@@ -222,7 +222,14 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     static string Id(JsonObject? args) => Required(args, "id");
 
     static string Required(JsonObject? args, string name) =>
-        args?[name]?.GetValue<string>() is { } v && !string.IsNullOrWhiteSpace(v) ? v : throw new ArgumentException($"{name} is required");
+        Optional(args, name) is { } v && !string.IsNullOrWhiteSpace(v) ? v : throw new ArgumentException($"{name} is required");
+
+    static string? Optional(JsonObject? args, string name) =>
+        args?[name] switch {
+            null                                               => null,
+            JsonValue v when v.TryGetValue<string>(out var s) => s,
+            _                                                  => throw new ArgumentException($"'{name}' must be a string.")
+        };
 
     static string EntryUrl(string baseUrl, JsonObject? args) =>
         $"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(args))}/entries/{Uri.EscapeDataString(Required(args, "entry_id"))}";
@@ -259,8 +266,8 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
 
     static string BuildListEntriesUrl(string baseUrl, JsonObject? args) {
         var qs = new List<string>();
-        if (args?["status"]?.GetValue<string>() is { Length: > 0 } status) qs.Add($"status={Uri.EscapeDataString(status)}");
-        if (args?["before"]?.GetValue<string>() is { Length: > 0 } before) qs.Add($"before={Uri.EscapeDataString(before)}");
+        if (Optional(args, "status") is { Length: > 0 } status) qs.Add($"status={Uri.EscapeDataString(status)}");
+        if (Optional(args, "before") is { Length: > 0 } before) qs.Add($"before={Uri.EscapeDataString(before)}");
         if (TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
 
         var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(args))}/entries";
@@ -270,13 +277,13 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     static JsonObject BuildAppendBody(JsonObject? args) => new() {
         ["title"]             = Required(args, "title"),
         ["body"]              = Required(args, "body"),
-        ["idempotency_key"]   = args?["idempotency_key"]?.GetValue<string>(),
+        ["idempotency_key"]   = Optional(args, "idempotency_key"),
         ["source_session_id"] = null,
         ["harness"]           = "mcp"
     };
 
     static JsonObject BuildSettleBody(JsonObject? args) => new() {
-        ["resolution"] = args?["resolution"]?.GetValue<string>()
+        ["resolution"] = Optional(args, "resolution")
     };
 
     // NOTE: request bodies use snake_case keys (repo_hash, machine_tag, source_session_id) —
@@ -322,7 +329,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             ["machine_context"]   = machineId,
             ["source_session_id"] = null,
             ["harness"]           = "mcp",
-            ["form"]              = args?["form"]?.GetValue<string>()
+            ["form"]              = Optional(args, "form")
         };
     }
 
@@ -331,7 +338,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         ["content"]          = args?["content"]?.GetValue<string>(),
         ["kind"]             = args?["kind"]?.GetValue<string>(),
         ["expected_version"] = args?["expected_version"]?.GetValue<string>(),
-        ["header"]           = args?["header"]?.GetValue<string>()
+        ["header"]           = Optional(args, "header")
     };
 
     internal static JsonObject BuildRescopeBody(JsonObject? args) {

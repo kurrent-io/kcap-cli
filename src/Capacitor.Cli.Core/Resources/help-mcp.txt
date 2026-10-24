@@ -120,9 +120,9 @@ mcp memory:
   `kcap login`.
 
   A memory saved with `form: "log"` is a log: its content is a short header,
-  and it grows by entries appended with append_memory_entry (a title and a body
-  of up to 16 KiB each), which any editor settles or reopens instead of
-  editing. get_memory on a log returns a bounded window of open and recently
+  and it grows by entries appended with append_memory_entry (a one-line title
+  of up to 200 characters and a body of up to 16 KiB), which any editor
+  settles or reopens instead of editing. get_memory on a log returns a bounded window of open and recently
   settled entries; list_memory_entries pages past it. update_memory changes a
   log's header with `header`; its `content` is refused. A server that predates
   logs saves `form: "log"` as an ordinary memory, and the entry tools say it
