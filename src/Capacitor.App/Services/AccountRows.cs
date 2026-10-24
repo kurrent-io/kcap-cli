@@ -26,7 +26,7 @@ public static class AccountRows {
     }
 
     // Split on both separators: the daemon's host may not run the platform this app does.
-    static string LastSegment(string directory) {
+    internal static string LastSegment(string directory) {
         var trimmed = directory.TrimEnd(Separators);
         return trimmed[(trimmed.LastIndexOfAny(Separators) + 1)..];
     }

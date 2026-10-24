@@ -11,6 +11,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Capacitor.App.Services;
 using Capacitor.App.Services.LocalSetup;
@@ -22,6 +23,7 @@ using Capacitor.App.ViewModels;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.Config;
@@ -168,6 +170,7 @@ public partial class App : Application {
     PauseController? _pause;
     ConsentService? _consent;
     PermissionService? _permissions;
+    AccountsService? _accounts;
     NotificationSettingsService? _notificationSettings;
     IDesktopNotificationSink? _notificationSink;
     IDesktopNotificationAccess? _notificationAccess;
@@ -372,7 +375,7 @@ public partial class App : Application {
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
@@ -397,6 +400,7 @@ public partial class App : Application {
             _attention = null;
             _commands = null;
             _permissions = null;
+            _accounts = null;
             _sessionAccess = null;
             _pullRequestTones = null;
             _pause = null;
@@ -716,6 +720,7 @@ public partial class App : Application {
             _time, _shutdown.Token, ServerSessionHttp.Responder(sessionHttp, profiles),
             sessionAgents: directory.SessionAgents);
         _permissions = permissions;
+        _accounts = new AccountsService(service, ct => AccountsSubscription.RunAsync(_daemonStore, service.DaemonName, ct), _time, _shutdown.Token);
         var sessionAccess = new SessionAccessService(serverLane, _time);
         var permissionFeed = new ServerPermissionFeed(
             serverLane, sessionAccess, permissions, readDetail, directory.VendorOfSession, _time);
@@ -1041,6 +1046,12 @@ public partial class App : Application {
                 needsAppRestart: lane.IsRetired(service.DaemonName), appLifetime: _shutdown.Token,
                 notificationSettings: _notificationSettings, notificationAccess: _notificationAccess,
                 profiles: profilesVm) {
+                Accounts = _accounts is { } accounts
+                    ? new AccountsSettingsViewModel(accounts, lane.RunAsync, service.DaemonName, settings.ProfileName,
+                        discover: () => AccountDiscovery.Find(
+                            _userHome, AccountStore.Beside(_daemonStore).TryLoad() ?? new AccountRegistry(), Environment.GetEnvironmentVariable),
+                        pickDirectory: PickAccountDirectoryAsync, daemonStatus: service.Status, appLifetime: _shutdown.Token)
+                    : null,
                 Appearance = new AppearanceSettingsViewModel(_uiScale),
                 Privacy    = new PrivacySettingsViewModel(_telemetry, _config, _usageNotice),
             };
@@ -1059,6 +1070,16 @@ public partial class App : Application {
         _ = profilesVm.RefreshAsync();
         window.Show();
         window.Activate();
+    }
+
+    async Task<string?> PickAccountDirectoryAsync(CancellationToken ct) {
+        if (_settingsWindow?.StorageProvider is not { } storage) return null;
+        var folders = await storage.OpenFolderPickerAsync(new FolderPickerOpenOptions {
+            Title = "Choose a config directory",
+            AllowMultiple = false,
+        });
+        ct.ThrowIfCancellationRequested();
+        return folders is [{ } folder] ? folder.TryGetLocalPath() : null;
     }
 
     // Deferred, so each window reads the CLI version installed when it opens rather than the one
@@ -2263,7 +2284,7 @@ public partial class App : Application {
             // OnShutdownRequested and settles on the ViewModel's silent-abort path.
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
-                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
+                    _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _accounts, _sessionAccess,
                     _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });

@@ -1,0 +1,259 @@
+using System.Reactive;
+using System.Reactive.Disposables;
+using System.Reactive.Disposables.Fluent;
+using System.Reactive.Linq;
+using Capacitor.App.Services;
+using Capacitor.App.Services.Mutation;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness;
+using ReactiveUI.Reactive;
+
+namespace Capacitor.App.ViewModels;
+
+/// Only a confirmed outcome reads as done: the next snapshot shows what an unconfirmed one left behind.
+public sealed class AccountsSettingsViewModel : ReactiveObject, IDisposable {
+    static readonly HarnessId[] Vendors = [HarnessId.Claude, HarnessId.Codex];
+
+    readonly Func<MutationRequest, CancellationToken, Task<MutationOutcome>> _runMutation;
+    readonly string _daemonName;
+    readonly string? _profileName;
+    readonly Func<IReadOnlyList<AccountCandidate>> _discover;
+    readonly Func<CancellationToken, Task<string?>> _pickDirectory;
+    readonly CancellationTokenSource _lifetime;
+    readonly CancellationToken _token;
+    readonly CompositeDisposable _subscriptions = new();
+    AccountsSnapshotDto? _snapshot;
+    bool _supported;
+    bool _connected;
+    bool _canManage;
+    IReadOnlyList<AccountVendorGroup> _groups = [];
+    IReadOnlyList<AccountCandidate> _candidates = [];
+    string? _message;
+    bool _isBusy;
+    AccountSettingsRow? _renaming;
+    string _renameDraft = "";
+    int _candidateReads;
+
+    public AccountsSettingsViewModel(
+            IAccountsService accounts, Func<MutationRequest, CancellationToken, Task<MutationOutcome>> runMutation,
+            string daemonName, string? profileName, Func<IReadOnlyList<AccountCandidate>> discover,
+            Func<CancellationToken, Task<string?>> pickDirectory, IObservable<AttachStatus> daemonStatus,
+            CancellationToken appLifetime = default) {
+        _runMutation = runMutation;
+        _daemonName = daemonName;
+        _profileName = profileName;
+        _discover = discover;
+        _pickDirectory = pickDirectory;
+        _lifetime = CancellationTokenSource.CreateLinkedTokenSource(appLifetime);
+        _token = _lifetime.Token;
+
+        var idle = this.WhenAnyValue(x => x.CanManage, x => x.IsBusy, (manage, busy) => manage && !busy);
+        AddCandidateCommand = ReactiveCommand.CreateFromTask<AccountCandidate>(AddCandidateAsync, idle).DisposeWith(_subscriptions);
+        AddFromPickerCommand = ReactiveCommand.CreateFromTask<string>(AddFromPickerAsync, idle).DisposeWith(_subscriptions);
+        AddDefaultCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(AddDefaultAsync, idle).DisposeWith(_subscriptions);
+        RewireCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(RewireAsync, idle).DisposeWith(_subscriptions);
+        RemoveCommand = ReactiveCommand.CreateFromTask<AccountSettingsRow>(RemoveAsync, idle).DisposeWith(_subscriptions);
+        BeginRenameCommand = ReactiveCommand.Create<AccountSettingsRow>(BeginRename, idle).DisposeWith(_subscriptions);
+        CancelRenameCommand = ReactiveCommand.Create(() => { Renaming = null; }, idle).DisposeWith(_subscriptions);
+        var renamable = this.WhenAnyValue(x => x.CanManage, x => x.IsBusy, x => x.Renaming, x => x.RenameDraft,
+            (manage, busy, row, draft) => manage && !busy && RenameChanges(row, draft));
+        CommitRenameCommand = ReactiveCommand.CreateFromTask(CommitRenameAsync, renamable).DisposeWith(_subscriptions);
+
+        daemonStatus.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(status => {
+            _connected = status.State == AttachState.Connected;
+            Refresh();
+        }).DisposeWith(_subscriptions);
+        accounts.Supported.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(supported => {
+            _supported = supported;
+            Refresh();
+        }).DisposeWith(_subscriptions);
+        accounts.Snapshot.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(snapshot => {
+            _snapshot = snapshot;
+            ApplyGroups(GroupsFor(snapshot));
+            Refresh();
+        }).DisposeWith(_subscriptions);
+    }
+
+    public IReadOnlyList<AccountVendorGroup> Groups {
+        get => _groups;
+        private set => this.RaiseAndSetIfChanged(ref _groups, value);
+    }
+
+    public bool CanManage {
+        get => _canManage;
+        private set => this.RaiseAndSetIfChanged(ref _canManage, value);
+    }
+
+    public string? ReadOnlyNotice =>
+        _connected && !_supported ? "Update kcap on this machine to manage accounts"
+        : _snapshot is null ? "Accounts are listed once the daemon is connected"
+        : null;
+
+    public string? Message {
+        get => _message;
+        private set => this.RaiseAndSetIfChanged(ref _message, value);
+    }
+
+    public bool IsBusy {
+        get => _isBusy;
+        private set => this.RaiseAndSetIfChanged(ref _isBusy, value);
+    }
+
+    public IReadOnlyList<AccountCandidate> Candidates {
+        get => _candidates;
+        private set => this.RaiseAndSetIfChanged(ref _candidates, value);
+    }
+
+    public AccountSettingsRow? Renaming {
+        get => _renaming;
+        private set => this.RaiseAndSetIfChanged(ref _renaming, value);
+    }
+
+    public string RenameDraft {
+        get => _renameDraft;
+        set => this.RaiseAndSetIfChanged(ref _renameDraft, value);
+    }
+
+    public ReactiveCommand<AccountCandidate, Unit> AddCandidateCommand { get; }
+    public ReactiveCommand<string, Unit> AddFromPickerCommand { get; }
+    public ReactiveCommand<AccountSettingsRow, Unit> AddDefaultCommand { get; }
+    public ReactiveCommand<AccountSettingsRow, Unit> RewireCommand { get; }
+    public ReactiveCommand<AccountSettingsRow, Unit> RemoveCommand { get; }
+    public ReactiveCommand<AccountSettingsRow, Unit> BeginRenameCommand { get; }
+    public ReactiveCommand<Unit, Unit> CommitRenameCommand { get; }
+    public ReactiveCommand<Unit, Unit> CancelRenameCommand { get; }
+
+    bool CanAct => CanManage && !IsBusy;
+
+    /// Discovery reads the disk, so it runs off the UI thread; only the newest read publishes.
+    public void RefreshCandidates() => _ = ReadCandidatesAsync();
+
+    async Task ReadCandidatesAsync() {
+        var read = ++_candidateReads;
+        try {
+            var found = await Task.Run(_discover, _token);
+            if (read == _candidateReads && !_token.IsCancellationRequested) Candidates = found;
+        } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
+        } catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: could not look for account directories: {ex.Message}");
+        }
+    }
+
+    internal static string OutcomeMessage(MutationVerb verb, string label, MutationOutcome outcome) {
+        var (done, infinitive, doing) = Words(verb);
+        return outcome switch {
+            MutationOutcome.Succeeded                   => $"{done} {label}",
+            MutationOutcome.Failed { Reason: { } why }  => $"Could not {infinitive} {label}: {why}",
+            MutationOutcome.Failed failed               => $"Could not {infinitive} {label} (exit code {failed.ExitCode})",
+            MutationOutcome.Refused refused             => $"Could not {infinitive} {label}: {refused.Reason}",
+            // Unconfirmed, and every case the lane never produces for an account verb: none reads as done.
+            _                                           => $"{doing} {label} could not be confirmed; the list shows the current state",
+        };
+    }
+
+    static (string Done, string Infinitive, string Doing) Words(MutationVerb verb) => verb switch {
+        MutationVerb.AccountAdd    => ("Added", "add", "Adding"),
+        MutationVerb.AccountRemove => ("Removed", "remove", "Removing"),
+        MutationVerb.AccountRename => ("Renamed", "rename", "Renaming"),
+        MutationVerb.AccountRewire => ("Re-wired", "re-wire", "Re-wiring"),
+        _                          => throw new ArgumentOutOfRangeException(nameof(verb), verb, "not an account verb"),
+    };
+
+    Task AddCandidateAsync(AccountCandidate candidate) =>
+        RunAsync(MutationVerb.AccountAdd, AccountRows.LastSegment(candidate.Directory),
+            new AccountArgs(candidate.Vendor.VendorId, candidate.Directory, null, null));
+
+    Task AddDefaultAsync(AccountSettingsRow row) =>
+        row.IsUnregisteredDefault
+            ? RunAsync(MutationVerb.AccountAdd, row.Label, new AccountArgs(row.Vendor, row.Directory, null, null))
+            : Task.CompletedTask;
+
+    Task RewireAsync(AccountSettingsRow row) =>
+        row.Id is { } id ? RunAsync(MutationVerb.AccountRewire, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+
+    Task RemoveAsync(AccountSettingsRow row) =>
+        row.Id is { } id ? RunAsync(MutationVerb.AccountRemove, row.Label, new AccountArgs(null, null, id, null)) : Task.CompletedTask;
+
+    async Task AddFromPickerAsync(string vendor) {
+        if (!CanAct) return;
+        IsBusy = true;
+        Message = null;
+        try {
+            string? directory;
+            try {
+                directory = await _pickDirectory(_token);
+            } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
+                return;
+            } catch (Exception ex) {
+                Message = $"Could not open the folder picker: {ex.Message}";
+                return;
+            }
+            if (directory is not { Length: > 0 }) return;
+            await SendAsync(MutationVerb.AccountAdd, AccountRows.LastSegment(directory), new AccountArgs(vendor, directory, null, null));
+        } finally { IsBusy = false; }
+    }
+
+    void BeginRename(AccountSettingsRow row) {
+        if (!CanAct || row.IsUnregisteredDefault) return;
+        RenameDraft = row.Label;
+        Renaming = row;
+    }
+
+    async Task CommitRenameAsync() {
+        if (!CanAct || Renaming is not { Id: { } id } row || !RenameChanges(row, RenameDraft)) return;
+        var label = RenameDraft.Trim();
+        Renaming = null;
+        await RunAsync(MutationVerb.AccountRename, $"{row.Label} to {label}", new AccountArgs(null, null, id, label));
+    }
+
+    static bool RenameChanges(AccountSettingsRow? row, string? draft) =>
+        row is not null && !string.IsNullOrWhiteSpace(draft) && !string.Equals(draft.Trim(), row.Label, StringComparison.Ordinal);
+
+    async Task RunAsync(MutationVerb verb, string label, AccountArgs args) {
+        if (!CanAct) return;
+        IsBusy = true;
+        Message = null;
+        try {
+            await SendAsync(verb, label, args);
+        } finally { IsBusy = false; }
+    }
+
+    async Task SendAsync(MutationVerb verb, string label, AccountArgs args) {
+        var request = MutationRequestFactory.ForAccount(verb, args, _daemonName, _profileName);
+        try {
+            Message = OutcomeMessage(verb, label, await _runMutation(request, _token));
+        } catch (OperationCanceledException) when (_token.IsCancellationRequested) {
+        } catch (Exception ex) {
+            Message = $"Could not {Words(verb).Infinitive} {label}: {ex.Message}";
+        }
+    }
+
+    static IReadOnlyList<AccountVendorGroup> GroupsFor(AccountsSnapshotDto? snapshot) =>
+        snapshot is null ? [] : [
+            .. Vendors.Select(vendor => new AccountVendorGroup(vendor.VendorId, HarnessRegistry.LabelOf(vendor), [
+                .. AccountRows.For(snapshot, vendor.VendorId)
+                    .Select(r => new AccountSettingsRow(r.Id, r.Vendor, r.Directory, r.Label, r.RecordingState, r.IsDefault)),
+            ])),
+        ];
+
+    // A resent snapshot listing the same rows leaves the list alone, so an open menu or a rename in
+    // progress is not rebuilt under the person using it.
+    void ApplyGroups(IReadOnlyList<AccountVendorGroup> groups) {
+        var same = groups.Count == Groups.Count && groups.Zip(Groups).All(pair =>
+            pair.First.Vendor == pair.Second.Vendor && pair.First.Rows.SequenceEqual(pair.Second.Rows));
+        if (!same) Groups = groups;
+        if (Renaming is { } renaming)
+            Renaming = Groups.SelectMany(g => g.Rows).FirstOrDefault(r => r.Id is not null && r.Id == renaming.Id);
+    }
+
+    void Refresh() {
+        CanManage = _supported && _snapshot is not null;
+        this.RaisePropertyChanged(nameof(ReadOnlyNotice));
+    }
+
+    public void Dispose() {
+        _lifetime.Cancel();
+        _subscriptions.Dispose();
+        _lifetime.Dispose();
+    }
+}

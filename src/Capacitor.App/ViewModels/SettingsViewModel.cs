@@ -164,6 +164,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
 
     public ProfilesSettingsViewModel? Profiles { get; }
 
+    public AccountsSettingsViewModel? Accounts { get; init; }
     public AppearanceSettingsViewModel? Appearance { get; init; }
     public PrivacySettingsViewModel? Privacy { get; init; }
 
@@ -413,6 +414,7 @@ public sealed class SettingsViewModel : ReactiveObject, IDisposable {
     public void Dispose() {
         _lifetime.Cancel();
         _subscriptions.Dispose();
+        Accounts?.Dispose();
         Appearance?.Dispose();
         Privacy?.Dispose();
         _lifetime.Dispose();

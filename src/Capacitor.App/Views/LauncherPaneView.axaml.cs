@@ -14,6 +14,7 @@ using Avalonia.Platform.Storage;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
 using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness;
 
 namespace Capacitor.App.Views;
 
@@ -685,13 +686,14 @@ public partial class LauncherPaneView : UserControl {
     }
 }
 
-/// The vendor's mark as bindable content (AgentChip's leading glyph). One-way; parameter is the
-/// size in pixels. Bindings evaluate on the UI thread, which BuildGlyph requires.
+/// The vendor's mark as bindable content (AgentChip's leading glyph), from a vendor token or a
+/// HarnessId. One-way; parameter is the size in pixels. Bindings evaluate on the UI thread, which
+/// BuildGlyph requires.
 public sealed class VendorGlyphConverter : IValueConverter {
     public static readonly VendorGlyphConverter Instance = new();
 
     public object? Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
-        value is string vendor
+        (value is HarnessId id ? id.VendorId : value) is string vendor
             ? LauncherPaneView.BuildGlyph(vendor, double.TryParse(parameter as string, out var size) ? size : 13)
             : null;
 
