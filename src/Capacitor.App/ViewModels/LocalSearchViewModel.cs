@@ -25,29 +25,37 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     readonly LocalSearchController _search;
     readonly LocalUpgradeController _upgrade;
     readonly Func<LocalEmbeddingSetting?> _readSetting;
+    readonly Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> _builtinOffer;
     readonly Func<Task> _reconnect;
     readonly CancellationToken _shutdown;
     readonly IScheduler _readScheduler;
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _read = new();
+    readonly SerialDisposable _offer = new();
     LocalEmbeddingSetting? _current;
     bool _loaded;
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
+    /// <param name="builtinOffer">The built-in model set the installed stack offers, or null; asked again on every reconnect,
+    /// which follows an upgrade.</param>
     public LocalSearchViewModel(
-            Func<LocalEmbeddingSetting?> readSetting, IObservable<ServerLaneStatus> status, LocalSearchController search,
+            Func<LocalEmbeddingSetting?> readSetting, Func<CancellationToken, Task<LocalEmbeddingModelManifest?>> builtinOffer,
+            IObservable<ServerLaneStatus> status, LocalSearchController search,
             LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
+        _builtinOffer  = builtinOffer;
         _reconnect     = reconnect;
         _shutdown      = shutdown;
         _readScheduler = readScheduler ?? RxSchedulers.TaskpoolScheduler;
         _read.DisposeWith(_disposables);
+        _offer.DisposeWith(_disposables);
 
         Choice = new SearchChoiceViewModel { Reconfiguring = true };
         ReadSetting();
+        LookUpOffer();
 
         Observable.Switch(search.WhenAnyValue(x => x.Progress)
                 .Select(p => p.Embeddings.Changed.Select(_ => Unit.Default).StartWith(Unit.Default)))
@@ -67,7 +75,10 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
             .Skip(1)
             .Where(connected => connected)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Subscribe(_ => ReadSetting())
+            .Subscribe(_ => {
+                ReadSetting();
+                LookUpOffer();
+            })
             .DisposeWith(_disposables);
 
         ApplyCommand = ReactiveCommand.CreateFromTask(ApplyAsync);
@@ -136,6 +147,14 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
                 _loaded  = true;
                 Refresh();
             }, ex => Console.Error.WriteLine($"kcap app: reading the local search setting failed: {ex.Message}"));
+
+    void LookUpOffer() =>
+        _offer.Disposable = Observable.FromAsync(_builtinOffer)
+            .ObserveOn(RxSchedulers.MainThreadScheduler)
+            .Subscribe(Choice.OfferBuiltin, ex => {
+                Console.Error.WriteLine($"kcap app: looking up the built-in search model failed: {ex.Message}");
+                Choice.OfferBuiltin(null);
+            });
 
     // A changed model restarts the server; the lane would find it on its own backoff.
     async Task ReconnectAsync() {

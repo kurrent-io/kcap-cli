@@ -68,7 +68,7 @@ public sealed class LocalInstallController(
         if (Running) return Task.CompletedTask;
 
         funnel.LocalInstallRetried();
-        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Recommended(ollama: false), ct);
+        return StartAsync(Embeddings ?? LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin), ct);
     }
 
     /// Settles a refusal decided before any child would start, through the same path a run's failure takes.

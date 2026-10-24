@@ -202,6 +202,7 @@ static class WizardFixtures {
                         Detected.ToDictionary(id => id, _ => new DetectedAgent(true, false)));
                 };
             },
+            BuiltinOffer: _ => Task.FromResult<LocalEmbeddingModelManifest?>(null),
             CliPath: CliPath,
             ShimApplicable: ShimApplicable,
             ShimTarget: ShimTarget,

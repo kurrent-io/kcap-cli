@@ -31,13 +31,13 @@ public class SearchChoiceViewModelTests {
             await vm.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(vm.UseBuiltin).IsTrue();
             await Assert.That(vm.OllamaEnabled).IsFalse();
-            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(ollama: false));
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin));
             await Assert.That(vm.Choice.Args).IsEmpty();
 
             running = true;
             await vm.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(vm.UseOllama).IsTrue();
-            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(ollama: true));
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Default));
             await Assert.That(vm.Choice.Args).IsEmpty();
             await Assert.That(vm.ModelChoiceVisible).IsTrue();
             await Assert.That(vm.OllamaStatus).IsNull();
@@ -60,6 +60,59 @@ public class SearchChoiceViewModelTests {
             recorded.Prefill(LocalEmbeddingSetting.Builtin(new string('a', 64)));
             await recorded.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(recorded.UseBuiltin).IsTrue();
+            await Assert.That(recorded.Choice).IsEqualTo(LocalEmbeddingChoice.Builtin);
+            return true;
+        });
+    }
+
+    static readonly LocalEmbeddingModelManifest Offered = new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]);
+
+    /// Without a built-in model to offer, the recommendation falls back to Ollama when it runs, else keyword search,
+    /// still passing no flag; an offer that arrives brings it back.
+    [Test]
+    public async Task A_stack_offering_no_builtin_model_recommends_ollama_or_keyword_search() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var running = false;
+            var vm = new SearchChoiceViewModel(_ => Task.FromResult(running), () => false);
+            vm.Prefill(null);
+            vm.OfferBuiltin(null);
+            await vm.CheckOllamaCommand.Execute().ToTask();
+            await Assert.That(vm.BuiltinEnabled).IsFalse();
+            await Assert.That(vm.BuiltinStatus).IsEqualTo(SearchChoiceViewModel.BuiltinUnavailable);
+            await Assert.That(vm.UseKeyword).IsTrue();
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.KeywordOnly));
+            await Assert.That(vm.Choice.Args).IsEmpty();
+
+            running = true;
+            await vm.CheckOllamaCommand.Execute().ToTask();
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Default));
+
+            running = false;
+            await vm.CheckOllamaCommand.Execute().ToTask();
+            vm.OfferBuiltin(Offered);
+            await Assert.That(vm.BuiltinEnabled).IsTrue();
+            await Assert.That(vm.BuiltinStatus).IsNull();
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin));
+            await Assert.That(vm.BuiltinDescription).Contains("(about 300 MB)");
+            return true;
+        });
+    }
+
+    [Test]
+    public async Task A_builtin_pick_the_stack_cannot_honour_falls_back_but_a_recorded_one_stays() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var picked = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
+            picked.Prefill(LocalEmbeddingSetting.Declined);
+            picked.UseBuiltin = true;
+            picked.OfferBuiltin(null);
+            await Assert.That(picked.UseKeyword).IsTrue();
+            await Assert.That(picked.Choice.Args).IsEmpty();
+
+            var recorded = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
+            recorded.Prefill(LocalEmbeddingSetting.Builtin(new string('a', 64)));
+            recorded.OfferBuiltin(null);
+            await Assert.That(recorded.UseBuiltin).IsTrue();
+            await Assert.That(recorded.BuiltinEnabled).IsTrue();
             await Assert.That(recorded.Choice).IsEqualTo(LocalEmbeddingChoice.Builtin);
             return true;
         });

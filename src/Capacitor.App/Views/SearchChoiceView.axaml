@@ -44,13 +44,17 @@
                 <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.KeywordDetail}" />
             </StackPanel>
         </RadioButton>
-        <RadioButton x:Name="SearchBuiltinOption" Classes="onboardingOption"
-                     IsChecked="{Binding UseBuiltin, Mode=TwoWay}">
-            <StackPanel Spacing="3">
-                <TextBlock Text="Search by meaning, built in" />
-                <TextBlock Classes="detail" Text="{x:Static vm:SearchChoiceViewModel.BuiltinDetail}" />
-            </StackPanel>
-        </RadioButton>
+        <StackPanel Spacing="2">
+            <RadioButton x:Name="SearchBuiltinOption" Classes="onboardingOption"
+                         IsChecked="{Binding UseBuiltin, Mode=TwoWay}" IsEnabled="{Binding BuiltinEnabled}">
+                <StackPanel Spacing="3">
+                    <TextBlock Text="Search by meaning, built in" />
+                    <TextBlock Classes="detail" Text="{Binding BuiltinDescription}" />
+                </StackPanel>
+            </RadioButton>
+            <TextBlock x:Name="BuiltinStatusText" Classes="detail" Text="{Binding BuiltinStatus}" Margin="35,0,11,0"
+                       IsVisible="{Binding BuiltinStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
         <StackPanel Spacing="2">
             <RadioButton x:Name="SearchOllamaOption" Classes="onboardingOption"
                          IsChecked="{Binding UseOllama, Mode=TwoWay}" IsEnabled="{Binding OllamaEnabled}">

@@ -13,9 +13,9 @@ public sealed record LocalEmbeddingChoice(string? Model) {
 
     public static readonly LocalEmbeddingChoice Builtin = new((string?)null) { Provider = LocalEmbeddingProvider.Builtin };
 
-    /// Nobody chose, so the run passes no flag and setup decides: Ollama when it runs, else the built-in model.
-    /// <paramref name="ollama"/> is what this side expects that to be.
-    public static LocalEmbeddingChoice Recommended(bool ollama) => (ollama ? Default : Builtin) with { Unchosen = true };
+    /// Nobody chose, so the run passes no flag and setup decides: Ollama when it runs, else the built-in model when the
+    /// stack offers it, else keyword search, recording nothing. <paramref name="expected"/> is what this side expects.
+    public static LocalEmbeddingChoice Recommended(LocalEmbeddingChoice expected) => expected with { Unchosen = true };
 
     public LocalEmbeddingProvider Provider { get; private init; } = Model is null ? LocalEmbeddingProvider.None : LocalEmbeddingProvider.Ollama;
 

@@ -23,12 +23,15 @@ public class LocalSearchViewModelTests {
         public int Reconnects;
         /// What `data/embedding.json` holds; the view model reads it again once a run settles.
         public LocalEmbeddingSetting? Setting;
+        /// What the installed stack's manifest offers; looked up again on every reconnect.
+        public LocalEmbeddingModelManifest? Offered;
 
-        public Harness(LocalEmbeddingSetting? setting) {
+        public Harness(LocalEmbeddingSetting? setting, bool offered = true) {
             Setting = setting;
+            Offered = offered ? new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]) : null;
             Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
             Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
-            Vm = new LocalSearchViewModel(() => Setting, Status, Search, Upgrade, () => {
+            Vm = new LocalSearchViewModel(() => Setting, _ => Task.FromResult(Offered), Status, Search, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
             }, CancellationToken.None, ImmediateScheduler.Instance);
@@ -52,6 +55,24 @@ public class LocalSearchViewModelTests {
             await Assert.That(keyword.Vm.StateText).IsEqualTo("keyword search");
             await Assert.That(meaning.Vm.StateText).IsEqualTo("search by meaning");
             await Assert.That(meaning.Vm.CurrentText).IsEqualTo("Searches by meaning with mxbai-embed-large.");
+        });
+    }
+
+    [Test]
+    public async Task The_builtin_option_follows_the_installed_stack_and_is_looked_up_again_on_reconnect() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(null, offered: false);
+
+            await Assert.That(h.Vm.Choice.BuiltinEnabled).IsFalse();
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
+            await Assert.That(h.Vm.Choice.Choice.Args).IsEmpty();
+
+            h.Offered = new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]);
+            h.Status.OnNext(new(ServerLaneState.Retrying));
+            h.Status.OnNext(new(ServerLaneState.Connected));
+
+            await Assert.That(h.Vm.Choice.BuiltinEnabled).IsTrue();
+            await Assert.That(h.Vm.Choice.UseBuiltin).IsTrue();
         });
     }
 
