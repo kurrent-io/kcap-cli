@@ -108,6 +108,7 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
     // §2.4 envelope transcript: the mapper translates every app-server notification into
     // canonical/ephemeral envelopes, drained through the bounded forward buffer (IAcpTranscriptSource).
     readonly CodexNotificationMapper _mapper;
+    readonly CodexDispatchedInputs   _dispatched = new();
     readonly CodexForwardBuffer      _forwardBuffer;
 
     CodexAppServerConnection? _connection;
@@ -507,6 +508,20 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
 
     public Task SendUserInputAndWaitForWriteAsync(string text) => _dispatcher.EnqueueAsync(text);
 
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) {
+        var sent = _dispatched.Add(text, dispatchId);
+        Task written;
+        try {
+            written = _dispatcher.EnqueueAsync(text);
+        } catch {
+            _dispatched.Remove(sent);
+            throw;
+        }
+        _ = written.ContinueWith(_ => _dispatched.Remove(sent), CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        return written;
+    }
+
     public async Task WaitForTurnIdleAsync(CancellationToken ct) {
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, _cts.Token);
         var settled   = _dispatcher.WaitForSettledAsync();
@@ -552,7 +567,8 @@ internal sealed partial class CodexAppServerHostedAgentRuntime : IHostedAgentRun
         if (_policy is { } policy) ObservePolicyFacts(policy, n.Method, n.Params);
 
         if (_emitEnvelopeTranscript)
-            foreach (var env in _mapper.Map(n.Method, n.Params)) {
+            foreach (var mapped in _mapper.Map(n.Method, n.Params)) {
+                var env = _dispatched.Stamp(mapped);
                 _policy?.Turns.Observe(env);
                 _forwardBuffer.Emit(env);
             }

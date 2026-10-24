@@ -1167,7 +1167,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     /// dropped-count) rather than silently discarding the input via the channel's own drop-write
     /// behavior.
     /// </summary>
-    Task EnqueueTurn(string text, bool acknowledgeWrite) {
+    Task EnqueueTurn(string text, bool acknowledgeWrite, Guid? dispatchId = null) {
         var written = acknowledgeWrite
             ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             : null;
@@ -1192,7 +1192,7 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
                 return written.Task;
             }
 
-            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text), advanceActivity: false);
+            EmitEnvelope(AcpEventTranslator.BuildUserMessage(seq: 0, NowIso(), text) with { DispatchId = dispatchId }, advanceActivity: false);
 
             if (!_pendingTurns.Writer.TryWrite(new PendingTurn(text, written))) {
                 // The channel was completed (the runtime went terminal) — the only way a not-full
@@ -1488,6 +1488,11 @@ internal sealed partial class AcpHostedAgentRuntime : IHostedAgentRuntime, IAcpT
     public Task SendUserInputAndWaitForWriteAsync(string text) {
         RequireSessionId();
         return EnqueueTurn(text, acknowledgeWrite: true);
+    }
+
+    public Task SendDispatchedInputAsync(string text, Guid dispatchId, bool waitForWrite) {
+        RequireSessionId();
+        return EnqueueTurn(text, acknowledgeWrite: waitForWrite, dispatchId);
     }
 
     public async Task WaitForTurnIdleAsync(CancellationToken ct) {

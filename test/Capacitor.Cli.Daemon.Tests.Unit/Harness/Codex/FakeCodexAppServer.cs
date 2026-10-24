@@ -44,6 +44,8 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
     // When set, turn/start responds inProgress and does NOT auto-emit turn/completed — the turn stays
     // active so a follow-up input is steered onto it. Complete it with CompleteHeldTurnAsync.
     public bool        HoldTurnOpen;
+    // Records each turn's input as a completed userMessage item, as the real server does.
+    public bool        EchoUserMessages;
     /// <summary>`model/list` pages, served in order; each page's nextCursor names the following one.</summary>
     public List<JsonArray> ModelPages = [];
     /// <summary>The `model/list` page answered with a result that is not a model list.</summary>
@@ -180,6 +182,7 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 await RespondAsync(id, new JsonObject {
                     ["turn"] = new JsonObject { ["id"] = turnId, ["status"] = "inProgress", ["items"] = new JsonArray() },
                 }, ct);
+                if (EchoUserMessages) await EchoUserMessageAsync(turnId, @params, ct);
 
                 // Optionally inject an out-of-policy approval request mid-turn.
                 if (InjectApprovalDuringTurn) {
@@ -221,6 +224,7 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
                 if (@params.Arr("input") is { } steerInput && steerInput.GetArrayLength() > 0)
                     LastSteerText = steerInput[0].Str("text");
                 await RespondAsync(id, new JsonObject { ["accepted"] = true }, ct);
+                if (EchoUserMessages) await EchoUserMessageAsync(LastSteerExpectedTurnId ?? _lastTurnId, @params, ct);
                 break;
 
             case "turn/interrupt":
@@ -244,6 +248,17 @@ sealed class FakeCodexAppServer : IAsyncDisposable {
             ["threadId"] = ThreadId,
             ["turn"]     = new JsonObject { ["id"] = _lastTurnId, ["status"] = status, ["items"] = new JsonArray() },
         }, _cts.Token);
+
+    int _userItems;
+
+    Task EchoUserMessageAsync(string? turnId, JsonElement @params, CancellationToken ct) =>
+        NotifyAsync("item/completed", new JsonObject {
+            ["threadId"] = ThreadId, ["turnId"] = turnId,
+            ["item"] = new JsonObject {
+                ["type"] = "userMessage", ["id"] = "user-" + Interlocked.Increment(ref _userItems),
+                ["content"] = JsonNode.Parse(@params.Arr("input")?.GetRawText() ?? "[]"),
+            },
+        }, ct);
 
     async Task<JsonElement> ServerRequestAsync(string method, JsonNode @params, CancellationToken ct) {
         var id  = Interlocked.Increment(ref _nextServerId);
