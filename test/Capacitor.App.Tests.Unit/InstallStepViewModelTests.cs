@@ -377,22 +377,20 @@ public class InstallStepViewModelTests {
     public async Task Entry_asks_about_search_and_starts_nothing_until_install() {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
 
-        var (choice, progress, runsBefore, askingTitle, installingTitle) = await AvaloniaSession.DispatchAsync(async () => {
+        var (choice, progress, runsBefore) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
             await install.OnEnterAsync(CancellationToken.None);
-            var shown = (install.ChoiceVisible, install.ProgressVisible, cli.SetupLocalCallCount, install.Title);
+            var shown = (install.ChoiceVisible, install.ProgressVisible, cli.SetupLocalCallCount);
 
             install.Search.UseKeyword = true;
             await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
-            return (shown.ChoiceVisible, shown.ProgressVisible, shown.SetupLocalCallCount, shown.Title, install.Title);
+            return shown;
         });
 
         await Assert.That(choice).IsTrue();
         await Assert.That(progress).IsFalse();
         await Assert.That(runsBefore).IsEqualTo(0);
-        await Assert.That(askingTitle).IsEqualTo("One more step before installing");
-        await Assert.That(installingTitle).IsEqualTo("Installing kcap on this Mac");
         await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.KeywordOnly], CollectionOrdering.Matching);
     }
 
@@ -454,19 +452,27 @@ public class InstallStepViewModelTests {
         await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.KeywordOnly], CollectionOrdering.Matching);
     }
 
+    /// The shell's headline binds the step's Title, so each change of the choice has to be announced.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task Refused_arguments_reopen_the_choice() {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(2, LocalSetupScript.Failed("invalid_arguments")) };
 
-        var choice = await AvaloniaSession.DispatchAsync(async () => {
+        var (choice, headlines) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
+            var announced = new List<string>();
+            install.PropertyChanged += (_, e) => {
+                if (e.PropertyName == nameof(InstallStepViewModel.Title)) announced.Add(install.Title);
+            };
             await EnterAndInstallAsync(install);
 
-            return install.ChoiceVisible;
+            return (install.ChoiceVisible, announced);
         });
 
         await Assert.That(choice).IsTrue();
+        await Assert.That(headlines).IsEquivalentTo(
+            ["One more step before installing", "Installing kcap on this Mac", "One more step before installing"],
+            CollectionOrdering.Matching);
     }
 
     [Test]
