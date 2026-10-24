@@ -140,7 +140,7 @@ public class McpWorkItemsServerTests {
             "declare_work_breakdown", "retract_work_breakdown",
             "declare_work_relation", "retract_work_relation",
             "get_work_item_topology",
-            "merge_work_item", "detach_work_item",
+            "merge_work_item", "detach_work_item", "declare_work_incomplete",
             "dismiss_next_work", "restore_next_work", "list_dismissed_next_work",
             "list_loose_ends", "claim_loose_end", "release_loose_end", "close_loose_end", "reopen_loose_end",
             "list_work_item_evals", "get_work_item_eval", "request_work_item_eval", "cancel_work_item_eval"
@@ -178,12 +178,26 @@ public class McpWorkItemsServerTests {
     }
 
     [Test]
-    public async Task Merge_and_detach_declare_their_required_ids() {
+    public async Task Corrections_declare_their_required_ids() {
         var byName = McpWorkItemsServer.BuildToolsList().ToDictionary(t => t.Name);
 
         await Assert.That(byName["merge_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id", "into_work_item_id" });
         await Assert.That(byName["detach_work_item"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id" });
+        await Assert.That(byName["declare_work_incomplete"].InputSchema.Required).IsEquivalentTo(new[] { "work_item_id", "reason" });
     }
+
+    [Test]
+    public async Task Incomplete_body_carries_the_session_and_reason_but_never_the_item() {
+        var body = McpWorkItemsServer.BuildDeclareIncompleteBody(
+            Args("""{"work_item_id":"wi-1","session_id":"s1","reason":"The migration bug is still open"}"""));
+
+        await Assert.That(body.ToJsonString()).IsEqualTo("""{"session_id":"s1","reason":"The migration bug is still open"}""");
+    }
+
+    [Test]
+    public async Task Incomplete_body_requires_a_reason() =>
+        await Assert.That(() => McpWorkItemsServer.BuildDeclareIncompleteBody(Args("""{"work_item_id":"wi-1","session_id":"s1"}""")))
+            .Throws<ArgumentException>().WithMessageContaining("reason");
 
     [Test]
     public async Task Loose_end_body_carries_session_id_and_text() {
