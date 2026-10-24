@@ -1796,7 +1796,9 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>The whole path through the real process: the running harness's session, the hosting
-    /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.</summary>
+    /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.
+    /// It fails when the suite runs under the Claude desktop app: the child's ancestry walk counts the app and its
+    /// <c>claude</c> as two agents, judges the server nested and sheds <c>KCAP_AGENT_ID</c>.</summary>
     [Test]
     public async Task Start_agent_posts_once_and_returns_without_reading_the_agent_back() {
         const string runningSession = "11111111-2222-3333-4444-555555555555";
