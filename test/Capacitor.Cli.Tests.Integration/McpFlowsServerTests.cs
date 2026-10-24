@@ -116,8 +116,9 @@ public class McpFlowsServerTests : IDisposable {
             UseShellExecute        = false,
             WorkingDirectory       = server.WorkingDirectory,
         };
-        // An asynchronous list reads stdin from /dev/null unless it is redirected explicitly.
-        foreach (var arg in new[] { "-c", "\"$@\" <&0 & echo $! >&2", "sh", server.FileName }) shell.ArgumentList.Add(arg);
+        // A POSIX shell (dash) points an asynchronous list's stdin at /dev/null before its own redirections run, so
+        // `<&0` would hand the server /dev/null; stdin is kept on fd 3 and restored from there.
+        foreach (var arg in new[] { "-c", "exec 3<&0; \"$@\" <&3 3<&- & echo $! >&2", "sh", server.FileName }) shell.ArgumentList.Add(arg);
         foreach (var arg in server.ArgumentList) shell.ArgumentList.Add(arg);
         shell.Environment.Clear();
         foreach (var (key, value) in server.Environment) shell.Environment[key] = value;
