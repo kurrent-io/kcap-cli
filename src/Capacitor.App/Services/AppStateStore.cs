@@ -22,7 +22,9 @@ public sealed record AppState(
     bool WindowMaximized = false,
     double? UiScale = null,
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
-    DateTimeOffset? WebSignUpOpenedAt = null);
+    DateTimeOffset? WebSignUpOpenedAt = null,
+    // "host/vendor:repo" -> account id, written by AccountMemory.
+    IReadOnlyDictionary<string, string>? AccountByRepo = null);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();

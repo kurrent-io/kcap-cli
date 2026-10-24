@@ -31,6 +31,21 @@ public class SessionStatusDotsTests {
         await Assert.That(SessionStatusDots.IsWorking(row.Status, row.AwaitingInput, row.LiveSubagents)).IsFalse();
     }
 
+    [Test]
+    public async Task A_row_carries_the_account_its_lane_reports() {
+        var remote = AgentRow.FromRemote(new AgentInstanceDto {
+            AgentId = "r1", Status = "Running", DaemonName = "d", OwnerUserId = "u", Vendor = "claude",
+            AccountDirectory = "/home/me/.claude-work", AccountId = "acc1", AccountLabel = "work",
+        });
+        var local = AgentRow.FromLocal(
+            new("a1", "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null,
+                AccountDirectory: "/home/me/.claude", AccountId: null, AccountLabel: ".claude"),
+            new("path:/repo", "repo"));
+
+        await Assert.That((remote.AccountDirectory, remote.AccountId, remote.AccountLabel)).IsEqualTo(("/home/me/.claude-work", "acc1", "work"));
+        await Assert.That((local.AccountDirectory, local.AccountId, local.AccountLabel)).IsEqualTo(("/home/me/.claude", (string?)null, ".claude"));
+    }
+
     static readonly RepoIdentity Repo = new("path:/repo", "repo");
 
     [Test]

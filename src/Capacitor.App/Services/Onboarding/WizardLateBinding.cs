@@ -1,4 +1,5 @@
 using Capacitor.App.Services.LocalSetup;
+using Capacitor.App.Services.Mutation;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 
@@ -71,6 +72,9 @@ public sealed class LateBoundKcapCli(Func<IKcapCli> bind, string? cliPath) : IKc
 
     public Task<ProcessResult> PluginInstallAsync(string? vendorFlag, CancellationToken ct, IReadOnlyList<string>? options = null) =>
         bind().PluginInstallAsync(vendorFlag, ct, options);
+
+    public Task<ProcessResult> AccountsAsync(MutationVerb verb, AccountArgs args, CancellationToken ct) =>
+        bind().AccountsAsync(verb, args, ct);
 
     public Task<StreamingResult> ImportAsync(ImportRequest request, Action<StreamedLine> onLine, CancellationToken ct) =>
         bind().ImportAsync(request, onLine, ct);

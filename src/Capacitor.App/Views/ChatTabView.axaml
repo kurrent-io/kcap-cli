@@ -357,7 +357,7 @@
         <Border x:Name="ComposerBand" Grid.Row="1" Padding="22,15,22,16"
                 Background="{StaticResource KcapSurfaceBrush}" BorderBrush="{StaticResource KcapBorderBrush}"
                 BorderThickness="0,1,0,0">
-            <Grid RowDefinitions="Auto,Auto,Auto,Auto">
+            <Grid RowDefinitions="Auto,Auto,Auto,Auto,Auto">
                 <!-- Runs that outlive the turn. Warning marks work in flight here as it does on a running
                      tool, not attention. -->
                 <Border x:Name="SubagentsBanner" Grid.Row="0" Margin="0,0,0,8" Padding="13,10"
@@ -513,6 +513,17 @@
                                     IsVisible="{Binding ShowsComposer}" />
                         </Grid>
                     </StackPanel>
+                </Border>
+
+                <Border x:Name="AccountStrip" Grid.Row="4" Margin="0,6,0,0" IsVisible="{Binding ShowsAccountStrip}">
+                    <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+                        <ContentControl VerticalAlignment="Center"
+                                        Content="{Binding AccountVendor, Converter={x:Static views:VendorGlyphConverter.Instance}, ConverterParameter=12}" />
+                        <TextBlock Grid.Column="1" Text="{Binding AccountLabel}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{StaticResource KcapTextBrush}" />
+                        <TextBlock Grid.Column="2" Text="{Binding AccountDirectory}" FontSize="11.5" VerticalAlignment="Center"
+                                   Foreground="{StaticResource KcapMutedBrush}" TextTrimming="CharacterEllipsis" />
+                    </Grid>
                 </Border>
             </Grid>
         </Border>
