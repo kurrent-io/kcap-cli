@@ -1,9 +1,12 @@
+using Avalonia.Automation.Peers;
+using Avalonia.Automation.Provider;
 using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
+using Capacitor.App.Views.Onboarding;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Harness;
 using TUnit.Assertions.Enums;
@@ -483,6 +486,38 @@ public class HistoryStepViewModelTests {
 
         await Assert.That(before).IsEqualTo(0);
         await Assert.That(notes).IsEqualTo(2);
-        await Assert.That(after).IsEqualTo(10); // two boxes each for two owners and three repositories
+        await Assert.That(after).IsEqualTo(10);
+    }
+
+    /// A mixed Only me box is half-filled, and a click on it turns every repository private rather than
+    /// widening them all to shared.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_click_on_a_mixed_only_me_box_keeps_every_repository_private() {
+        var levels = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Report());
+            await h.EnterAsync();
+            h.Repo("acme/api").OnlyMe = true;
+            h.Vm.ToggleCustomizeCommand.Execute().Subscribe();
+            var window = new Window { Content = new HistoryPaneView { DataContext = h.Vm }, Width = 800, Height = 900 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var box = window.GetVisualDescendants().OfType<CheckBox>()
+                .First(c => c.Name == "OwnerOnlyMeCheck" && c.DataContext is HistoryOwnerGroup { Owner: "acme" });
+            var mixedShown = box.IsChecked;
+            ((IToggleProvider)ControlAutomationPeer.CreatePeerForElement(box)!).Toggle();
+            Dispatcher.UIThread.RunJobs();
+            var result = (Mixed: mixedShown, Clicked: box.IsChecked,
+                Levels: h.Vm.Groups.Single(g => g.Owner == "acme").Repos.Select(r => r.Level).ToList());
+
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+            return result;
+        });
+
+        await Assert.That(levels.Mixed).IsNull();
+        await Assert.That(levels.Clicked).IsTrue();
+        await Assert.That(levels.Levels.All(l => l == ImportLevel.OnlyMe)).IsTrue();
     }
 }

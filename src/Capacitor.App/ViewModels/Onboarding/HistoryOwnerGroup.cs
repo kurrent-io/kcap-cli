@@ -40,11 +40,13 @@ public sealed class HistoryOwnerGroup : ReactiveObject {
         }
     }
 
-    /// Read over the imported repositories only, and null while they disagree.
+    /// Read over the imported repositories only, and null while they disagree. A click on the mixed box
+    /// arrives as false; it makes them all private, never all shared.
     public bool? OnlyMe {
         get => Agreed([.. Repos.Where(r => r.Included)], r => r.OnlyMe);
         set {
             if (value is not { } onlyMe) return;
+            if (OnlyMe is null) onlyMe = true;
             foreach (var repo in Repos) repo.OnlyMe = onlyMe;
         }
     }
