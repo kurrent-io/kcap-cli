@@ -293,11 +293,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // what DEV-1665 was) silently disappear, leaving the daemon looking
             // healthy while it drops every invocation.
             .ConfigureLogging(b => b.Services.AddSingleton(loggerFactory))
-            .AddJsonProtocol(options => {
-                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
-                    options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-                }
-            )
+            .AddJsonProtocol(options => ConfigureHubPayload(options.PayloadSerializerOptions))
             .Build();
 
         // Halve KeepAliveInterval (15s → 7s) so the WebSocket stays warm
@@ -953,6 +949,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             _logger.LogDebug(ex, "UpdateTitle send failed for session {SessionId}", sessionId);
             return false;
         }
+    }
+
+    /// <summary>How every hub payload to and from the server is serialized.</summary>
+    internal static void ConfigureHubPayload(JsonSerializerOptions options) {
+        options.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
+        options.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
     }
 
     // Outgoing messages to server

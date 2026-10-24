@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Daemon.Services;
 using Microsoft.AspNetCore.SignalR;
@@ -86,6 +87,20 @@ public class ServerConnectionAgentRegisteredTests {
 
         await Assert.That(acked.AckedCalls.Single().ContinuesAgentId).IsEqualTo("agent-1");
         await Assert.That(legacy.LegacyCalls.Single().ContinuesAgentId).IsEqualTo("agent-1");
+    }
+
+    /// <summary>Serialized as the hub sends it: the claim travels only when there is one, so an ordinary agent's
+    /// registration carries no continuation field at all.</summary>
+    [Test]
+    public async Task The_hub_payload_names_a_continued_agent_and_omits_the_field_otherwise() {
+        var options = new JsonHubProtocolOptions().PayloadSerializerOptions;
+        ServerConnection.ConfigureHubPayload(options);
+
+        var successor = JsonSerializer.Serialize(new AgentRegistered("a2", null, "opus", null, "/r", ContinuesAgentId: "a1"), options);
+        var ordinary  = JsonSerializer.Serialize(new AgentRegistered("a1", null, "opus", null, "/r"), options);
+
+        await Assert.That(successor).Contains("\"continues_agent_id\":\"a1\"");
+        await Assert.That(ordinary).DoesNotContain("continues_agent_id");
     }
 
     /// <summary>The missing method is remembered per connection: a reconnect may reach an upgraded server.</summary>

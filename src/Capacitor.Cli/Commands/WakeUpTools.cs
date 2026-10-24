@@ -114,59 +114,62 @@ static partial class WakeUpTools {
     };
 
     internal static (string Text, bool IsError) Render(string toolName, int status, string body, JsonObject? arguments) {
-        var answer = TryParse(body);
-        var code   = answer?["error"] is JsonValue c && c.TryGetValue<string>(out var stated) && stated.Length > 0 ? stated : null;
+        using var document = TryParse(body);
+        var root = document?.RootElement ?? default;
+        var code = root.Str("error") is { Length: > 0 } stated ? stated : null;
 
-        if (status is >= 200 and < 300) return Success(toolName, answer, arguments);
+        if (status is >= 200 and < 300) return Success(toolName, root, arguments);
 
         // With the feature off nothing is mapped under the route: a POST meets the page fallback's 405, a GET a 404.
         if (status is (404 or 405) && code is null)
             return ($"Error: this server does not support wake-ups: {Route} answered {status} with no refusal code, so the route is missing or switched off. Nothing was scheduled or changed.", true);
 
-        if (code is null) return ($"Error: HTTP {status} — {body}", true);
+        if (code is null) return ($"Error: HTTP {status} — {body}{UnknownOutcome(toolName, status)}", true);
 
-        var message = answer!["message"] is JsonValue m && m.TryGetValue<string>(out var text) && text.Length > 0 ? $": {text}" : "";
-
-        return ($"Error ({code}){message}", true);
+        return ($"Error ({code}){(root.Str("message") is { Length: > 0 } message ? $": {message}" : "")}", true);
     }
 
-    static (string Text, bool IsError) Success(string toolName, JsonObject? answer, JsonObject? arguments) {
+    // A coded refusal says what happened; an uncoded server failure on a change does not say whether it was committed.
+    static string UnknownOutcome(string toolName, int status) => (toolName, status >= 500) switch {
+        (Schedule, true) => "\nThe wake-up may or may not have been scheduled: call list_wakeups before scheduling again.",
+        (Cancel, true)   => "\nWhether the wake-up was cancelled is unknown: call list_wakeups before cancelling again.",
+        _                => ""
+    };
+
+    static readonly string[] ListedFields = ["wakeup_id", "state", "outcome", "fire_at", "scheduled_at", "settled_at", "prompt"];
+
+    static (string Text, bool IsError) Success(string toolName, JsonElement root, JsonObject? arguments) {
         switch (toolName) {
-            case Schedule when Str(answer, "wakeup_id") is { } id && Str(answer, "fire_at") is { } fireAt:
+            case Schedule when root.Str("wakeup_id") is { } id && root.Str("fire_at") is { } fireAt:
                 return ($"wakeup_id: {id}\nfire_at: {fireAt}\nScheduled. End your turn now; the prompt arrives as your next input.", false);
             case Schedule:
                 return ($"Error: the server's answer to POST {Route} could not be read. Call list_wakeups to see whether the wake-up was scheduled.", true);
-            case Cancel when (answer?["ok"] is JsonValue ok && ok.TryGetValue<bool>(out var confirmed) && confirmed):
+            case Cancel when root.Bool("ok") == true:
                 return ($"Cancelled wake-up {WakeUpId(arguments)}.", false);
             case Cancel:
                 return ($"Error: the server's answer to the cancel of wake-up {WakeUpId(arguments)} could not be read, so whether it was cancelled is unknown. Call list_wakeups to see.", true);
         }
 
-        if (answer?["wakeups"] is not JsonArray rows)
-            return ($"Error: the server's wake-up list (GET {Route}) could not be read.", true);
+        var unreadable = ($"Error: the server's wake-up list (GET {Route}) could not be read.", true);
 
-        if (rows.Count == 0) return ("This session has no wake-ups pending, and none settled in the last 24 hours.", false);
+        if (root.Arr("wakeups") is not { } rows) return unreadable;
 
-        var blocks = rows.OfType<JsonObject>().Select(row => {
-            var lines = new List<string>();
+        var blocks = new List<string>();
 
-            foreach (var field in (string[])["wakeup_id", "state", "outcome", "fire_at", "scheduled_at", "settled_at", "prompt"])
-                if (Str(row, field) is { } value) lines.Add($"{field}: {value}");
+        foreach (var row in rows.EnumerateArray()) {
+            if (row.Str("wakeup_id") is null || row.Str("state") is null) return unreadable;
 
-            return string.Join('\n', lines);
-        });
+            blocks.Add(string.Join('\n', ListedFields.Select(f => row.Str(f) is { } value ? $"{f}: {value}" : null).OfType<string>()));
+        }
 
-        return (string.Join("\n\n", blocks), false);
+        return blocks.Count == 0
+            ? ("This session has no wake-ups pending, and none settled in the last 24 hours.", false)
+            : (string.Join("\n\n", blocks), false);
     }
 
-    static string? Str(JsonObject? node, string key) =>
-        node?[key] is JsonValue v && v.TryGetValue<JsonElement>(out var e)
-            ? e.ValueKind == JsonValueKind.String ? e.GetString() : e.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined ? null : e.GetRawText()
-            : null;
-
-    static JsonObject? TryParse(string body) {
+    static JsonDocument? TryParse(string body) {
         try {
-            return JsonNode.Parse(body) as JsonObject;
+            return JsonDocument.Parse(body);
         } catch (JsonException) {
             return null;
         }

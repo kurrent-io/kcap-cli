@@ -2311,7 +2311,7 @@ public readonly record struct AgentRegistered(
         string? Vendor = null,
         // The agent this one continues after a daemon restart could not resume it, from the resume ledger; the server
         // checks the claim where it uses it. Trailing name-bound field — an older server ignores it.
-        string? ContinuesAgentId = null
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinuesAgentId = null
     );
 
 public readonly record struct AgentStatusChanged(

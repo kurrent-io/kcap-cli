@@ -121,6 +121,11 @@ public class McpFlowsServerWakeUpTests {
     [Arguments("""{"wakeups":[]}""", false, "This session has no wake-ups pending, and none settled in the last 24 hours.")]
     [Arguments("""{"flows":[]}""", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
     [Arguments("<html></html>", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
+    [Arguments("""{"wakeups":[null]}""", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
+    [Arguments("""{"wakeups":[3]}""", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
+    [Arguments("""{"wakeups":[{}]}""", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
+    [Arguments("""{"wakeups":[{"wakeup_id":"w","state":"pending"},{"state":"pending"}]}""", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
+    [Arguments("""{"wakeups":[{"wakeup_id":7,"state":"pending"}]}""", true, "Error: the server's wake-up list (GET /api/wakeups) could not be read.")]
     public async Task List_answers_an_empty_or_unreadable_body_plainly(string body, bool isError, string text) {
         var call = await CallAsync("list_wakeups", "{}", body: body);
 
@@ -187,6 +192,18 @@ public class McpFlowsServerWakeUpTests {
 
         await Assert.That(call.IsError).IsTrue();
         await Assert.That(call.Text).StartsWith("Error: this server does not support wake-ups");
+    }
+
+    /// <summary>An uncoded 5xx does not say whether a schedule or cancel was committed, so the agent is sent to the list
+    /// before it retries. A coded one, such as <c>not_recorded</c>, says nothing changed and is relayed as it is.</summary>
+    [Test]
+    [Arguments("schedule_wakeup", 500, "Error: HTTP 500 — boom\nThe wake-up may or may not have been scheduled: call list_wakeups before scheduling again.")]
+    [Arguments("cancel_wakeup", 502, "Error: HTTP 502 — boom\nWhether the wake-up was cancelled is unknown: call list_wakeups before cancelling again.")]
+    public async Task An_uncoded_server_failure_on_a_change_says_its_outcome_is_unknown(string tool, int status, string text) {
+        var call = await CallAsync(tool, $$"""{"delay_minutes":5,"prompt":"p","wakeup_id":"{{WakeUpId}}"}""", status, "boom");
+
+        await Assert.That(call.IsError).IsTrue();
+        await Assert.That(call.Text).IsEqualTo(text);
     }
 
     [Test]
