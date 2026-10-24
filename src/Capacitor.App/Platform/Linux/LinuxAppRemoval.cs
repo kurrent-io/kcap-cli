@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Setup;
@@ -7,20 +8,22 @@ namespace Capacitor.App.Platform.Linux;
 
 /// Removes what an AppImage install leaves outside the image: the `kcap` links into the CLI it copied out of the
 /// mount, that copy itself, and finally the image, which goes to the user's Trash so it stays restorable.
-public sealed class LinuxAppRemoval : IAppRemoval {
+public sealed partial class LinuxAppRemoval : IAppRemoval {
     readonly IProcessRunner        _runner;
     readonly string                _image;
     readonly string                _stagedRoot;
     readonly IReadOnlyList<string> _linkFolders;
     readonly string                _trash;
     readonly TimeProvider          _time;
+    readonly Func<string, string, int> _rename;
 
     public LinuxAppRemoval(IProcessRunner runner, UserHome home, AppImageInstall install, Func<string, string?> getEnv, TimeProvider time)
         : this(runner, install.Image, AppImageInstall.StagedRoot(getEnv, home), KcapLinkFolders.For(home),
                Path.Combine(AppImageInstall.DataHome(getEnv, home), "Trash"), time) { }
 
     internal LinuxAppRemoval(IProcessRunner runner, string image, string stagedRoot, IReadOnlyList<string> linkFolders, string trash,
-            TimeProvider time) {
+            TimeProvider time, Func<string, string, int>? rename = null) {
+        _rename      = rename ?? Rename;
         _runner      = runner;
         _image       = image;
         _stagedRoot  = stagedRoot;
@@ -48,8 +51,8 @@ public sealed class LinuxAppRemoval : IAppRemoval {
         }
     }
 
-    /// The freedesktop.org home Trash: the info file is claimed first, so two removals never take one name, and
-    /// an image on another filesystem than the Trash stays where it is.
+    /// <summary>The freedesktop.org home Trash: the info file is claimed first, so two removals never take one name. The
+    /// image is renamed, never copied, so one on another filesystem than the Trash stays where it is.</summary>
     public Task<bool> TrashBundleAsync(CancellationToken ct) {
         if (!File.Exists(_image)) return Task.FromResult(false);
 
@@ -74,18 +77,39 @@ public sealed class LinuxAppRemoval : IAppRemoval {
                 }
             }
 
-            File.Move(_image, Path.Combine(files, claimed));
+            var destination = Path.Combine(files, claimed);
+            if (_rename(_image, destination) is var errno and not 0) {
+                // A rename either happens or does not, but a destination left by anything else is not the image.
+                if (File.Exists(_image)) TryDelete(destination);
+                TryDelete(Path.Combine(info, claimed + ".trashinfo"));
+                Console.Error.WriteLine(errno == CrossDevice
+                    ? $"kcap: {_image} is on another filesystem than the Trash; leaving it where it is"
+                    : $"kcap: could not move {_image} to the Trash (errno {errno})");
+
+                return Task.FromResult(false);
+            }
 
             return Task.FromResult(true);
         } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
-            if (claimed is not null) {
-                try { File.Delete(Path.Combine(info, claimed + ".trashinfo")); } catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException) { }
-            }
+            if (claimed is not null) TryDelete(Path.Combine(info, claimed + ".trashinfo"));
             Console.Error.WriteLine($"kcap: could not move {_image} to the Trash: {ex.Message}");
 
             return Task.FromResult(false);
         }
     }
+
+    const int CrossDevice = 18;
+
+    static void TryDelete(string path) {
+        try { File.Delete(path); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// <summary>rename(2): unlike <see cref="File.Move(string,string)"/>, it never falls back to copying across
+    /// filesystems, and answers EXDEV instead.</summary>
+    static int Rename(string from, string to) => RenameNative(from, to) == 0 ? 0 : Marshal.GetLastPInvokeError();
+
+    [LibraryImport("libc", EntryPoint = "rename", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)]
+    private static partial int RenameNative(string from, string to);
 
     internal static string TrashInfo(string path, DateTimeOffset deletedAt) =>
         "[Trash Info]\n"

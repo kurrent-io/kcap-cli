@@ -26,9 +26,11 @@ public class LinuxAppRemovalTests {
 
     string Staged => Tmp.PathTo("data", "kcap", "desktop");
 
-    LinuxAppRemoval Removal(Runner? runner = null, string? image = null) =>
+    LinuxAppRemoval Removal(Runner? runner = null, string? image = null, Func<string, string, int>? rename = null) =>
         new(runner ?? new Runner(), image ?? Tmp.PathTo("apps", "kcap-x86_64.AppImage"), Staged,
-            [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time);
+            [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time, rename);
+
+    const int CrossDevice = 18;
 
     [Test, ExcludeOn(OS.Windows)]
     public async Task Only_links_into_the_staged_cli_are_removed() {
@@ -74,6 +76,37 @@ public class LinuxAppRemovalTests {
         await Assert.That(info).Contains($"\nPath={first}\n");
         await Assert.That(info).Contains($"\nDeletionDate={_time.GetLocalNow():yyyy-MM-ddTHH:mm:ss}\n");
         await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.2.AppImage.trashinfo"))).IsTrue();
+    }
+
+    /// <summary>An image on another filesystem than the Trash cannot be renamed into it. It stays where it is, with
+    /// nothing copied into the Trash and no info file left to name a file that is not there.</summary>
+    [Test]
+    public async Task An_image_on_another_filesystem_stays_where_it_is() {
+        var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
+
+        var trashed = await Removal(image: image, rename: (_, _) => CrossDevice).TrashBundleAsync(CancellationToken.None);
+
+        await Assert.That(trashed).IsFalse();
+        await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
+        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "files"))).IsEmpty();
+        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
+    }
+
+    /// <summary>A move that fails part way leaves nothing behind in the Trash, and the image in place.</summary>
+    [Test]
+    public async Task A_failed_move_leaves_no_partial_file_in_the_trash() {
+        var image = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "image");
+        static int PartialThenFail(string from, string to) {
+            File.WriteAllText(to, "ima");
+            return 5;
+        }
+
+        var trashed = await Removal(image: image, rename: PartialThenFail).TrashBundleAsync(CancellationToken.None);
+
+        await Assert.That(trashed).IsFalse();
+        await Assert.That(File.ReadAllText(image)).IsEqualTo("image");
+        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "files"))).IsEmpty();
+        await Assert.That(Directory.EnumerateFileSystemEntries(Tmp.PathTo("data", "Trash", "info"))).IsEmpty();
     }
 
     [Test]
