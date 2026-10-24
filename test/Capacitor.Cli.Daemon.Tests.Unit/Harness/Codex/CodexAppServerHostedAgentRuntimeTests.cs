@@ -363,6 +363,31 @@ public class CodexAppServerHostedAgentRuntimeTests {
     }
 
     [Test]
+    public async Task A_dispatched_inputs_recorded_user_message_carries_its_dispatch_and_a_typed_one_none() {
+        var fake = new FakeCodexAppServer { HoldTurnOpen = true, EchoUserMessages = true };
+        var (runtime, _, _) = Build(_ => fake, Launch(), emitEnvelopes: true);
+        await runtime.StartAsync(CancellationToken.None).WaitAsync(HangGuard);
+        var dispatch = Guid.NewGuid();
+
+        await runtime.SendUserInputAsync("typed").WaitAsync(HangGuard);
+        await runtime.SendDispatchedInputAsync("dispatched", dispatch, waitForWrite: false).WaitAsync(HangGuard);
+
+        var users = new List<AcpEventEnvelope>();
+        using var cts = new CancellationTokenSource(HangGuard);
+        while (users.Count < 2) {
+            var env = await runtime.Envelopes.ReadAsync(cts.Token);
+            if (env.Kind == AcpEventKind.UserMessage) users.Add(env);
+        }
+
+        await Assert.That(users.Select(u => (u.Text, u.DispatchId)))
+            .IsEquivalentTo(new (string?, Guid?)[] { ("typed", null), ("dispatched", dispatch) }, TUnit.Assertions.Enums.CollectionOrdering.Matching);
+
+        await fake.CompleteHeldTurnAsync();
+        await runtime.WaitForTurnIdleAsync(CancellationToken.None).WaitAsync(HangGuard);
+        await runtime.DisposeAsync();
+    }
+
+    [Test]
     public async Task Initial_prompt_fires_the_first_turn_during_start() {
         var fake = new FakeCodexAppServer();
         var (runtime, _, _) = Build(_ => fake, Launch(prompt: "kick off the review"));

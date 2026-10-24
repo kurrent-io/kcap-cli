@@ -1546,6 +1546,11 @@ public readonly record struct AcpEventEnvelope(
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? TurnId = null,
 
+        // user_message — the server dispatch that delivered it, kept so a viewer of the journal can ask the
+        // server who sent it. Sent only when set; the server ignores it.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        Guid? DispatchId = null,
+
         // user_message read from a stored transcript: the id the server keeps the event under. Local to the
         // desktop chat, never serialized.
         [property: JsonIgnore]
@@ -2141,8 +2146,8 @@ public readonly record struct SendInputCommand(
         string    AgentId,
         string    Text,
         string[]? AttachmentIds,
-        // Names this dispatch when the daemon has to refuse it. Null from a server that does not send
-        // one, in which case there is nothing to name and no refusal is reported.
+        // Names this dispatch when the daemon has to refuse it, and on the user message a runtime records
+        // for it. Null from a server that does not send one, in which case there is nothing to name.
         Guid?     DispatchId = null
     );
 

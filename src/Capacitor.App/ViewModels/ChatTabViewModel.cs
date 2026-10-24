@@ -1527,9 +1527,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     /// A remote feed's offset is the line's number in the session's root stream; a local one's is a file
-    /// position, so only the envelope's own keys name it there.
+    /// position, so only the envelope's own keys name it there. A journaled message with no dispatch is the
+    /// owner's own input and keeps the fallback.
     SenderLabel SenderOf(AcpEventEnvelope e, long offset) =>
-        new(new MessageKeys(e.SourceEventId, _origin == AgentOrigin.Remote ? offset : null), Timestamp(e.TimestampIso));
+        new(new MessageKeys(e.SourceEventId, _origin == AgentOrigin.Remote ? offset : null, e.DispatchId), Timestamp(e.TimestampIso));
 
     static IEnumerable<SenderLabel> SenderLabels(IEnumerable<ChatItemViewModel> items) {
         foreach (var item in items) {
