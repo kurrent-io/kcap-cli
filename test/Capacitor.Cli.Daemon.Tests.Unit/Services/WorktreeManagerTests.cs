@@ -68,6 +68,44 @@ public class WorktreeManagerTests {
         }
     }
 
+    /// <summary>
+    /// Fetching a head that moves a submodule makes git fetch the submodule too, from the submodule's own
+    /// remote. That remote is the user's business, not the review's: unreachable here, it must not fail
+    /// the launch.
+    /// </summary>
+    [Test]
+    public async Task CreateAsync_fetches_a_head_that_moves_a_submodule_whose_remote_is_unreachable() {
+        var sub      = GitRepo.CreateWithCommit("sub");
+        using var up = GitRepo.CreateWithCommit("upstream");
+        up.Do("-c", "protocol.file.allow=always", "submodule", "add", sub, "vendored");
+        up.Commit("add submodule");
+        up.Config("uploadpack.allowAnySHA1InWant", "true");
+
+        using var cloneDir = new TempDir("clone");
+        var clone = up.Clone(cloneDir.PathTo("repo"));
+        clone.Do("-c", "protocol.file.allow=always", "submodule", "update", "--init");
+
+        sub.CreateFile("moved.txt", "moved");
+        sub.CommitAll("moved");
+        var vendored = GitRepo.At(up.PathTo("vendored"));
+        vendored.Do("fetch", "-q", "origin");
+        vendored.Do("checkout", "-q", sub.Head);
+        up.Add("vendored");
+        up.Commit("move the submodule");
+        up.Do("update-ref", "refs/pull/7/head", up.Head);
+        var head = up.Head;
+        sub.Dispose();
+
+        var manager  = new WorktreeManager(new DaemonConfig(), NullLogger<WorktreeManager>.Instance, NoSnapshotBarrier.Instance, TimeProvider.System);
+        var worktree = await manager.CreateAsync(clone, name: "review-pr-7", baseRef: "refs/pull/7/head");
+
+        try {
+            await Assert.That(GitRepo.At(worktree.Path).Head).IsEqualTo(head);
+        } finally {
+            await WorktreeManager.RemoveAsync(worktree, TimeProvider.System);
+        }
+    }
+
     [Test]
     public async Task CreateAsync_with_a_local_only_sha_checks_it_out_without_a_remote() {
         using var repo = GitRepo.Create("local-only");

@@ -279,7 +279,7 @@ public partial class WorktreeManager(
                 // --no-auto-maintenance: that flag needs a newer git than the override transport does.
                 await RunGit(repoPath, FetchTimeout,
                     time,
-                    [new("maintenance.auto", "false"), new("gc.auto", "0")],
+                    [new("maintenance.auto", "false"), new("gc.auto", "0"), .. NoSubmoduleRecursion()],
                     "fetch", "origin", $"{baseRef}:{fetchedRef}");
                 await WithWorktreeMetadataGate(repoPath, time, () =>
                     RunGit(repoPath, GitTimeout, time, noHooks,
@@ -448,15 +448,15 @@ public partial class WorktreeManager(
         if (staged.ExitCode is not (0 or 1))
             throw new InvalidOperationException(
                 $"git diff --cached --quiet failed: {GitFailureDetail(staged.Stderr, staged.Stdout)}");
-        // Bookkeeping commit. Identity is explicit: a host with no user.email fails with
-        // "Author identity unknown". An empty folder is a valid start — commit an empty tree
-        // so the agent has a real HEAD to build on.
+        // Bookkeeping commit, with its own identity and unsigned: an unattended daemon cannot drive the
+        // user's signing program. An empty folder is a valid start — commit an empty tree so the agent
+        // has a real HEAD to build on.
         var commitArgs = staged.ExitCode == 0
             ? new[] { "commit", "--allow-empty", "-m", "Initial snapshot" }
             : new[] { "commit", "-m", "Initial snapshot" };
         await RunGit(worktreePath, GitTimeout,
             time,
-            [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
+            [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap"), new("commit.gpgsign", "false")],
             commitArgs);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
@@ -500,6 +500,12 @@ public partial class WorktreeManager(
     /// <summary>The hook override. The transport carrying it is proved by the runner that hands it to git
     /// (see <c>ProveConfigTransportIfCarryingAsync</c>), so nothing here has to remember to.</summary>
     static GitConfigOverride[] NoBranchHooks() => [new("core.hooksPath", NoHooksPath)];
+
+    /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it
+    /// fails outright; and a fetch that recursed would reach each submodule's own remote. Neither may
+    /// depend on the user's git config.</summary>
+    static GitConfigOverride[] NoSubmoduleRecursion() =>
+        [new("submodule.recurse", "false"), new("fetch.recurseSubmodules", "false")];
 
     /// <summary>
     /// Neutralizes the tree, and UNDOES the creation if that fails.
@@ -545,7 +551,8 @@ public partial class WorktreeManager(
         // pathspec matches nothing. This is the step that materialises the tree, and therefore the step
         // the overrides have to guard.
         await RunGit(worktreePath, GitTimeout, time,
-            [.. noHooks, .. overrides, .. ParallelCheckoutFor(OperatingSystem.IsWindows())], "reset", "--hard", "HEAD");
+            [.. noHooks, .. NoSubmoduleRecursion(), .. overrides, .. ParallelCheckoutFor(OperatingSystem.IsWindows())],
+            "reset", "--hard", "HEAD");
     }
 
     /// Windows only: its per-file write cost makes a serial checkout most of a launch's wait (7.5k files,
@@ -1019,12 +1026,10 @@ public partial class WorktreeManager(
                 throw new InvalidOperationException("borrowed_snapshot_sparse_checkout_unsupported");
 
             await RunGit(parent, GitTimeout, time, "clone", "--no-hardlinks", "--no-checkout", "--", bundle, destination);
-            // Same guard as `worktree add`: this checkout materialises branch content, so a relative
-            // core.hooksPath would run the branch's post-checkout here too. Missed when the guard was
-            // added — it went on the worktree paths only.
+            // Same guards as the worktree checkout: this one materialises branch content too.
             await RunGit(destination, GitTimeout,
                 time,
-                [.. NoBranchHooks(), .. await FilterOverridesForAsync(destination)],
+                [.. NoBranchHooks(), .. NoSubmoduleRecursion(), .. await FilterOverridesForAsync(destination)],
                 "checkout", "--detach", "HEAD");
             var clonedHead = (await RunGitCapture(destination, GitTimeout, time, false, "rev-parse", "HEAD")).Trim();
             if (!string.Equals(sourceHead, clonedHead, StringComparison.Ordinal)) throw new SourceChangedException();
