@@ -78,7 +78,7 @@ public static class ToolDetail {
         }
     }
 
-    static bool IsImageExtension(string path) {
+    internal static bool IsImageExtension(string path) {
         var ext = System.IO.Path.GetExtension(path);
         return ext.Equals(".png", StringComparison.OrdinalIgnoreCase)
             || ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
