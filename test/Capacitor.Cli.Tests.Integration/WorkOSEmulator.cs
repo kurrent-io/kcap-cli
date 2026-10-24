@@ -67,8 +67,9 @@ public sealed class WorkOSEmulator : IAsyncDisposable {
     }
 
     public static async Task<WorkOSEmulator> StartAsync(CancellationToken ct) {
-        // A fixed host port, so a restart keeps the base a stored token names. Passing any argument
-        // replaces the image's defaults, and without --host 0.0.0.0 it listens on its own loopback.
+        // The host port stays fixed across a restart, because a stored token names the base URL; something that takes
+        // the port while the emulator is stopped fails that one test. Passing any argument replaces the image's
+        // defaults, and without --host 0.0.0.0 it listens on its own loopback.
         var container = await ContainerHostPorts.StartAsync(() => new ContainerBuilder(new DockerImage("ghcr.io/workos/emulate", tag: "0.15.0"))
             .WithPortBinding(ContainerHostPorts.Next(), Port)
             .WithResourceMapping(Encoding.UTF8.GetBytes(Seed), SeedPath)
@@ -79,8 +80,9 @@ public sealed class WorkOSEmulator : IAsyncDisposable {
         return new WorkOSEmulator(container, container.GetMappedPublicPort(Port));
     }
 
-    /// <summary>Stops and starts the same container: the emulator keeps all state in memory, so every
-    /// token it issued is forgotten.</summary>
+    /// <summary>Stops and starts the same container on the same host port: the emulator keeps all state in memory, so
+    /// every token it issued is forgotten. The port is not retried, so one taken while it is stopped fails the
+    /// start.</summary>
     public async Task RestartAsync(CancellationToken ct) {
         await _container.StopAsync(ct);
         await _container.StartAsync(ct);

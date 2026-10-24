@@ -7,8 +7,8 @@ namespace Capacitor.Cli.Tests.Unit;
 /// Docker's own host-port choice, and a port-0 bind, share Linux's ephemeral range with a loaded runner's sockets, so
 /// every published container port takes its host port from <c>ContainerHostPorts.Next()</c>. Pinned as a guard because
 /// a binding on Docker's choice passes everywhere a machine is quiet and fails only on a busy runner. The KurrentDB and
-/// Postgres builders publish their port on Docker's choice unless told otherwise, so each builder's own chain, up to
-/// its <c>.Build()</c>, needs a picked binding.
+/// Postgres builders publish their port on Docker's choice unless told otherwise, so each builder's own chain needs a
+/// picked binding in the statement that constructs it.
 /// </summary>
 public partial class ContainerHostPortGuardTests {
     [GeneratedRegex(@"\.WithPortBinding\s*\((?!\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,)")]
@@ -31,13 +31,16 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("new KurrentDbBuilder(image).Build()")]
     [Arguments("KurrentDbBuilder b = new(image); b.Build()")]
     [Arguments("new PostgreSqlBuilder(image).Build(); new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80).Build()")]
+    [Arguments("KurrentDbBuilder b = new(image); b = b.WithPortBinding(ContainerHostPorts.Next(), 2113); b.Build()")]
+    [Arguments("KurrentDbBuilder Unbuilt() => new KurrentDbBuilder(image); var c = new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80).Build();")]
+    [Arguments("Pair(new KurrentDbBuilder(a), new PostgreSqlBuilder(b).WithPortBinding(ContainerHostPorts.Next(), 5432).Build())")]
+    [Arguments("new KurrentDbBuilder(image).WithEnvironment(\"NOTE\", \".WithPortBinding(ContainerHostPorts.Next(), 2113)\").Build()")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
     [Test]
     [Arguments(".WithPortBinding(ContainerHostPorts.Next(), Port)")]
     [Arguments("new KurrentDbBuilder(image).WithPortBinding(ContainerHostPorts.Next(), 2113).Build()")]
-    [Arguments("KurrentDbBuilder b = new(image); b = b.WithPortBinding(ContainerHostPorts.Next(), 2113); b.Build()")]
     public async Task Pattern_passes_a_port_picked_below_the_ephemeral_range(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsFalse();
 
@@ -47,7 +50,6 @@ public partial class ContainerHostPortGuardTests {
 
         var offenders = Directory.EnumerateFiles(Path.Combine(root, "test"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(s => s is "bin" or "obj"))
-            .Where(path => path != ThisFile())
             .Where(path => PublishesOnDockersChoice(File.ReadAllText(path)))
             .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))
             .ToList();
@@ -56,19 +58,26 @@ public partial class ContainerHostPortGuardTests {
             .Because("bind each published port with .WithPortBinding(ContainerHostPorts.Next(), containerPort)");
     }
 
-    static bool PublishesOnDockersChoice(string code) =>
-        DockerChosenBinding().IsMatch(code)
-     || PublishingBuilder().Matches(code).Any(builder => !PickedBinding().IsMatch(ChainOf(code, builder)));
+    static bool PublishesOnDockersChoice(string source) {
+        var code = SourceCode.OutsideStrings(source);
 
-    /// <summary>The code from a builder's construction to its first <c>.Build()</c>, or to the end of the file.</summary>
-    static string ChainOf(string code, Match builder) {
-        var start = builder.Index + builder.Length;
-        var build = Build().Match(code, start);
-
-        return code[start..(build.Success ? build.Index : code.Length)];
+        return DockerChosenBinding().IsMatch(code)
+            || PublishingBuilder().Matches(code).Any(builder => !PickedBinding().IsMatch(ChainOf(code, builder)));
     }
 
-    static string ThisFile([CallerFilePath] string here = "") => here;
+    /// <summary>The code from a builder's construction to whichever comes first: its <c>.Build()</c>, the end of its
+    /// statement, or the next builder's construction. A binding added in a later statement does not count.</summary>
+    static string ChainOf(string code, Match builder) {
+        var start = builder.Index + builder.Length;
+
+        int[] ends = [
+            Build().Match(code, start) is { Success: true } build ? build.Index : code.Length,
+            code.IndexOf(';', start) is >= 0 and var statement ? statement : code.Length,
+            PublishingBuilder().Match(code, start) is { Success: true } next ? next.Index : code.Length
+        ];
+
+        return code[start..ends.Min()];
+    }
 
     static string RepoRoot([CallerFilePath] string here = "") {
         var dir = Path.GetDirectoryName(here);
