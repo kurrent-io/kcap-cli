@@ -1302,23 +1302,28 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         return null;
     }
 
-    /// Unknown until this connection's listing has answered for the daemon under the viewer: a
-    /// listing that answered without it is still Unknown, never Unsupported. A server without
-    /// sign-in gives no viewer id, so the local daemon is then the one row carrying its name.
-    internal static AccountSupport SupportFor(DaemonListing listing, string machine, string? viewerId, bool remote) {
+    /// Unknown until this connection's listing has answered for the daemon: a listing that answered
+    /// without it is still Unknown, never Unsupported. The local daemon is its twin row whatever owner
+    /// that row carries, since the viewer's listing includes a daemon still registered under a
+    /// claimed legacy id. Without a twin (a daemon that predates machine ids lists none) it is
+    /// matched by name and owner, or, on a server without sign-in, as the one row carrying its name.
+    AccountSupport SupportFor(DaemonListing listing, string machine, string? viewerId, bool remote) {
         if (listing.Daemons is not { } daemons) return AccountSupport.Unknown;
 
-        var daemon = viewerId is null && !remote ? OnlyRowNamed(daemons, machine) : FindDaemon(daemons, machine, viewerId);
+        var daemon = remote ? FindDaemon(daemons, machine, viewerId)
+            : OnlyRow(daemons, IsLocalTwin) ?? (viewerId is null
+                ? OnlyRow(daemons, d => string.Equals(d.Name, machine, StringComparison.Ordinal))
+                : FindDaemon(daemons, machine, viewerId));
         return daemon is null ? AccountSupport.Unknown
             : daemon.SupportsAccountLaunches ? AccountSupport.Supported
             : AccountSupport.Unsupported;
     }
 
-    /// Two rows with the name cannot be told apart without an owner, so they match nothing.
-    static DaemonInfo? OnlyRowNamed(IReadOnlyList<DaemonInfo> daemons, string name) {
+    /// Two matching rows cannot be told apart, so they match nothing.
+    static DaemonInfo? OnlyRow(IReadOnlyList<DaemonInfo> daemons, Func<DaemonInfo, bool> matches) {
         DaemonInfo? match = null;
         foreach (var d in daemons) {
-            if (!string.Equals(d.Name, name, StringComparison.Ordinal)) continue;
+            if (!matches(d)) continue;
             if (match is not null) return null;
             match = d;
         }

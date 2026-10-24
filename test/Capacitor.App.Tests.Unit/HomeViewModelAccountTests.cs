@@ -33,8 +33,8 @@ public class HomeViewModelAccountTests {
     static AccountsSnapshotDto Snapshot(string hostId, long revision, params AccountViewDto[] accounts) =>
         new(hostId, revision, accounts, [new("claude", "/u/.claude", "/u/.claude"), new("codex", "/u/.codex", "/u/.codex")]);
 
-    static DaemonInfo Listed(string name, bool accounts = true, string owner = Viewer, string[]? repos = null) => new() {
-        Name = name, OwnerUserId = owner, Connected = true, SupportsAccountLaunches = accounts,
+    static DaemonInfo Listed(string name, bool accounts = true, string owner = Viewer, string? machineId = null, string[]? repos = null) => new() {
+        Name = name, OwnerUserId = owner, MachineId = machineId, Connected = true, SupportsAccountLaunches = accounts,
         RepoPaths = repos, SupportedVendors = ["claude", "codex", "pi"],
     };
 
@@ -77,7 +77,7 @@ public class HomeViewModelAccountTests {
 
         public async Task<HomeViewModel> StartAsync(
                 (string Host, string Vendor, string Repo, string Id)[]? memory = null, IRemoteAgentsService? remote = null,
-                DaemonStatusDto? local = null, Func<CancellationToken, Task<string?>>? viewerId = null) {
+                DaemonStatusDto? local = null, string? localMachineId = null, Func<CancellationToken, Task<string?>>? viewerId = null) {
             if (memory is not null)
                 await Store.UpdateAsync(s => s with {
                     AccountByRepo = memory.ToDictionary(m => AccountMemory.KeyFor(m.Host, m.Vendor, m.Repo), m => m.Id),
@@ -88,6 +88,7 @@ public class HomeViewModelAccountTests {
             Vm = new HomeViewModel(
                 Daemon, Store, Launch, () => Task.FromResult<string[]>([]), TimeProvider.System,
                 daemons: Remote.Daemons, viewerId: viewerId ?? (_ => Task.FromResult<string?>(Viewer)), laneStatus: Lane,
+                localMachineId: localMachineId,
                 listing: listings.Listing, daemonAccounts: listings.DaemonAccounts, localAccounts: LocalAccounts,
                 retryListing: () => OnRetry());
             return Vm;
@@ -775,6 +776,33 @@ public class HomeViewModelAccountTests {
             await vm.StartCommand.Execute();
             await Assert.That(rig.Launch.Requests.Single().DaemonName).IsEqualTo("box");
             await Assert.That(rig.Launch.Requests.Single().AccountId).IsNull();
+        });
+    }
+
+    /// The hub lists a daemon still registered under a claimed legacy id for its viewer, so the local
+    /// daemon's row is the one carrying its machine id and name, under whatever owner it is listed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_local_daemon_is_its_twin_row_whatever_owner_the_listing_carries() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.StartAsync(localMachineId: "m1");
+            await vm.SelectRepositoryAsync(Repo);
+            rig.LocalAccounts.OnNext(Snapshot("h1", 1, Home, Work));
+
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName, owner: "legacy", machineId: "m2")));
+            await Assert.That(vm.AccountPendingText).IsEqualTo(Loading);
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName, owner: "legacy", machineId: "m1")));
+            await Assert.That(vm.AccountPendingText).IsNull();
+            await Assert.That(vm.AccountSection).IsTrue();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+
+            await vm.PickAccountAsync("a2");
+            vm.Goal = "g";
+            await vm.StartCommand.Execute();
+            await Assert.That(rig.Launch.Requests.Single().AccountId).IsEqualTo("a2");
         });
     }
 }
