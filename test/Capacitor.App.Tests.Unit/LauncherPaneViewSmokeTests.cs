@@ -1026,4 +1026,85 @@ public class LauncherPaneViewSmokeTests {
             Dispatcher.UIThread.RunJobs();
         });
     }
+
+    /// Real pointer input on a control inside the open panel, which lives in its own popup root.
+    static void ClickInPanel(Window window, Control target) {
+        Settle(window);
+        var root = TopLevel.GetTopLevel(target) ?? throw new InvalidOperationException("Click target is not shown.");
+        var origin = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), root)
+            ?? throw new InvalidOperationException("Click target is not under its root.");
+        root.MouseDown(origin, MouseButton.Left);
+        root.MouseUp(origin, MouseButton.Left);
+        Settle(window);
+    }
+
+    /// The rows belong to the selected vendor, so browsing another vendor's tab shows that vendor's
+    /// models without them, and coming back shows them again.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_account_section_shows_only_under_the_selected_vendors_tab() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            Button Tab(string label) => PanelButtons(agent).Single(b => b.Width == 34 && AutomationProperties.GetName(b) == label);
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+
+            ClickInPanel(window, Tab("Codex"));
+            await Assert.That(AccountHeader(agent)).IsNull();
+            await Assert.That(NamedRow(agent, "work")).IsNull();
+            await Assert.That(NamedRow(agent, "GPT-5.6, Codex")).IsNotNull();
+
+            ClickInPanel(window, Tab("Claude Code"));
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+            await Assert.That(NamedRow(agent, "work")).IsNotNull();
+
+            agent.Hide();
+            Settle(window);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// The listing and snapshot re-emit on every server change notification; one that changes
+    /// nothing the panel draws must leave its rows, and the focus on them, in place.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unchanged_listing_and_snapshot_leave_the_open_panel_rows_in_place() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.ResolveAsync();
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            window.KeyPressQwerty(PhysicalKey.Tab, RawInputModifiers.None);
+            Settle(window);
+            var home = NamedRow(agent, "home, selected")!;
+            var modelDefault = NamedRow(agent, "Default — Claude Code chooses, Claude Code, selected")!;
+            await Assert.That(home.IsFocused).IsTrue();
+
+            rig.AnswerListing();
+            rig.Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));
+            Settle(window);
+
+            await Assert.That(NamedRow(agent, "home, selected")).IsSameReferenceAs(home);
+            await Assert.That(NamedRow(agent, "Default — Claude Code chooses, Claude Code, selected")).IsSameReferenceAs(modelDefault);
+            await Assert.That(home.IsFocused).IsTrue();
+
+            agent.Hide();
+            Settle(window);
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
 }

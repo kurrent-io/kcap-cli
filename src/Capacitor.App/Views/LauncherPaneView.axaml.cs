@@ -551,16 +551,26 @@ public partial class LauncherPaneView : UserControl {
             return row;
         }
 
-        // The pending line stands in for the rows, never beside them, even while the view-model still publishes rows.
-        void AddAccountSection() {
+        // What the Account section draws, or null when it is absent: the rows belong to the selected
+        // vendor and are not searched. The pending line stands in for the rows even while the
+        // view-model still publishes rows, so they are left out of it.
+        (string? Pending, bool Retry, IReadOnlyList<AccountChoice> Rows)? AccountsToDraw() =>
+            vm.AccountSection && (searchBox.Text?.Trim() ?? "").Length == 0
+         && string.Equals(currentTab, vm.SelectedVendor, StringComparison.OrdinalIgnoreCase)
+                ? vm.AccountPendingText is { } pending ? (pending, vm.AccountRetryVisible, []) : (null, false, vm.AccountRows)
+                : null;
+
+        (string? Pending, bool Retry, IReadOnlyList<AccountChoice> Rows)? drawnAccounts = null;
+
+        void AddAccountSection(string? pending, bool retryVisible, IReadOnlyList<AccountChoice> choices) {
             rows.Children.Add(new TextBlock { Text = "Account", Classes = { "sectionMeta" }, Margin = new Thickness(10, 4, 10, 2) });
-            if (vm.AccountPendingText is { } pending) {
+            if (pending is not null) {
                 var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(10, 4) };
                 line.Children.Add(new TextBlock {
                     Text = pending, FontSize = 12.5, Foreground = muted,
                     VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
                 });
-                if (vm.AccountRetryVisible) {
+                if (retryVisible) {
                     var retry = new Button {
                         Content = "Retry", Command = vm.RetryAccountsCommand, Padding = new Thickness(10, 3), FontSize = 12,
                     };
@@ -570,7 +580,7 @@ public partial class LauncherPaneView : UserControl {
                 }
                 rows.Children.Add(line);
             } else {
-                foreach (var choice in vm.AccountRows) rows.Children.Add(AccountRow(choice));
+                foreach (var choice in choices) rows.Children.Add(AccountRow(choice));
             }
             rows.Children.Add(ChoiceSeparator());
         }
@@ -592,9 +602,10 @@ public partial class LauncherPaneView : UserControl {
         void RebuildRows() {
             rows.Children.Clear();
             var term = searchBox.Text?.Trim() ?? "";
+            drawnAccounts = AccountsToDraw();
 
             if (term.Length == 0) {
-                if (vm.AccountSection) AddAccountSection();
+                if (drawnAccounts is { } accounts) AddAccountSection(accounts.Pending, accounts.Retry, accounts.Rows);
                 var option = vm.Harnesses.FirstOrDefault(
                     o => string.Equals(o.Vendor, currentTab, StringComparison.OrdinalIgnoreCase));
                 if (option is not null) AddVendorRows(option, _ => true, includeDefault: true);
@@ -651,10 +662,17 @@ public partial class LauncherPaneView : UserControl {
         }
 
         // The account choice can resolve while the panel is open; a closed panel keeps no handler.
+        // AccountRows is a fresh list on every listing or snapshot emission, and a rebuild drops focus
+        // and hover, so only a change to what the section draws rebuilds.
         void OnAccountChanged(object? _, PropertyChangedEventArgs e) {
-            if (e.PropertyName is nameof(HomeViewModel.AccountSection) or nameof(HomeViewModel.AccountRows)
-                or nameof(HomeViewModel.AccountPendingText) or nameof(HomeViewModel.AccountRetryVisible))
-                RebuildRows();
+            if (e.PropertyName is not (nameof(HomeViewModel.AccountSection) or nameof(HomeViewModel.AccountRows)
+                    or nameof(HomeViewModel.AccountPendingText) or nameof(HomeViewModel.AccountRetryVisible)))
+                return;
+            var next = AccountsToDraw();
+            var same = drawnAccounts is { } drawn && next is { } now
+                ? drawn.Pending == now.Pending && drawn.Retry == now.Retry && drawn.Rows.SequenceEqual(now.Rows)
+                : drawnAccounts is null && next is null;
+            if (!same) RebuildRows();
         }
         vm.PropertyChanged += OnAccountChanged;
         flyout.Closed += (_, _) => vm.PropertyChanged -= OnAccountChanged;
