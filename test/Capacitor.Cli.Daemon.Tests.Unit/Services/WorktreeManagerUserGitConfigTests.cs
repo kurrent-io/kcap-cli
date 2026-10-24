@@ -102,7 +102,11 @@ public class WorktreeManagerUserGitConfigTests {
         var snapshot = GitRepo.At(worktree.Path);
         await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:crlf.txt").StdOut).IsEqualTo("one\r\ntwo\r\n");
         await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:project.txt").StdOut).IsEqualTo("one\ntwo\n");
-        await Assert.That(snapshot.Do("check-attr", "text", "crlf.txt").Text).IsEqualTo("crlf.txt: text: unspecified");
+        // The agent's later git commands do not carry GIT_ATTR_NOSYSTEM. The snapshot's attributes file sits above the
+        // machine's in git's precedence and below the project's, so a machine-wide `* text` cannot reach these files.
+        await Assert.That(snapshot.Do("check-attr", "text", "crlf.txt").Text).IsEqualTo("crlf.txt: text: unset");
+        await Assert.That(snapshot.Do("check-attr", "text", "project.txt").Text).IsEqualTo("project.txt: text: set");
+        await Assert.That(snapshot.Do("status", "--porcelain").Text).IsEqualTo("");
     }
 
     /// <summary>The machine's attributes file lives at a path compiled into git, so no test can stage one. This pins

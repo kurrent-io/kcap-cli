@@ -435,7 +435,7 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
-        var verbatim = VerbatimLineEndings(CreateEmptyAttributesFile(worktreePath));
+        var verbatim = VerbatimLineEndings(CreateSnapshotAttributesFile(worktreePath));
         // Kept in the snapshot's own config too, so the agent's later diffs compare the bytes that were copied.
         foreach (var setting in verbatim)
             await RunGit(worktreePath, GitTimeout, time, noHooks, "config", setting.Key, setting.Value);
@@ -507,22 +507,25 @@ public partial class WorktreeManager(
     static GitConfigOverride[] NoBranchHooks() => [new("core.hooksPath", NoHooksPath)];
 
     /// <summary>A standalone snapshot records the bytes it copied: a user's line-ending conversion would rewrite
-    /// them, and its strict form refuses the commit outright. A user's own attributes file is replaced by an
-    /// empty one, so only the project's <c>.gitattributes</c> decides a file's conversion.</summary>
-    static GitConfigOverride[] VerbatimLineEndings(string emptyAttributesFile) =>
-        [new("core.autocrlf", "false"), new("core.safecrlf", "false"), new("core.attributesFile", emptyAttributesFile)];
+    /// them, and its strict form refuses the commit outright. A user's own attributes file is replaced by the
+    /// snapshot's, so only the project's <c>.gitattributes</c> decides a file's conversion.</summary>
+    static GitConfigOverride[] VerbatimLineEndings(string attributesFile) =>
+        [new("core.autocrlf", "false"), new("core.safecrlf", "false"), new("core.attributesFile", attributesFile)];
 
     /// <summary>The machine's attributes file is not the project's either, and no config replaces it, so the snapshot's
     /// add, diff and commit skip it.</summary>
     static readonly KeyValuePair<string, string>[] NoSystemAttributes = [new("GIT_ATTR_NOSYSTEM", "1")];
 
-    /// <summary>An empty attributes file inside the snapshot's git dir, as a path git reads the same on every
-    /// platform: a config value read from the environment is not unescaped, so it carries no backslash.</summary>
-    static string CreateEmptyAttributesFile(string worktreePath) {
+    /// <summary>The snapshot's attributes file, inside its git dir, as a path git reads the same on every platform: a
+    /// config value read from the environment is not unescaped, so it carries no backslash. It unsets <c>text</c> for
+    /// every path. Git ranks the file above the machine's attributes and below the project's <c>.gitattributes</c>,
+    /// so the agent's later commands, which skip neither, still convert only what the project asks for.
+    /// <c>info/attributes</c> would not do: it outranks the project's own file.</summary>
+    static string CreateSnapshotAttributesFile(string worktreePath) {
         var info = Path.Combine(worktreePath, ".git", "info");
         Directory.CreateDirectory(info);
-        var path = Path.Combine(info, "kcap-no-user-attributes");
-        File.WriteAllBytes(path, []);
+        var path = Path.Combine(info, "kcap-snapshot-attributes");
+        File.WriteAllText(path, "* -text\n");
 
         return Path.GetFullPath(path).Replace('\\', '/');
     }
