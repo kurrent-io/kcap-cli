@@ -15,6 +15,9 @@ public sealed class LocalModelSetDownloader(LocalRoot root, LocalBundleClient bu
     /// <summary>This instance put a model set in place.</summary>
     public bool Fetched { get; private set; }
 
+    /// <summary>Runs once every file of a download has verified, before the set is moved into place.</summary>
+    public Action<LocalEmbeddingModelManifest>? Publishing { get; init; }
+
     string SetDirectory(LocalEmbeddingModelManifest m) => Path.Combine(Models, m.ModelSet);
 
     /// <summary>Every file is there with the declared size and digest.</summary>
@@ -62,6 +65,7 @@ public sealed class LocalModelSetDownloader(LocalRoot root, LocalBundleClient bu
                 done += file.Size;
             }
 
+            Publishing?.Invoke(m);
             Install(m, partial);
             Fetched = true;
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {

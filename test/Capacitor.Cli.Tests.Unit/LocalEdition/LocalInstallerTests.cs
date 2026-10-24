@@ -776,14 +776,71 @@ public class LocalInstallerTests {
         await ReuseOffering(new LocalEmbeddingAnswer.Builtin());
         if (damaged) File.WriteAllBytes(ModelFile, [1, 2, 3]);
         _log.Clear();
+        _events.Reports.Clear();
 
         await ReuseOffering(new LocalEmbeddingAnswer.Default());
 
         await Assert.That(_log.Contains("install")).IsEqualTo(damaged).Because(string.Join(", ", _log));
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingBuiltinConfigured>().Count()).IsEqualTo(1);
         await Assert.That(_log.Contains("start")).IsEqualTo(!damaged).Because(string.Join(", ", _log));
         await Assert.That(File.ReadAllBytes(ModelFile).SequenceEqual(ModelOnnx)).IsTrue();
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
         await Assert.That(EmbeddingEnvironment()).IsEquivalentTo(BuiltinEnvironment);
+    }
+
+    /// <summary>A setup that stops once the repaired files are in place, before the restart, leaves the marker pending,
+    /// so the next setup restarts the server although it finds nothing to fetch. An older CLI reads the marked record as
+    /// a settled decline.</summary>
+    [Test]
+    public async Task A_repair_interrupted_before_the_restart_is_finished_by_the_next_setup() {
+        await Install();
+        await ReuseOffering(new LocalEmbeddingAnswer.Builtin());
+        File.WriteAllBytes(ModelFile, [1, 2, 3]);
+        var       models    = Path.Combine(Root.Directory, "models");
+        JsonNode? published = null;
+        _log.Clear();
+
+        using (FaultPoints.Arm(point => {
+                   if (point != $"sync:{models}" || !File.ReadAllBytes(ModelFile).SequenceEqual(ModelOnnx)) return;
+
+                   published = JsonNode.Parse(File.ReadAllText(LocalEmbeddingFile.PathFor(Root)));
+                   throw new InvalidOperationException("interrupted");
+               }))
+            await Assert.ThrowsAsync<LocalInstallFailure>(() => ReuseOffering(new LocalEmbeddingAnswer.Default()));
+
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(published!["provider"]!.GetValue<string>()).IsEqualTo("none");
+        await Assert.That(published["pending"]).IsNull();
+        await Assert.That(published["builtin"]!["pending"]?.GetValue<bool>()).IsTrue();
+
+        await Install(new(false, false));
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(EmbeddingEnvironment()).IsEquivalentTo(BuiltinEnvironment);
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
+    }
+
+    [Test]
+    public async Task A_repair_whose_restart_fails_leaves_the_marker_pending() {
+        await Install();
+        await ReuseOffering(new LocalEmbeddingAnswer.Builtin());
+        File.WriteAllBytes(ModelFile, [1, 2, 3]);
+        Service.InstallFailure = new LocalLifecycleException("systemctl restart failed");
+
+        await Assert.ThrowsAsync<LocalInstallFailure>(() => ReuseOffering(new LocalEmbeddingAnswer.Default()));
+
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet) with { Pending = true });
+        var left = JsonNode.Parse(File.ReadAllText(LocalEmbeddingFile.PathFor(Root)))!;
+        await Assert.That(left["provider"]!.GetValue<string>()).IsEqualTo("none");
+        await Assert.That(left["pending"]).IsNull();
+
+        Service.InstallFailure = null;
+        _log.Clear();
+
+        await Install(new(false, false));
+
+        await Assert.That(_log).Contains("install");
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
     }
 
     [Test]
