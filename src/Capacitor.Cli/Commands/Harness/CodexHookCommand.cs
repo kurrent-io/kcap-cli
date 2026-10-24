@@ -283,8 +283,8 @@ sealed class CodexHookCommand(
                 "PermissionRequest" => await HandlePermissionRequest(node, env),
                 "PreToolUse"        => await HandlePreToolUse(node, env),
                 "UserPromptSubmit"
-                  or "PostToolUse"  => 0,  // informational, swallowed
-                _                   => 0   // unknown — silently ignore
+                  or "PostToolUse"  => 0,
+                _                   => 0
             };
         } catch (Exception ex) {
             // Fail open, but NOT by leaving stdout empty: unlike Claude, Codex's
