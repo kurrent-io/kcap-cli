@@ -37,6 +37,8 @@ public sealed class AccountChooser {
 
     public event Action? Changed;
 
+    public static string UnavailableReason(string label) => $"{label} is not available on this machine";
+
     public void EnterTarget(string repoPath, string vendor) {
         _repoPath = repoPath;
         _vendor   = vendor;
@@ -90,7 +92,7 @@ public sealed class AccountChooser {
             AccountSelectionState.ExplicitInvalid => $"{label} — unavailable",
             _                                     => null,
         };
-        InvalidReason = State == AccountSelectionState.ExplicitInvalid ? $"{label} is not available on this machine" : null;
+        InvalidReason = State == AccountSelectionState.ExplicitInvalid ? UnavailableReason(label!) : null;
         PendingText   = State == AccountSelectionState.Pending ? "Loading accounts…" : null;
         OffersRetry   = State == AccountSelectionState.Pending && _fetchFailed;
         Rows          = Choices(rows, label);
