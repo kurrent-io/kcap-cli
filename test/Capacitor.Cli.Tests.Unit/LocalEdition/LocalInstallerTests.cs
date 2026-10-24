@@ -642,15 +642,19 @@ public class LocalInstallerTests {
     }
 
     [Test]
-    public async Task An_unrecognised_recorded_provider_is_kept_and_the_unit_is_not_replaced() {
+    [Arguments(false)]
+    [Arguments(true)]
+    public async Task An_unrecognised_recorded_provider_is_kept_and_the_unit_is_not_replaced(bool builtin) {
         using var ollama = new FakeOllama().Running($"{OllamaClient.DefaultModel}:latest").Embeds(1024);
         await Install();
         Directory.CreateDirectory(Path.GetDirectoryName(LocalEmbeddingFile.PathFor(Root))!);
         File.WriteAllText(LocalEmbeddingFile.PathFor(Root), """{"provider":"cohere"}""");
         _log.Clear();
 
-        await Install(ReuseWithOllama, ollama: ollama);
+        if (builtin) await ReuseOffering(new LocalEmbeddingAnswer.Builtin(), ollama);
+        else await Install(ReuseWithOllama, ollama: ollama);
 
+        await Assert.That(Models.Requests.Where(r => r.StartsWith("/local/models/", StringComparison.Ordinal))).IsEmpty();
         await Assert.That(_log).DoesNotContain("install");
         await Assert.That(File.ReadAllText(LocalEmbeddingFile.PathFor(Root))).IsEqualTo("""{"provider":"cohere"}""");
         await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code).IsEqualTo(LocalEmbeddingSkipCode.UnrecognisedProvider);

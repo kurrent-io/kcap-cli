@@ -16,6 +16,11 @@ static class LocalEmbeddingStep {
         LocalModelSetDownloader models, LocalEmbeddingModelManifest? manifest, IProgress<LocalInstallEvent> progress, CancellationToken ct) {
         var current = LocalEmbeddingFile.Read(root);
 
+        if (current is { Provider: LocalEmbeddingProvider.Unknown }) {
+            progress.Report(Unrecognised(root));
+            return null;
+        }
+
         switch (answer) {
             case LocalEmbeddingAnswer.Skip:
                 progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.Declined, "Search by meaning is off; search works by keyword."));
@@ -33,10 +38,6 @@ static class LocalEmbeddingStep {
             case LocalEmbeddingProvider.None:
                 progress.Report(new LocalInstallEvent.EmbeddingsSkipped(LocalEmbeddingSkipCode.Declined,
                     "Search by meaning stays off, as an earlier setup chose; --builtin-embeddings or --embedding-model <model> turns it on."));
-                return null;
-
-            case LocalEmbeddingProvider.Unknown:
-                progress.Report(Unrecognised(root));
                 return null;
 
             case LocalEmbeddingProvider.Builtin when answer is LocalEmbeddingAnswer.Default:
