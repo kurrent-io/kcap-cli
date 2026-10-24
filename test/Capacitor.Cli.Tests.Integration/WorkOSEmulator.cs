@@ -1,8 +1,8 @@
 using System.Text;
-using Capacitor.Cli.Core.Auth;
 using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Configurations;
 using DotNet.Testcontainers.Containers;
+using DotNet.Testcontainers.Images;
 
 namespace Capacitor.Cli.Tests.Integration;
 
@@ -15,7 +15,6 @@ public sealed class WorkOSEmulator : IAsyncDisposable {
     public const string OwnerId        = "user_01K0000000000000000000000A";
     public const string OrganizationId = "org_01K0000000000000000000000K";
 
-    const string Image     = "ghcr.io/workos/emulate:0.15.0";
     const int    Port      = 4100;
     const string SeedPath  = "/app/workos-emulate.config.yaml";
 
@@ -70,25 +69,14 @@ public sealed class WorkOSEmulator : IAsyncDisposable {
     public static async Task<WorkOSEmulator> StartAsync(CancellationToken ct) {
         // A fixed host port, so a restart keeps the base a stored token names. Passing any argument
         // replaces the image's defaults, and without --host 0.0.0.0 it listens on its own loopback.
-        var hostPort  = OAuthLoginFlow.GetAvailablePort();
-        var container = new ContainerBuilder(Image)
-            .WithPortBinding(hostPort, Port)
+        var container = await ContainerHostPorts.StartAsync(() => new ContainerBuilder(new DockerImage("ghcr.io/workos/emulate", tag: "0.15.0"))
+            .WithPortBinding(ContainerHostPorts.Next(), Port)
             .WithResourceMapping(Encoding.UTF8.GetBytes(Seed), SeedPath)
             .WithCommand("--host", "0.0.0.0", "--seed", SeedPath)
             .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(r => r.ForPort(Port).ForPath("/health")))
-            .Build();
+            .Build(), ct);
 
-        var emulator = new WorkOSEmulator(container, hostPort);
-
-        try {
-            await container.StartAsync(ct);
-        } catch {
-            await emulator.DisposeAsync();
-
-            throw;
-        }
-
-        return emulator;
+        return new WorkOSEmulator(container, container.GetMappedPublicPort(Port));
     }
 
     /// <summary>Stops and starts the same container: the emulator keeps all state in memory, so every
