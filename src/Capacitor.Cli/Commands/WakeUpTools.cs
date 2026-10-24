@@ -136,8 +136,10 @@ static partial class WakeUpTools {
                 return ($"wakeup_id: {id}\nfire_at: {fireAt}\nScheduled. End your turn now; the prompt arrives as your next input.", false);
             case Schedule:
                 return ($"Error: the server's answer to POST {Route} could not be read. Call list_wakeups to see whether the wake-up was scheduled.", true);
-            case Cancel:
+            case Cancel when (answer?["ok"] is JsonValue ok && ok.TryGetValue<bool>(out var confirmed) && confirmed):
                 return ($"Cancelled wake-up {WakeUpId(arguments)}.", false);
+            case Cancel:
+                return ($"Error: the server's answer to the cancel of wake-up {WakeUpId(arguments)} could not be read, so whether it was cancelled is unknown. Call list_wakeups to see.", true);
         }
 
         if (answer?["wakeups"] is not JsonArray rows)

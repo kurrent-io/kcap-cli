@@ -139,6 +139,20 @@ public class McpFlowsServerWakeUpTests {
         await Assert.That(JsonNode.DeepEquals(SentBody(call), JsonNode.Parse("""{"session_id":"s1"}"""))).IsTrue();
     }
 
+    /// <summary>A 2xx that is not the route's confirmation, such as a proxy's page, proves nothing was cancelled.</summary>
+    [Test]
+    [Arguments("<html></html>")]
+    [Arguments("{}")]
+    [Arguments("""{"ok":false}""")]
+    [Arguments("""{"ok":"true"}""")]
+    public async Task A_cancel_answer_without_the_confirmation_is_not_reported_as_cancelled(string body) {
+        var call = await CallAsync("cancel_wakeup", $$"""{"wakeup_id":"{{WakeUpId}}"}""", body: body);
+
+        await Assert.That(call.IsError).IsTrue();
+        await Assert.That(call.Text).IsEqualTo(
+            $"Error: the server's answer to the cancel of wake-up {WakeUpId} could not be read, so whether it was cancelled is unknown. Call list_wakeups to see.");
+    }
+
     /// <summary>Every refusal the server codes reaches the agent with its code and the server's own sentence.</summary>
     [Test]
     [Arguments("schedule_wakeup", 400, "invalid_request")]
