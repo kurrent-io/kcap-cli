@@ -3,7 +3,9 @@ using System.Reactive.Threading.Tasks;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
@@ -67,6 +69,68 @@ public class MainWindowViewModelTests {
         return new WorkspaceViewModel(
             agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
             new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests, drafts: drafts);
+    }
+
+    static HistoryImportRun ImportRun(int expected, int passes) =>
+        new(expected, 2, "from the last 90 days", passes, action => action());
+
+    static ImportRequest Pass() => new(ImportScopeChoice.Repo, null, [], ["a/b"]);
+
+    /// After setup closes, the main window keeps counting against the total setup showed, and its bar moves as sessions settle.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_import_keeps_its_total_and_progress_after_setup() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var gate = new TaskCompletionSource<StreamingResult>();
+            Action<StreamedLine>? emit = null;
+            var run = ImportRun(94, 1);
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System, historyImport: run);
+            using var activation = vm.Activator.Activate();
+            var shown = ProgressShown(vm);
+
+            run.Start(new FakeKcapCli { ImportBehavior = (_, onLine, _) => { emit = onLine; return gate.Task; } }, [Pass()]);
+            for (var i = 0; i < 46; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i} (claude)"));
+
+            await Assert.That(vm.HistoryImportStatus).IsEqualTo("Importing history · 46 of 94 sessions processed");
+            await Assert.That(shown.LastOrDefault()).IsEqualTo(100.0 * 46 / 94);
+
+            gate.SetResult(new StreamingResult(0, false, []));
+            await run.Completion;
+        });
+    }
+
+    /// With no total to count against, the bar moves when a pass completes, even if no session settled in it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_total_the_bar_follows_completed_passes() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var gate = new TaskCompletionSource<StreamingResult>();
+            var run = ImportRun(0, 2);
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System, historyImport: run);
+            using var activation = vm.Activator.Activate();
+            var shown = ProgressShown(vm);
+
+            var calls = 0;
+            run.Start(new FakeKcapCli {
+                ImportBehavior = (_, _, _) => ++calls < 2 ? Task.FromResult(new StreamingResult(0, false, [])) : gate.Task,
+            }, [Pass(), Pass()]);
+
+            await Assert.That(shown.LastOrDefault()).IsEqualTo(50.0);
+
+            gate.SetResult(new StreamingResult(0, false, []));
+            await run.Completion;
+        });
+    }
+
+    /// Every value the window announced for its import bar, in order.
+    static List<double> ProgressShown(MainWindowViewModel vm) {
+        var shown = new List<double>();
+        vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(MainWindowViewModel.HistoryImportProgress)) shown.Add(vm.HistoryImportProgress);
+        };
+        return shown;
     }
 
     [Test]
@@ -804,7 +868,7 @@ public class MainWindowViewModelTests {
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
 
             vm.OpenSession("0123456789abcdef0123456789abcdef");
-            vm.OpenSessionIfCurrent("0123456789abcdef0123456789abcdef", vm.NavigationGeneration);
+            vm.OpenSessionIfCurrent("0123456789abcdef0123456789abcdef", AgentOrigin.Local, vm.NavigationGeneration);
 
             await Assert.That(vm.CurrentWorkspace).IsNull();
         });
@@ -908,7 +972,7 @@ public class MainWindowViewModelTests {
             foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
             var target = rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id));
             var other = rail.Repos.Single(repo => repo != target);
-            vm.OpenSessionIfCurrent(id, vm.NavigationGeneration);
+            vm.OpenSessionIfCurrent(id, remote ? AgentOrigin.Remote : AgentOrigin.Local, vm.NavigationGeneration);
             await Assert.That(target.IsExpanded).IsTrue();
             await Assert.That(other.IsExpanded).IsFalse();
             await Assert.That(rail.SelectedSessionKey).IsEqualTo($"{(remote ? "remote" : "local")}:{id}");

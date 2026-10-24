@@ -436,6 +436,7 @@ public sealed partial class WorkContextViewModel : ReactiveObject {
     /// The server has just said the viewer may not have this data, so nothing of it stays visible.
     void ApplyTerminal(WorkContextPhase phase) {
         ClearServerProjections();
+        ForgetViewer();
         Phase = phase;
         IsStale = false;
     }

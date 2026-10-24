@@ -310,11 +310,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             // what DEV-1665 was) silently disappear, leaving the daemon looking
             // healthy while it drops every invocation.
             .ConfigureLogging(b => b.Services.AddSingleton(loggerFactory))
-            .AddJsonProtocol(options => {
-                    options.PayloadSerializerOptions.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
-                    options.PayloadSerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
-                }
-            )
+            .AddJsonProtocol(options => ConfigureHubPayload(options.PayloadSerializerOptions))
             .Build();
 
         // Halve KeepAliveInterval (15s → 7s) so the WebSocket stays warm
@@ -990,6 +986,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         }
     }
 
+    /// <summary>How every hub payload to and from the server is serialized.</summary>
+    internal static void ConfigureHubPayload(JsonSerializerOptions options) {
+        options.TypeInfoResolverChain.Insert(0, CapacitorJsonContext.Default);
+        options.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+    }
+
     // Outgoing messages to server
     /// <summary>Registers the agent and returns the server's answer. A server without <c>AgentRegisteredAcked</c>
     /// gets the unanswered <c>AgentRegistered</c> instead, read as accepted; that server is remembered for the
@@ -997,12 +999,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null,
+            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null,
             string? accountDirectory = null, string? accountId = null, string? accountLabel = null) {
         var activeCount = GetActiveCount?.Invoke();
         var registration = new AgentRegistered(
             agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor, accountDirectory, accountId, accountLabel);
+            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor, continuesAgentId, accountDirectory, accountId, accountLabel);
         var connection = CurrentConnectionId ?? "";
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {

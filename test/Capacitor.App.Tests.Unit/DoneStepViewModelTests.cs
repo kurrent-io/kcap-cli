@@ -142,6 +142,22 @@ public class DoneStepViewModelTests {
         }
     }
 
+    /// Starting agents from elsewhere needs a cloud workspace, so only cloud's service card offers it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments(false, true)]
+    [Arguments(true, false)]
+    public async Task Only_cloud_promises_starting_agents_from_anywhere(bool local, bool promised) {
+        var body = await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new DoneStepViewModel(() => local ? LocalFacts() : Facts());
+            await vm.OnEnterAsync(CancellationToken.None);
+            return vm.ServiceBody;
+        });
+
+        await Assert.That(body).StartsWith("Keeps kcap storing sessions when the app is closed");
+        await Assert.That(body.Contains("from anywhere", StringComparison.Ordinal)).IsEqualTo(promised);
+    }
+
     /// One primary, Open kcap, on either edition; the browser holds the web workspace or the local dashboard.
     [Test]
     [NotInParallel("AvaloniaSession")]

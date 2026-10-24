@@ -334,7 +334,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public ReactiveCommand<QueuedChatMessage, Unit> SendQueuedCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
+    public ReactiveCommand<UserAttachment, Unit> OpenAttachmentCommand { get; }
     public ReactiveCommand<string, Unit> RunCodeCommand { get; }
+
+    // The opener launches whatever it is handed, so only a resolved image path reaches it: a
+    // transcript line naming an executable must not run it.
+    void OpenAttachment(UserAttachment attachment) {
+        if (attachment.PreviewPath is not { } path) return;
+        try { _opener.Open(path); }
+        catch (Exception ex) { Console.Error.WriteLine($"kcap: open attachment failed: {ex.Message}"); }
+    }
 
     readonly ObservableAsPropertyHelper<string> _composerHint;
     public string ComposerHint => _composerHint.Value;
@@ -883,6 +892,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
         _disposables.Add(OpenLinkCommand);
 
+        OpenAttachmentCommand = ReactiveCommand.Create<UserAttachment>(OpenAttachment);
+        _disposables.Add(OpenAttachmentCommand);
+
         // A code block's command goes out the composer's own path rather than straight to the
         // channel, so it is queued, recalled and cleared exactly as a typed prompt is. Whatever
         // draft is sitting there is replaced, which is what putting it in the composer means.
@@ -1420,7 +1432,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     case AcpEventKind.UserMessage:
                         cursor.OpenGroup = null;
                         cursor.OpenShell = null;
-                        cursor.Fresh.Add(new UserTurnItem(e.Text ?? ""));
+                        var (typed, files) = AttachmentTrailer.Split(e.Text ?? "");
+                        cursor.Fresh.Add(new UserTurnItem(typed, [.. files.Select(file => UserAttachment.From(file, _origin == AgentOrigin.Local ? _root : null))]));
                         break;
                     case AcpEventKind.AssistantText:
                         cursor.OpenGroup = null;

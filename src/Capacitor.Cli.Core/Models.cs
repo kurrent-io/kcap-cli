@@ -1082,6 +1082,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(WorkItems.WorkItemTopologyDto))]
 [JsonSerializable(typeof(WorkItems.WorkItemDto))]
 [JsonSerializable(typeof(WorkItems.SessionSummaryDto))]
+[JsonSerializable(typeof(WorkItems.ViewerIdentityDto))]
 [JsonSerializable(typeof(WorkItems.WorkItemErrorDto))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
@@ -2321,6 +2322,9 @@ public readonly record struct AgentRegistered(
         // read it from. Trailing name-bound field — an older server ignores it, an older daemon
         // never sets it.
         string? Vendor = null,
+        // The agent this one continues after a daemon restart could not resume it, from the resume ledger; the server
+        // checks the claim where it uses it. Trailing name-bound field — an older server ignores it.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinuesAgentId = null,
         string? AccountDirectory = null,
         string? AccountId        = null,
         string? AccountLabel     = null

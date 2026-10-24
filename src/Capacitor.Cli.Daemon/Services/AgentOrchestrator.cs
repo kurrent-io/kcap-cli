@@ -77,6 +77,9 @@ internal record AgentInstance(
     /// takeover of that session's work has started.
     public string?              ContinuedFromSessionId { get; set; }
 
+    /// The agent this one continues, announced on every registration so the server can follow its wake-ups here.
+    public string?              ContinuesAgentId  { get; init; }
+
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
 
@@ -3114,6 +3117,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 InactivityBoundSeconds = cmd.InactivityBoundSeconds,
                 StartTitle          = startTitle,
                 IsPrivate           = isPrivate,
+                ContinuesAgentId    = resume?.Entry.InheritedAgentIds is [.., var predecessor] ? predecessor : null,
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };
@@ -5192,7 +5196,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle,
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
             agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
         if (!registration.Registered) {
@@ -5690,7 +5694,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle,
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
                         agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
