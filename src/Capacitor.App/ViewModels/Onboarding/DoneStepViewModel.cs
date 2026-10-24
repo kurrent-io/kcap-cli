@@ -162,8 +162,10 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
             ? "kcap import brings your existing history over whenever you want"
             : null;
 
-    public string ServiceBody =>
-        $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
+    /// Starting agents remotely goes through a cloud workspace, so the local edition does not offer it.
+    public string ServiceBody => _current.Local
+        ? "Keeps kcap storing sessions when the app is closed"
+        : $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
 
     public string ServicePill => ServiceState switch {
         BackgroundServiceState.Running    => "Running",
