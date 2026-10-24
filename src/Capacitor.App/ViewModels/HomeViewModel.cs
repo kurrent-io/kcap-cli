@@ -537,7 +537,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// is offered or sent.</param>
     /// <param name="daemonAccounts">Every listed daemon's accounts (IRemoteAgentsService.DaemonAccounts).</param>
     /// <param name="localAccounts">This machine's daemon's own snapshot (IAccountsService.Snapshot).</param>
-    /// <param name="retryListing">Fetches the listing again (IRemoteAgentsService.RefreshDaemonsAsync).</param>
+    /// <param name="retryListing">Fetches the listing and every daemon's accounts again
+    /// (IRemoteAgentsService.RefreshDaemonsAsync).</param>
     /// <param name="launchFailed">A tracked launch failed (MainWindowViewModel.CloseFailedLaunch):
     /// its auto-opened workspace would otherwise cover the StartError this view just set.</param>
     public HomeViewModel(
@@ -1416,8 +1417,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _accountChooser.EnterTarget(repoPath, vendor);
             }
             var support = viewer.Resolved ? SupportFor(listing, machine, viewer.Id, sel.Remote) : AccountSupport.Unknown;
-            _accountChooser.SetSupport(support, listing.FetchFailed);
-            _accountChooser.SetSnapshot(AccountsSnapshotFor(sel.Remote, machine, remoteAccounts, localAccounts));
+            var snapshot = AccountsSnapshotFor(sel.Remote, machine, remoteAccounts, localAccounts);
+            // A remote host's accounts arrive only by the server's fetch, so a missing row is retried like the listing.
+            var retryable = listing.FetchFailed || (sel.Remote && support == AccountSupport.Supported && snapshot is null);
+            _accountChooser.SetSupport(support, retryable);
+            _accountChooser.SetSnapshot(snapshot);
         } finally {
             _applyingAccountInputs = false;
         }

@@ -18,7 +18,8 @@ public interface IRemoteAgentsService {
     IObservable<DaemonListing> Listing { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; }
-    /// Fetches the daemon listing now, ahead of any retry the backoff is waiting on.
+    /// Fetches the daemon listing and every daemon's accounts now, ahead of any retry the backoff is
+    /// waiting on.
     Task RefreshDaemonsAsync();
 }
 
@@ -38,9 +39,10 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly BehaviorSubject<IReadOnlyList<DaemonAccountsDto>> _daemonAccounts = new([]);
     readonly IDisposable _subscriptions;
     static readonly TimeSpan DaemonsRefreshTimeout = TimeSpan.FromSeconds(5);
-    // The listing otherwise refreshes only on a connect or a daemons push, so one failed fetch on a
-    // healthy connection would leave it unanswered, and account support unknown, until the next.
-    static readonly TimeSpan[] ListingRetryDelays = [
+    // The listing and the accounts otherwise refresh only on a connect or a push, so one failed fetch
+    // on a healthy connection would leave account support unknown, or a remote target's accounts
+    // missing, until the next.
+    static readonly TimeSpan[] RetryDelays = [
         TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(6), TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(24),
         TimeSpan.FromSeconds(30),
     ];
@@ -70,9 +72,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     bool _daemonAccountsBusy;
     bool _daemonAccountsRerun;
     TaskCompletionSource? _daemonsInFlight;
-    ITimer? _listingRetry;
-    long _listingRetryTicket;
-    int _listingRetryAttempt;
+    readonly RetryBackoff _listingRetry;
+    readonly RetryBackoff _accountsRetry;
     readonly IServerLane _lane;
     readonly Action<int>? _onUnauthorized;
     readonly TimeProvider _time;
@@ -83,6 +84,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         _lane = lane;
         _onUnauthorized = onUnauthorized;
         _time = time ?? TimeProvider.System;
+        _listingRetry = new(_time, RetryDelays);
+        _accountsRetry = new(_time, RetryDelays);
         var wait = debounce ?? TimeSpan.FromMilliseconds(250);
         var connected = lane.Status
             .Select(s => s.State == ServerLaneState.Connected)
@@ -102,7 +105,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         var laneStatus = lane.Status.Subscribe(s => {
             lock (_lock) {
                 _laneConnected = s.State == ServerLaneState.Connected;
-                ResetListingRetry();
+                _listingRetry.Reset();
+                _accountsRetry.Reset();
                 if (!_laneConnected) return;
                 if (s.Subject is not null) {
                     if (_lastSubject is not null && _lastSubject != s.Subject) {
@@ -125,7 +129,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // RefreshAgentsAsync can await its completion before publishing rows that AgentDirectory
         // deduplicates against Daemons.
         var refreshDaemons = everyConnect.Merge(lane.DaemonsChanged.Throttle(wait))
-            .Select(_ => Observable.FromAsync(() => RefreshDaemonsAsync()))
+            .Select(_ => Observable.FromAsync(() => RefreshListingAsync()))
             .Merge()
             .Subscribe();
         var refreshDaemonAccounts = everyConnect.Merge(lane.DaemonAccountsChanged.Throttle(wait))
@@ -190,7 +194,9 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         }
     }
 
-    public async Task RefreshDaemonsAsync() {
+    public Task RefreshDaemonsAsync() => Task.WhenAll(RefreshListingAsync(), RefreshDaemonAccountsAsync());
+
+    async Task RefreshListingAsync() {
         lock (_lock) {
             if (_daemonsBusy) { _daemonsRerun = true; return; }
             _daemonsBusy = true;
@@ -211,11 +217,11 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                     _daemons.OnNext(result);
                 if (listingGeneration == _listingGeneration) {
                     if (result is not null) {
-                        ResetListingRetry();
+                        _listingRetry.Reset();
                         _listing.OnNext(new(result, listingGeneration, false));
                     } else {
                         _listing.OnNext(new(null, listingGeneration, true));
-                        if (!_daemonsRerun) ScheduleListingRetry();
+                        if (!_daemonsRerun) ScheduleRetry(_listingRetry, RefreshListingAsync);
                     }
                 }
                 if (_daemonsRerun) { _daemonsRerun = false; continue; }
@@ -228,33 +234,15 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         }
     }
 
-    // The three below run under _lock. Cancelling bumps the ticket, so a timer callback that lost
-    // the race with its own cancellation finds a newer ticket and does nothing.
-    void ScheduleListingRetry() {
-        CancelListingRetry();
+    // Runs under _lock. Nothing is pending while the lane is down or after Dispose: both reset every backoff.
+    void ScheduleRetry(RetryBackoff backoff, Func<Task> refresh) {
         if (_disposed || !_laneConnected) return;
-        var delay = ListingRetryDelays[Math.Min(_listingRetryAttempt++, ListingRetryDelays.Length - 1)];
-        var ticket = _listingRetryTicket;
-        _listingRetry = _time.CreateTimer(_ => RetryListing(ticket), null, delay, Timeout.InfiniteTimeSpan);
-    }
-
-    void ResetListingRetry() {
-        _listingRetryAttempt = 0;
-        CancelListingRetry();
-    }
-
-    void CancelListingRetry() {
-        _listingRetryTicket++;
-        _listingRetry?.Dispose();
-        _listingRetry = null;
-    }
-
-    void RetryListing(long ticket) {
-        lock (_lock) {
-            if (ticket != _listingRetryTicket) return;
-            CancelListingRetry();
-        }
-        _ = RefreshDaemonsAsync();
+        backoff.Schedule(ticket => {
+            lock (_lock) {
+                if (!backoff.Claim(ticket)) return;
+            }
+            _ = refresh();
+        });
     }
 
     async Task RefreshDaemonAccountsAsync() {
@@ -272,8 +260,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             } catch (Exception) {
             }
             lock (_lock) {
-                if (result is not null && generation == _generation)
-                    _daemonAccounts.OnNext(result);
+                if (result is not null) {
+                    _accountsRetry.Reset();
+                    if (generation == _generation) _daemonAccounts.OnNext(result);
+                } else if (!_daemonAccountsRerun) {
+                    ScheduleRetry(_accountsRetry, RefreshDaemonAccountsAsync);
+                }
                 if (_daemonAccountsRerun) { _daemonAccountsRerun = false; continue; }
                 _daemonAccountsBusy = false;
             }
@@ -315,7 +307,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         TaskCompletionSource? inFlight;
         lock (_lock) {
             _disposed = true;
-            ResetListingRetry();
+            _listingRetry.Reset();
+            _accountsRetry.Reset();
             inFlight = _daemonsInFlight;
             _daemonsInFlight = null;
         }

@@ -737,4 +737,44 @@ public class HomeViewModelAccountTests {
             await Assert.That(vm.ModelChoicesFor("claude").Select(m => m.Slug)).Contains("claude-opus-5");
         });
     }
+
+    /// A remote host's accounts arrive only through the server's fetch, so a supported target
+    /// without its row offers Retry rather than waiting on a push that may never come.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_supported_remote_daemon_without_an_accounts_row_offers_Retry_and_resolves_once_the_row_arrives() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var box = Listed("box", repos: ["/w/repo"]);
+            rig.Remote.DaemonsSubject.OnNext([box]);
+            var vm = await rig.StartAsync();
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName), box));
+            await vm.SelectMachineAsync("box", isLocal: false);
+            vm.Goal = "g";
+
+            await Assert.That(vm.AccountPendingText).IsEqualTo(Loading);
+            await Assert.That(vm.AccountRetryVisible).IsTrue();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+
+            var retries = 0;
+            rig.OnRetry = () => {
+                retries++;
+                rig.Remote.DaemonAccountsSubject.OnNext([
+                    AccountsOf("box", "h2", Account("b1", "box-home", "/u/.claude"), Account("b2", "box-work", "/u/.claude-work")),
+                ]);
+                return Task.CompletedTask;
+            };
+            await vm.RetryAccountsCommand.Execute();
+
+            await Assert.That(retries).IsEqualTo(1);
+            await Assert.That(vm.AccountPendingText).IsNull();
+            await Assert.That(vm.AccountRetryVisible).IsFalse();
+            await Assert.That(vm.AccountSection).IsTrue();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+
+            await vm.StartCommand.Execute();
+            await Assert.That(rig.Launch.Requests.Single().DaemonName).IsEqualTo("box");
+            await Assert.That(rig.Launch.Requests.Single().AccountId).IsNull();
+        });
+    }
 }

@@ -527,4 +527,61 @@ public class RemoteAgentsServiceTests {
 
         await Assert.That(Revisions()).IsEquivalentTo([0L, 1L, 2L, 0L], CollectionOrdering.Matching);
     }
+
+    /// Pins the first two backoff steps (3 s, then 6 s) and that an answer stops the retries.
+    [Test]
+    public async Task A_failed_accounts_fetch_retries_with_backoff() {
+        var time = new FakeTimeProvider();
+        var calls = 0;
+        var lane = new FakeServerLane {
+            DaemonAccountsHandler = () => Interlocked.Increment(ref calls) switch {
+                1 => Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(null),
+                2 => throw new InvalidOperationException("hub call failed"),
+                _ => Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>([new() { DaemonName = "work-mac", HostId = "h1", Revision = 1 }]),
+            },
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: time);
+        var accounts = new List<IReadOnlyList<DaemonAccountsDto>>();
+        using var sub = Record(svc.DaemonAccounts, accounts);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromSeconds(3) - TimeSpan.FromTicks(1));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(1);
+        time.Advance(TimeSpan.FromTicks(1));
+        await Eventually(() => Volatile.Read(ref calls) == 2);
+
+        time.Advance(TimeSpan.FromSeconds(6) - TimeSpan.FromTicks(1));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+        time.Advance(TimeSpan.FromTicks(1));
+        await Eventually(() => Seen(accounts)[^1].Count == 1);
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(3);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task RefreshDaemonsAsync_fetches_the_accounts_at_once() {
+        var time = new FakeTimeProvider();
+        var calls = 0;
+        var lane = new FakeServerLane {
+            DaemonAccountsHandler = () => Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(Interlocked.Increment(ref calls) == 1
+                ? null : [new() { DaemonName = "work-mac", HostId = "h1", Revision = 1 }]),
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: time);
+        var accounts = new List<IReadOnlyList<DaemonAccountsDto>>();
+        using var sub = Record(svc.DaemonAccounts, accounts);
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(1);
+
+        await svc.RefreshDaemonsAsync();
+
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+        await Assert.That(Seen(accounts)[^1].Single().HostId).IsEqualTo("h1");
+        // The answer withdrew the retry the failure had scheduled.
+        time.Advance(TimeSpan.FromSeconds(30));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+    }
 }
