@@ -75,6 +75,19 @@ public class ServerConnectionAgentRegisteredTests {
         await Assert.That(conn.LegacyCalls.Single().RuntimeTransport).IsEqualTo("pty");
     }
 
+    /// <summary>A server that predates the field ignores it, so the same registration serves both methods.</summary>
+    [Test]
+    public async Task The_continued_agent_rides_on_the_acked_and_the_legacy_call() {
+        var acked  = new TestServerConnection();
+        var legacy = new TestServerConnection { Acked = UnknownMethod };
+
+        await acked.AgentRegisteredAsync("agent-2", "prompt", "model", null, "/repo", continuesAgentId: "agent-1");
+        await legacy.AgentRegisteredAsync("agent-2", "prompt", "model", null, "/repo", continuesAgentId: "agent-1");
+
+        await Assert.That(acked.AckedCalls.Single().ContinuesAgentId).IsEqualTo("agent-1");
+        await Assert.That(legacy.LegacyCalls.Single().ContinuesAgentId).IsEqualTo("agent-1");
+    }
+
     /// <summary>The missing method is remembered per connection: a reconnect may reach an upgraded server.</summary>
     [Test]
     public async Task The_missing_method_is_not_probed_again_until_the_connection_changes() {

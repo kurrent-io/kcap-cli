@@ -24,6 +24,16 @@ public class AgentRegisteredWireFormatTests {
     }
 
     [Test]
+    public async Task Continues_agent_id_serializes_as_continues_agent_id_and_is_absent_by_default() {
+        var successor = JsonSerializer.Serialize(
+            new AgentRegistered("a2", null, "opus", null, "/r", ContinuesAgentId: "a1"), CapacitorJsonContext.Default.AgentRegistered);
+        var ordinary = JsonSerializer.Serialize(new AgentRegistered("a1", null, "opus", null, "/r"), CapacitorJsonContext.Default.AgentRegistered);
+
+        await Assert.That(successor).Contains("\"continues_agent_id\":\"a1\"");
+        await Assert.That(ordinary).DoesNotContain("continues_agent_id\":\"");
+    }
+
+    [Test]
     public async Task Payload_without_title_fields_reads_as_no_title() {
         var reg = JsonSerializer.Deserialize(
             """{"agent_id":"a1","model":"opus","repo_path":"/r"}""", CapacitorJsonContext.Default.AgentRegistered);

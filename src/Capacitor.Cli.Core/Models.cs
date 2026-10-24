@@ -2308,7 +2308,10 @@ public readonly record struct AgentRegistered(
         // The agent's vendor. A re-registration after a reconnect has no launch on the server to
         // read it from. Trailing name-bound field — an older server ignores it, an older daemon
         // never sets it.
-        string? Vendor = null
+        string? Vendor = null,
+        // The agent this one continues after a daemon restart could not resume it, from the resume ledger; the server
+        // checks the claim where it uses it. Trailing name-bound field — an older server ignores it.
+        string? ContinuesAgentId = null
     );
 
 public readonly record struct AgentStatusChanged(

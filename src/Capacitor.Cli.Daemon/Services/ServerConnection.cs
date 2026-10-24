@@ -962,11 +962,11 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null) {
+            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null) {
         var activeCount = GetActiveCount?.Invoke();
         var registration = new AgentRegistered(
             agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor);
+            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor, continuesAgentId);
         var connection = CurrentConnectionId ?? "";
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {
