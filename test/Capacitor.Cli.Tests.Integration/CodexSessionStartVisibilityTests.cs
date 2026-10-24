@@ -17,6 +17,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// silently default to org-visible (the server treats null as the
 /// org-visibility fallback) and ignore per-profile exclusions.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class CodexSessionStartVisibilityTests : IDisposable {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
     [TempHome] public required TempHome Home { get; init; }

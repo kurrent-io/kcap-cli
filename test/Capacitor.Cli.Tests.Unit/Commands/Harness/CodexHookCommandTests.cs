@@ -14,6 +14,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands.Harness;
 // Shares the AuthProviderDiscoveryCache cohort with the rest of the assembly's /auth/config
 // stubbers, so this class's own stub cannot race one of theirs.
 [NotInParallel("AuthProviderDiscoveryCache")]
+[ParallelLimiter<SubprocessLimit>]
 public class CodexHookCommandTests : IDisposable {
 
     [TempHome] public required TempHome Home { get; init; }

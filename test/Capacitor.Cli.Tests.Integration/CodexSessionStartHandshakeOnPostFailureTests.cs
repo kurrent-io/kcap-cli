@@ -14,6 +14,7 @@ namespace Capacitor.Cli.Tests.Integration;
 /// lifecycle-POST rejection must still produce the handshake: the recording outcome cannot decide
 /// whether the host can proceed. The non-zero exit still reports that the session was not recorded.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class CodexSessionStartHandshakeOnPostFailureTests : IDisposable {
     [TempHome] public required TempHome Home { get; init; }
 
