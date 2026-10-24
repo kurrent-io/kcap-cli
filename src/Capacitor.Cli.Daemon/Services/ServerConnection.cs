@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
 using Capacitor.Cli.Core.Eval.Contracts;
@@ -123,21 +124,25 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// </summary>
     public Func<string[]>? GetLiveAgentIds { get; set; }
 
-    /// <summary>Phase B (D2): richer live-agent metadata (kind + flow identity) sent alongside
+    /// <summary>Richer live-agent metadata (kind + flow identity) sent alongside
     /// <see cref="GetLiveAgentIds"/> on <c>DaemonConnect</c>. Optional — null when not wired (tests).</summary>
     public Func<LiveAgentInfo[]>? GetLiveAgents { get; set; }
 
     /// <summary>The agents this daemon is about to resume, claimed on <c>DaemonConnect</c>.</summary>
     public Func<ResumingAgentClaim[]>? GetResumingAgents { get; set; }
 
+    /// <summary>The host's accounts snapshot, carried on <c>DaemonConnect</c>; between connects a change
+    /// goes out through <see cref="AccountsChangedAsync"/>.</summary>
+    public Func<AccountsSnapshotDto?>? GetAccountsSnapshot { get; set; }
+
     public Func<(int Count, long Version)>? GetActiveCount { get; set; }
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.4): the server prunes the daemon's durable
-    /// resolved-candidates ledger per-entry (sparse, deliver-once). One-way server→daemon receive; the
-    /// handler (<see cref="AgentOrchestrator"/>) is SYNCHRONOUS (the ledger Ack is void).</summary>
+    /// <summary>The server prunes the daemon's durable resolved-candidates ledger per-entry (sparse,
+    /// deliver-once). One-way server→daemon receive; the handler (<see cref="AgentOrchestrator"/>) is
+    /// SYNCHRONOUS (the ledger Ack is void).</summary>
     public event Action<AckResolvedCandidates>? OnAckResolvedCandidates;
 
-    /// <summary>Phase B2-b (sequenced-settlement design §4.2.2/§5.5): the sequenced-command receive seams.
+    /// <summary>The sequenced-command receive seams.
     /// <see cref="OnStopAgentV2"/> is the Seq'd stop primitive a capability daemon receives instead of the
     /// legacy <c>StopAgent</c>; <see cref="OnAckProcessedPrefix"/> is the server's identity-cache retirement
     /// proof (SYNCHRONOUS — the processor's <c>AckPrefix</c> is void); <see cref="OnRequestStatusReport"/> is
@@ -202,6 +207,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         try { await _hub.SendAsync("DaemonStatusReport", report, cancellationToken: _ct); }
         catch (Exception ex) { _logger.LogDebug(ex, "DaemonStatusReport send failed (old server or transient)"); }
     }
+
+    /// <summary>One-way, like <see cref="DaemonStatusReportAsync"/>, so a server without the handler only
+    /// logs it. A dropped or failed send is not retried: every registration brings the server up to date,
+    /// on <c>DaemonConnect</c> or right after it.</summary>
+    public virtual async Task AccountsChangedAsync(AccountsSnapshotDto snapshot) {
+        if (!IsReady) return;
+        try { await SendAccountsChangedRawAsync(snapshot); }
+        catch (Exception ex) { _logger.LogDebug(ex, "AccountsChanged send failed (old server or transient)"); }
+    }
+
+    internal virtual Task SendAccountsChangedRawAsync(AccountsSnapshotDto snapshot) =>
+        _hub.SendAsync("AccountsChanged", snapshot, cancellationToken: _ct);
 
     /// <summary>Phase B2-b (sequenced-settlement design §4.2.2): answer a sequenced command ONE-WAY (never
     /// <c>InvokeAsync</c>) — an old server without the <c>CommandAck</c>/<c>CommandRejected</c> handler
@@ -677,6 +694,8 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
                     try { _logger.LogDebug(ex, "post-registration hook failed — ignoring"); }
                     catch { /* logger provider threw — swallow so post-register containment holds */ }
                 }
+
+                await SendAccountsChangedSinceConnectAsync();
             }
         );
 
@@ -739,11 +758,14 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             SupportsCorrelatedStatusReports: AdvertisesCorrelatedStatusReports,
             EvalProtocolVersion: 2,
             VendorModels: _config.VendorModels,
+            VendorModelsByAccount: _config.VendorModelsByAccount,
             SupportsRawInput: AdvertisesRawInput,
             SupportsBranchBaseRef: true,
             ResumingAgents: GetResumingAgents?.Invoke(),
             ActiveCount: activeCount?.Count,
-            ActiveCountVersion: activeCount?.Version);
+            ActiveCountVersion: activeCount?.Version,
+            SupportsAccountLaunches: true,
+            Accounts: GetAccountsSnapshot?.Invoke());
     }
 
     async Task DaemonConnectCoreAsync() {
@@ -751,15 +773,13 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
         var repoStore = FingerprintRepoStore();
         var repoPaths = await MergeRepoPathsAsync();
         var liveIds   = GetLiveAgentIds?.Invoke() ?? [];
-        var liveAgents = GetLiveAgents?.Invoke(); // Phase B (D2): additive; null on an unwired/old path
+        var liveAgents = GetLiveAgents?.Invoke();
+        var connect    = BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents);
 
         try {
-            await _hub.InvokeAsync(
-                "DaemonConnect",
-                BuildDaemonConnect(platform, repoPaths, liveIds, liveAgents),
-                cancellationToken: _ct
-            );
+            await InvokeDaemonConnectRawAsync(connect);
             _advertisedRepoStore = repoStore;
+            _connectAccounts     = connect.Accounts;
         } catch (Exception ex) when (IsNameInUse(ex)) {
             // server refused our (owner, name) slot because another
             // live daemon owns it. Surface to DaemonRunner before re-throwing
@@ -773,6 +793,9 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
             throw;
         }
     }
+
+    internal virtual Task InvokeDaemonConnectRawAsync(DaemonConnect connect) =>
+        _hub.InvokeAsync("DaemonConnect", connect, cancellationToken: _ct);
 
     /// <summary>
     /// Set by <see cref="AgentOrchestrator"/>: re-registers this daemon's live agents with the
@@ -796,6 +819,18 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     internal RepoStoreFingerprint? AdvertisedRepoStore => _advertisedRepoStore;
 
     volatile RepoStoreFingerprint? _advertisedRepoStore;
+
+    volatile AccountsSnapshotDto? _connectAccounts;
+
+    // A change after the connect payload was built had its own send dropped by the IsReady guard.
+    Task SendAccountsChangedSinceConnectAsync() {
+        if (GetAccountsSnapshot?.Invoke() is not { } current) return Task.CompletedTask;
+
+        var sent = _connectAccounts;
+        return sent is not null && sent.HostId == current.HostId && sent.Revision == current.Revision
+            ? Task.CompletedTask
+            : AccountsChangedAsync(current);
+    }
 
     // Taken before the read it pairs with, so a write landing during the read still reads as a
     // change afterwards.
@@ -826,7 +861,7 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     /// <c>virtual</c> so unit tests can control readiness directly without a live SignalR transport
     /// (see the ACP hub-method tests).
     /// </summary>
-    internal virtual bool IsReady => _gate.IsReady(_hub.State);
+    internal virtual bool IsReady => _gate.IsReady(HubState);
 
     /// <summary>The current SignalR connection incarnation. Review-flow launch commands pin this
     /// value server-side and the daemon rechecks it immediately before any spawn side effects.</summary>
@@ -964,11 +999,12 @@ internal partial class ServerConnection : IAsyncDisposable, IDaemonHeartbeatPort
     public virtual async Task<AgentRegisteredResponse> AgentRegisteredAsync(
             string agentId, string? prompt, string? model, string? effort, string? repoPath,
             string? sandboxPolicy = null, string? approvalPolicy = null, string? permissionPreset = null,
-            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null) {
+            string? runtimeTransport = null, string? vendor = null, AgentStartTitle? title = null, string? continuesAgentId = null,
+            string? accountDirectory = null, string? accountId = null, string? accountLabel = null) {
         var activeCount = GetActiveCount?.Invoke();
         var registration = new AgentRegistered(
             agentId, prompt, model, effort, repoPath, sandboxPolicy, approvalPolicy, permissionPreset, runtimeTransport,
-            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor, continuesAgentId);
+            title?.Text, title?.Derived ?? false, activeCount?.Count, activeCount?.Version, vendor, continuesAgentId, accountDirectory, accountId, accountLabel);
         var connection = CurrentConnectionId ?? "";
 
         if (!string.Equals(Volatile.Read(ref _registrationAckMissingOn), connection, StringComparison.Ordinal)) {

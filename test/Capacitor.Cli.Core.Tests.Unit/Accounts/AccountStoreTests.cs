@@ -41,6 +41,20 @@ public class AccountStoreTests {
     }
 
     [Test]
+    public async Task MutateWithRevision_returns_the_revision_it_wrote() {
+        var store = Store();
+
+        var (_, first)  = store.MutateWithRevision(r => (r with { Accounts = [Claude("/h/.claude-a")] }, 0));
+        var (_, second) = store.MutateWithRevision(r => (r with { Accounts = [.. r.Accounts, Claude("/h/.claude-b")] }, 0));
+        var (_, none)   = store.MutateWithRevision(r => (r, 0));
+
+        await Assert.That(first).IsEqualTo(1L);
+        await Assert.That(second).IsEqualTo(2L);
+        await Assert.That(none).IsEqualTo(2L);
+        await Assert.That(store.Load().Revision).IsEqualTo(2L);
+    }
+
+    [Test]
     public async Task Concurrent_mutations_lose_no_account() {
         var store = Store();
 

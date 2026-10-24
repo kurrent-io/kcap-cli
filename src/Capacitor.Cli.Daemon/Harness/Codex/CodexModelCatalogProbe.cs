@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Capacitor.Cli.Core;
@@ -16,6 +18,12 @@ internal static partial class CodexModelCatalogProbe {
     const int MaxPages = 10;
 
     internal static string DirectoryFor(string stateDir) => Path.Combine(stateDir, "codex-probe");
+
+    /// <summary>One working directory per account, named by a hash of its directory key: the key is a
+    /// whole path, so it cannot be a file name itself.</summary>
+    internal static string DirectoryFor(string stateDir, string directoryKey) =>
+        Path.Combine(DirectoryFor(stateDir),
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(directoryKey)))[..16].ToLowerInvariant());
 
     /// <summary>Null on every failure, never an empty catalog: an empty one would suppress the
     /// launcher's other sources.</summary>

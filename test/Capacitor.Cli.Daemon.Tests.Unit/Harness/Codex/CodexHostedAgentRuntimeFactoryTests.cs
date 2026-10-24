@@ -1,4 +1,9 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Nodes;
+using Capacitor.Cli.Core.Accounts;
+using Capacitor.Cli.Core.Harness.Codex;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Daemon.Harness.Codex;
 using Capacitor.Cli.Daemon.Services;
@@ -59,7 +64,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
     }
 
     CodexLauncher NewLauncher() =>
-        new(new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example" },
+        new(new DaemonConfig { CodexPath = "codex", CapacitorPath = "/opt/kcap", ServerUrl = "https://t.example", Home = Home },
             TestHarnesses.Under(Home), NullLogger<CodexLauncher>.Instance) {
             ReadInheritedMcpServers = static () => [],
         };
@@ -79,6 +84,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
                 CodexAppServerActive      = appServerActive,
                 CodexAppServerInteractive = appServerInteractive,
                 Version                   = "0.146.0",
+                Home                      = Home,
             },
             NullLoggerFactory.Instance, TimeProvider.System, spawn);
 
@@ -259,7 +265,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
         using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
 
-        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _, _) =>
             Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
         var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam);
 
@@ -282,7 +288,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
         using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
 
         var pty = new RecordingPtyFactory();
-        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _, _) =>
             Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
         var factory = Factory(pty, appServerActive: true, seam);
 
@@ -320,7 +326,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
         using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
 
-        CodexAppServerSpawnFactory seam = (_, _, _, _, env, _, _) => {
+        CodexAppServerSpawnFactory seam = (_, _, _, _, env, _, _, _) => {
             capturedEnv = env;
             return Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
         };
@@ -353,7 +359,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
     public async Task ApplyChildEnv_drops_an_inherited_flow_role() {
         var childEnv = new Dictionary<string, string?> { ["KCAP_FLOW_ROLE"] = "reviewer" };
 
-        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, new Dictionary<string, string> { ["KCAP_SESSION_KIND"] = "hosted_agent" });
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, new Dictionary<string, string> { ["KCAP_SESSION_KIND"] = "hosted_agent" }, []);
 
         await Assert.That(childEnv.ContainsKey("KCAP_FLOW_ROLE")).IsFalse();
     }
@@ -365,7 +371,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
         var childEnv = new Dictionary<string, string?> { ["KCAP_HOSTED_APPSERVER"] = "1", ["PATH"] = "/usr/bin" };
         var overlay  = new Dictionary<string, string> { ["KCAP_AGENT_ID"] = "agent-1" }; // dormant: no marker
 
-        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, overlay);
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, overlay, []);
 
         await Assert.That(childEnv.ContainsKey("KCAP_HOSTED_APPSERVER")).IsFalse();
         await Assert.That(childEnv["KCAP_AGENT_ID"]).IsEqualTo("agent-1");
@@ -377,7 +383,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
         var childEnv = new Dictionary<string, string?>();
         var overlay  = new Dictionary<string, string> { ["KCAP_HOSTED_APPSERVER"] = "1" };
 
-        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, overlay);
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, overlay, []);
 
         await Assert.That(childEnv["KCAP_HOSTED_APPSERVER"]).IsEqualTo("1");
     }
@@ -391,12 +397,41 @@ public class CodexHostedAgentRuntimeFactoryTests {
         // the worktree above is empty, and so is the home this points CODEX_HOME into.
         using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
 
-        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _, _) =>
             throw new InvalidOperationException("spawn must never be reached when hooks are missing");
         var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam);
 
         await Assert.ThrowsAsync<CodexHooksNotInstalledException>(
             () => factory.StartAsync(Ctx(isReviewFlow: true, wt.Path), CancellationToken.None));
+    }
+
+    /// Hooks exist only in the account directory, so the start passes the preflight only when the
+    /// launcher ran against the launch's account; the trust entry shows where it wrote.
+    [Test]
+    public async Task AppServer_factory_prepares_with_the_launch_account() {
+        var worktree   = Home.CreateDir("wt");
+        var accountDir = Home.CreateDir("codex-work");
+        accountDir.CreateFile("hooks.json", """
+            {"hooks":{
+                "SessionStart":[{"hooks":[{"type":"command","command":"kcap hook --codex"}]}],
+                "Stop":[{"hooks":[{"type":"command","command":"kcap hook --codex"}]}],
+                "PermissionRequest":[{"hooks":[{"type":"command","command":"kcap hook --codex"}]}]
+            }}
+            """);
+        await using var fake = new FakeCodexAppServer();
+
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _, _) =>
+            Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam, appServerInteractive: true);
+        var ctx     = Ctx(isReviewFlow: false, worktree) with { Account = new ResolvedAccount(accountDir, "acct-1", "Work") };
+
+        var start = await factory.StartAsync(ctx, CancellationToken.None).WaitAsync(HangGuard);
+        await start.Runtime.DisposeAsync();
+
+        await Assert.That(fake.ReceivedMethods).Contains("thread/start");
+        await Assert.That(File.ReadAllText(AccountLayouts.Codex(Home, accountDir).ConfigToml))
+            .Contains($"\"{CodexPaths.NormalizeProjectKey(worktree).Replace("\\", "\\\\")}\"");
+        await Assert.That(File.Exists(Home.PathTo(".codex", "config.toml"))).IsFalse();
     }
 
     [Test]
@@ -409,7 +444,7 @@ public class CodexHostedAgentRuntimeFactoryTests {
         using var codexEnv = EnvScope.Exclusive("CODEX_HOME", Home.PathTo(".codex"));
 
         var process = new FakeAcpProcess();
-        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _) =>
+        CodexAppServerSpawnFactory seam = (_, _, _, _, _, _, _, _) =>
             Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), process));
         var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam);
 
@@ -418,6 +453,123 @@ public class CodexHostedAgentRuntimeFactoryTests {
 
         // The factory disposed the runtime on the failed handshake, so the spawned child is not leaked.
         await Assert.That(process.HasExited).IsTrue();
+    }
+
+    /// <summary>The seam's overlay, and the environment the real spawn would hand this launch's child: the
+    /// daemon's own, as a <see cref="ProcessStartInfo"/> seeds it, with the seam's removals and overlay applied.</summary>
+    async Task<(IReadOnlyDictionary<string, string> Overlay, IDictionary<string, string?> Child)> AppServerChildEnvFor(ResolvedAccount account) {
+        using var wt = new TempDir();
+        WriteWorktreeHooks(wt);
+        await using var fake = new FakeCodexAppServer();
+        IReadOnlyDictionary<string, string>? overlay = null;
+        IReadOnlyCollection<string>?         remove  = null;
+
+        CodexAppServerSpawnFactory seam = (_, _, _, _, env, removeEnv, _, _) => {
+            (overlay, remove) = (env, removeEnv);
+            return Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        };
+        var factory = Factory(new RecordingPtyFactory(), appServerActive: true, seam);
+
+        var start = await factory.StartAsync(Ctx(isReviewFlow: true, wt.Path) with { Account = account }, CancellationToken.None).WaitAsync(HangGuard);
+        await start.Runtime.DisposeAsync();
+
+        var child = new ProcessStartInfo().Environment;
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(child, overlay!, remove!);
+
+        return (overlay!, child);
+    }
+
+    string CodexDaemonDefault => Home.CreateDir(".codex-work");
+
+    [Test]
+    [NotInParallel]
+    public async Task Launch_resolved_to_the_built_in_directory_removes_the_inherited_variable() {
+        using var codexEnv = EnvScope.Exclusive("CODEX_HOME", CodexDaemonDefault);
+
+        var (_, child) = await AppServerChildEnvFor(new ResolvedAccount(Home.CreateDir(".codex"), "acct-personal", "Personal"));
+
+        await Assert.That(child.ContainsKey("CODEX_HOME")).IsFalse();
+        await Assert.That(Environment.GetEnvironmentVariable("CODEX_HOME")).IsEqualTo(CodexDaemonDefault);
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Launch_resolved_to_the_daemons_own_custom_default_sets_it_explicitly() {
+        using var codexEnv = EnvScope.Exclusive("CODEX_HOME", CodexDaemonDefault);
+
+        var (overlay, child) = await AppServerChildEnvFor(new ResolvedAccount(CodexDaemonDefault, null, ".codex-work"));
+
+        await Assert.That(overlay["CODEX_HOME"]).IsEqualTo(CodexDaemonDefault);
+        await Assert.That(child["CODEX_HOME"]).IsEqualTo(CodexDaemonDefault);
+        await Assert.That(Environment.GetEnvironmentVariable("CODEX_HOME")).IsEqualTo(CodexDaemonDefault);
+    }
+
+    [Test]
+    [NotInParallel]
+    public async Task Launch_resolved_to_another_custom_account_sets_that_directory() {
+        using var codexEnv = EnvScope.Exclusive("CODEX_HOME", CodexDaemonDefault);
+        var other = Home.CreateDir(".codex-other");
+
+        var (_, child) = await AppServerChildEnvFor(new ResolvedAccount(other, "acct-other", "Other"));
+
+        await Assert.That(child["CODEX_HOME"]).IsEqualTo(other);
+        await Assert.That(Environment.GetEnvironmentVariable("CODEX_HOME")).IsEqualTo(CodexDaemonDefault);
+    }
+
+    /// The built-in directory is reached by removing the daemon's inherited variable and a custom one by
+    /// naming it; each account's probe runs in a working directory of its own, and its answer lands
+    /// under its own id.
+    [Test]
+    public async Task Probe_runs_once_per_codex_account_with_its_home_in_the_environment() {
+        using var daemons = new TempDaemonStore();
+        var builtIn = Home.PathTo(".codex");
+        var work    = Home.PathTo(".codex-work");
+        var spawns  = new ConcurrentQueue<(string Cwd, IReadOnlyDictionary<string, string> Env, IReadOnlyCollection<string> Remove)>();
+        var fakes   = new ConcurrentQueue<FakeCodexAppServer>();
+
+        CodexAppServerSpawnFactory seam = (_, _, _, cwd, env, removeEnv, _, _) => {
+            spawns.Enqueue((cwd, env, removeEnv));
+            var named = env.TryGetValue("CODEX_HOME", out var codexHome) ? Path.GetFileName(codexHome) : "built-in";
+            var fake  = new FakeCodexAppServer {
+                ModelPages = [new JsonArray(new JsonObject { ["id"] = named, ["model"] = named, ["displayName"] = named, ["hidden"] = false })],
+            };
+            fakes.Enqueue(fake);
+            return Task.FromResult<(CodexAppServerConnection, IAcpProcess)>((fake.ConnectClient(), new FakeAcpProcess()));
+        };
+        var factory = new CodexHostedAgentRuntimeFactory(
+            NewLauncher(), new RecordingPtyFactory(),
+            new DaemonConfig { Name = "test", Store = daemons.Store, Version = "0.146.0", Home = Home },
+            NullLoggerFactory.Instance, TimeProvider.System, seam);
+
+        try {
+            var byAccount = await VendorModelCatalogs.ProbeByAccountAsync(
+                factory, [("acct-personal", builtIn), ("acct-work", work)], CancellationToken.None).WaitAsync(HangGuard);
+
+            await Assert.That(spawns.Count).IsEqualTo(2);
+            var personal = spawns.Single(s => !s.Env.ContainsKey("CODEX_HOME"));
+            var custom   = spawns.Single(s => s.Env.ContainsKey("CODEX_HOME"));
+            await Assert.That(personal.Remove).Contains("CODEX_HOME");
+            await Assert.That(custom.Env["CODEX_HOME"]).IsEqualTo(work);
+            await Assert.That(custom.Remove).DoesNotContain("CODEX_HOME");
+            await Assert.That(personal.Cwd).IsNotEqualTo(custom.Cwd);
+
+            await Assert.That(byAccount["acct-personal"].Single().Value).IsEqualTo("built-in");
+            await Assert.That(byAccount["acct-work"].Single().Value).IsEqualTo(".codex-work");
+        } finally {
+            foreach (var fake in fakes) await fake.DisposeAsync();
+        }
+    }
+
+    [Test]
+    public async Task ApplyChildEnv_removes_before_it_overlays() {
+        var childEnv = new Dictionary<string, string?> { ["CODEX_HOME"] = "/inherited", ["PATH"] = "/usr/bin" };
+
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, new Dictionary<string, string>(), ["CODEX_HOME"]);
+        await Assert.That(childEnv.ContainsKey("CODEX_HOME")).IsFalse();
+
+        CodexHostedAgentRuntimeFactory.ApplyChildEnv(childEnv, new Dictionary<string, string> { ["CODEX_HOME"] = "/account" }, ["CODEX_HOME"]);
+        await Assert.That(childEnv["CODEX_HOME"]).IsEqualTo("/account");
+        await Assert.That(childEnv["PATH"]).IsEqualTo("/usr/bin");
     }
 
     static void WriteWorktreeHooks(TempDir worktree) =>
