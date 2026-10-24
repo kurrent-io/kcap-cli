@@ -225,8 +225,23 @@
                                     ToolTip.Tip="How the local server searches your sessions. Change it in Settings."
                                     AutomationProperties.Name="Open search settings for the local server"
                                     Command="{Binding Search.OpenSettingsCommand, FallbackValue={x:Null}}"
-                                    IsVisible="{Binding Search.StateText, Converter={x:Static StringConverters.IsNotNullOrEmpty}, FallbackValue=False}">
+                                    IsVisible="{Binding Search.ShowsSettingsLink, FallbackValue=False}">
                                 <TextBlock x:Name="RailLocalSearchText" Text="{Binding Search.StateText}" Classes="footerMeta" />
+                            </Button>
+                            <!-- With no Settings window to open (a server reached by URL with no profile), the controls open here. -->
+                            <Button x:Name="RailLocalSearchInlineButton" Classes="kcapGhost" Padding="2,0" Margin="-2,0,3,0" MinHeight="0"
+                                    ToolTip.Tip="How the local server searches your sessions"
+                                    AutomationProperties.Name="Search settings for the local server"
+                                    IsVisible="{Binding Search.ShowsInlineSettings, FallbackValue=False}">
+                                <TextBlock Text="{Binding Search.StateText}" Classes="footerMeta" />
+                                <Button.Flyout>
+                                    <Flyout Placement="TopEdgeAlignedLeft" VerticalOffset="-6" FlyoutPresenterClasses="kcapPanel">
+                                        <ScrollViewer MaxHeight="560" Width="440" Margin="12" VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <views:SearchSettingsView x:Name="RailLocalSearchPanel" DataContext="{Binding Search}" />
+                                        </ScrollViewer>
+                                    </Flyout>
+                                </Button.Flyout>
                             </Button>
                         </WrapPanel>
                     </Panel>

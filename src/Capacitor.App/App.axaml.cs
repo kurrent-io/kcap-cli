@@ -235,7 +235,7 @@ public partial class App : Application {
     // counterpart of the wizard sign-in quiesce.
     SignInWindow? _signInWindow;
     SettingsWindow? _settingsWindow;
-    Action? _openSearchSettings;
+    readonly BehaviorSubject<Action?> _openSearchSettings = new(null);
     FeedbackWindow? _feedbackWindow;
     internal FeedbackWindow? FeedbackWindowForTests => _feedbackWindow;
     readonly AppMenu _appMenu = new(AppKitMenus.ShowAboutPanel);
@@ -792,7 +792,7 @@ public partial class App : Application {
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
                 () => LocalEmbeddingFile.Read(_localRoot), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
-                _shutdown.Token, openSettings: () => _openSearchSettings?.Invoke()),
+                _shutdown.Token, openSettings: _openSearchSettings),
         };
         _localStack = localStack;
         IObservable<bool>? stackOwnsStart = null;
@@ -925,7 +925,7 @@ public partial class App : Application {
                 lifecycle.PhaseClosed, showSearch)
             : null;
         Action? openSettings = openSettingsOn is null ? null : () => openSettingsOn(false);
-        _openSearchSettings = openSettingsOn is null ? null : () => openSettingsOn(true);
+        _openSearchSettings.OnNext(openSettingsOn is null ? null : () => openSettingsOn(true));
         ConfigureSettingsMenu(openSettings);
         _appMenu.SetSetupAction(() => _ = RestartForSetupAsync(desktop));
         if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {

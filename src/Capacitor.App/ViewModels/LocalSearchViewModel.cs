@@ -19,7 +19,7 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     static readonly string[] Derived = [
         nameof(Running), nameof(StateText), nameof(CurrentText), nameof(CanApply), nameof(ApplyLabel), nameof(Embeddings),
-        nameof(FailureText),
+        nameof(FailureText), nameof(ShowsSettingsLink), nameof(ShowsInlineSettings),
     ];
 
     readonly LocalSearchController _search;
@@ -31,15 +31,16 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     readonly CompositeDisposable _disposables = new();
     readonly SerialDisposable _read = new();
     LocalEmbeddingSetting? _current;
+    bool _canOpenSettings;
     bool _loaded;
 
     /// <param name="readSetting">The installation's recorded embedding setting; a disk read, run on
     /// <paramref name="readScheduler"/> (the task pool by default), never on the UI thread.</param>
-    /// <param name="openSettings">Opens Settings on its Search tab.</param>
+    /// <param name="openSettings">What opens Settings on its Search tab, null while no Settings window can open.</param>
     public LocalSearchViewModel(
             Func<LocalEmbeddingSetting?> readSetting, IObservable<ServerLaneStatus> status, LocalSearchController search,
             LocalUpgradeController upgrade, Func<Task> reconnect, CancellationToken shutdown, IScheduler? readScheduler = null,
-            Action? openSettings = null) {
+            IObservable<Action?>? openSettings = null) {
         _search        = search;
         _upgrade       = upgrade;
         _readSetting   = readSetting;
@@ -73,7 +74,14 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
             .DisposeWith(_disposables);
 
         ApplyCommand        = ReactiveCommand.CreateFromTask(ApplyAsync);
-        OpenSettingsCommand = ReactiveCommand.Create(() => openSettings?.Invoke());
+        Action? open = null;
+        var settings = openSettings ?? Observable.Return<Action?>(null);
+        settings.Subscribe(action => {
+            open             = action;
+            _canOpenSettings = action is not null;
+            Refresh();
+        }).DisposeWith(_disposables);
+        OpenSettingsCommand = ReactiveCommand.Create(() => open?.Invoke(), settings.Select(action => action is not null));
     }
 
     public SearchChoiceViewModel Choice { get; }
@@ -111,6 +119,12 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public ReactiveCommand<Unit, Unit> ApplyCommand { get; }
 
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
+
+    /// The rail word opens the Settings tab when there is one to open.
+    public bool ShowsSettingsLink => StateText is not null && _canOpenSettings;
+
+    /// Without a Settings window, the rail word opens the same controls in place.
+    public bool ShowsInlineSettings => StateText is not null && !_canOpenSettings;
 
     string? CurrentModel => _current?.Model;
 
