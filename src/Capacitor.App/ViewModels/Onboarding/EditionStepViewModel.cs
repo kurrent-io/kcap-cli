@@ -6,9 +6,8 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// <summary>
-/// The first page: which edition this machine sets up. Whoever reaches the installer has already
-/// chosen kcap, so the page asks only that. Cloud and "already have a workspace" continue to
-/// Sign-in, Local to Install.
+/// The first page: which edition this machine sets up. Cloud and "already have a workspace" continue
+/// to Sign-in, Local to Install.
 /// </summary>
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string LocalTitle = "For you, locally";
