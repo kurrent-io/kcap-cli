@@ -72,7 +72,8 @@ public class RemoteAgentsServiceTests {
     public async Task IdentityChangeClearsCachesEvenWhenTheNewFetchReturnsNull() {
         var returnNull = false;
         var lane = new FakeServerLane {
-            DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>([new DaemonInfo { Name = "work-mac", Connected = true }]),
+            DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>(
+                returnNull ? null : [new DaemonInfo { Name = "work-mac", Connected = true }]),
         };
         using var svc = new RemoteAgentsService(
             lane, _ => Task.FromResult(new RemoteFetch(returnNull ? null : [Agent("a1")])), TimeSpan.Zero);
@@ -458,6 +459,43 @@ public class RemoteAgentsServiceTests {
             [new DaemonListing(null, 0, false), new DaemonListing(null, 1, false), new DaemonListing(null, 2, false),
              new DaemonListing(fresh, 2, false)],
             CollectionOrdering.Matching);
+    }
+
+    /// The lane can publish Connected twice in a row when a second reconnect lands during the
+    /// first one's token read. The second resets the listing and supersedes the fetch in flight, so
+    /// it must start a fetch of its own, or the listing stays unanswered with no retry pending.
+    [Test]
+    public async Task A_second_Connected_in_a_row_fetches_again_so_the_listing_and_accounts_answer() {
+        var daemonCalls = 0;
+        var accountCalls = 0;
+        IReadOnlyList<DaemonInfo> stale = [new DaemonInfo { Name = "old-mac", Connected = true }];
+        IReadOnlyList<DaemonInfo> fresh = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        var daemonsGate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var accountsGate = new TaskCompletionSource<IReadOnlyList<DaemonAccountsDto>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane {
+            DaemonsHandler = () => Interlocked.Increment(ref daemonCalls) == 1
+                ? daemonsGate.Task : Task.FromResult<IReadOnlyList<DaemonInfo>?>(fresh),
+            DaemonAccountsHandler = () => Interlocked.Increment(ref accountCalls) == 1
+                ? accountsGate.Task
+                : Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>([new() { DaemonName = "work-mac", HostId = "h1", Revision = 2 }]),
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+        var listings = new List<DaemonListing>();
+        using var listingSub = Record(svc.Listing, listings);
+        var accounts = new List<IReadOnlyList<DaemonAccountsDto>>();
+        using var accountsSub = Record(svc.DaemonAccounts, accounts);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        daemonsGate.SetResult(stale);
+        accountsGate.SetResult([new() { DaemonName = "old-mac", HostId = "h0", Revision = 1 }]);
+
+        await Eventually(() => Seen(listings)[^1].Daemons is not null);
+        await Eventually(() => Seen(accounts)[^1].Count == 1);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(fresh, 2, false));
+        await Assert.That(Volatile.Read(ref daemonCalls)).IsEqualTo(2);
+        await Assert.That(Seen(accounts)[^1][0].Revision).IsEqualTo(2L);
+        await Assert.That(Volatile.Read(ref accountCalls)).IsEqualTo(2);
     }
 
     [Test]

@@ -89,6 +89,11 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             .DistinctUntilChanged()
             .Where(c => c)
             .Select(_ => System.Reactive.Unit.Default);
+        // Not an edge: the lane can publish Connected twice in a row, and each one resets the
+        // listing and supersedes the fetch in flight, so each needs a fetch of its own.
+        var everyConnect = lane.Status
+            .Where(s => s.State == ServerLaneState.Connected)
+            .Select(_ => System.Reactive.Unit.Default);
 
         // Subscribed before the refresh triggers below (same lane.Status), so on a Connected
         // status this runs first: nothing seeded under one identity survives into another, even
@@ -119,11 +124,11 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // subscribes before Agents so a Connected edge starts the daemon refresh first and
         // RefreshAgentsAsync can await its completion before publishing rows that AgentDirectory
         // deduplicates against Daemons.
-        var refreshDaemons = connected.Merge(lane.DaemonsChanged.Throttle(wait))
+        var refreshDaemons = everyConnect.Merge(lane.DaemonsChanged.Throttle(wait))
             .Select(_ => Observable.FromAsync(() => RefreshDaemonsAsync()))
             .Merge()
             .Subscribe();
-        var refreshDaemonAccounts = connected.Merge(lane.DaemonAccountsChanged.Throttle(wait))
+        var refreshDaemonAccounts = everyConnect.Merge(lane.DaemonAccountsChanged.Throttle(wait))
             .Select(_ => Observable.FromAsync(() => RefreshDaemonAccountsAsync()))
             .Merge()
             .Subscribe();
