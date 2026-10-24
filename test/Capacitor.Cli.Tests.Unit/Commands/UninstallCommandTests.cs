@@ -19,6 +19,7 @@ using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
+[ParallelLimiter<SubprocessLimit>]
 public class UninstallCommandTests {
     // Uninstall runs `daemon stop --yes`, which enumerates this directory and kills the PIDs it
     // finds; a shared one holding the test runner's own PID makes it kill its own tree.
@@ -396,18 +397,16 @@ public class UninstallCommandTests {
         await Assert.That(sessionStart[0]!["hooks"]![0]!["command"]!.GetValue<string>()).IsEqualTo("user-script");
     }
 
-    // Bare: the error goes to the process-global Console, whose readers carry no key.
-    [Test, NotInParallel]
+    [Test]
     public async Task Project_flag_errors_when_not_inside_git_tree() {
         await using var fixture = await Fixture.CreateAsync();
 
         // A scratch dir with NO .git anywhere up the tree.
         using var tmp = new TempDir();
-        using var capture = ConsoleOutput.StartErrorCapture();
 
         var exit = await NewCommand(fixture, workdir: tmp.Path).HandleAsync(["uninstall", "--yes", "--project"]);
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedError()).Contains("--project requires a git working tree");
+        await Assert.That(fixture.Err.ToString()).Contains("--project requires a git working tree");
     }
 
     [Test]
@@ -655,23 +654,20 @@ public class UninstallCommandTests {
     }
 
     [Test, ExcludeOn(OS.Windows)]
-    [NotInParallel]
     public async Task Uninstall_removes_its_own_link() {
         await using var fixture = await Fixture.CreateAsync();
 
         var (links, link, binary) = LinkFixture(fixture);
-        using var output          = ConsoleOutput.StartCapture();
 
         var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config"]);
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(new FileInfo(link).LinkTarget).IsNull();
         await Assert.That(File.Exists(binary)).IsTrue();
-        await Assert.That(output.GetCapturedOutput()).Contains($"Remove the kcap command link at {link}");
+        await Assert.That(fixture.Out.ToString()).Contains($"Remove the kcap command link at {link}");
     }
 
     [Test, ExcludeOn(OS.Windows)]
-    [NotInParallel]
     public async Task Keep_path_links_leaves_it() {
         await using var fixture = await Fixture.CreateAsync();
 
@@ -684,7 +680,6 @@ public class UninstallCommandTests {
     }
 
     [Test, ExcludeOn(OS.Windows)]
-    [NotInParallel]
     [UnsupportedOSPlatform("windows")]
     public async Task A_link_it_cannot_remove_fails_the_uninstall_with_a_sudo_hint() {
         await using var fixture = await Fixture.CreateAsync();
@@ -694,12 +689,10 @@ public class UninstallCommandTests {
         File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
 
         try {
-            using var errors = ConsoleOutput.StartErrorCapture();
-
             var exit = await NewCommand(fixture, links: links).HandleAsync(["uninstall", "--yes", "--keep-config"]);
 
             await Assert.That(exit).IsEqualTo(1);
-            await Assert.That(errors.GetCapturedError()).Contains($"sudo rm '{link}'");
+            await Assert.That(fixture.Err.ToString()).Contains($"sudo rm '{link}'");
         } finally {
             File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
@@ -717,19 +710,47 @@ public class UninstallCommandTests {
         return (new KcapLinkRemover([folder], binary), link, binary);
     }
 
-    UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null) {
+    static WatcherPaths WatchersOf(Fixture f) => new(f.Root.Path("watchers"));
+
+    /// What the daemon and watcher stop step reports reaches the command's own writers, the survivor
+    /// that fails the uninstall included.
+    [Test]
+    public async Task A_watcher_the_stop_step_cannot_end_is_reported_on_the_commands_own_writers() {
+        await using var fixture = await Fixture.CreateAsync();
+        var paths = WatchersOf(fixture);
+        Directory.CreateDirectory(paths.Directory);
+
+        using var watcher = DummyProcess.StartSleep(30);
+        var       pidFile = paths.PidFile("s-a");
+        await File.WriteAllTextAsync(pidFile, $"{watcher.Pid}\n{PidIdentity.Capture(watcher.Pid)}");
+
+        int exit;
+        // Held exclusively, the pid file can be neither read to stop the watcher nor deleted.
+        using (new FileStream(pidFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            exit = await NewCommand(fixture).HandleAsync(["uninstall", "--yes", "--keep-config"]);
+
+        await Assert.That(exit).IsEqualTo(1);
+        await Assert.That(fixture.Out.ToString()).Contains("No daemons are running.");
+        await Assert.That(fixture.Out.ToString()).Contains("Could not stop watcher s-a");
+        await Assert.That(fixture.Err.ToString()).Contains("Error killing watcher s-a");
+        await Assert.That(fixture.Err.ToString()).Contains("Watcher s-a is still running.");
+    }
+
+    UninstallCommand NewCommand(Fixture f, DaemonStore? store = null, string? workdir = null, UserHome? home = null, IOutgoingRecorders? recorders = null, ILocalStackFactory? stacks = null, KcapLinkRemover? links = null, string stdin = "") {
         var userHome = home ?? f.UserHome;
         var profiles = Resolutions.None(f.Root);
         var daemons  = store ?? Daemons.Store;
-        var watchers = TestWatchers.For(f.Root, profiles, new FixedCapacitorHttpClient());
+        var watchers = TestWatchers.In(WatchersOf(f), f.Root, profiles, new FixedCapacitorHttpClient());
         var harness  = TestHarnesses.Under(userHome);
+        var console  = new StandardStreams(f.Out, f.Err, new StringReader(stdin));
 
         return new(
             daemons, f.Root, userHome, harness, TestBinaries.None, new AgentsPaths(userHome),
             new WorkingDirectory(workdir ?? AppContext.BaseDirectory),
-            recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System),
+            recorders ?? new OutgoingRecorders(daemons, f.Root, profiles, userHome, harness, TestBinaries.None, watchers, TimeProvider.System, console),
             stacks ?? new EmptyStackFactory(userHome, f.Root),
-            links ?? new KcapLinkRemover([], ""));
+            links ?? new KcapLinkRemover([], ""),
+            console);
     }
 
     sealed class EmptyStackFactory(UserHome home, ConfigRoot config) : ILocalStackFactory {
@@ -769,20 +790,18 @@ public class UninstallCommandTests {
         return new(root, service, log, stacks, new FakeOutgoingRecorders(log, watchers));
     }
 
-    async Task<(int Exit, string Out, string Err)> UninstallWithLocalAsync(Fixture f, LocalServer local, params string[] args) {
-        using var capture = ConsoleOutput.StartFullCapture();
+    async Task<(int Exit, string Out, string Err)> UninstallWithLocalAsync(Fixture f, LocalServer local, string stdin, params string[] args) {
+        var exit = await NewCommand(f, recorders: local.Recorders, stacks: local.Stacks, stdin: stdin).HandleAsync(["uninstall", .. args]);
 
-        var exit = await NewCommand(f, recorders: local.Recorders, stacks: local.Stacks).HandleAsync(["uninstall", .. args]);
-
-        return (exit, capture.GetCapturedOutput(), capture.GetCapturedError());
+        return (exit, f.Out.ToString(), f.Err.ToString());
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Yes_alone_refuses_when_a_local_server_is_installed() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
 
-        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes");
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "", "--yes");
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains("--purge-local");
@@ -791,12 +810,12 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Purge_local_purges_before_the_config_directory_goes() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
 
-        var (exit, output, _) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+        var (exit, output, _) = await UninstallWithLocalAsync(fixture, local, "", "--yes", "--purge-local");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(output).Contains("Purged the local server");
@@ -807,12 +826,12 @@ public class UninstallCommandTests {
             .IsEquivalentTo(new[] { "local" });
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Keep_config_keeps_the_local_data() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
 
-        var (exit, _, _) = await UninstallWithLocalAsync(fixture, local, "--yes", "--keep-config");
+        var (exit, _, _) = await UninstallWithLocalAsync(fixture, local, "", "--yes", "--keep-config");
 
         await Assert.That(exit).IsEqualTo(0);
         await Assert.That(local.Log).Contains("uninstall");
@@ -820,19 +839,12 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(local.Dir("data"))).IsTrue();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Interactive_prompt_names_the_deletion() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
-        var stdin = Console.In;
 
-        (int Exit, string Out, string Err) result;
-        Console.SetIn(new StringReader("y\n"));
-        try {
-            result = await UninstallWithLocalAsync(fixture, local);
-        } finally {
-            Console.SetIn(stdin);
-        }
+        var result = await UninstallWithLocalAsync(fixture, local, "y\n");
 
         await Assert.That(result.Exit).IsEqualTo(0);
         await Assert.That(result.Out).Contains(LocalUrl);
@@ -841,14 +853,14 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(local.Dir("data"))).IsFalse();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Unreadable_local_registry_keeps_the_config_directory() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
         await File.WriteAllTextAsync(local.Root.RegistryPath, "{ not json");
         var kcapTs = fixture.Temp.CreateFile(".pi/agent/extensions/kcap.ts", "export default function(pi){}");
 
-        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "", "--yes", "--purge-local");
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains(local.Root.RegistryPath);
@@ -857,27 +869,27 @@ public class UninstallCommandTests {
         await Assert.That(File.Exists(kcapTs)).IsFalse();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task A_local_removal_that_fails_exits_1_and_keeps_the_config_directory() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
         local.Service.StopFailure      = new LocalLifecycleException("launchctl bootout failed");
         local.Service.UninstallFailure = new LocalLifecycleException("launchctl bootout failed");
 
-        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "", "--yes", "--purge-local");
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains("launchctl bootout failed");
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Yes_alone_refuses_when_a_local_change_was_interrupted() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
         LocalStateFiles.WriteJournal(local.Root, new("setup", "pending", ServerStart.Deny, null, DateTimeOffset.UtcNow, new Dictionary<string, string>()));
 
-        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes");
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "", "--yes");
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains("interrupted");
@@ -887,13 +899,13 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task Keep_config_still_refuses_an_interrupted_purge_without_purge_local() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
         LocalStateFiles.WriteJournal(local.Root, new(LocalPurgeJournal.Operation, LocalPurgeJournal.Retiring, ServerStart.Deny, null, DateTimeOffset.UtcNow, new Dictionary<string, string>()));
 
-        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--keep-config");
+        var (exit, _, errors) = await UninstallWithLocalAsync(fixture, local, "", "--yes", "--keep-config");
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains("finish deleting the local server's data");
@@ -904,7 +916,7 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     public async Task A_local_removal_that_throws_an_io_error_still_finishes_the_rest() {
         await using var fixture = await Fixture.CreateAsync();
         var local = InstallLocalServer(fixture);
@@ -912,7 +924,7 @@ public class UninstallCommandTests {
             if (point == "purge:after-data") throw new IOException("disk went away");
         });
 
-        var (exit, output, errors) = await UninstallWithLocalAsync(fixture, local, "--yes", "--purge-local");
+        var (exit, output, errors) = await UninstallWithLocalAsync(fixture, local, "", "--yes", "--purge-local");
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(errors).Contains("Could not remove the local server: disk went away");
@@ -921,11 +933,10 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task No_local_server_needs_no_purge_flag() {
         await using var fixture = await Fixture.CreateAsync();
 
-        using var capture = ConsoleOutput.StartFullCapture();
         var exit = await NewCommand(fixture, recorders: new FakeOutgoingRecorders([])).HandleAsync(["uninstall", "--yes"]);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -933,30 +944,28 @@ public class UninstallCommandTests {
         await Assert.That(Directory.Exists(Path.Combine(fixture.Home, ".vibe"))).IsFalse();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Busy_daemon_refuses_and_changes_nothing() {
         await using var fixture = await Fixture.CreateAsync();
         var log       = new List<string>();
         var recorders = new FakeOutgoingRecorders(log);
         recorders.Busy.Add("daemon 'x' is running or starting agents");
 
-        using var capture = ConsoleOutput.StartFullCapture();
         var exit = await NewCommand(fixture, recorders: recorders).HandleAsync(["uninstall", "--yes"]);
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedError()).Contains("--force");
+        await Assert.That(fixture.Err.ToString()).Contains("--force");
         await Assert.That(log).DoesNotContain("recorders:stop");
         await Assert.That(Directory.Exists(fixture.ConfigDir)).IsTrue();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Force_proceeds_past_a_busy_daemon() {
         await using var fixture = await Fixture.CreateAsync();
         var log       = new List<string>();
         var recorders = new FakeOutgoingRecorders(log);
         recorders.Busy.Add("daemon 'x' is running or starting agents");
 
-        using var capture = ConsoleOutput.StartFullCapture();
         var exit = await NewCommand(fixture, recorders: recorders).HandleAsync(["uninstall", "--yes", "--force"]);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -1221,7 +1230,7 @@ public class UninstallCommandTests {
         await Assert.That(arrived!.Service.IsInstalled(arrived.Unit)).IsTrue();
     }
 
-    [Test, NotInParallel, ExcludeOn(OS.Windows)]
+    [Test, ExcludeOn(OS.Windows)]
     [Arguments(true)]
     [Arguments(false)]
     public async Task A_purge_started_after_inspection_still_requires_consent_before_recovery(bool skipPrompt) {
@@ -1235,15 +1244,8 @@ public class UninstallCommandTests {
             return [];
         });
 
-        var stdin = Console.In;
-        Console.SetIn(new StringReader("y\n"));
-        int exit;
-        try {
-            exit = await NewCommand(fixture, recorders: recorders).HandleAsync(skipPrompt
-                ? ["uninstall", "--yes", "--keep-config"] : ["uninstall", "--keep-config"]);
-        } finally {
-            Console.SetIn(stdin);
-        }
+        var exit = await NewCommand(fixture, recorders: recorders, stdin: "y\n").HandleAsync(skipPrompt
+            ? ["uninstall", "--yes", "--keep-config"] : ["uninstall", "--keep-config"]);
 
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(Directory.Exists(arrived!.Dir("data"))).IsTrue();
@@ -1301,6 +1303,9 @@ public class UninstallCommandTests {
         public required string ConfigDir { get; init; }
 
         public TempHome Temp => _tempHome!;
+
+        public StringWriter Out { get; } = new();
+        public StringWriter Err { get; } = new();
 
         public ConfigRoot Root     => new(ConfigDir);
         public UserHome   UserHome => new(Home);
