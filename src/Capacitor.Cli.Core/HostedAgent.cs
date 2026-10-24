@@ -18,6 +18,10 @@ public sealed record HostedAgent(string? AgentId, bool IsRendered, DaemonBridge 
     public const string SessionKindVar = "KCAP_SESSION_KIND";
     public const string FlowRoleVar    = "KCAP_FLOW_ROLE";
 
+    /// <summary>Set to "1" on an envelope-sourced app-server session, whose transcript and approvals the
+    /// daemon owns, so the Codex hook stands down from both.</summary>
+    public const string HostedAppServerVar = "KCAP_HOSTED_APPSERVER";
+
     /// <summary>The agent kcap's MCP servers ask the hosting daemon about, for the session they act for.
     /// Distinct from <see cref="AgentIdVar"/> because hooks read that one and link the session they
     /// post to the agent, and inside an ACP child the daemon already records the session itself.</summary>

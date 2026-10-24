@@ -225,8 +225,6 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         CodexPosture = ctx.CodexPosture,
     };
 
-    internal const string HostedAppServerMarkerEnv = "KCAP_HOSTED_APPSERVER";
-
     internal static Dictionary<string, string> BuildEnv(RuntimeStartContext ctx, bool emitEnvelopeTranscript) {
         var env = new Dictionary<string, string> {
             [HostedAgent.RenderedVar] = HostedAgent.Rendered,
@@ -237,9 +235,9 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
         if (!string.IsNullOrEmpty(ctx.DaemonEpoch))     env["KCAP_DAEMON_EPOCH"]      = ctx.DaemonEpoch;
         if (!string.IsNullOrEmpty(ctx.ServerUrl))       env[ProfileOverrides.UrlVar]  = ctx.ServerUrl;
         if (!string.IsNullOrEmpty(ctx.DaemonBridgeUrl)) env[HostedAgent.BridgeUrlVar] = ctx.DaemonBridgeUrl;
-        // guard-1: only an envelope-sourced session carries this marker; the codex hook + watcher read it
-        // and stand down so the rollout is not double-ingested alongside the envelopes.
-        if (emitEnvelopeTranscript) env[HostedAppServerMarkerEnv] = "1";
+        // Only an envelope-sourced session carries this marker, so its rollout is not ingested a second
+        // time beside the envelopes.
+        if (emitEnvelopeTranscript) env[HostedAgent.HostedAppServerVar] = "1";
         return env;
     }
 
@@ -247,7 +245,7 @@ internal sealed class CodexHostedAgentRuntimeFactory : IHostedAgentRuntimeFactor
     // this launch: an inherited envelope marker would make a non-emitting child's hook watcher stand
     // down and lose ingestion, and an inherited session or lookup agent names another session.
     internal static void ApplyChildEnv(IDictionary<string, string?> childEnv, IReadOnlyDictionary<string, string> overlay) {
-        childEnv.Remove(HostedAppServerMarkerEnv);
+        childEnv.Remove(HostedAgent.HostedAppServerVar);
         childEnv.Remove(HostedAgent.FlowRoleVar);
         childEnv.Remove(HostedAgent.DaemonAgentIdVar);
         InheritedHarnessSessions.Remove(childEnv);

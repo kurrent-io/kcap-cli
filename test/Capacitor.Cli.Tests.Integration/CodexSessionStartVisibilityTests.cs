@@ -63,11 +63,7 @@ public class CodexSessionStartVisibilityTests : IDisposable {
         await Assert.That(body["default_visibility"]?.GetValue<string>()).IsEqualTo("private");
     }
 
-    // Globally sequential ([NotInParallel] with no group key): this test
-    // captures Console.Out. Group keys don't prevent cross-group Console
-    // interleaving — see the comment block at the top of
-    // test/Capacitor.Cli.Tests.Unit/Codex/CodexHookCommandTests.cs.
-    [Test, NotInParallel]
+    [Test]
     public async Task SessionStart_for_excluded_repo_is_skipped_and_marks_session_disabled() {
         const string excludedSessionId = "codexexclusiontestsess";
 
@@ -95,10 +91,11 @@ public class CodexSessionStartVisibilityTests : IDisposable {
               }
               """;
 
-        using var capture = ConsoleOutput.StartCapture();
+        var stdout = new StringWriter();
 
         try {
-            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory)).Handle(new StringReader(payload));
+            var exit = await new CodexHookCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), new HookClock(TimeProvider.System), Home, TestHarnesses.Under(Home), HostedAgent.Terminal, new FixedCapacitorHttpClient(), TestWatchers.For(Config.Root, Resolutions.At(_server.Url!, Config.Root), new FixedCapacitorHttpClient()), router: new GitProviderRouter(), workdir: new WorkingDirectory(AppContext.BaseDirectory))
+                .Handle(new StringReader(payload), new CodexHookEnvironment(stdout, TextWriter.Null, Skip: false, HostedAppServer: false));
             await Assert.That(exit).IsEqualTo(0);
 
             // No /hooks/session-start/codex POST.
@@ -106,7 +103,7 @@ public class CodexSessionStartVisibilityTests : IDisposable {
             await Assert.That(requests.Count).IsEqualTo(0);
 
             // Codex's SessionStart parser rejects empty stdout.
-            var doc = System.Text.Json.JsonDocument.Parse(capture.GetCapturedOutput());
+            var doc = System.Text.Json.JsonDocument.Parse(stdout.ToString());
             await Assert.That(doc.RootElement.GetProperty("continue").GetBoolean()).IsTrue();
 
             // Subsequent Stop on the same session must take the disabled-session
