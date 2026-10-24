@@ -200,7 +200,7 @@ List tools with
 | Server | Use it for |
 |---|---|
 | kcap-sessions | `search_sessions`, `list_repo_sessions`, `get_session_summary`, `list_turns`, `get_turn`, `get_session_transcript`, `list_repo_plans`, `get_declared_plans`, `get_session_evals` |
-| kcap-memory | `search_memories`, `get_memory`, `save_memory`, `update_memory`, `rescope_memory`, `archive_memory` |
+| kcap-memory | `search_memories`, `get_memory`, `save_memory`, `update_memory`, `rescope_memory`, `archive_memory`; for a log, `append_memory_entry`, `settle_memory_entry`, `reopen_memory_entry`, `list_memory_entries` |
 | kcap-analytics | `get_analytics_schema` once, then `query_analytics` (read-only SQL) |
 | kcap-workitems | work items, breakdowns, loose ends, next work |
 | kcap-plans | declared plan documents and tasks |

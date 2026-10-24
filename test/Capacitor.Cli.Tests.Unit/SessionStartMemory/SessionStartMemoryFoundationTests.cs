@@ -380,6 +380,24 @@ public class SessionStartMemoryFoundationTests {
     }
 
     [Test]
+    public async Task Provider_counts_a_logs_open_entries_after_its_slug() {
+        const string body = "{\"entries\":[" +
+            "{\"memory_id\":\"1\",\"slug\":\"inbox\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"scope_kind\":\"repo\",\"form\":\"log\",\"open_entries\":3}," +
+            "{\"memory_id\":\"2\",\"slug\":\"quiet\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"form\":\"log\",\"open_entries\":0}," +
+            "{\"memory_id\":\"3\",\"slug\":\"doc\",\"audience\":\"org\",\"description\":\"d\",\"kind\":\"project\",\"form\":\"document\",\"open_entries\":null}" +
+            "],\"projects\":[]}";
+        var provider = new SessionStartMemoryContextProvider(new FixedScopeResolver("repo", "machine"),
+            Lazy(new HttpClient(new StaticHandler(HttpStatusCode.OK, body))), Stopped());
+
+        var result = await provider.GetAsync(new SessionStartMemoryContextRequest("https://example", "/repo", false,
+            TimeSpan.FromSeconds(1), CancellationToken.None));
+
+        await Assert.That(result.Fragment).Contains("- inbox (3 open) [repo]: d");
+        await Assert.That(result.Fragment).Contains("- quiet (0 open): d");
+        await Assert.That(result.Fragment).Contains("- doc: d");
+    }
+
+    [Test]
     [Arguments("\"not-an-index\"")]
     [Arguments("{}")]
     [Arguments("{\"entries\":null,\"projects\":null}")]

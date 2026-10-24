@@ -66,6 +66,11 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-memory", "save_memory").Annotations.ReadOnlyHint).IsFalse();
         // Changing who may see a memory overwrites its access scope.
         await Assert.That(Tool("kcap-memory", "rescope_memory").Annotations.DestructiveHint).IsTrue();
+        await Assert.That(Tool("kcap-memory", "append_memory_entry").Annotations).IsEqualTo(McpToolAnnotations.Additive);
+        // Settling a settled entry, or reopening an open one, appends nothing.
+        await Assert.That(Tool("kcap-memory", "settle_memory_entry").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
+        await Assert.That(Tool("kcap-memory", "reopen_memory_entry").Annotations).IsEqualTo(McpToolAnnotations.Upsert);
+        await Assert.That(Tool("kcap-memory", "list_memory_entries").Annotations).IsEqualTo(McpToolAnnotations.Read);
         // The server keys a declaration on its normalized text, so re-declaring lands on the same end.
         await Assert.That(Tool("kcap-workitems", "declare_loose_end").Annotations.IdempotentHint).IsTrue();
         await Assert.That(Tool("kcap-workitems", "list_loose_ends").Annotations).IsEqualTo(McpToolAnnotations.Read);
