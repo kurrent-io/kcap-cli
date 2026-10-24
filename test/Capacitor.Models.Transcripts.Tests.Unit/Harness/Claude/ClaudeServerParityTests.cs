@@ -89,23 +89,19 @@ public class ClaudeServerParityTests {
         if (extra is not null) await Assert.That(usage.AdditionalCounts.Fields.ContainsKey(extra)).IsTrue();
     }
 
-    static string AssistantMessage(string uuid, string messageId, string usage) =>
-        $$$"""{"type":"assistant","uuid":"{{{uuid}}}","message":{"id":"{{{messageId}}}","model":"claude-x","content":[{"type":"text","text":"a"}],"usage":{{{usage}}}}}""";
-
-    /// <summary>Every block of one response carries its message id, so the id decides: the same id is the same response,
-    /// whatever its usage says, and a new id is a new response even when its usage is identical.</summary>
+    /// <summary>Older Claude Code builds write a growing <c>output_tokens</c> across the blocks of one response, so a block
+    /// of the same message id whose usage grew still carries it: keeping only the first snapshot would undercount.</summary>
     [Test]
-    [Arguments("msg_1", "msg_2", """{"input_tokens":10,"output_tokens":5}""", true)]
-    [Arguments("msg_1", "msg_1", """{"input_tokens":10,"output_tokens":7}""", false)]
-    public async Task The_message_id_tells_one_response_from_the_next(string firstId, string secondId, string secondUsage, bool secondCarriesUsage) {
+    public async Task A_grown_snapshot_of_the_same_response_still_carries_its_usage() {
+        static string Line(string uuid, int output) =>
+            $$"""{"type":"assistant","uuid":"{{uuid}}","message":{"id":"msg_1","model":"claude-x","content":[{"type":"text","text":"a"}],"usage":{"input_tokens":10,"output_tokens":""" + output + "}}}";
         var ctx = Ctx();
-        E(AssistantMessage(Uuid, firstId, """{"input_tokens":10,"output_tokens":5}"""), ctx);
+        E(Line(Uuid, 5), ctx);
 
-        await Assert.That(E(AssistantMessage(Uuid2, secondId, secondUsage), ctx)[0].Usage is not null).IsEqualTo(secondCarriesUsage);
+        await Assert.That(E(Line(Uuid2, 120), ctx)[0].Usage?.OutputTokens).IsEqualTo(120L);
     }
 
-    /// <summary>Without a message id, a record repeating the previous record's usage, in any key order, is the same
-    /// response and carries none;
+    /// <summary>A record repeating the previous record's usage, in any key order, is the same response and carries none;
     /// one whose usage differs in any field, including one with no canonical slot, carries its own.</summary>
     [Test]
     [Arguments("""{"input_tokens":10,"output_tokens":5,"service_tier":"standard"}""", """{"service_tier":"standard","output_tokens":5,"input_tokens":10}""", false)]

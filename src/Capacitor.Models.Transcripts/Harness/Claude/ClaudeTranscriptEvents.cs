@@ -12,9 +12,9 @@ public sealed class ClaudeTranscriptContext(string idScope) : TranscriptContext 
     /// hash it.
     public string IdScope { get; } = idScope;
 
-    /// The message id and whole usage object of the last assistant record that carried one: Claude Code writes each
-    /// block of one response as its own record with the response's usage repeated, and only the first counts.
-    internal (string? MessageId, JsonElement Usage)? PreviousUsage { get; set; }
+    /// The whole usage object of the last assistant record that carried one: Claude Code writes each block of
+    /// one response as its own record with the response's usage repeated, and only the first counts.
+    internal JsonElement? PreviousUsage { get; set; }
 }
 
 /// Claude Code's project transcript (`~/.claude/projects/&lt;slug&gt;/&lt;session&gt;.jsonl`): one JSON
@@ -342,14 +342,9 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         var cacheWrite = usage.Num("cache_creation_input_tokens");
         var reasoning  = usage.Num("reasoning_tokens");
         var total      = usage.Num("total_tokens");
-        // Every block of one response carries its message id, so the id decides when there is one. Without it, an equal
-        // usage object, compared whole so a field outside the canonical counts still tells two responses apart, is the
-        // next best sign.
-        var id         = message.Str("id");
-        var repeat     = ctx.PreviousUsage is { } previous && (id is not null
-            ? id == previous.MessageId
-            : previous.MessageId is null && JsonElement.DeepEquals(previous.Usage, usage));
-        ctx.PreviousUsage = (id, usage.Clone());
+        // The whole object, so a field outside the canonical counts still tells two responses apart.
+        var repeat     = ctx.PreviousUsage is { } previous && JsonElement.DeepEquals(previous, usage);
+        ctx.PreviousUsage = usage.Clone();
         var extras = StructOf(usage);
         foreach (var key in CanonicalUsageKeys) extras.Fields.Remove(key);
         var additive = input is not null || output is not null || cacheRead is not null || cacheWrite is not null;
