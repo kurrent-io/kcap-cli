@@ -108,7 +108,10 @@ public sealed record AgentStatusDto(
     TerminalDialogDto? TerminalDialog = null,
     // Why the daemon could not resume an agent a restart stopped, on a row whose Status is
     // "Interrupted". Such a row and a "Resuming" one have no process, only a resume ledger entry.
-    string? Interruption = null);
+    string? Interruption = null,
+    // UTC instant the daemon last saw the agent stop waiting, while Running and not waiting. Lets a
+    // freshly built view show the turn's real elapsed time. Null from an older daemon.
+    DateTime? WorkingSince = null);
 
 /// Wire tokens for <see cref="AgentStatusDto.WorkLocation"/>, compared literally by every
 /// client, so they never change.

@@ -75,6 +75,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     int _pollAfter = 30;
     string _section = "overview";
     string? _thread;
+    internal const string NoPullRequestsNote = "No pull requests yet.";
     string _notice = WorkContextViewModel.WaitingNote;
     PullRequestReaderNote? _readerNote;
 
@@ -103,7 +104,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
     public bool CanDisplay => _foreground && !_masked && (Remaining > 0
         || (_grace || RenewingSnapshot) && SnapshotDisplayRemaining > 0);
     public bool CanNavigate => CanDisplay && !_legacy;
-    bool CanDisplayReader => _readerVisible && CanDisplay && (CanReveal || _section == "overview" || _sections.ContainsKey(SectionKey));
+    bool CanDisplayReader => _readerVisible && CanDisplay && (CanReveal || !ReadsRows || _sections.ContainsKey(SectionKey));
     double Remaining => Math.Max(0, _accessSeconds - _time.GetElapsedTime(_accessStarted).TotalSeconds);
     bool RenewingSnapshot => _hasDisplayed && _accessSeconds > 0 && _overviewPending;
     // Both in-flight renewal and failed-renewal grace end at the same access-based deadline.
@@ -207,7 +208,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
             _hasListed = false;
             ApplyRequestedSubject();
             _lastRefresh = null;
-            SetNotice(snapshot is null ? "Loading pull requests…" : "");
+            SetNotice(snapshot is null && _selected is null ? NoPullRequestsNote : "");
             if (snapshot is not null) Seed(snapshot);
             RequestRefresh();
         }).DisposeWith(_subscriptions);
@@ -292,7 +293,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (_readerVisible == visible) return;
         _readerVisible = visible;
         Notify();
-        if (visible && CanReveal && _section != "overview") LoadOrRefreshSection();
+        if (visible && CanReveal && ReadsRows) LoadOrRefreshSection();
     }
     public void SelectSubject(PullRequestSubjectDto subject) {
         if (_disposed) return;
@@ -315,6 +316,7 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         if (!_hasListed) {
             // Pin the requested subject without cancelling the initial link discovery.
             _selected = choice;
+            if (_notice == NoPullRequestsNote) _notice = "";
             this.RaisePropertyChanged(nameof(Selected));
             Notify();
             return;
@@ -350,13 +352,13 @@ public sealed partial class PullRequestContextViewModel : ReactiveObject {
         RequestOverview();
     }
     void ShowSection(string section) {
-        if (!CanNavigate || section is not ("overview" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
+        if (!CanNavigate || section is not ("overview" or "conflicts" or "checks" or "reviewers" or "reviews" or "threads" or "thread_comments" or "conversation")) return;
         _section = section;
         ScrollOffset = 0;
         _openReader();
         _readerVisible = true;
         Notify();
-        if (section == "overview") return;
+        if (!ReadsRows) return;
         if (CanReveal) LoadOrRefreshSection();
         else if (CurrentSection is null && !(ReadRetryAt > _time.GetUtcNow().UtcDateTime)) { _lastOverview = null; RequestOverview(); }
     }

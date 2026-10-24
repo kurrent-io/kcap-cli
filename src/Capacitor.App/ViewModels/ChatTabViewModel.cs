@@ -333,7 +333,16 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     public ReactiveCommand<QueuedChatMessage, Unit> SendQueuedCommand { get; }
     public ReactiveCommand<Unit, Unit> InterruptCommand { get; }
     public ReactiveCommand<string, Unit> OpenLinkCommand { get; }
+    public ReactiveCommand<UserAttachment, Unit> OpenAttachmentCommand { get; }
     public ReactiveCommand<string, Unit> RunCodeCommand { get; }
+
+    // The opener launches whatever it is handed, so only a resolved image path reaches it: a
+    // transcript line naming an executable must not run it.
+    void OpenAttachment(UserAttachment attachment) {
+        if (attachment.PreviewPath is not { } path) return;
+        try { _opener.Open(path); }
+        catch (Exception ex) { Console.Error.WriteLine($"kcap: open attachment failed: {ex.Message}"); }
+    }
 
     readonly ObservableAsPropertyHelper<string> _composerHint;
     public string ComposerHint => _composerHint.Value;
@@ -450,6 +459,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     /// Small title on assistant prose: the harness name once the session has one, else a role.
     public string AssistantTitle => string.IsNullOrEmpty(_vendorLabel) ? "Assistant" : _vendorLabel;
 
+    bool _isOwnedByCurrentUser;
+    public string UserTitle => _origin == AgentOrigin.Local || _isOwnedByCurrentUser ? "You" : "User";
+
     string _modelLabel = "default";
     public string ModelLabel { get => _modelLabel; private set => this.RaiseAndSetIfChanged(ref _modelLabel, value); }
 
@@ -496,6 +508,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     int? _liveSubagents;
     long? _workingSince;
     TimeSpan _worked;
+    DateTime? _daemonWorkingSince;
+    bool _turnBaselined;
 
     void RefreshActivityNote() {
         var inTurn = SessionStatusDots.IsWorking(_status, _awaitingInput, _liveSubagents);
@@ -503,7 +517,15 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         if (!inTurn) {
             _workingSince = null;
             _worked = TimeSpan.Zero;
-        } else if (working) {
+            _turnBaselined = false;
+        } else if (!_turnBaselined) {
+            // A pane built mid-turn picks up the time the daemon has already seen pass, read when the
+            // turn is first seen so time spent behind a card afterwards stays excluded.
+            _turnBaselined = true;
+            if (_daemonWorkingSince is { } started && _time.GetUtcNow().UtcDateTime - started is { Ticks: > 0 } before)
+                _worked = before;
+        }
+        if (working) {
             _workingSince ??= _time.GetTimestamp();
         } else if (_workingSince is { } pausedAt) {
             _worked += _time.GetElapsedTime(pausedAt);
@@ -857,6 +879,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         OpenLinkCommand = ReactiveCommand.Create<string>(url => LinkPolicy.Open(_opener, url));
         _disposables.Add(OpenLinkCommand);
 
+        OpenAttachmentCommand = ReactiveCommand.Create<UserAttachment>(OpenAttachment);
+        _disposables.Add(OpenAttachmentCommand);
+
         // A code block's command goes out the composer's own path rather than straight to the
         // channel, so it is queued, recalled and cleared exactly as a typed prompt is. Whatever
         // draft is sitting there is replaced, which is what putting it in the composer means.
@@ -901,6 +926,10 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     }
 
     void OnSession(ChatSessionInfo info) {
+        if (_isOwnedByCurrentUser != info.IsOwnedByCurrentUser) {
+            _isOwnedByCurrentUser = info.IsOwnedByCurrentUser;
+            this.RaisePropertyChanged(nameof(UserTitle));
+        }
         ReadOnlyNotice = info.ReadOnlyNotice;
         IsReadOnlyParticipant = info.ReadOnlyNotice.Length > 0;
         TakesAttachments = info.TakesAttachments;
@@ -921,6 +950,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var queued in Tracked.Where(q => !q.IsForeign)) queued.MarkUnconfirmed();
         _awaitingInput = info.AwaitingInput;
         _liveSubagents = info.LiveSubagents;
+        _daemonWorkingSince = info.WorkingSince;
         if (!_feedReleased) _runs.SessionOver = info.Ended;
         if (_planActivity is not null) _planActivity.SessionOver = info.Ended;
         // A foreign row is the server's answer for one session. Moving to another — or to none,
@@ -1378,7 +1408,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                     case AcpEventKind.UserMessage:
                         cursor.OpenGroup = null;
                         cursor.OpenShell = null;
-                        cursor.Fresh.Add(new UserTurnItem(e.Text ?? ""));
+                        var (typed, files) = AttachmentTrailer.Split(e.Text ?? "");
+                        cursor.Fresh.Add(new UserTurnItem(typed, [.. files.Select(file => UserAttachment.From(file, _origin == AgentOrigin.Local ? _root : null))]));
                         break;
                     case AcpEventKind.AssistantText:
                         cursor.OpenGroup = null;

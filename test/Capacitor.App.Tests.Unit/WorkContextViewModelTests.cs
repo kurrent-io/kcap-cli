@@ -1057,10 +1057,10 @@ public class WorkContextViewModelTests {
     }
 
     /// The card lists the session's pull requests only: a PR linked to the work item alone is not
-    /// offered, and the pane's empty copy speaks instead.
+    /// offered, and the session card keeps its empty message instead.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task An_empty_session_list_shows_the_empty_note_whatever_the_work_item_links() {
+    public async Task An_empty_session_list_keeps_the_card_message_whatever_the_work_item_links() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var source = new FakePullRequestSource(h.Time) { Links = [] };
@@ -1075,10 +1075,10 @@ public class WorkContextViewModelTests {
                 await WaitUntilAsync(() => source.Lists == 1 && pullRequests.HasListed && !pullRequests.IsReading, what: "empty session PR list");
                 await Assert.That(pullRequests.HasPullRequest).IsFalse();
                 await Assert.That(pullRequests.HasChoice).IsFalse();
-                await Assert.That(pullRequests.Notice).IsEqualTo("");
+                await Assert.That(pullRequests.Notice).IsEqualTo("No pull requests yet.");
                 await Assert.That(h.Vm.Links).IsEmpty();
-                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
-                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
                 await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
             } finally {
                 await pullRequests.TeardownAsync();
@@ -1118,10 +1118,10 @@ public class WorkContextViewModelTests {
         });
     }
 
-    /// Empty copy waits until both the session list and the work-item read have settled.
+    /// The session card keeps its empty message while the work item loads and after it settles.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task Empty_pull_request_copy_waits_until_the_session_list_and_work_item_have_settled() {
+    public async Task The_empty_session_card_stays_visible_while_the_work_item_loads() {
         await RunOnUiAsync(async () => {
             var h = new Harness();
             var source = new FakePullRequestSource(h.Time) { Links = [] };
@@ -1134,15 +1134,15 @@ public class WorkContextViewModelTests {
                 await WaitUntilAsync(() => source.Lists == 1 && pullRequests.HasListed, what: "session PR list settled empty");
                 await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Loading);
                 await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
-                await Assert.That(h.Vm.ShowsPullRequestSection).IsFalse();
-                await Assert.That(pullRequests.Notice).IsEqualTo("");
+                await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
+                await Assert.That(pullRequests.Notice).IsEqualTo("No pull requests yet.");
 
                 gate.SetResult(ReadyWith(Row("w1", "t"), Item()));
                 await (h.Vm.PendingReadForTesting ?? Task.CompletedTask);
                 await Assert.That(h.Vm.Phase).IsEqualTo(WorkContextPhase.Ready);
-                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsTrue();
+                await Assert.That(h.Vm.ShowsPullRequestEmpty).IsFalse();
                 await Assert.That(h.Vm.ShowsPullRequestSection).IsTrue();
-                await Assert.That(h.Vm.ShowsPullRequestCard).IsFalse();
+                await Assert.That(h.Vm.ShowsPullRequestCard).IsTrue();
             } finally {
                 if (!gate.Task.IsCompleted) gate.TrySetCanceled();
                 await pullRequests.TeardownAsync();
@@ -1516,6 +1516,50 @@ public class WorkContextViewModelTests {
             await Assert.That(h.Vm.RequesterInitial).IsEqualTo("Y");
             await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
             await h.Vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    [Arguments("user_a", "https://example.test/a.png")]
+    [Arguments("github:5", "https://example.test/a.png")]
+    [Arguments(null, "https://example.test/a.png")]
+    [Arguments("user_b", null)]
+    public async Task The_requester_row_takes_the_viewers_own_avatar_when_the_requester_is_the_viewer(string? requester, string? expected) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with {
+                    Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png", Ids = ["user_a", "github:5"] },
+                });
+                await h.PushAsync(Dto() with { RequesterDisplay = "Ada", Requester = requester });
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.NoWorkItem, what: "the read applied");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsEqualTo(expected);
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_read_takes_the_viewers_avatar_off_the_requester_row() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with { Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png" } });
+                await h.PushAsync(Dto() with { Requester = "user_a" });
+                await WaitUntilAsync(() => h.Vm.RequesterAvatarUrl is not null, what: "the viewer's avatar");
+
+                h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+                h.SignIn.OnNext(ReactiveUnit.Default);
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.SignedOut, what: "the signed-out read");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
         });
     }
 

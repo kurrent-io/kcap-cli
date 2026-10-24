@@ -28,6 +28,23 @@ public class AppMenuBarTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task Launch_approvals_action_updates_existing_window_menus() => AvaloniaSession.RunOnUiAsync(async () => {
+        var opened = 0;
+        var bar = NewBar();
+        var window = new Window();
+        var menu = Submenu(bar.Build(window), "Window");
+        var item = Item(menu, "Launch approvals…");
+        await Assert.That(item.IsEnabled).IsFalse();
+        bar.SetLaunchApprovalsAction(() => opened++);
+        await Assert.That(item.IsEnabled).IsTrue();
+        Click(item);
+        await Assert.That(opened).IsEqualTo(1);
+        bar.SetLaunchApprovalsAction(null);
+        await Assert.That(item.IsEnabled).IsFalse();
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Build_puts_Window_before_Help() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(NewBar().Build(new Window())));
 
@@ -40,7 +57,7 @@ public class AppMenuBarTests {
         var layout = await AvaloniaSession.DispatchAsync(() =>
             Layout(Submenu(NewBar(showMainWindow: () => { }).Build(new Window()), "Window")));
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|kcap|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|kcap|Launch approvals…|-|Bring All to Front");
     }
 
     [Test]
@@ -48,7 +65,7 @@ public class AppMenuBarTests {
     public async Task Window_menu_leaves_out_the_main_window_before_one_exists() {
         var layout = await AvaloniaSession.DispatchAsync(() => Layout(Submenu(NewBar().Build(new Window()), "Window")));
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Launch approvals…|-|Bring All to Front");
     }
 
     [Test]
@@ -75,7 +92,7 @@ public class AppMenuBarTests {
             return (Layout(menu), refresh.Gesture, refresh.IsEnabled);
         });
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|kcap|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|Refresh|-|kcap|Launch approvals…|-|Bring All to Front");
         await Assert.That(gesture).IsEqualTo(RefreshShortcut.Primary);
         await Assert.That(enabled).IsFalse();
     }
@@ -86,7 +103,7 @@ public class AppMenuBarTests {
         var layout = await AvaloniaSession.DispatchAsync(() =>
             Layout(Submenu(NewBar().Build(new SettingsWindow()), "Window")));
 
-        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Bring All to Front");
+        await Assert.That(layout).IsEqualTo("Minimize|Zoom|Toggle Full Screen|-|Launch approvals…|-|Bring All to Front");
     }
 
     [Test]

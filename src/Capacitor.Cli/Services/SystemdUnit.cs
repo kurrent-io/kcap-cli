@@ -129,6 +129,37 @@ static class SystemdUnit {
         return BinaryFromUnit(rewritten) == binary ? rewritten : null;
     }
 
+    /// <summary>
+    /// The unit with its <c>Environment=</c> assignment of <paramref name="key"/> set to
+    /// <paramref name="value"/>, added ahead of <c>ExecStart=</c> when absent; null when it already is that
+    /// or the unit has no <c>ExecStart=</c>.
+    /// </summary>
+    public static string? WithEnvironmentValue(string unitText, string key, string value) {
+        var before = EnvFromUnit(unitText);
+        if (before.TryGetValue(key, out var current) && current == value) return null;
+
+        ServiceText.RequireValidEnvName(key);
+        ServiceText.RequireNoControlCharacters(key, value);
+        var assignment = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(value))}";
+
+        var lines = unitText.Split('\n').ToList();
+        if (current is not null) {
+            // Only the line Unit writes: a hand-written one may carry other assignments the rewrite would drop.
+            var ours  = $"Environment={EnvAssignment(key, ServiceText.SystemdValue(current))}";
+            var index = lines.FindIndex(l => l.Trim() == ours);
+            if (index < 0) return null;
+            lines[index] = assignment;
+        } else {
+            var exec = lines.FindIndex(l => l.StartsWith("ExecStart=", StringComparison.Ordinal));
+            if (exec < 0) return null;
+            lines.Insert(exec, assignment);
+        }
+
+        var rewritten = string.Join('\n', lines);
+
+        return EnvFromUnit(rewritten).TryGetValue(key, out var written) && written == value ? rewritten : null;
+    }
+
     static string UnescapeExpansions(string s) => s.Replace("%%", "%").Replace("$$", "$");
 
     /// <summary>The <c>Environment=</c> assignments of a rendered unit, reversing <see cref="EnvAssignment"/>.</summary>

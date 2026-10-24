@@ -23,6 +23,8 @@
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
     </Style>
     <Style Selector="TextBlock.onboardingLede">
+        <Setter Property="MaxWidth" Value="500" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="FontSize" Value="15" />
         <Setter Property="LineHeight" Value="25" />
         <Setter Property="TextWrapping" Value="Wrap" />
@@ -163,12 +165,13 @@
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentHoverBrush}" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
     </Style>
+    <!-- A faded accent fill blends its label into the canvas; a disabled primary reads as an outline instead. -->
     <Style Selector="Button.onboardingPrimary:disabled /template/ ContentPresenter#PART_ContentPresenter">
-        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
-        <Setter Property="Foreground" Value="{StaticResource OnboardingAccentOnBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingSurfaceBorderBrush}" />
+        <Setter Property="Foreground" Value="{StaticResource OnboardingDimBrush}" />
     </Style>
-    <Style Selector="Button.onboardingPrimary:disabled, Button.onboardingSecondary:disabled, Button.onboardingQuiet:disabled, Button.onboardingLink:disabled">
+    <Style Selector="Button.onboardingSecondary:disabled, Button.onboardingQuiet:disabled, Button.onboardingLink:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
     <Style Selector="Button.onboardingSecondary">
@@ -248,6 +251,14 @@
         <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <!-- An edition this machine cannot take: the head fades, the footer saying why stays legible. -->
+    <Style Selector="Button.onboardingEditionCard:disabled Grid.onboardingEditionHead">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="StackPanel.onboardingEditionFooter">
+        <Setter Property="Spacing" Value="14" />
+        <Setter Property="Margin" Value="0,16,0,0" />
     </Style>
     <Style Selector="Button.onboardingCompact">
         <Setter Property="Padding" Value="14,9" />
@@ -348,7 +359,7 @@
                         BorderThickness="{TemplateBinding BorderThickness}"
                         CornerRadius="{TemplateBinding CornerRadius}" Padding="{TemplateBinding Padding}">
                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="9">
-                        <Panel Width="15" Height="15" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <Panel Width="15" Height="15" VerticalAlignment="Top" Margin="0,1,0,0">
                             <Ellipse Name="Ring" Width="15" Height="15" StrokeThickness="1"
                                      Stroke="{StaticResource OnboardingDimBrush}" Fill="Transparent" />
                             <Ellipse Name="Dot" Width="7" Height="7" Fill="{StaticResource OnboardingAccentBrush}" IsVisible="False" />
@@ -360,9 +371,9 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- The wash and the filled ring mark the choice; an outline on top of both is one signal too many. -->
     <Style Selector="RadioButton.onboardingOption:checked">
         <Setter Property="Background" Value="{StaticResource OnboardingAccentWashBrush}" />
-        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
     </Style>
     <Style Selector="RadioButton.onboardingOption:checked /template/ Ellipse#Ring">
         <Setter Property="Stroke" Value="{StaticResource OnboardingAccentBrush}" />

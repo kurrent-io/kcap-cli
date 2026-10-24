@@ -202,16 +202,41 @@ public class OnboardingViewModelTests {
     public async Task Finish_later_follows_its_gate() {
         var (open, closed) = await AvaloniaSession.DispatchAsync(async () => {
             var gate = new System.Reactive.Subjects.BehaviorSubject<bool>(true);
-            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Done)], canFinishLater: gate);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition)], canFinishLater: gate);
             await vm.PendingEnterForTesting;
 
-            var open = CanExecute(vm.FinishLaterCommand);
+            var open = (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible);
             gate.OnNext(false);
-            return (open, CanExecute(vm.FinishLaterCommand));
+            return (open, (CanExecute(vm.FinishLaterCommand), vm.FinishLaterVisible));
         });
 
-        await Assert.That(open).IsTrue();
-        await Assert.That(closed).IsFalse();
+        await Assert.That(open).IsEqualTo((true, true));
+        await Assert.That(closed).IsEqualTo((false, false));
+    }
+
+    /// Done's own primary closes setup, so Finish later shows there only while the service is not running,
+    /// and follows it as it changes.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Finish_later_shows_on_the_done_page_only_while_the_service_is_not_running() {
+        var (onEdition, failed, running) = await AvaloniaSession.DispatchAsync(async () => {
+            var facts = DoneFacts.Empty with { DaemonProblem = "The daemon install failed (verify_viability)." };
+            var changed = new System.Reactive.Subjects.Subject<System.Reactive.Unit>();
+            var done = new DoneStepViewModel(() => facts, restate: changed);
+            var vm = new OnboardingViewModel([new FakeWizardStep(WizardStepId.Edition), done]);
+            await vm.PendingEnterForTesting;
+
+            var onEdition = vm.FinishLaterVisible;
+            await vm.NextCommand.Execute().ToTask();
+            var failed = vm.FinishLaterVisible;
+            facts = facts with { DaemonRunning = true, DaemonProblem = null };
+            changed.OnNext(System.Reactive.Unit.Default);
+            return (onEdition, failed, vm.FinishLaterVisible);
+        });
+
+        await Assert.That(onEdition).IsTrue();
+        await Assert.That(failed).IsTrue();
+        await Assert.That(running).IsFalse();
     }
 
     [Test]

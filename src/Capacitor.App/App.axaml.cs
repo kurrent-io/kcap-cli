@@ -190,6 +190,8 @@ public partial class App : Application {
     // frame: the prompt window factory and BuildAndShowMainWindow both close over the SAME
     // instance.
     ActivityViewModel? _activity;
+    LaunchApprovalsCoordinator? _launchApprovals;
+    WebWorkspaceViewModel? _webWorkspace;
     // Both constructed INSIDE BuildAndShowMainWindow, over the same `service` instance, and read
     // back off the built window's DataContext so they can be disposed.
     HomeViewModel? _home;
@@ -356,29 +358,24 @@ public partial class App : Application {
             _wizardWindow = null;
             _wizardAuth = null;
         } catch (Exception ex) {
-            // BEFORE any await: a shutdown request can arrive while cleanup below is still
-            // awaiting (or if the helper itself throws), and the deferred path reads this.
+            // A quit during cleanup must retain the startup failure's exit code.
             _exitCode = 1;
-            // Also before any await, and for the same reason: if the main window was already up
-            // when the failure hit, no tray will ever exist to bring it back, so hide-on-close
-            // must not intercept anything from here on — every close on this path is a real one.
+            _shutdown.Cancel();
+            // Block window recreation and hide-on-close before cleanup can yield.
             if (_coordinator is not null) _coordinator.QuitInProgress = true;
-            // Also before any await, and the same reasoning as the shutdown path's: a workspace the
-            // user opened before the failure landed must release its attach here, not survive into
-            // the error window.
             LatchNavigation();
-            // No orphan wizard beside the error window: it is a dead shell once startup has failed,
-            // and its own close path (the handoff) is exactly what did not run.
             if (_wizardWindow is { IsVisible: true } wizard) wizard.Close();
             if (TakeAdoptableWindow() is { } adoptable) adoptable.Window.Close();
             Console.Error.WriteLine($"kcap app failed to start: {ex}");
+            await QuiesceAppAsync(_wizardAuth, _historyImport, _localInstall,
+                lifecycle: null, lane: null, QuiesceShutdownCap, _time);
             await _workspaceTeardown.DrainAsync();
             await HandleStartupFailureAsync(
                 desktop, ex, _service, _shutdown,
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
-                _lifecycle, _lane, _localUpgrade, _localSearch);
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
+                _lifecycle, _lane, _localUpgrade, _localSearch, _menuBar, _coordinator);
             await DisposeServerClientsAsync(); // after _home above
             // all already disposed above — never let a later OnShutdownRequested (e.g. Cmd+Q
             // while the error window is up) dispose any of them a second time
@@ -405,13 +402,13 @@ public partial class App : Application {
             _pullRequestTones = null;
             _pause = null;
             _activity = null;
+            _launchApprovals = null;
+            _webWorkspace = null;
             _home = null;
             _localServer = null;
             _rail = null;
-            _wizardAuth = null; // its attempt, if any, already settled through the wizard's own close path
-            if (_historyImport is { } history) await history.CancelActiveRunAsync();
+            _wizardAuth = null;
             _historyImport = null;
-            if (_localInstall is { } install) await install.SettleAsync();
             _localInstall = null;
             _wizardWindow = null;
         }
@@ -494,7 +491,9 @@ public partial class App : Application {
                 }
                 return outcome;
             },
-            quit: Quit, plan: plan, destinations: directories.Count > 1 ? directories : null,
+            quit: Quit, plan: plan,
+            destinations: directories.Count > 1 ? directories : null,
+            userApplicationsDirectory: userApps,
             selectDestination: directory => {
                 mover = Mover(directory);
                 plan = mover.Inspect(root!);
@@ -517,7 +516,8 @@ public partial class App : Application {
 
     internal static Window BuildInstallLocationWindow(InstallLocationKind kind, Func<Task<MoveOutcome>> move, Action quit,
             ApplicationsInstallPlan? plan = null, IReadOnlyList<string>? destinations = null,
-            Func<string, ApplicationsInstallPlan>? selectDestination = null) {
+            Func<string, ApplicationsInstallPlan>? selectDestination = null,
+            string? userApplicationsDirectory = null) {
         var where = kind switch {
             InstallLocationKind.DmgVolume   => "kcap is running from the disk image.",
             InstallLocationKind.Translocated => "kcap is running from a temporary location.",
@@ -525,7 +525,8 @@ public partial class App : Application {
                 $"An existing kcap installation was found at {plan?.ExistingPath ?? plan?.Target}.",
             _                                => "kcap is not in your Applications folder.",
         };
-        return new InstallLocationWindow(where, move, quit, plan, destinations, selectDestination);
+        return new InstallLocationWindow(where, move, quit, plan, destinations, selectDestination,
+            userApplicationsDirectory);
     }
 
     // The ONE resolve+evaluate composition (OnboardingGate.EvaluateAsync), wrapped in the
@@ -655,6 +656,9 @@ public partial class App : Application {
             () => ConsentDecisionLogReader.ReadTail(_daemonStore, service.DaemonName, 200),
             () => ActivityStatKey(_daemonStore, service.DaemonName), ticker);
         _activity = activity;
+        var launchApprovals = new LaunchApprovalsCoordinator(activity);
+        _launchApprovals = launchApprovals;
+        _menuBar?.SetLaunchApprovalsAction(launchApprovals.Show);
 
         // The prompt window is built per raise, never here: the coordinator owns its lifetime
         // and each window gets its own ViewModel over the one shared service.
@@ -705,8 +709,7 @@ public partial class App : Application {
         _modelCatalog = modelCatalog;
         _ = modelCatalog.LoadAsync(_shutdown.Token);
 
-        var reportCliSetup = ServerCliSetupReport.Sender(
-            sessionHttp, profiles, typeof(CapacitorVersion).Assembly.GetName().Version?.ToString());
+        var reportCliSetup = ServerCliSetupReport.Sender(sessionHttp, profiles, ReportedCliVersion);
         _ = reportCliSetup(_shutdown.Token);
 
         // After the directory, which feeds it the session→agent map: a server-lane item names a
@@ -803,6 +806,9 @@ public partial class App : Application {
             serverLane.Status, isLocalServer, lifecycleCli.LocalStartAsync, () => serverLane.RestartAsync(), _shutdown.Token,
             busy: stackOwnsStart);
         _localServer = localServer;
+        var webWorkspace = new WebWorkspaceViewModel(profiles?.Resolution.ServerUrl, opener, notifier.Notify,
+            _shutdown.Token, localServer);
+        _webWorkspace = webWorkspace;
 
         var feedbackTrailer = FeedbackTrailerFeed(service, CapacitorVersion.CurrentDisplay(), () => lifecycle.CliVersion);
         // A resolved server and nothing more — deliberately wider than Settings, which also needs a
@@ -883,7 +889,8 @@ public partial class App : Application {
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
                 isReloading: lifecycle.IsReloading, reloadDaemon: lifecycle.ReloadServiceAsync,
-                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice)),
+                localServer: localServer, localStack: localStack, uiScale: _uiScale, usageNotice: _usageNotice,
+                web: webWorkspace, openLaunchApprovals: launchApprovals.Show)),
             // Both close paths release the workspace: hide-to-tray keeps the window (and its
             // attach) alive, a real close discards the window the next Show() would rebuild.
             releaseWorkspace: window => (window.DataContext as MainWindowViewModel)?.CloseWorkspace());
@@ -948,7 +955,7 @@ public partial class App : Application {
             installShim: shimOffer.RunManualInstallAsync, permissions: permissions,
             remote: TrayViewModel.SummaryFrom(directory, attention.SessionsWithAttention),
             updateMenu: _updates.MenuItem, updateAction: _updates.RunMenuActionAsync,
-            restartPending: restartPending.Pending, openSettings: openSettings);
+            restartPending: restartPending.Pending, openSettings: openSettings, openLaunchApprovals: launchApprovals.Show);
         _tray = new TrayIconManager(this, _trayVm);
     }
 
@@ -1246,7 +1253,9 @@ public partial class App : Application {
             ConfiguredDaemonName: () => ResolveConfiguredDaemonName(_config, _serverEnv, _localRoot),
             HeldDaemonNames: HeldDaemonNamesAsync,
             ProfileOverride: _serverEnv.Profile,
-            UsageNotice: _usageNotice);
+            UsageNotice: _usageNotice,
+            ReportCliSetup: ReportWizardCliSetupAsync,
+            ResumeWebSignUp: WizardComposition.ResumesWebSignUp(await _appState.LoadAsync(), _time.GetUtcNow()));
         _localInstall ??= WizardComposition.NewInstallController(options);
         var graph = WizardComposition.BuildGraph(options with { Install = _localInstall });
 
@@ -1340,7 +1349,9 @@ public partial class App : Application {
         // Detached once the flow has closed, so the main surface's own hide-on-close is the window's
         // only close behaviour after handover.
         void OnClosing(object? sender, WindowClosingEventArgs e) {
-            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false } && shuttingDown?.Invoke() != true;
+            // Teardown settles setup itself; requesting handover here would race that cleanup.
+            if (shuttingDown?.Invoke() == true) return;
+            var userClose = e is { CloseReason: WindowCloseReason.WindowClosing, IsProgrammatic: false };
             if (WizardWindowClosing(wizard, install, userClose)) e.Cancel = true;
         }
         window.Closing += OnClosing;
@@ -1419,19 +1430,19 @@ public partial class App : Application {
         return result;
     }
 
-    // Split out of the catch so a test can drive "dispose-then-show-error" against a real
-    // DaemonClientService (constructed with fakes, disposal observable) and the same fake
-    // IClassicDesktopStyleApplicationLifetime AppStartupTests already uses for ShowStartupError.
-    // Ordering matters: dispose WHILE WE STILL CAN. `service` may already be live (Start()
-    // called, socket/IPC pump running) if the failure happened later in StartAsync (e.g.
-    // BuildAndShowMainWindow throwing) — and the error window's own close handler force-shuts-
-    // down via desktop.Shutdown(1), which bypasses OnShutdownRequested/DisposeAndShutdownAsync
-    // entirely, so nothing else would ever run this cleanup.
+    // The error window shuts down directly, bypassing normal teardown, so all live services
+    // and windows must be released before showing it.
     internal static async Task HandleStartupFailureAsync(
             IClassicDesktopStyleApplicationLifetime desktop, Exception ex, DaemonClientService? service,
             CancellationTokenSource shutdown, IReadOnlyList<IDisposable?> uiDisposables,
             DaemonLifecycleController? lifecycle = null, DaemonMutationLane? lane = null, LocalUpgradeController? upgrade = null,
-            LocalSearchController? search = null) {
+            LocalSearchController? search = null, AppMenuBar? menuBar = null, MainWindowCoordinator? coordinator = null) {
+        menuBar?.SetLaunchApprovalsAction(null);
+        if (coordinator is not null) coordinator.QuitInProgress = true;
+        shutdown.Cancel();
+        desktop.MainWindow?.Close();
+        desktop.MainWindow = null;
+
         // The dependent goes first (it subscribes to service's streams) — same ordering rule as
         // the normal shutdown path below. Its own DisposeAsync cancels its independent lifetime
         // token and waits out any mutation it started; that wait is unbounded here on purpose — a
@@ -1444,7 +1455,6 @@ public partial class App : Application {
             }
         }
         if (service is not null) {
-            shutdown.Cancel();
             try {
                 await service.DisposeAsync();
             } catch (Exception disposeEx) {
@@ -1566,6 +1576,7 @@ public partial class App : Application {
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
             LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
             UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
+            WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
             RailPreferencesStore? railPreferences = null, string? profileName = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
@@ -1593,7 +1604,7 @@ public partial class App : Application {
             service, appState,
             launch, new RepoPathStore(config, time).GetSortedPathsAsync, time, shutdownToken,
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
-            openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),
+            openSessionIfCurrent: (agentId, origin, generation) => vm?.OpenSessionIfCurrent(agentId, origin, generation),
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,
@@ -1636,8 +1647,9 @@ public partial class App : Application {
             serverWorkspaceFactory: serverWorkspaceFactory,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
-            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon) {
+            backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
             LocalStack = localStack,
+            Web = web,
         };
         var window = adopt?.Window ?? new MainWindow();
         window.DataContext = vm;
@@ -1765,31 +1777,60 @@ public partial class App : Application {
     }
 
     // A throwaway lane over a fresh resolution: the cached ServerLane is bound to the first profile it
-    // saw, and the wizard has only just signed in.
+    // saw, and the wizard has only just signed in. Null when the profile names no server.
+    async Task<(ServiceProvider Lane, ProfileContext Profiles)?> FreshServerLaneAsync(CancellationToken ct) {
+        var (_, profiles) = await ResolveAndEvaluateGateAsync(
+            _config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, ct).ConfigureAwait(false);
+        if (profiles?.Resolution.ServerUrl is not { Length: > 0 } url) return null;
+
+        var lane = new ServiceCollection()
+            .AddSingleton(_config)
+            .AddSingleton(profiles)
+            .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
+            .AddCapacitorHttp(_serverEnv, _machineEnv)
+            .BuildValidated();
+
+        return (lane, profiles);
+    }
+
     async Task<IReadOnlyDictionary<string, DaemonNameHolding>> HeldDaemonNamesAsync(CancellationToken ct) {
         try {
-            var (_, profiles) = await ResolveAndEvaluateGateAsync(
-                _config, _foreignHttp.GetRequiredService<TokenStore>(), _serverEnv, _localRoot, _time, ct).ConfigureAwait(false);
-            if (profiles?.Resolution.ServerUrl is not { Length: > 0 } url) return FrozenDictionary<string, DaemonNameHolding>.Empty;
-
-            await using var lane = new ServiceCollection()
-                .AddSingleton(_config)
-                .AddSingleton(profiles)
-                .AddSingleton(new CapacitorServer(url, _config, profiles, _localRoot))
-                .AddCapacitorHttp(_serverEnv, _machineEnv)
-                .BuildValidated();
+            if (await FreshServerLaneAsync(ct).ConfigureAwait(false) is not ({ } lane, { } profiles))
+                return FrozenDictionary<string, DaemonNameHolding>.Empty;
+            await using var _ = lane;
 
             var (client, status, _, _) = await lane.GetRequiredService<ICapacitorHttpClient>().ForWaitAsync(ct).ConfigureAwait(false);
             using (client) {
                 if (status is not (AuthStatus.Ok or AuthStatus.NoAuthRequired)) return FrozenDictionary<string, DaemonNameHolding>.Empty;
 
-                return await DaemonNameHolder.HeldElsewhereAsync(client, url, _config, ct).ConfigureAwait(false);
+                return await DaemonNameHolder.HeldElsewhereAsync(client, profiles.Resolution.ServerUrl!, _config, ct).ConfigureAwait(false);
             }
         } catch (Exception ex) when (!ct.IsCancellationRequested) {
             Console.Error.WriteLine($"kcap: daemon name lookup failed — offering the configured name: {ex.Message}");
             return FrozenDictionary<string, DaemonNameHolding>.Empty;
         }
     }
+
+    // Sent from the wizard so the dashboard it opens already knows this install. Bounded, so a
+    // server that never answers leaves the Done page on a retry rather than a spinner.
+    async Task<bool> ReportWizardCliSetupAsync(CancellationToken ct) {
+        using var timeout = new CancellationTokenSource(WizardCliSetupReportTimeout, _time);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(ct, timeout.Token);
+        try {
+            if (await FreshServerLaneAsync(bounded.Token).ConfigureAwait(false) is not ({ } lane, { } profiles)) return false;
+            await using var _ = lane;
+
+            return await ServerCliSetupReport.Sender(lane.GetRequiredService<ICapacitorHttpClient>(), profiles, ReportedCliVersion)(bounded.Token)
+                .ConfigureAwait(false);
+        } catch (Exception ex) when (!ct.IsCancellationRequested) {
+            Console.Error.WriteLine($"kcap: cli-setup report from setup failed: {ex.Message}");
+            return false;
+        }
+    }
+
+    static readonly TimeSpan WizardCliSetupReportTimeout = TimeSpan.FromSeconds(30);
+
+    static string? ReportedCliVersion => typeof(CapacitorVersion).Assembly.GetName().Version?.ToString();
 
     // Delegates to the ONE shared validator: must agree with OnboardingGate on what counts as a
     // valid server_url (e.g. both reject file://), or a gate-incomplete machine could still pass
@@ -2240,6 +2281,8 @@ public partial class App : Application {
         // _reauthSettle synchronously, so reading it after Close observes this close's task.
         if (_signInWindow is { } reauthDialog) reauthDialog.Close();
         if (_settingsWindow is { } settingsDialog) settingsDialog.Close();
+        _launchApprovals?.Dispose();
+        _menuBar?.SetLaunchApprovalsAction(null);
         if (_feedbackWindow is { } feedbackDialog) feedbackDialog.Close();
         if (_reauthSettle is { } reauthSettle) await reauthSettle.ConfigureAwait(false);
 
@@ -2259,7 +2302,7 @@ public partial class App : Application {
             await DisposeUiThenConfirmShutdownAsync(
                 [_tray, _trayVm, _promptCoordinator, _consent, _desktopNotifications, _notificationSink,
                     _notificationSessions, _notificationSettings, _permissionFeed, _attention, _commands, _permissions, _sessionAccess,
-                    _pullRequestTones, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
+                    _pullRequestTones, _launchApprovals, _webWorkspace, _activity, _home, _localServer, _localStack, _rail, _pause, _restartPending],
                 DisposeLifecycleAndServiceAsync, () => _shutdownConfirmed = true, desktop, _exitCode,
                 applyOnExit: () => { if (!_setupRestarting && !_uninstallRelaunching) _updates?.ApplyPendingOnExit(); });
         } else {

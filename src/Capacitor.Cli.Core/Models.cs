@@ -1082,6 +1082,7 @@ public sealed record CurationApplyResponse {
 [JsonSerializable(typeof(WorkItems.WorkItemTopologyDto))]
 [JsonSerializable(typeof(WorkItems.WorkItemDto))]
 [JsonSerializable(typeof(WorkItems.SessionSummaryDto))]
+[JsonSerializable(typeof(WorkItems.ViewerIdentityDto))]
 [JsonSerializable(typeof(WorkItems.WorkItemErrorDto))]
 [JsonSerializable(typeof(RepositoryPayload))]
 [JsonSerializable(typeof(GitCacheEntry))]
@@ -1897,6 +1898,8 @@ public readonly record struct DaemonStatusReport(
         // every unsolicited report. The server's idle-marker coordinator confirms a claim only
         // against the report carrying ITS nonce — an unechoed report can never confirm one.
         string?                       EchoNonce                     = null,
+        // Advances with every change that can move ActiveCount; the server keeps the highest-versioned reading.
+        long?                         ActiveCountVersion            = null,
         ResumingAgentClaim[]?         ResumingAgents                = null
     );
 
@@ -2242,6 +2245,9 @@ public readonly record struct DaemonConnect(
         // cannot see a branch that exists only here.
         bool                                        SupportsBranchBaseRef = false,
         ResumingAgentClaim[]?                       ResumingAgents = null,
+        // The daemon's ActiveCount and its version, read together, as on a status report.
+        int?                                        ActiveCount = null,
+        long?                                       ActiveCountVersion = null,
         // The permission-preset tokens this daemon enforces, for every vendor in AcpPresetVendors.
         // Null from a daemon predating the field, which the server reads as explore and edit only.
         string[]?                                   AcpPresets = null
@@ -2297,10 +2303,16 @@ public readonly record struct AgentRegistered(
         // The session's start title, with the same meaning as on LaunchAgentCommand.
         string? Title        = null,
         bool    TitleDerived = false,
+        // The daemon's ActiveCount and its version, read together after the agent was published.
+        int?    ActiveCount        = null,
+        long?   ActiveCountVersion = null,
         // The agent's vendor. A re-registration after a reconnect has no launch on the server to
         // read it from. Trailing name-bound field — an older server ignores it, an older daemon
         // never sets it.
-        string? Vendor = null
+        string? Vendor = null,
+        // The agent this one continues after a daemon restart could not resume it, from the resume ledger; the server
+        // checks the claim where it uses it. Trailing name-bound field — an older server ignores it.
+        [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? ContinuesAgentId = null
     );
 
 public readonly record struct AgentStatusChanged(
@@ -2325,7 +2337,13 @@ public readonly record struct ReportAgentCommandsArgs(
 
 /// <param name="StopReason">The code of the daemon's own termination verdict, when it ended the agent.
 /// A server that predates it ignores the field.</param>
-public readonly record struct AgentUnregistered(string AgentId, string? StopReason = null);
+/// <param name="ActiveCount">The daemon's ActiveCount, read with <paramref name="ActiveCountVersion"/>.</param>
+public readonly record struct AgentUnregistered(
+        string  AgentId,
+        int?    ActiveCount        = null,
+        long?   ActiveCountVersion = null,
+        string? StopReason         = null
+    );
 
 public readonly record struct LaunchFailed(
         string AgentId,

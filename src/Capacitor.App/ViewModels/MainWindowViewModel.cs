@@ -153,6 +153,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Constructed once at the composition root; the prompt window's onConcluded callback nudges
     /// the same instance.
     public ActivityViewModel Activity { get; }
+    public WebWorkspaceViewModel? Web { get; init; }
+    public ReactiveCommand<Unit, Unit> OpenLaunchApprovalsCommand { get; }
 
     /// The launcher pane's view model, built at the composition root over the SAME
     /// IDaemonClientService instance this window uses, never a second daemon connection. Null
@@ -234,11 +236,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public bool CanOpenSetup { get; }
     public HistoryImportRun? HistoryImport { get; }
     public bool HistoryImportVisible => HistoryImport is not null;
+    public bool HistoryImportRunning => HistoryImport is { Running: true };
+    /// Counts against the same total setup showed, so the figure reads as one run across both windows.
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
-        : run.Running ? $"Importing history · {run.Imported:N0} sessions uploaded"
+        : run.Running ? $"Importing history · {run.ProcessedOfExpected} sessions processed"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
-            ? $"History import didn't finish · {run.Imported:N0} sessions uploaded. Reopen setup to retry."
-        : $"History imported · {run.Imported:N0} sessions uploaded";
+            ? $"History import didn't finish · {run.ProcessedOfExpected} sessions processed. Reopen setup to retry"
+        : $"History imported · {run.Processed:N0} sessions processed";
+    public double HistoryImportProgress => HistoryImport?.Progress ?? 0;
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -339,12 +344,14 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
-            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
+            IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
             Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null) {
         _service = service;
         _serverFactory = serverWorkspaceFactory;
         Time = time;
         Activity = activity;
+        OpenLaunchApprovalsCommand = ReactiveCommand.Create(openLaunchApprovals ?? (() => { }),
+            Observable.Return(openLaunchApprovals is not null));
         Home = home;
         _navigation = navigation ?? new NavigationGate();
         _trackTeardown = trackWorkspaceTeardown ?? RunUntracked;
@@ -419,9 +426,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
         this.WhenActivated(disposables => {
             if (historyImport is not null)
-                historyImport.WhenAnyValue(x => x.State, x => x.Imported, (state, imported) => (state, imported))
+                historyImport.WhenAnyValue(x => x.State, x => x.Processed, x => x.PassesDone, (state, processed, passes) => (state, processed, passes))
                     .ObserveOn(RxSchedulers.MainThreadScheduler)
-                    .Subscribe(_ => this.RaisePropertyChanged(nameof(HistoryImportStatus)))
+                    .Subscribe(_ => {
+                        this.RaisePropertyChanged(nameof(HistoryImportStatus));
+                        this.RaisePropertyChanged(nameof(HistoryImportRunning));
+                        this.RaisePropertyChanged(nameof(HistoryImportProgress));
+                    })
                     .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);
             var snapshots = service.Snapshots.ObserveOn(RxSchedulers.MainThreadScheduler);
@@ -670,9 +681,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// arriving after any navigation (closing the workspace, another session, close-to-hide, the
     /// shutdown latch) opens nothing, rather than attaching an invisible terminal or replacing what
     /// the user opened while the launch was in flight.
-    public void OpenSessionIfCurrent(string agentId, int generation) {
+    public void OpenSessionIfCurrent(string agentId, AgentOrigin origin, int generation) {
         if (generation != _navigation.Generation) return;
-        OpenSession(agentId);
+        OpenSession(agentId, origin);
     }
 
     /// The launcher words a launch failure, and an open workspace covers the launcher. Only a

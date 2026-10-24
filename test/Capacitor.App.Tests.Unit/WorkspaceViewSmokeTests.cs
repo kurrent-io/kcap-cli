@@ -68,6 +68,45 @@ public class WorkspaceViewSmokeTests {
         return (window, vm, daemon, attach);
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_idle_chat_resized_before_opening_terminal_uses_the_measured_terminal_size() {
+        await RunOnUiAsync(async () => {
+            var surface = new XtermTerminalSurface(80, 24);
+            var (view, vm, daemon, attach) = Build(surface: () => surface);
+            var window = new Window { Content = view, Width = 900, Height = 600 };
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+            daemon.Agents.AddOrUpdate(Agent(AgentId, hasTerminal: true) with { AwaitingInput = true });
+            await (vm.Terminal.PendingResolveWorkForTesting ?? Task.CompletedTask);
+            var client = attach.Created.Single();
+            await client.TriggerAttached("ready"u8.ToArray());
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            var initialSize = surface.CurrentSize;
+
+            window.Width = 1200;
+            window.Height = 760;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(surface.CurrentSize).IsNotEqualTo(initialSize);
+            await Assert.That(client.Resizes).IsEmpty();
+
+            await vm.ShowTerminalCommand.Execute();
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            await Assert.That(client.Resizes.Last()).IsEqualTo(surface.CurrentSize);
+            await Assert.That(surface.Model.Terminal.Engine.GetLine(0)).IsEqualTo("ready");
+
+            window.Width = 1000;
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+            await Assert.That(client.Resizes.Last()).IsEqualTo(surface.CurrentSize);
+            await vm.TeardownAsync();
+            window.Close();
+        });
+    }
+
     /// Effectively visible under this window. A name that never gets realized into the visual
     /// tree — a collapsed surface's own controls — reads as not visible rather than throwing.
     static bool Visible(Window window, string name) => Find<Control>(window, name) is { IsEffectivelyVisible: true };

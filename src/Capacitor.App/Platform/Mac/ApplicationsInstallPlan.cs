@@ -24,6 +24,6 @@ public sealed record ApplicationsInstallPlan(
             + "The app will quit and its daemon will restart. This interrupts active turns; resumable agents restart unless auto-resume is off.",
         ApplicationsInstallAction.OpenInstalled => "The installed copy of kcap will open. Your settings and sign-in will stay intact.",
         ApplicationsInstallAction.Blocked => Error ?? "The existing copy cannot be safely replaced.",
-        _ => "kcap will be installed in Applications and open automatically. Your settings and sign-in will stay intact.",
+        _ => $"kcap will be installed at {Target} and open automatically. Your settings and sign-in will stay intact.",
     };
 }

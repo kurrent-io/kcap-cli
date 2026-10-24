@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
@@ -75,6 +76,7 @@ public class HistoryStepViewModelTests {
         await h.Vm.Run!.Completion;
 
         await Assert.That(h.Vm.LocalLevels).IsTrue();
+        await Assert.That(h.Vm.SharingLine).IsNull();
         await Assert.That(h.Vm.Groups.SelectMany(g => g.Repos).All(r => r is { Level: ImportLevel.OnlyMe, LastStop: 1 })).IsTrue();
         await Assert.That(h.Cli.ImportRequests.Single().Private).IsTrue();
         await Assert.That(h.Cli.ImportRequests.Single().Repos!).IsEquivalentTo(["acme/web", "acme/api", "solo/notes"], CollectionOrdering.Matching);
@@ -92,6 +94,31 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.NextLabel).IsEqualTo("Import 2 repositories");
     }
 
+    /// The page says what it found and what Next will import, and the second line follows the choices under Customize.
+    [Test]
+    public async Task The_summary_follows_the_repositories_and_window_chosen() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+        var found = h.Vm.FoundLine;
+        var byDefault = h.Vm.ImportLine;
+
+        h.Repo("acme/web").Level = ImportLevel.Skip;
+        foreach (var w in h.Vm.Windows) w.IsSelected = w.Since is null; // the pane's radio group does this
+        var narrowed = h.Vm.ImportLine;
+
+        var sharedNoted = h.Vm.SharingLine;
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.OnlyMe;
+        var privateNoted = h.Vm.SharingLine;
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.Skip;
+
+        await Assert.That(sharedNoted).IsNotNull();
+        await Assert.That(privateNoted).IsNull();
+        await Assert.That(found).IsEqualTo("Found 53 sessions in 3 repositories on test-mac");
+        await Assert.That(byDefault).IsEqualTo("kcap imports 27 sessions from all 3 repositories, covering the last 90 days");
+        await Assert.That(narrowed).IsEqualTo("kcap imports 13 sessions from 2 of 3 repositories, covering your whole history");
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("Nothing is selected to import");
+    }
+
     [Test]
     public async Task A_window_a_repository_did_not_report_shows_no_count_rather_than_zero() {
         var report = new ImportDiscoveryReport(
@@ -100,6 +127,7 @@ public class HistoryStepViewModelTests {
         await h.EnterAsync();
 
         await Assert.That(h.Vm.Windows.All(w => w.CountLabel is null)).IsTrue();
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("kcap imports the last 90 days from the one repository");
     }
 
     /// The owner track is a bulk set; it reads a level back only when every repository agrees.
@@ -135,6 +163,10 @@ public class HistoryStepViewModelTests {
         await h.EnterAsync();
         h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
         h.Vm.TitleLocally = false;
+        var sharing = new List<string?>();
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(HistoryStepViewModel.SharingLine)) sharing.Add(h.Vm.SharingLine);
+        };
 
         var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
         var first = h.Cli.ImportRequests.Single();
@@ -149,6 +181,7 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Cli.ImportRequests[1].Repos!).IsEquivalentTo(["acme/web", "acme/api"], CollectionOrdering.Matching);
         await Assert.That(h.Cli.ImportRequests[1].Private).IsFalse();
         await Assert.That(h.Vm.Run!.Expected).IsEqualTo(27);
+        await Assert.That(sharing.Last()).IsEqualTo("Shared imports follow your recording privacy setting");
     }
 
     [Test]
@@ -167,6 +200,75 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.Run!.Imported).IsEqualTo(24);
         await Assert.That(h.Vm.Run!.Failed).IsEqualTo(2);
         await Assert.That(h.Vm.Run!.State).IsEqualTo(ImportRunState.Failed);
+    }
+
+    /// The figures move as each session settles, and the closing line still settles the totals.
+    [Test]
+    public async Task The_run_counts_sessions_as_they_land() {
+        var h = new Harness(Report());
+        (int Imported, int Failed, int Processed)? midway = null;
+        h.Cli.ImportBehavior = (_, onLine, _) => {
+            foreach (var text in (string[]) [
+                         "Loading 1a2b... 120 lines [new]", "Loading 3c4d (cursor)", "Skipping 5e6f (already current)",
+                         "Already loaded 7a8b (no new content)", "Failed 9c0d", "Skipping 1e2f [transcript unreadable]",
+                         "Failed to reach the server", "↳ imported subagent 3a4b (12 lines)",
+                     ])
+                onLine(new StreamedLine(ProcessStreamKind.Stdout, $"  {text}"));
+            var run = h.Vm.Run!;
+            midway ??= (run.Imported, run.Failed, run.Processed);
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  3 imported · 2 skipped · 3 failed"));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+        await h.EnterAsync();
+        h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(midway).IsEqualTo((2, 2, 6));
+        await Assert.That(h.Vm.Run!.Imported).IsEqualTo(6);
+        await Assert.That(h.Vm.Run!.Failed).IsEqualTo(6);
+        await Assert.That(h.Vm.Run!.Processed).IsEqualTo(16);
+    }
+
+    /// A pass that dies before its totals line keeps what it counted, and the next pass's totals add to it.
+    [Test]
+    public async Task A_pass_without_totals_keeps_its_live_counts() {
+        var h = new Harness(Report());
+        var pass = 0;
+        h.Cli.ImportBehavior = (_, onLine, _) => {
+            if (pass++ == 0) {
+                for (var i = 0; i < 5; i++) onLine(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i}... 10 lines [new]"));
+                return Task.FromResult(new StreamingResult(1, false, []));
+            }
+
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  Loading t0... 10 lines [new]"));
+            onLine(new StreamedLine(ProcessStreamKind.Stdout, "  1 imported · 0 skipped · 0 failed"));
+            return Task.FromResult(new StreamingResult(0, false, []));
+        };
+        await h.EnterAsync();
+        h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Run!.Imported).IsEqualTo(6);
+    }
+
+    /// A repository the report did not count makes the whole selection's count unknown, not a smaller one.
+    [Test]
+    public async Task An_uncounted_repository_leaves_the_expected_count_unknown() {
+        var h = new Harness(new ImportDiscoveryReport([
+            Repo("acme", "web", 40, 20, 5, 30),
+            new ImportDiscoveryRepo("solo", "notes", 3, null, null),
+        ], 0, [new(D30, 5), new(D90, 20), new(null, 43)]));
+        await h.EnterAsync();
+        h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
+
+        await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
+        await h.Vm.Run!.Completion;
+
+        await Assert.That(h.Vm.Run!.Expected).IsEqualTo(0);
     }
 
     [Test]
@@ -338,11 +440,13 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.TitlingOffered).IsFalse();
     }
 
+    /// The tracks wait behind Customize; opening it draws one per owner and one per repository. What
+    /// Next would leave out or share stays in view either way.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_draws_a_track_per_owner_and_per_repository() {
-        var tracks = await AvaloniaSession.DispatchAsync(async () => {
-            var h = new Harness(Report());
+    public async Task The_pane_draws_a_track_per_owner_and_per_repository_once_customizing() {
+        var (before, after, notes) = await AvaloniaSession.DispatchAsync(async () => {
+            var h = new Harness(Report(unmatched: 4));
             var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
             await h.Vm.Discovery;
@@ -351,14 +455,22 @@ public class HistoryStepViewModelTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var count = window.GetVisualDescendants().OfType<ImportTrack>().Count();
+            int Shown() => window.GetVisualDescendants().OfType<ImportTrack>().Count(t => t.IsEffectivelyVisible);
+            var collapsed = Shown();
+            var notesShown = window.GetVisualDescendants().OfType<TextBlock>()
+                .Count(t => t.Name is "UnmatchedNoteText" or "SharingLineText" && t.IsEffectivelyVisible);
+            window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "CustomizeButton").Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            var open = Shown();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return count;
+            return (collapsed, open, notesShown);
         });
 
-        await Assert.That(tracks).IsEqualTo(5); // two owners, three repositories
+        await Assert.That(before).IsEqualTo(0);
+        await Assert.That(notes).IsEqualTo(2);
+        await Assert.That(after).IsEqualTo(5); // two owners, three repositories
     }
 }

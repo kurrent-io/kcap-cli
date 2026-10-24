@@ -24,7 +24,9 @@ public sealed record AppState(
     // ("{server}|{profileName}") last resolved to, so startup opens in that user's shape.
     IReadOnlyDictionary<string, ViewModels.RailPreferences>? RailPreferencesByUser = null,
     IReadOnlyDictionary<string, string>? LastUserByProfile = null,
-    double? UiScale = null);
+    double? UiScale = null,
+    // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
+    DateTimeOffset? WebSignUpOpenedAt = null);
 
 public interface IAppStateStore {
     Task<AppState> LoadAsync();

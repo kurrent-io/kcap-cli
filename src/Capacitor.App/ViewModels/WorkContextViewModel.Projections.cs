@@ -132,9 +132,9 @@ public sealed partial class WorkContextViewModel {
     public bool HasTopologyNotes => HasBlockers || !string.IsNullOrEmpty(CycleNote);
     public bool HasContributors => _contributors.Count > 0;
     /// The card carries the PR picker and the live checks and review rows, so it stays while it
-    /// has a PR to select or something to say; a list settled with neither leaves the pane's own
-    /// empty copy to speak instead of a bare frame. Before a session id the card could only repeat
-    /// the pane's waiting note.
+    /// has a PR to select or something to say, including the empty-list message during discovery
+    /// and polling. The pane's own empty copy is a fallback when there is no card content.
+    /// Before a session id the card could only repeat the pane's waiting note.
     public bool ShowsPullRequestCard =>
         Phase != WorkContextPhase.WaitingForSession
         && PullRequests is { } prs && (prs.HasChoice || prs.HasNotice || prs.HasReaderNote);
@@ -161,6 +161,8 @@ public sealed partial class WorkContextViewModel {
     public string RequesterRole { get => _requesterRole; private set => this.RaiseAndSetIfChanged(ref _requesterRole, value); }
     string _requesterInitial = "Y";
     public string RequesterInitial { get => _requesterInitial; private set => this.RaiseAndSetIfChanged(ref _requesterInitial, value); }
+    string? _requesterId;
+    ViewerIdentityDto? _viewer;
     string? _requesterAvatarUrl;
     public string? RequesterAvatarUrl { get => _requesterAvatarUrl; private set => this.RaiseAndSetIfChanged(ref _requesterAvatarUrl, value); }
 
@@ -216,10 +218,22 @@ public sealed partial class WorkContextViewModel {
         Requester = FirstNonBlank(dto.RequesterDisplay, dto.Requester) ?? "You";
         RequesterRole = $"This session · {vendorLabel}";
         RequesterInitial = WorkContextPersonViewModel.InitialOf(Requester);
-        RequesterAvatarUrl = GitHubAvatarUrl(dto.Requester);
+        _requesterId = dto.Requester;
+        ResolveRequesterAvatar();
     }
 
-    /// Only a `github:` id names an avatar; a WorkOS-only user keeps the initial.
+    /// A launch with no requester is the daemon owner's, and the viewer only sees their own daemons.
+    /// Anyone else gets a picture only from a `github:` id.
+    void ResolveRequesterAvatar() =>
+        RequesterAvatarUrl = _viewer is { AvatarUrl: { } own } && (_requesterId is null || _viewer.Owns(_requesterId))
+            ? own
+            : GitHubAvatarUrl(_requesterId);
+
+    void ForgetViewer() {
+        _viewer = null;
+        ResolveRequesterAvatar();
+    }
+
     static string? GitHubAvatarUrl(string? userId) =>
         userId is not null && userId.StartsWith("github:", StringComparison.Ordinal)
         && long.TryParse(userId.AsSpan(7), NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id > 0
@@ -282,6 +296,8 @@ public sealed partial class WorkContextViewModel {
     }
 
     void ApplyReady(WorkContextRead read) {
+        _viewer = read.Viewer;
+        ResolveRequesterAvatar();
         if (read.Primary is null) {
             ClearCard();
             ApplyLinks(read);

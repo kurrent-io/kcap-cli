@@ -74,7 +74,7 @@ public class LocalSearchViewModelTests {
     public async Task Turning_search_by_meaning_on_reruns_setup_with_the_model_and_reconnects() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness(LocalEmbeddingSetting.Declined);
-            h.Vm.Choice.UseDefault = true;
+            h.Vm.Choice.UseMeaning = true;
             await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Turn on search by meaning");
 
             h.Setting = new LocalEmbeddingSetting("mxbai-embed-large");

@@ -6,8 +6,8 @@ using ReactiveUI.Reactive;
 namespace Capacitor.App.ViewModels.Onboarding;
 
 /// <summary>
-/// The first page: what Capacitor is, and which edition this machine sets up. Cloud and "already
-/// have a workspace" continue to Sign-in, Local to Install.
+/// The first page: which edition this machine sets up. Cloud and "already have a workspace" continue
+/// to Sign-in, Local to Install.
 /// </summary>
 public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string LocalTitle = "For you, locally";
@@ -17,6 +17,9 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     public const string CloudTitle = "For your team, cloud";
     public const string CloudDetail =
         "A Team workspace on kcap.ai that your team shares. Sign in with your work account; Team is free for 60 days.";
+    public const string ExistingTitle = "Already have a workspace?";
+    public const string ExistingDetail =
+        "Sign in to one you created on kcap.ai or a teammate invited you to";
     public const string UnsupportedPlatform = "The local edition isn't available on this platform yet.";
     public const string CloudProfilePresent =
         "This Mac is set up for a cloud workspace. Moving it to local comes in a later release.";
@@ -44,17 +47,13 @@ public sealed class EditionStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public WizardStepId Id                => WizardStepId.Edition;
-    public string       Title             => "Your coding agents, with a memory";
+    public string       Title             => "How do you want to use kcap?";
     public string       Eyebrow           => "Get started";
     public bool         Applicable        => true;
     public bool         Satisfied         => true;
     public bool         Skippable         => false;
     public bool         OwnsPrimaryAction => true;
     public bool         PassThrough       => _locked();
-
-    public string Lede =>
-        "kcap records the sessions your coding agents run on this machine and gives them tools to search " +
-        "that history, so what you already worked out is there the next time you need it.";
 
     public EditionChoice? Choice {
         get => _choice;

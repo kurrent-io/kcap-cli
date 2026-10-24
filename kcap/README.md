@@ -21,6 +21,8 @@ Search and recall past kcap sessions from inside the agent.
 | `list_repo_plans` | List a repository's declared plans you can see, most recently touched first |
 | `get_declared_plans` | A plan's documents and full task list, by `plan_id` or `session_id` |
 | `get_session_evals` | Eval state and scores for up to 25 sessions by id; works on every plan |
+| `get_eval_report` | A session's latest completed eval as Markdown: findings, recommendations, retrospective; defaults to the repo's latest |
+| `list_eval_runs` | A repo's recently evaluated sessions with their category scores, newest first |
 | `get_connection` | The server URL and profile this MCP server resolved at start; no network call |
 
 Repo-aware: it resolves the cwd to a repo hash at startup, so `search_sessions` defaults to *this* repo.
@@ -52,10 +54,14 @@ Search, save, and update durable team memories — preferences, feedback, projec
 |------|-------------|
 | `search_memories` | Hybrid semantic + keyword search over memories visible to you |
 | `get_memory` | Fetch a memory's full content by id or slug |
-| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide) |
-| `update_memory` | Update an existing memory's description/content/kind |
+| `save_memory` | Save a new memory (`audience`, `slug`, `description`, `content`, `kind`); scoped to the cwd repo unless `project: <slug>` (a project's repos) or `global: true` (org-wide); `form: "log"` saves a log, whose `content` is its header |
+| `update_memory` | Update an existing memory's description/content/kind, or a log's `header` |
 | `rescope_memory` | Change a memory's audience (e.g. promote user → team/org) or move its home to a project, repo or the org |
 | `archive_memory` | Soft-delete a memory |
+| `append_memory_entry` | Append an entry (`title`, `body`) to a log — a memory saved with `form: "log"` |
+| `settle_memory_entry` | Settle a log entry, with an optional one-line `resolution` |
+| `reopen_memory_entry` | Reopen a settled log entry |
+| `list_memory_entries` | Page a log's open or settled entries, newest first |
 
 Repo- and machine-aware: it resolves the cwd to a repo hash and the local persisted machine id at startup to scope saves and bias search results.
 

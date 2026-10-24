@@ -42,9 +42,6 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     IDisposable? _notifierSubscription;
     IAppNotifier? _notifier;
 
-    // Defaults to false — the Activity flyout starts closed (MainWindow.axaml), so Activity is off
-    // regardless of the window's own visibility.
-    bool _activityOpen;
     PullRequestContextViewModel? _foregroundPullRequests;
 
     /// Assigned by App.BuildAndShowMainWindow — the SAME IAppNotifier instance
@@ -96,8 +93,9 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
     void ApplyMinimumSize() {
         var area = Screens?.ScreenFromWindow(this) ?? Screens?.Primary;
         var available = area is null ? (Size?)null : area.WorkingArea.Size.ToSize(area.Scaling);
-        MinWidth  = UiScale.Minimum(Onboarding is null ? WindowSizeMemory.MinWidth : 640, _scale, available?.Width);
-        MinHeight = UiScale.Minimum(WindowSizeMemory.MinHeight, _scale, available?.Height);
+        var onboarding = Onboarding is not null;
+        MinWidth  = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinWidth : WindowSizeMemory.MinWidth, _scale, available?.Width);
+        MinHeight = UiScale.Minimum(onboarding ? WindowSizeMemory.OnboardingMinHeight : WindowSizeMemory.MinHeight, _scale, available?.Height);
     }
 
     // The inset is in window units and the pane sits inside the scale, so it is divided back out.
@@ -138,13 +136,6 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
             Position = NotificationPosition.TopRight,
         };
 
-        // The Activity feed rides a flyout off its chip: open/closed IS the section's
-        // expanded/collapsed state for the polling gate below.
-        if (ActivityButton.Flyout is { } activityFlyout) {
-            activityFlyout.Opened += (_, _) => { _activityOpen = true; UpdateActivityVisibility(); };
-            activityFlyout.Closed += (_, _) => { _activityOpen = false; UpdateActivityVisibility(); };
-        }
-
         var switchCover = new WorkspaceSwitchCover(ContentPane, SwitchCover, SwitchCoverStill);
         this.WhenActivated(disposables => {
             var coverTracking = new SerialDisposable().DisposeWith(disposables);
@@ -158,9 +149,8 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
                         ? Observable.Return<ISessionWorkspace?>(null)
                         : vm.WhenAnyValue(x => x.CurrentWorkspace)))
                 .Subscribe(workspace => {
-                    if (workspace is not null) ActivityButton.Flyout?.Hide();
-                    else Dispatcher.UIThread.Post(LauncherView.FocusComposer, DispatcherPriority.Loaded);
-                    UpdateActivityVisibility();
+                    if (workspace is null) Dispatcher.UIThread.Post(LauncherView.FocusComposer, DispatcherPriority.Loaded);
+                    UpdateWorkspaceVisibility();
                 })
                 .DisposeWith(disposables);
         });
@@ -253,16 +243,12 @@ public partial class MainWindow : ReactiveWindow<MainWindowViewModel> {
         // first Show(), but this keeps the check correct even if a caller (a test) does it the
         // other way around.
         if (change.Property == IsVisibleProperty || change.Property == DataContextProperty
-            || change.Property == WindowStateProperty) UpdateActivityVisibility();
+            || change.Property == WindowStateProperty) UpdateWorkspaceVisibility();
     }
 
-    // Activity polls only while it is actually on screen: window visible AND the launcher pane
-    // showing (no workspace open) AND the flyout open. PR context follows the
-    // window being on screen — visible and not minimized — never keyboard focus: a reader left
-    // beside another app's window stays readable and keeps its access lease renewed.
-    void UpdateActivityVisibility() {
+    // Visibility, never keyboard focus, keeps a PR reader's access lease renewed beside another app.
+    void UpdateWorkspaceVisibility() {
         if (DataContext is MainWindowViewModel vm) {
-            vm.Activity.OnTabVisibleChanged(_activityOpen && IsVisible && vm.CurrentWorkspace is null);
             var pullRequests = vm.CurrentWorkspace?.PullRequests;
             if (_foregroundPullRequests != pullRequests) _foregroundPullRequests?.SetForeground(false);
             _foregroundPullRequests = pullRequests;

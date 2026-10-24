@@ -94,11 +94,23 @@ internal sealed record WizardGraphOptions(
     // The app's one install controller, shared by every wizard it shows; null builds a graph-local one.
     LocalInstallController?                                                      Install = null,
     // Null, or already acknowledged, leaves the Privacy page out of the run.
-    UsageDataNotice?                                                             UsageNotice = null);
+    UsageDataNotice?                                                             UsageNotice = null,
+    // Tells the configured server this machine has kcap installed; true once it accepted.
+    Func<CancellationToken, Task<bool>>?                                         ReportCliSetup = null,
+    // This app sent the user to kcap.ai's sign-up and no sign-in has committed since.
+    bool                                                                         ResumeWebSignUp = false);
 
 /// The wizard half of the composition root, split out of App so it can be driven
 /// with fakes: nothing here touches a daemon, a socket or the network until a step is used.
 internal static class WizardComposition {
+    /// How long after setup opened kcap.ai's sign-up a relaunch still opens on sign-in.
+    internal static readonly TimeSpan WebSignUpResumeWindow = TimeSpan.FromDays(1);
+
+    /// A sign-up this app opened in the browser, recent enough that a relaunch is the user coming back
+    /// with a workspace to sign in to.
+    internal static bool ResumesWebSignUp(AppState state, DateTimeOffset now) =>
+        state.WebSignUpOpenedAt is { } opened && now >= opened && now - opened <= WebSignUpResumeWindow;
+
     /// Production bridges: one marshalling boundary, Avalonia's dispatcher in the app.
     internal static WizardBridges BuildBridges(Action<Action> post, CliTelemetry telemetry, AuthEndpoints endpoints) =>
         new(post, telemetry, endpoints);
@@ -124,17 +136,78 @@ internal static class WizardComposition {
         operation(new WizardFacadeSpec(
             root, tokenStore, httpFactory, proxy, github, workos, profile, bridges.Progress, bridges.Picker,
             bridges.Telemetry, bridges.Endpoints, time,
-            WizardAuthService.ArmingHook(claims), ProbeWorkspace(httpFactory, time), precondition));
+            WizardAuthService.ArmingHook(claims),
+            ProbeWorkspace(httpFactory, bridges.Endpoints, bridges.Progress.ProvisioningWait, bridges.Progress.ProvisioningFailed, time),
+            precondition));
 
+    internal static readonly TimeSpan ProvisioningPollInterval = TimeSpan.FromSeconds(5);
+
+    /// How long sign-in waits on a workspace kcap.ai is still creating, the same as the browser sign-up's own wait.
+    internal static readonly TimeSpan ProvisioningWaitLimit = SignInStepViewModel.SignUpWait;
+
+    /// <summary>
     /// kcap-web adds the owner to a workspace's organization before the workspace is live, so discovery
-    /// can list one still provisioning. Its host 404s until then, and discovery leaves it out.
-    static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
-            IHttpClientFactory httpFactory, TimeProvider time) =>
-        async (tenant, _, ct) => {
+    /// can list one still provisioning, whose host 404s until then. kcap-web's own status for it tells
+    /// the two apart: a workspace still being created is waited for, so sign-in finishes on its own once
+    /// it is live. One kcap-web gave up on is gone; one still not live when the wait ends is pending.
+    /// </summary>
+    internal static Func<DiscoveredTenant, string, CancellationToken, Task<WorkspaceAnswer>> ProbeWorkspace(
+            IHttpClientFactory httpFactory, AuthEndpoints endpoints, Action<string> waiting, Action<string> failed,
+            TimeProvider time) {
+        // The bearers of discoveries that already found a live workspace. Discovery waits on every probe,
+        // so a wait on one still being created would otherwise hold back the live ones.
+        var liveFound = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+
+        return async (tenant, bearer, ct) => {
+            var answer = await AskAsync(tenant, ct);
+            if (answer == WorkspaceAnswer.Live) liveFound.TryAdd(bearer, 0);
+            if (answer != WorkspaceAnswer.Gone || tenant.Slug is not { Length: > 0 } slug) return answer;
+
+            var provisioning = new TenantProvisioningClient(
+                httpFactory.CreateClient(nameof(TenantProvisioningClient)), ClientAgent.Desktop);
+            // The status client reads a cancelled request as a transport failure.
+            var status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+            ct.ThrowIfCancellationRequested();
+            if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
+                is PollVerdict.Failed or PollVerdict.ActiveNoOrg) {
+                failed(tenant.Label);
+                return answer;
+            }
+            if (!ProvisioningPoll.IsPending(status.StatusCode, status.Body?.State)) return answer;
+
+            waiting(tenant.Label);
+            var deadline = time.GetUtcNow() + ProvisioningWaitLimit;
+            while (time.GetUtcNow() < deadline) {
+                if (liveFound.ContainsKey(bearer)) return WorkspaceAnswer.Pending;
+                await Task.Delay(ProvisioningPollInterval, time, ct);
+                if (liveFound.ContainsKey(bearer)) return WorkspaceAnswer.Pending;
+
+                answer = await AskAsync(tenant, ct);
+                if (answer == WorkspaceAnswer.Live) {
+                    liveFound.TryAdd(bearer, 0);
+                    return answer;
+                }
+
+                // An expired bearer can no longer see a failure, so the wait ends there and sign-in offers another try.
+                status = await provisioning.GetStatusAsync(endpoints.SignupUrl, bearer, slug, ct);
+                ct.ThrowIfCancellationRequested();
+                if (status.StatusCode == 401) return WorkspaceAnswer.Pending;
+                if (ProvisioningPoll.Classify(status.StatusCode, status.Body?.State, status.Body?.WorkosOrgId)
+                    is PollVerdict.Failed or PollVerdict.NotFound or PollVerdict.Forbidden or PollVerdict.ActiveNoOrg) {
+                    failed(tenant.Label);
+                    return WorkspaceAnswer.Gone;
+                }
+            }
+
+            return WorkspaceAnswer.Pending;
+        };
+
+        async Task<WorkspaceAnswer> AskAsync(DiscoveredTenant tenant, CancellationToken ct) {
             using var client = httpFactory.CreateClient(CapacitorClients.Anonymous);
 
             return await WorkspaceProbe.AskAsync(client, tenant.Origin, time, ct);
-        };
+        }
+    }
 
     internal static LocalInstallController NewInstallController(WizardGraphOptions options) {
         var cli = new LateBoundKcapCli(options.ResolveCli, options.CliPath);
@@ -246,6 +319,10 @@ internal static class WizardComposition {
         install.Settled += OnInstallSettled;
         if (committedLocalAtStart) _ = daemon.EnsureAsync(options.ShutdownToken);
 
+        OnboardingViewModel? shell = null;
+        // The daemon and its outcome lines change while Done is open; the page re-reads its facts on each.
+        var serviceChanged = daemon.WhenAnyValue(x => x.Satisfied, x => x.Busy, x => x.Status, x => x.Message, (_, _, _, _) => Unit.Default)
+            .Merge(options.Surface.WhenAnyValue(x => x.StatusText, x => x.AttentionText, (_, _) => Unit.Default));
         // Read on every entry, so a Back-then-forward re-render sees each step's current state.
         var done = new DoneStepViewModel(() => {
             var recording = harnesses.Rows.Where(r => r is { Record: true, Succeeded: true }).ToList();
@@ -261,16 +338,25 @@ internal static class WizardComposition {
                 !local && Connected() ? options.ResolveIdentity()?.Server : null,
                 daemon.Problem,
                 local,
-                local ? LocalEndpoints.Read(root).Active?.ServerUrl : null);
-        }, options.UrlOpener);
+                local ? LocalEndpoints.Read(root).Active?.ServerUrl : null,
+                daemon.Busy,
+                options.Surface.AttentionText ?? options.Surface.StatusText);
+        }, options.UrlOpener, PrepareWorkspaceAsync, serviceChanged,
+            // The same page Help and support → Set up kcap leads through to connect an agent.
+            addAgent: () => shell?.TryGoTo(WizardStepId.Harnesses));
         IWizardStep[] steps = [edition, installStep, signIn, harnesses, history, new UsageDataStepViewModel(options.UsageNotice), done];
 
-        var canFinishLater = edition.WhenAnyValue(x => x.Choice).Select(_ => Unit.Default)
+        // Before a server is connected the app has nothing to show, so deferring is offered only for the optional steps after.
+        var canFinishLater = signIn.WhenAnyValue(x => x.Satisfied).Select(_ => Unit.Default)
             .Merge(install.WhenAnyValue(x => x.Outcome).Select(_ => Unit.Default))
             .Merge(durable.Select(_ => Unit.Default))
-            .Select(_ => !OnLocalPath() || Installed() || CommittedLocal());
-        var wizard = new OnboardingViewModel(
-            steps, options.ShutdownToken, options.Surface, canFinishLater: canFinishLater, restate: durable.Select(_ => Unit.Default));
+            .Select(_ => Connected());
+        // Someone coming back from kcap.ai's sign-up already has a workspace; everyone else chooses first.
+        var startAt = options.ResumeWebSignUp && !signedInAtStart && !OnLocalPath() && !Installed()
+            ? WizardStepId.SignIn
+            : (WizardStepId?)null;
+        var wizard = shell = new OnboardingViewModel(
+            steps, options.ShutdownToken, options.Surface, startAt, canFinishLater, durable.Select(_ => Unit.Default));
         signIn.SignUpExpired += () => {
             edition.ShowNotice(SignInStepViewModel.SignUpExpiredNotice);
             wizard.TryGoTo(WizardStepId.Edition);
@@ -289,6 +375,19 @@ internal static class WizardComposition {
         return new WizardGraph(wizard, auth, steps, history, connect, daemon, install, pathFix);
 
         bool Connected() => signIn.Satisfied || Installed() || CommittedLocal();
+
+        // A run already in flight is waited out, never queued behind: a second run straight after a
+        // declined takeover would ask again. A failed run is repeated only when the user retries.
+        async Task<WorkspaceReadiness> PrepareWorkspaceAsync(bool retry) {
+            await daemon.QuiescedAsync().ConfigureAwait(true);
+            if (!daemon.Satisfied && (retry || daemon.Problem is null))
+                await daemon.EnsureAsync(options.ShutdownToken).ConfigureAwait(true);
+            if (!daemon.Satisfied) return WorkspaceReadiness.DaemonNotRunning;
+
+            return options.ReportCliSetup is null || await options.ReportCliSetup(options.ShutdownToken).ConfigureAwait(true)
+                ? WorkspaceReadiness.Ready
+                : WorkspaceReadiness.Unreported;
+        }
     }
 
     /// Why this machine cannot take the local edition, or null when it can. A cloud profile anywhere

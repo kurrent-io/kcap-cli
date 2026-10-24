@@ -43,9 +43,13 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         _resuming            = resuming ?? (() => false);
 
         Search          = new SearchChoiceViewModel();
-        InstallCommand  = ReactiveCommand.CreateFromTask(InstallAsync, Search.WhenAnyValue(x => x.Valid));
         TryAgainCommand = ReactiveCommand.CreateFromTask(TryAgainAsync);
         CancelCommand   = ReactiveCommand.Create(() => { if (CancelVisible) _controller.Interrupt(); });
+
+        Search.PropertyChanged += (_, e) => {
+            if (e.PropertyName is nameof(SearchChoiceViewModel.Valid) or nameof(SearchChoiceViewModel.Checking))
+                this.RaisePropertyChanged(nameof(CanContinue));
+        };
 
         _controller.PropertyChanged += OnControllerChanged;
         _controller.Settled         += OnSettled;
@@ -53,15 +57,19 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public WizardStepId Id                => WizardStepId.Install;
-    public string       Title             => "Installing kcap on this Mac";
+    /// Nothing installs while the search choice is up, so the headline says the page is still asking.
+    public string       Title             => ChoiceVisible ? "One more step before installing" : "Installing kcap on this Mac";
     public string       Eyebrow           => "Install";
     public bool         Applicable        => true;
     public bool         Satisfied         => _controller.Outcome is LocalInstallOutcome.Installed;
     public bool         Skippable         => false;
-    public bool         OwnsPrimaryAction => true;
+    /// While the search choice is up, the footer's primary action starts the install.
+    public bool         OwnsPrimaryAction => !ChoiceVisible;
+    public string?      NextLabel         => ChoiceVisible ? "Install" : null;
+    public bool         CanContinue       => !ChoiceVisible || (Search.Valid && !Search.Checking);
     public bool         PassThrough       => !_onLocalPath() || _controller.Outcome is LocalInstallOutcome.Installed;
 
-    public string Lede => "The server runs on this Mac and your sessions stay on it. This usually takes a minute or two.";
+    public string Lede => "The server runs on this Mac and your sessions stay on it";
 
     public LocalSetupProgress Progress => _controller.Progress;
 
@@ -72,7 +80,11 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         get => _choosing;
         private set {
             this.RaiseAndSetIfChanged(ref _choosing, value);
+            this.RaisePropertyChanged(nameof(Title));
             this.RaisePropertyChanged(nameof(ProgressVisible));
+            this.RaisePropertyChanged(nameof(OwnsPrimaryAction));
+            this.RaisePropertyChanged(nameof(NextLabel));
+            this.RaisePropertyChanged(nameof(CanContinue));
         }
     }
 
@@ -125,7 +137,6 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
 
     public bool RefusalVisible => RefusalMessage is not null;
 
-    public ReactiveCommand<Unit, Unit> InstallCommand  { get; }
     public ReactiveCommand<Unit, Unit> TryAgainCommand { get; }
     public ReactiveCommand<Unit, Unit> CancelCommand   { get; }
 
@@ -173,12 +184,19 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         { Model: { } m }  => new LocalEmbeddingChoice(m),
     };
 
-    public Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) =>
-        Task.FromResult(direction switch {
+    public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {
+        // Next on the choice is Install: the page stays, and advances itself once the run is installed.
+        if (direction == WizardNavigation.Next && ChoiceVisible) {
+            await InstallAsync();
+            return false;
+        }
+
+        return direction switch {
             WizardNavigation.Back => BackVisible,
             WizardNavigation.Next => _controller.Outcome is LocalInstallOutcome.Installed,
             _                     => false,
-        });
+        };
+    }
 
     /// Stops following the controller, which outlives this page and the wizard that showed it.
     public void Detach() {
@@ -200,7 +218,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     };
 
     Task InstallAsync() {
-        if (!ChoiceVisible || !Search.Valid) return Task.CompletedTask;
+        if (!ChoiceVisible || !CanContinue) return Task.CompletedTask;
 
         ChoiceVisible = false;
         return _controller.StartAsync(Search.Choice, _lifetime);
@@ -249,11 +267,11 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         next.PropertyChanged          += OnProgressChanged;
         next.Download.PropertyChanged += OnProgressChanged;
         Rows = [
-            new("Downloading", next.Download),
+            new("Downloading the kcap server", next.Download),
             new("Verifying the signature", next.Verify),
-            new("Installing", next.Install),
+            new("Installing the kcap server", next.Install),
             new("Search by meaning", next.Embeddings.Row),
-            new("First start", next.FirstStart),
+            new("Starting the kcap server", next.FirstStart),
         ];
         RestateDownload();
     }

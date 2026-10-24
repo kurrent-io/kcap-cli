@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Commands;
@@ -43,7 +44,7 @@ static class LooseEndClaimToolResults {
         var root = document?.RootElement ?? default;
         var end = NextWorkUntrustedText.Render(root.Str("loose_end_id"), 128);
         if (root.Str("state") != "closed" || root.Str("claim_id") != claimId || end.Length == 0 ||
-            WorkContextIds.CanonicalSessionId(root.Str("session_id")) != WorkContextIds.CanonicalSessionId(sessionId))
+            !SessionIds.SameSession(root.Str("session_id"), sessionId))
             return ("Error: claimed completion could not be confirmed. Inspect the ledger before retrying; never retry without the claim and worker identities.", true);
         return ($"Closed loose end {end}.", false);
     }
@@ -54,7 +55,7 @@ static class LooseEndClaimToolResults {
         return root.Arr("items") is { } items && items.EnumerateArray().All(item =>
             item.Arr("claims") is { } claims && claims.EnumerateArray().Any(claim =>
                 !string.IsNullOrWhiteSpace(claim.Str("claim_id")) && claim.Str("status") is "in_progress" or "finishing" &&
-                WorkContextIds.CanonicalSessionId(claim.Str("session_id")) == WorkContextIds.CanonicalSessionId(sessionId)));
+                SessionIds.SameSession(claim.Str("session_id"), sessionId)));
     }
 
     internal static string? ClaimLine(JsonElement claim) {

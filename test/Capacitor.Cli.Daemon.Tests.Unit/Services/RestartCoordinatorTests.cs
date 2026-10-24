@@ -15,7 +15,7 @@ public class RestartCoordinatorTests {
         public RestartOutcome Restart() { Calls++; return Outcome; }
     }
 
-    RestartCoordinator NewCoordinator(SpyStrategy spy, Func<bool> isBusy, Func<BinaryStat?> stat) {
+    RestartCoordinator NewCoordinator(IRestartStrategy spy, Func<bool> isBusy, Func<BinaryStat?> stat) {
         var c = RestartCoordinator.ForTest(Daemons.Store, "laptop", "v0.4.11", spy, TimeProvider.System);
         c.IsBusy     = isBusy;
         c.StatBinary = stat;
@@ -319,5 +319,127 @@ public class RestartCoordinatorTests {
         hard = false;
         c.Tick();
         await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_harness_installed_after_startup_restarts_once_no_agents_remain() {
+        var spy       = new SpyStrategy();
+        var installed = false;
+        var agents    = true;
+        var c         = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.HasAgents        = () => agents;
+        c.HarnessInstalled = () => installed;
+
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        installed = true;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        agents = false;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>An update needs only a turn boundary, so a harness restart already waiting for every
+    /// agent to finish must not hold it back.</summary>
+    [Test]
+    public async Task An_update_landing_behind_a_harness_restart_fires_at_the_turn_boundary() {
+        var spy  = new SpyStrategy();
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HasAgents        = () => true;
+        c.HarnessInstalled = () => true;
+
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Only_an_unadvertised_vendor_that_now_finds_its_CLI_counts_as_installed() {
+        IHostedAgentRuntimeFactory[] advertisedOnly = [new FakeFactory("claude", available: true)];
+        IHostedAgentRuntimeFactory[] stillMissing   = [new FakeFactory("claude", available: true), new FakeFactory("codex", available: false)];
+        IHostedAgentRuntimeFactory[] nowInstalled   = [new FakeFactory("claude", available: true), new FakeFactory("codex", available: true)];
+
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(["claude"], advertisedOnly)).IsFalse();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(["claude"], stillMissing)).IsFalse();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(["claude"], nowInstalled)).IsTrue();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable([], nowInstalled)).IsTrue();
+        await Assert.That(RestartCoordinator.UnadvertisedNowAvailable(null, nowInstalled)).IsFalse();
+    }
+
+    sealed class FakeFactory(string vendor, bool available) : IHostedAgentRuntimeFactory {
+        public string CliPath            => vendor;
+        public string Vendor             => vendor;
+        public bool   SupportsUnattended => false;
+        public bool   IsAvailable()      => available;
+
+        public Task<HostedRuntimeStart> StartAsync(RuntimeStartContext ctx, CancellationToken ct) =>
+            throw new NotSupportedException();
+    }
+
+    /// <summary>A foreground daemon answers a harness restart with a no-op; an update after it must still
+    /// be detected rather than swallowed by a coordinator left fired.</summary>
+    [Test]
+    public async Task A_no_op_harness_restart_leaves_update_detection_working() {
+        var spy  = new SpyStrategy { Outcome = RestartOutcome.NoOp };
+        var size = 100L;
+        var c    = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HarnessInstalled = () => true;
+
+        c.Tick();
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+
+        size = 200;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(2);
+    }
+
+    /// <summary>A when-idle request must not turn a pending update into one that waits for every agent.</summary>
+    [Test]
+    public async Task A_when_idle_request_keeps_a_pending_update_on_its_turn_boundary() {
+        var spy      = new SpyStrategy();
+        var size     = 100L;
+        var boundary = false;
+        var c        = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(size, 1));
+        c.HasAgents      = () => true;
+        c.AtTurnBoundary = () => boundary;
+
+        size = 200;
+        c.Tick();
+        c.RequestRestart(force: false, whenIdle: true);
+        await Assert.That(spy.Calls).IsEqualTo(0);
+
+        boundary = true;
+        c.Tick();
+        await Assert.That(spy.Calls).IsEqualTo(1);
+    }
+
+    /// <summary>A request that lands while a harness restart is running stays pending after its no-op.</summary>
+    [Test]
+    public async Task A_request_during_a_no_op_harness_restart_is_not_dropped() {
+        var c   = (RestartCoordinator?)null;
+        var spy = new ReentrantStrategy(() => c!.RequestRestart(force: false));
+        c = NewCoordinator(spy, isBusy: () => false, stat: () => new BinaryStat(100, 1));
+        c.HarnessInstalled = () => true;
+
+        c.Tick();
+        c.Tick();
+
+        await Assert.That(spy.Calls).IsEqualTo(2);
+    }
+
+    sealed class ReentrantStrategy(Action duringFirst) : IRestartStrategy {
+        public int Calls;
+        public RestartOutcome Restart() {
+            if (++Calls == 1) duringFirst();
+            return RestartOutcome.NoOp;
+        }
     }
 }

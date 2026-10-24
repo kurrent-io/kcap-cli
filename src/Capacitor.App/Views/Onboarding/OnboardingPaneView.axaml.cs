@@ -36,5 +36,7 @@ public partial class OnboardingPaneView : UserControl {
         if (e.PropertyName == nameof(OnboardingViewModel.Current)) StepScroll.Offset = default;
     }
 
+    void OnStepScrolled(object? sender, ScrollChangedEventArgs e) => TitleBarRule.Opacity = StepScroll.Offset.Y > 0 ? 1 : 0;
+
     void OnChromePointerPressed(object? sender, PointerPressedEventArgs e) => WindowChrome.BeginDrag(this, e);
 }

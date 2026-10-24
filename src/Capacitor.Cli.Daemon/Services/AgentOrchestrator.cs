@@ -75,6 +75,9 @@ internal record AgentInstance(
     /// takeover of that session's work has started.
     public string?              ContinuedFromSessionId { get; set; }
 
+    /// The agent this one continues, announced on every registration so the server can follow its wake-ups here.
+    public string?              ContinuesAgentId  { get; init; }
+
     /// Set once any stop has been asked of this agent; a resume still being judged then ends as stopped.
     public bool                 StopRequested     { get; set; }
 
@@ -908,10 +911,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         _server.OnSendRawInput           += HandleSendRawInput;
         _server.OnResizeTerminal         += HandleResizeTerminal;
         _server.ReRegisterAgentsHook          =  ReRegisterAgentsAsync;
-        // Settlement lost-ack redelivery (D1): re-deliver unretired terminal acks POST-registration
-        // (readiness restored) — inside ReRegisterAgentsHook the CommandAckAsync IsReady gate would drop
-        // them. Fires on every (re)connect + heartbeat re-register.
-        _server.OnRegisteredHook              =  () => { Processor?.RedeliverUnretiredProcessedAcks(); return Task.CompletedTask; };
+        // Acks and status reports sent inside the registration bracket are dropped by the IsReady gate,
+        // so this report, and the ack redelivery it runs, is what reaches the server for that window.
+        // Not awaited: a parked send must not hold up the reconnect path.
+        _server.OnRegisteredHook              =  () => { _ = SendStatusReportNowAsync(); return Task.CompletedTask; };
         _server.FindRepoForRemoteHandler      =  HandleFindRepoForRemote;
         _permissionBridge.AttributeHandler    =  HandleAttributePermission;
         _permissionBridge.InputWaitHandler    =  HandleInputWait;
@@ -965,6 +968,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // Phase B (D2): richer live-agent metadata (kind + flow identity) alongside the ids.
         _server.GetLiveAgents = () => [.. BuildLiveAgents()];
         _server.GetResumingAgents = ResumingClaims;
+        _server.GetActiveCount = ActiveCountSnapshot;
 
         // Start heartbeat loops
         _ = RunHeartbeatLoopAsync(_shutdownCts.Token);
@@ -1069,19 +1073,36 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// helpers are the only writers of agent status and registry membership, so the ordering
     /// cannot be forgotten at a call site.
     internal void SetAgentStatus(AgentInstance agent, string status) {
-        lock (_membership) agent.Status = status;
+        lock (_membership) {
+            agent.Status = status;
+            _activeCountVersion++;
+        }
         _statusNotifier.Pulse();
     }
 
     internal void PublishAgent(AgentInstance agent) {
-        lock (_membership) _agents[agent.Id] = agent;
+        lock (_membership) {
+            _agents[agent.Id] = agent;
+            _activeCountVersion++;
+        }
         _statusNotifier.Pulse();
     }
 
     internal void UnpublishAgent(string agentId) {
-        lock (_membership) _agents.TryRemove(agentId, out _);
+        lock (_membership) {
+            _agents.TryRemove(agentId, out _);
+            _activeCountVersion++;
+        }
         _statusNotifier.Pulse();
     }
+
+    internal (int Count, long Version) ActiveCountSnapshot() {
+        lock (_membership) return (ActiveCount, _activeCountVersion);
+    }
+
+    /// <summary>Advances under <see cref="_membership"/> with every write that can change
+    /// <see cref="ActiveCount"/>, so the server keeps the reading with the highest version.</summary>
+    long _activeCountVersion;
 
     /// <summary>Held by every change of agent status, agent membership and pending launches, and by
     /// <see cref="BusyForStatus"/>, so that count is one consistent observation however launches overlap.</summary>
@@ -1429,8 +1450,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <summary>Phase B (D2): the daemon's self-report snapshot — its authoritative
     /// <see cref="ActiveCount"/> plus the live-agent metadata (and, once D4/Task 8 lands, the
     /// kill-quarantine). Pure; the send loop + tests share it.</summary>
-    internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) =>
-        new(ActiveCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
+    internal DaemonStatusReport BuildStatusReport(string? echoNonce = null) {
+        var (activeCount, activeCountVersion) = ActiveCountSnapshot();
+
+        return new(activeCount, [.. BuildLiveAgents()], [.. QuarantineSnapshot()],
             // Phase B2-b (sequenced-settlement design §4.2.4): re-advertise the durable resolved-
             // candidates ledger on every self-report until the server prunes it per-entry via
             // AckResolvedCandidates. Epoch is the shipped per-boot _daemonEpoch.
@@ -1456,7 +1479,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // send refreshes it); the server raises the "installed but not configured" notification from it.
             HarnessInventory: CurrentHarnessInventory(),
             EchoNonce: echoNonce,
+            ActiveCountVersion: activeCountVersion,
             ResumingAgents: ResumingClaims());
+    }
 
     /// <summary>Phase B2-b (sequenced-settlement design): the per-platform startup-reap-complete
     /// roll-up. A blocked known-id candidate (pending_marker / legacy_unresolvable /
@@ -3017,6 +3042,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 InactivityBoundSeconds = cmd.InactivityBoundSeconds,
                 StartTitle          = startTitle,
                 IsPrivate           = isPrivate,
+                ContinuesAgentId    = resume?.Entry.InheritedAgentIds is [.., var predecessor] ? predecessor : null,
                 // Keeps the worktree and the entry through any failure until the resume is judged.
                 ResumePending       = resume is not null
             };
@@ -3452,6 +3478,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task ReadAgentOutputAsync(AgentInstance agent) {
         var cloud = TryStartCloudSink(agent);
         agent.CloudSink = cloud;
+        var outputActivity = new TerminalOutputActivity();
 
         // An UNATTENDED reviewer (bypassPermissions, no human present) can wedge forever on a
         // one-time consent/trust dialog — the original silent failure. Watch its PTY stream for the
@@ -3469,8 +3496,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             await foreach (var data in agent.Runtime.ReadOutputAsync(agent.ReadCts.Token)) {
                 agent.LastOutputAt      = _time.GetUtcNow().UtcDateTime;
                 agent.HasReceivedOutput = true;
-                // PTY output IS the activity signal for a PTY-hosted agent — no turn gate applies.
-                agent.ActivityClock.Advance();
+                // Mode changes and cursor housekeeping prove liveness without starting a turn.
+                agent.ActivityClock.AdvanceTerminalOutput(outputActivity.Observe(data));
 
                 if (agent.Status == "Starting") {
                     SetAgentStatus(agent, "Running");
@@ -4934,6 +4961,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
         if (IsClosingToInput(agent)) return;
 
+        if (!IsSubmit(SpecialKeyMap.ToBytes(key))) agent.ActivityClock.NoteViewerInput();
         await agent.Runtime.SendSpecialKeyAsync(key);
     }
 
@@ -4964,10 +4992,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         if (bytes.Length == 0) return;
 
         var waitGeneration = agent.ActivityClock.WaitGeneration;
+        var submit = IsSubmit(bytes);
+        if (!submit) agent.ActivityClock.NoteViewerInput();
 
         try {
             await agent.Runtime.SendRawInputAsync(bytes);
-            if (IsSubmit(bytes)) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
+            if (submit) agent.ActivityClock.ClearAwaitingInputSince(waitGeneration);
         } catch (NotSupportedException) {
             LogSendRawInputNotSupported(cmd.AgentId, agent.Runtime.Vendor);
         }
@@ -5089,7 +5119,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId);
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5586,7 +5616,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the
@@ -6053,6 +6083,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             try { await _server.AgentUnregisteredAsync(agentId, StopReasonCode(agent)); } catch (OperationCanceledException) when (_shutdownCts.IsCancellationRequested) { } catch (Exception ex) {
                 LogCleanupStepFailed(ex, "unregistering", agentId);
             }
+        } else if (!_shutdownCts.IsCancellationRequested) {
+            // The server still counts a server-silent agent's slot, and no unregister will free it.
+            await SendStatusReportNowAsync();
         }
     }
 

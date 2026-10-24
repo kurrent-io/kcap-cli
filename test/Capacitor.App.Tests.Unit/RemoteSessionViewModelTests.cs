@@ -82,6 +82,41 @@ public class RemoteSessionViewModelTests {
         }
     }
 
+    [Test]
+    [Arguments("u1", "You")]
+    [Arguments("u2", "User")]
+    [Arguments(null, "User")]
+    [Arguments("", "User")]
+    public async Task Chat_label_compares_daemon_owner_with_signed_in_account(string? owner, string expected) {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row() with { OwnerUserId = owner };
+            var vm = h.Build(row);
+            await WaitUntilAsync(() => vm.Chat.UserTitle == expected, what: "chat ownership label");
+            await Assert.That(vm.Chat.UserTitle).IsEqualTo(expected);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Chat_label_follows_account_and_owner_changes() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var row = Harness.Row();
+            var vm = h.Build(row);
+            await WaitUntilAsync(() => vm.Chat.UserTitle == "You", what: "own daemon label");
+
+            h.Lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2", Epoch: 2));
+            await WaitUntilAsync(() => vm.Chat.UserTitle == "User", what: "different account label");
+            h.Directory.Rows.AddOrUpdate(row with { OwnerUserId = "u2" });
+            await WaitUntilAsync(() => vm.Chat.UserTitle == "You", what: "updated daemon owner label");
+
+            h.Lane.StatusSubject.OnNext(new(ServerLaneState.SignedOut, Epoch: 3));
+            await WaitUntilAsync(() => vm.Chat.UserTitle == "User", what: "unknown account label");
+            await vm.TeardownAsync();
+        });
+    }
+
     static WorkContextRead LinkedWork(string id, string title) => WorkContextRead.Of(WorkContextReadKind.Ready) with {
         Primary = new SessionWorkItemAssignmentDto { WorkItemId = id, Label = title, IsPrimary = true },
         Item = new WorkItemDto { WorkItemId = id, Title = title },

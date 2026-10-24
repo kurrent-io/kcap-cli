@@ -45,6 +45,7 @@ public class ToolImagePreviewTests {
             try {
                 await preview.Loading;
                 await Assert.That(preview.IsVisible).IsTrue();
+                await Assert.That(preview.Unavailable).IsFalse();
                 var image = (Image)preview.Content!;
                 await Assert.That(image.Source).IsNotNull();
                 window.UpdateLayout();
@@ -62,6 +63,7 @@ public class ToolImagePreviewTests {
                 await pending;
                 await preview.Loading;
                 await Assert.That(preview.IsVisible).IsFalse();
+                await Assert.That(preview.Unavailable).IsTrue();
                 await Assert.That(image.Source).IsNull();
 
                 preview.Path = path;
