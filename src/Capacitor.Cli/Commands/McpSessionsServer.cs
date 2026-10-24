@@ -693,12 +693,29 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             first["hits"]                 = merged;
             first["widened_to_all_repos"] = true;
 
-            // The flag describes one request's lexical lanes; a lexical hit in either scope clears it.
-            var firstNoLexical   = ReadNoLexicalMatch(first);
-            var widenedNoLexical = ReadNoLexicalMatch(widened);
+            // Each flag describes one request. A null no_lexical_match is unknown (a timed-out transcript lane), so
+            // "no match" survives only when both requests said so; null lane flags mean that request ran no lexical search.
+            if (first.ContainsKey("no_lexical_match") || widened.ContainsKey("no_lexical_match")) {
+                var firstNoLexical   = ReadBool(first, "no_lexical_match");
+                var widenedNoLexical = ReadBool(widened, "no_lexical_match");
+                first["no_lexical_match"] = firstNoLexical is false || widenedNoLexical is false ? false
+                                          : firstNoLexical is true && widenedNoLexical is true ? true
+                                          : null;
+            }
 
-            if (firstNoLexical is not null || widenedNoLexical is not null) {
-                first["no_lexical_match"] = (firstNoLexical ?? true) && (widenedNoLexical ?? true);
+            foreach (var field in new[] { "bounded_lanes", "timed_out_lanes" }) {
+                var firstLanes   = first[field] as JsonArray;
+                var widenedLanes = widened[field] as JsonArray;
+                if (firstLanes is null && widenedLanes is null) continue;
+
+                var names = new List<string>();
+                foreach (var lane in (firstLanes ?? new JsonArray()).Concat(widenedLanes ?? new JsonArray())) {
+                    if (lane is JsonValue v && v.TryGetValue<string>(out var name) && !names.Contains(name)) names.Add(name);
+                }
+
+                var union = new JsonArray();
+                foreach (var name in names) union.Add((JsonNode?)JsonValue.Create(name));
+                first[field] = union;
             }
 
             return first.ToJsonString();
@@ -706,8 +723,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return firstBody;
         }
 
-        static bool? ReadNoLexicalMatch(JsonObject body) =>
-            body["no_lexical_match"] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
+        static bool? ReadBool(JsonObject body, string field) =>
+            body[field] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
     }
 
     static string BuildSummaryUrl(string baseUrl, string sessionId) =>
