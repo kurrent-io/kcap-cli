@@ -116,9 +116,38 @@
                         <StackPanel Spacing="6">
                             <TextBlock Classes="toolKindChip" HorizontalAlignment="Left"
                                        Text="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).UserTitle}" />
-                            <views:MarkdownView Text="{Binding Text}" Flavor="Prompt"
+                            <views:MarkdownView Text="{Binding Text}" Flavor="Prompt" IsVisible="{Binding HasText}"
                                                 OpenLink="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).OpenLinkCommand}"
                                                 RunCode="{Binding $parent[ItemsControl].((vm:ChatTabViewModel)DataContext).RunCodeCommand}" />
+                            <ItemsControl ItemsSource="{Binding Attachments}" IsVisible="{Binding HasAttachments}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:UserAttachment">
+                                        <Panel Margin="0,2,8,2">
+                                            <views:ToolImagePreview Classes="kcapGhost" Path="{Binding PreviewPath}" ExpandsOnClick="False"
+                                                                    ToolTip.Tip="{Binding FileName}"
+                                                                    AutomationProperties.Name="{Binding FileName}"
+                                                                    Command="{Binding $parent[views:ChatTabView].((vm:ChatTabViewModel)DataContext).OpenAttachmentCommand}"
+                                                                    CommandParameter="{Binding}" />
+                                            <Border IsVisible="{Binding !HasPreview}" Padding="8,4" CornerRadius="8"
+                                                    Background="{StaticResource KcapSurfaceBrush}"
+                                                    BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <views:AppIcon Kind="Paperclip" Size="14" VerticalAlignment="Center"
+                                                                   Foreground="{StaticResource KcapMutedBrush}" />
+                                                    <TextBlock Text="{Binding FileName}" FontSize="12" MaxWidth="240"
+                                                               TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource KcapTextBrush}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </Panel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </Border>
                 </DataTemplate>

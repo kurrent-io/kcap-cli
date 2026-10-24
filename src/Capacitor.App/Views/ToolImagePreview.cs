@@ -7,7 +7,7 @@ using Capacitor.App.Services;
 
 namespace Capacitor.App.Views;
 
-/// Thumbnail for a Read of a local image. A click grows it; a missing file draws nothing.
+/// Thumbnail for a local image. A click grows it unless ExpandsOnClick is off; a missing file draws nothing.
 public sealed class ToolImagePreview : Button {
     const double Thumb = 140;
     const double Expanded = 520;
@@ -18,6 +18,9 @@ public sealed class ToolImagePreview : Button {
 
     public static readonly StyledProperty<string?> PathProperty =
         AvaloniaProperty.Register<ToolImagePreview, string?>(nameof(Path));
+
+    public static readonly StyledProperty<bool> ExpandsOnClickProperty =
+        AvaloniaProperty.Register<ToolImagePreview, bool>(nameof(ExpandsOnClick), defaultValue: true);
 
     readonly Image _image = new() {
         MaxHeight = Thumb,
@@ -37,10 +40,16 @@ public sealed class ToolImagePreview : Button {
         Cursor = new Cursor(StandardCursorType.Hand);
         Content = _image;
         Click += (_, _) => {
+            if (!ExpandsOnClick) return;
             _expanded = !_expanded;
             _image.MaxHeight = _expanded ? Expanded : Thumb;
             _image.MaxWidth = _expanded ? 720 : 480;
         };
+    }
+
+    public bool ExpandsOnClick {
+        get => GetValue(ExpandsOnClickProperty);
+        set => SetValue(ExpandsOnClickProperty, value);
     }
 
     public string? Path {
