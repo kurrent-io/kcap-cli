@@ -1049,7 +1049,7 @@ public class LocalInstallerTests {
     }
 
     [Test]
-    public async Task The_embedding_manifest_comes_from_the_signed_bundle_manifest_or_is_absent() {
+    public async Task The_embedding_manifest_comes_from_the_signed_bundle_manifest_and_a_bad_version_is_refused() {
         var set     = new string('c', 64);
         using var offered = new FakeBundle(Tmp.PathTo("offered.tar.gz"), Version) {
             EmbeddingModel = new JsonObject {
@@ -1065,9 +1065,8 @@ public class LocalInstallerTests {
         await Assert.That(model?.ModelSet).IsEqualTo(set);
         await Assert.That(model?.TotalSize).IsEqualTo(42L);
         await Assert.That(await Installer().FetchEmbeddingManifestAsync(Version, CancellationToken.None)).IsNull();
-        await Assert.That(await Installer(offered).FetchEmbeddingManifestAsync("9.9.9", CancellationToken.None)).IsNull();
 
-        offered.ManifestMissing = true;
-        await Assert.That(await Installer(offered).FetchEmbeddingManifestAsync(Version, CancellationToken.None)).IsNull();
+        var refused = await Assert.ThrowsAsync<LocalInstallFailure>(() => Installer(offered).FetchEmbeddingManifestAsync("not a version", CancellationToken.None));
+        await Assert.That(refused!.Code).IsEqualTo(LocalInstallFailureCode.InvalidArguments);
     }
 }

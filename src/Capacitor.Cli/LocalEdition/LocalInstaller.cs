@@ -314,18 +314,9 @@ sealed class LocalInstaller(
     /// <exception cref="LocalInstallFailure"><paramref name="version"/> is not a release version, as the install refuses it.</exception>
     public async Task<LocalEmbeddingModelManifest?> FetchEmbeddingManifestAsync(string version, CancellationToken ct) {
         try {
-            byte[] bytes;
-            string signature;
-
-            try {
-                (bytes, signature) = await bundles.FetchManifestAsync(version, platform.Rid, ct);
-            } catch (ArgumentException ex) {
-                throw new LocalInstallFailure(LocalInstallFailureCode.InvalidArguments, ex.Message);
-            }
-
-            return LocalBundleManifest.Verify(bytes, signature, manifestKey, version, platform.Rid).EmbeddingModel;
-        } catch (LocalBundleException) {
-            return null;
+            return await new LocalEmbeddingOffer(bundles, manifestKey, platform.Rid).LookupAsync(version, ct);
+        } catch (ArgumentException ex) {
+            throw new LocalInstallFailure(LocalInstallFailureCode.InvalidArguments, ex.Message);
         }
     }
 
