@@ -53,6 +53,7 @@ public class WorkContextClientTests {
         await Assert.That(outcome.Body!.AvatarUrl).IsEqualTo("https://example.test/a.png");
         await Assert.That(outcome.Body.Owns("github:5")).IsTrue();
         await Assert.That(outcome.Body.Owns("github:6")).IsFalse();
+        await Assert.That(outcome.Body.Owns("5")).IsTrue();
     }
 
     [Test]

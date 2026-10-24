@@ -1544,6 +1544,27 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_read_takes_the_viewers_avatar_off_the_requester_row() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with { Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png" } });
+                await h.PushAsync(Dto() with { Requester = "user_a" });
+                await WaitUntilAsync(() => h.Vm.RequesterAvatarUrl is not null, what: "the viewer's avatar");
+
+                h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+                h.SignIn.OnNext(ReactiveUnit.Default);
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.SignedOut, what: "the signed-out read");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     [Arguments("user_01HZZZZZZZZZZZZZZZZZZZZZZZ")]
     [Arguments("github:")]
     [Arguments("github:-5")]

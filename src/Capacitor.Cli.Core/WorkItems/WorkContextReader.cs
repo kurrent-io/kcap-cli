@@ -6,8 +6,8 @@ public enum WorkContextReadKind { Ready, SessionUnknown, SignedOut, NotInPlan, U
 /// null <see cref="Primary"/> is the no-work-item state; <see cref="ItemFailed"/>,
 /// <see cref="TopologyFailed"/> and <see cref="SummaryFailed"/> degrade a section without failing
 /// the read. <see cref="Item"/> is served for the primary and may carry a different id than it.
-/// <see cref="Viewer"/> is read only when asked for; <see cref="ViewerFailed"/> means no answer
-/// arrived, so the caller should ask again.
+/// <see cref="Viewer"/> is read only when asked for; <see cref="ViewerFailed"/> means no usable
+/// answer arrived, so the caller should ask again. A refusal such as an older server's 404 is an answer.
 public sealed record WorkContextRead(
         WorkContextReadKind                         Kind,
         IReadOnlyList<SessionWorkItemAssignmentDto> Assignments,
@@ -51,7 +51,8 @@ public static class WorkContextReader {
         var topology = topologyTask is null ? null : await topologyTask.ConfigureAwait(false);
         var viewer   = viewerTask is null ? null : await viewerTask.ConfigureAwait(false);
 
-        if (assignments.StatusCode == 401 || summary.StatusCode == 401 || item?.StatusCode == 401 || topology?.StatusCode == 401)
+        if (assignments.StatusCode == 401 || summary.StatusCode == 401 || item?.StatusCode == 401 || topology?.StatusCode == 401
+         || viewer?.StatusCode == 401)
             return WorkContextRead.Of(WorkContextReadKind.SignedOut);
 
         switch (assignments) {
@@ -75,7 +76,7 @@ public static class WorkContextReader {
             SummaryFailed: !summary.Succeeded,
             Detail: null) {
             Viewer       = viewer is { Succeeded: true } ? viewer.Body : null,
-            ViewerFailed = viewer is { StatusCode: 0 },
+            ViewerFailed = viewer is { StatusCode: 0 } or { StatusCode: >= 200 and < 300, Body: null },
         };
     }
 

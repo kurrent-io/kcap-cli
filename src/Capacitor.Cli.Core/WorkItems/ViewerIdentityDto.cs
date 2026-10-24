@@ -9,5 +9,9 @@ public sealed record ViewerIdentityDto {
     [JsonPropertyName("avatar_url")] public string?               AvatarUrl { get; init; }
     [JsonPropertyName("ids")]        public IReadOnlyList<string> Ids       { get; init; } = [];
 
-    public bool Owns(string userId) => userId == UserId || Ids.Contains(userId);
+    /// A bare number is a legacy GitHub id; the server lists it as `github:{n}`.
+    public bool Owns(string userId) {
+        var id = userId.Length > 0 && userId.All(char.IsAsciiDigit) ? $"github:{userId}" : userId;
+        return id == UserId || Ids.Contains(id);
+    }
 }

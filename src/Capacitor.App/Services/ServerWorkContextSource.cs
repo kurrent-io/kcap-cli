@@ -9,9 +9,12 @@ namespace Capacitor.App.Services;
 public sealed class ServerWorkContextSource : IWorkContextSource, IAsyncDisposable {
     readonly AuthenticatedServerReads<WorkContextClient> _reads;
     readonly LastReads<WorkContextRead> _last = new();
-    // Asked once per credential: who the viewer is does not change between sessions.
-    volatile ViewerIdentityDto? _viewer;
-    volatile bool _viewerSettled;
+    // Asked once per credential. _last.Generation moves on every credential change, so a viewer
+    // settled under an older one, or by a read that began before the change, is never served.
+    readonly Lock _viewerLock = new();
+    SettledViewer? _viewer;
+
+    sealed record SettledViewer(long Generation, ViewerIdentityDto? Identity);
 
     public ServerWorkContextSource(ConfigRoot config, ProfileContext? profiles, ProfileOverrides env,
             MachineAuth machine, AuthenticatedServerReads<WorkContextClient>.ClientFactory? factory = null,
@@ -19,33 +22,36 @@ public sealed class ServerWorkContextSource : IWorkContextSource, IAsyncDisposab
         _reads = new(config, profiles, env, machine, (http, url) => new WorkContextClient(http, url), factory, localRoot: localRoot);
     }
     public async Task<WorkContextRead> ReadAsync(string sessionId, CancellationToken ct) {
-        var readViewer = !_viewerSettled;
-        var read = await _last.RecordAsync(sessionId, () => _reads.ReadAsync(
-            (channel, token) => WorkContextReader.ReadAsync(channel, sessionId, readViewer, token), read => read.Kind == WorkContextReadKind.SignedOut,
-            WorkContextRead.Of(WorkContextReadKind.SignedOut), WorkContextRead.Of(WorkContextReadKind.Unreachable, "disposed"), ct),
+        var read = await _last.RecordAsync(sessionId, () => ReadWithViewerAsync(sessionId, ct),
             read => read.Kind switch { WorkContextReadKind.Ready => true, WorkContextReadKind.Unreachable => null, _ => false }).ConfigureAwait(false);
         // A lapsed credential ends what every session's cache may still show.
-        if (read.Kind == WorkContextReadKind.SignedOut) {
-            _last.Clear();
-            ForgetViewer();
-            return read;
-        }
-        if (readViewer && read.Kind == WorkContextReadKind.Ready && !read.ViewerFailed) {
-            _viewer = read.Viewer;
-            _viewerSettled = true;
-        }
-        return read with { Viewer = _viewer };
+        if (read.Kind == WorkContextReadKind.SignedOut) _last.Clear();
+        return read;
     }
+
+    async Task<WorkContextRead> ReadWithViewerAsync(string sessionId, CancellationToken ct) {
+        long generation;
+        SettledViewer? known;
+        lock (_viewerLock) {
+            generation = _last.Generation;
+            known = _viewer?.Generation == generation ? _viewer : null;
+        }
+        var read = await _reads.ReadAsync(
+            (channel, token) => WorkContextReader.ReadAsync(channel, sessionId, readViewer: known is null, token), read => read.Kind == WorkContextReadKind.SignedOut,
+            WorkContextRead.Of(WorkContextReadKind.SignedOut), WorkContextRead.Of(WorkContextReadKind.Unreachable, "disposed"), ct).ConfigureAwait(false);
+        if (read.Kind != WorkContextReadKind.Ready) return read;
+
+        lock (_viewerLock) {
+            if (generation != _last.Generation) return read with { Viewer = null };
+            if (known is null && !read.ViewerFailed) known = _viewer = new(generation, read.Viewer);
+            return read with { Viewer = known?.Identity };
+        }
+    }
+
     public WorkContextRead? Cached(string sessionId) => _last.Get(sessionId);
     public ValueTask DisposeAsync() => _reads.DisposeAsync();
     public void InvalidateAuthentication() {
         _reads.Invalidate();
         _last.Clear();
-        ForgetViewer();
-    }
-
-    void ForgetViewer() {
-        _viewerSettled = false;
-        _viewer = null;
     }
 }

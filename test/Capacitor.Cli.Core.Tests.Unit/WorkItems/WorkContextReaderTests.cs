@@ -87,8 +87,9 @@ public class WorkContextReaderTests {
 
     [Test]
     [Arguments(0, true)]
+    [Arguments(200, true)]
     [Arguments(404, false)]
-    public async Task A_viewer_read_without_an_answer_fails_and_a_refused_one_settles_empty(int status, bool failed) {
+    public async Task A_viewer_read_without_a_usable_answer_fails_and_a_refused_one_settles_empty(int status, bool failed) {
         var channel = new ScriptedChannel { Viewer = new(status, null, null) };
 
         var read = await WorkContextReader.ReadAsync(channel, "s1", readViewer: true, CancellationToken.None);
@@ -96,6 +97,15 @@ public class WorkContextReaderTests {
         await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.Ready);
         await Assert.That(read.Viewer).IsNull();
         await Assert.That(read.ViewerFailed).IsEqualTo(failed);
+    }
+
+    [Test]
+    public async Task A_401_on_the_viewer_alone_signs_the_read_out() {
+        var channel = new ScriptedChannel { Viewer = new(401, null, null) };
+
+        var read = await WorkContextReader.ReadAsync(channel, "s1", readViewer: true, CancellationToken.None);
+
+        await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.SignedOut);
     }
 
     [Test]

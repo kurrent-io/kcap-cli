@@ -46,10 +46,11 @@ public class ServerWorkContextSourceTests {
     static ProfileContext Profiles(ConfigRoot config) => Resolutions.At("http://server.test", config);
 
     static (ServerWorkContextSource Source, List<ScriptedHandler> Handlers) Build(
-            ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null) {
+            ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null, Action<ScriptedHandler>? created = null) {
         var handlers = new List<ScriptedHandler>();
         var source = new ServerWorkContextSource(config, profiles, ProfileOverrides.None, MachineAuth.None, (_, _, _, _) => {
             var handler = new ScriptedHandler();
+            created?.Invoke(handler);
             handlers.Add(handler);
             return Task.FromResult((new HttpClient(handler), status?.Invoke() ?? AuthStatus.Ok));
         });
@@ -80,6 +81,31 @@ public class ServerWorkContextSourceTests {
         await Assert.That(second.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
         var asked = handlers.Sum(h => h.Paths.Count(p => p == "/api/users/me/identity"));
         await Assert.That(asked).IsEqualTo(2);
+        await Assert.That(source.Cached(Session)!.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await source.DisposeAsync();
+    }
+
+    /// The read parks all three requests before the credential changes, so its identity answer
+    /// arrives under a retired credential and must neither be served nor spare the next read its ask.
+    [Test]
+    public async Task A_viewer_read_under_a_retired_credential_settles_nothing() {
+        var gates = new[] { new TaskCompletionSource(), new TaskCompletionSource(), new TaskCompletionSource() };
+        var (source, handlers) = Build(Config.Root, Profiles(Config.Root), created: h => {
+            if (gates.Any(g => !g.Task.IsCompleted)) foreach (var gate in gates) h.Gates.Enqueue(gate);
+        });
+        var stale = source.ReadAsync(Session, CancellationToken.None);
+        await WorkspaceFixtures.WaitUntilAsync(
+            () => handlers.Count == 1 && handlers[0].Gates.Count == 0,
+            what: "the stale read's three requests parked on their gates");
+        source.InvalidateAuthentication();
+        foreach (var gate in gates) gate.SetResult();
+
+        var staleRead = await stale;
+        var next = await source.ReadAsync(Session, CancellationToken.None);
+
+        await Assert.That(staleRead.Viewer).IsNull();
+        await Assert.That(next.Viewer).IsNotNull();
+        await Assert.That(handlers[1].Paths).Contains("/api/users/me/identity");
         await source.DisposeAsync();
     }
 

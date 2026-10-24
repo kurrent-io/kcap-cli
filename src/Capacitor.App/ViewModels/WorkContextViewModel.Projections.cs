@@ -229,6 +229,11 @@ public sealed partial class WorkContextViewModel {
             ? own
             : GitHubAvatarUrl(_requesterId);
 
+    void ForgetViewer() {
+        _viewer = null;
+        ResolveRequesterAvatar();
+    }
+
     static string? GitHubAvatarUrl(string? userId) =>
         userId is not null && userId.StartsWith("github:", StringComparison.Ordinal)
         && long.TryParse(userId.AsSpan(7), NumberStyles.None, CultureInfo.InvariantCulture, out var id) && id > 0
@@ -291,10 +296,8 @@ public sealed partial class WorkContextViewModel {
     }
 
     void ApplyReady(WorkContextRead read) {
-        if (read.Viewer is { } viewer) {
-            _viewer = viewer;
-            ResolveRequesterAvatar();
-        }
+        _viewer = read.Viewer;
+        ResolveRequesterAvatar();
         if (read.Primary is null) {
             ClearCard();
             ApplyLinks(read);
