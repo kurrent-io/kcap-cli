@@ -52,4 +52,23 @@ public class HistoryImportRunTests {
         await Assert.That(shown).IsEqualTo(count);
         await Assert.That(measured).IsEqualTo(progress);
     }
+
+    /// With no count to measure against, progress is the share of passes that have completed.
+    [Test]
+    public async Task Without_a_count_progress_follows_completed_passes() {
+        var gate = new TaskCompletionSource<StreamingResult>();
+        var calls = 0;
+        var cli = new FakeKcapCli {
+            ImportBehavior = (_, _, _) => ++calls < 2 ? Task.FromResult(new StreamingResult(0, false, [])) : gate.Task,
+        };
+        var run = new HistoryImportRun(0, 1, "from the last 90 days", 2, action => action());
+        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"]), new ImportRequest(ImportScopeChoice.Repo, null, [], ["c/d"])]);
+
+        var afterFirst = run.Progress;
+        gate.SetResult(new StreamingResult(0, false, []));
+        await run.Completion;
+
+        await Assert.That(afterFirst).IsEqualTo(50.0);
+        await Assert.That(run.Progress).IsEqualTo(100.0);
+    }
 }

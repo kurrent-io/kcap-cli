@@ -71,32 +71,66 @@ public class MainWindowViewModelTests {
             new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests, drafts: drafts);
     }
 
-    /// After setup closes, the main window keeps counting against the total setup showed.
+    static HistoryImportRun ImportRun(int expected, int passes) =>
+        new(expected, 2, "from the last 90 days", passes, action => action());
+
+    static ImportRequest Pass() => new(ImportScopeChoice.Repo, null, [], ["a/b"]);
+
+    /// After setup closes, the main window keeps counting against the total setup showed, and its bar moves as sessions settle.
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_running_import_keeps_its_total_and_progress_after_setup() {
-        var gate = new TaskCompletionSource<StreamingResult>();
-        Action<StreamedLine>? emit = null;
-        var cli = new FakeKcapCli {
-            ImportBehavior = (_, onLine, _) => {
-                emit = onLine;
-                return gate.Task;
-            },
-        };
-        var run = new HistoryImportRun(94, 2, "from the last 90 days", 1, action => action());
-        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"])]);
-        for (var i = 0; i < 46; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i} (claude)"));
-
-        var (status, progress) = await AvaloniaSession.DispatchAsync(() => {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var gate = new TaskCompletionSource<StreamingResult>();
+            Action<StreamedLine>? emit = null;
+            var run = ImportRun(94, 1);
             var vm = new MainWindowViewModel(
                 new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System, historyImport: run);
-            return (vm.HistoryImportStatus, vm.HistoryImportProgress);
-        });
-        gate.SetResult(new StreamingResult(0, false, []));
-        await run.Completion;
+            using var activation = vm.Activator.Activate();
+            var shown = ProgressShown(vm);
 
-        await Assert.That(status).IsEqualTo("Importing history · 46 of 94 sessions processed");
-        await Assert.That(progress).IsEqualTo(100.0 * 46 / 94);
+            run.Start(new FakeKcapCli { ImportBehavior = (_, onLine, _) => { emit = onLine; return gate.Task; } }, [Pass()]);
+            for (var i = 0; i < 46; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i} (claude)"));
+
+            await Assert.That(vm.HistoryImportStatus).IsEqualTo("Importing history · 46 of 94 sessions processed");
+            await Assert.That(shown.LastOrDefault()).IsEqualTo(100.0 * 46 / 94);
+
+            gate.SetResult(new StreamingResult(0, false, []));
+            await run.Completion;
+        });
+    }
+
+    /// With no total to count against, the bar moves when a pass completes, even if no session settled in it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_total_the_bar_follows_completed_passes() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var gate = new TaskCompletionSource<StreamingResult>();
+            var run = ImportRun(0, 2);
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System, historyImport: run);
+            using var activation = vm.Activator.Activate();
+            var shown = ProgressShown(vm);
+
+            var calls = 0;
+            run.Start(new FakeKcapCli {
+                ImportBehavior = (_, _, _) => ++calls < 2 ? Task.FromResult(new StreamingResult(0, false, [])) : gate.Task,
+            }, [Pass(), Pass()]);
+
+            await Assert.That(shown.LastOrDefault()).IsEqualTo(50.0);
+
+            gate.SetResult(new StreamingResult(0, false, []));
+            await run.Completion;
+        });
+    }
+
+    /// Every value the window announced for its import bar, in order.
+    static List<double> ProgressShown(MainWindowViewModel vm) {
+        var shown = new List<double>();
+        vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(MainWindowViewModel.HistoryImportProgress)) shown.Add(vm.HistoryImportProgress);
+        };
+        return shown;
     }
 
     [Test]
