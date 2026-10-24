@@ -377,20 +377,22 @@ public class InstallStepViewModelTests {
     public async Task Entry_asks_about_search_and_starts_nothing_until_install() {
         var cli = new FakeKcapCli { SetupLocalBehavior = LocalSetupScript.Prints(0, LocalSetupScript.Committed) };
 
-        var (choice, progress, runsBefore) = await AvaloniaSession.DispatchAsync(async () => {
+        var (choice, progress, runsBefore, askingTitle, installingTitle) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
             await install.OnEnterAsync(CancellationToken.None);
-            var shown = (install.ChoiceVisible, install.ProgressVisible, cli.SetupLocalCallCount);
+            var shown = (install.ChoiceVisible, install.ProgressVisible, cli.SetupLocalCallCount, install.Title);
 
             install.Search.UseKeyword = true;
             await install.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
-            return shown;
+            return (shown.ChoiceVisible, shown.ProgressVisible, shown.SetupLocalCallCount, shown.Title, install.Title);
         });
 
         await Assert.That(choice).IsTrue();
         await Assert.That(progress).IsFalse();
         await Assert.That(runsBefore).IsEqualTo(0);
+        await Assert.That(askingTitle).IsEqualTo("One more step before installing");
+        await Assert.That(installingTitle).IsEqualTo("Installing kcap on this Mac");
         await Assert.That(cli.SetupLocalEmbeddings).IsEquivalentTo([LocalEmbeddingChoice.KeywordOnly], CollectionOrdering.Matching);
     }
 

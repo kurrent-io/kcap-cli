@@ -57,7 +57,8 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     }
 
     public WizardStepId Id                => WizardStepId.Install;
-    public string       Title             => "Installing kcap on this Mac";
+    /// Nothing installs while the search choice is up, so the headline says the page is still asking.
+    public string       Title             => ChoiceVisible ? "One more step before installing" : "Installing kcap on this Mac";
     public string       Eyebrow           => "Install";
     public bool         Applicable        => true;
     public bool         Satisfied         => _controller.Outcome is LocalInstallOutcome.Installed;
@@ -68,7 +69,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     public bool         CanContinue       => !ChoiceVisible || (Search.Valid && !Search.Checking);
     public bool         PassThrough       => !_onLocalPath() || _controller.Outcome is LocalInstallOutcome.Installed;
 
-    public string Lede => "The server runs on this Mac and your sessions stay on it. This usually takes a minute or two.";
+    public string Lede => "The server runs on this Mac and your sessions stay on it";
 
     public LocalSetupProgress Progress => _controller.Progress;
 
@@ -79,6 +80,7 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
         get => _choosing;
         private set {
             this.RaiseAndSetIfChanged(ref _choosing, value);
+            this.RaisePropertyChanged(nameof(Title));
             this.RaisePropertyChanged(nameof(ProgressVisible));
             this.RaisePropertyChanged(nameof(OwnsPrimaryAction));
             this.RaisePropertyChanged(nameof(NextLabel));
