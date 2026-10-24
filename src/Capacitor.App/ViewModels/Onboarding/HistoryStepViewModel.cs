@@ -177,11 +177,12 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    /// Who can read a Shared import, said outside Customize because Shared is the cloud default.
+    /// Who can read a Shared import, said outside Customize because Shared is the cloud default. Once the
+    /// import starts the choices are locked, so it stops pointing at them.
     public string? SharingLine =>
-        !_discoveredLocal && Groups.SelectMany(g => g.Repos).Any(r => r.Level == ImportLevel.Shared)
-            ? "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me"
-            : null;
+        _discoveredLocal || !Groups.SelectMany(g => g.Repos).Any(r => r.Level == ImportLevel.Shared) ? null
+        : ImportStarted ? "Shared imports follow your recording privacy setting"
+        :                 "Shared imports follow your recording privacy setting. Use Customize to keep a repository to Only me";
 
     /// Titling runs your own agent, so it is a choice only where a harness that titles is in scope.
     public bool TitlingOffered => HasRepos && FromHarnesses.Any(h => h is HarnessId.Claude or HarnessId.Codex);
@@ -232,6 +233,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     void OnRunChanged(object? sender, PropertyChangedEventArgs e) {
         if (e.PropertyName != nameof(HistoryImportRun.State)) return;
         this.RaisePropertyChanged(nameof(ImportStarted));
+        this.RaisePropertyChanged(nameof(SharingLine));
         this.RaisePropertyChanged(nameof(Skippable));
         this.RaisePropertyChanged(nameof(NextLabel));
         this.RaisePropertyChanged(nameof(Satisfied));

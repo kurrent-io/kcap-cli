@@ -163,6 +163,10 @@ public class HistoryStepViewModelTests {
         await h.EnterAsync();
         h.Repo("solo/notes").Level = ImportLevel.OnlyMe;
         h.Vm.TitleLocally = false;
+        var sharing = new List<string?>();
+        h.Vm.PropertyChanged += (_, e) => {
+            if (e.PropertyName == nameof(HistoryStepViewModel.SharingLine)) sharing.Add(h.Vm.SharingLine);
+        };
 
         var left = await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
         var first = h.Cli.ImportRequests.Single();
@@ -177,6 +181,7 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Cli.ImportRequests[1].Repos!).IsEquivalentTo(["acme/web", "acme/api"], CollectionOrdering.Matching);
         await Assert.That(h.Cli.ImportRequests[1].Private).IsFalse();
         await Assert.That(h.Vm.Run!.Expected).IsEqualTo(27);
+        await Assert.That(sharing.Last()).IsEqualTo("Shared imports follow your recording privacy setting");
     }
 
     [Test]
