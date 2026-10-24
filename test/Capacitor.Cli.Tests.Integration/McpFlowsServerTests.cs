@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json.Nodes;
 using WireMock.RequestBuilders;
 using WireMock.ResponseBuilders;
@@ -21,6 +22,7 @@ public class McpFlowsServerTests : IDisposable {
 
     readonly WireMockServer _server           = WireMockServer.Start();
     readonly List<Process>  _spawnedProcesses = [];
+    readonly List<int>      _orphanedPids     = [];
 
     [Before(Test)]
     public void InitWorkspaceRepo() => Repo.AddRemote("https://github.com/test-owner/test-repo.git");
@@ -32,6 +34,15 @@ public class McpFlowsServerTests : IDisposable {
                 p.Dispose();
             } catch {
                 // best-effort cleanup
+            }
+        }
+
+        foreach (var pid in _orphanedPids) {
+            try {
+                using var orphan = Process.GetProcessById(pid);
+                if (!orphan.HasExited) orphan.Kill(entireProcessTree: true);
+            } catch {
+                // already gone
             }
         }
 
@@ -71,7 +82,8 @@ public class McpFlowsServerTests : IDisposable {
             string? workingDirectory  = null,
             string? harnessSessionId  = null,
             string? harnessProjectDir = null,
-            string? hostedAgentId     = null) {
+            string? hostedAgentId     = null,
+            bool    orphaned          = false) {
         _server.Given(Request.Create().WithPath("/auth/config").UsingGet())
             .RespondWith(Response.Create().WithStatusCode(200).WithBody($$"""{"provider":"{{provider}}"}"""));
 
@@ -82,8 +94,38 @@ public class McpFlowsServerTests : IDisposable {
 
         ApplyHarnessSignals(psi, harnessSessionId, harnessProjectDir, hostedAgentId);
 
+        if (orphaned && !OperatingSystem.IsWindows()) return StartOrphaned(psi);
+
         var process = Process.Start(psi) ?? throw new InvalidOperationException("Failed to start kcap process");
         _spawnedProcesses.Add(process);
+        return process;
+    }
+
+    /// <summary>
+    /// Starts the server through a shell that exits straight away, so the server is reparented to init and its
+    /// ancestry holds none of the processes this suite runs under. A server that finds a hosting variable walks its
+    /// ancestry for coding agents, and the coding agent a developer runs the suite from must not be one of them.
+    /// The returned process is the shell; its pipes are the server's, which the shell hands down. Windows does not
+    /// reparent, and a walk there stops at the parent that has gone.
+    /// </summary>
+    Process StartOrphaned(ProcessStartInfo server) {
+        var shell = new ProcessStartInfo("/bin/sh") {
+            RedirectStandardInput  = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError  = true,
+            UseShellExecute        = false,
+            WorkingDirectory       = server.WorkingDirectory,
+        };
+        // An asynchronous list reads stdin from /dev/null unless it is redirected explicitly.
+        foreach (var arg in new[] { "-c", "\"$@\" <&0 & echo $! >&2", "sh", server.FileName }) shell.ArgumentList.Add(arg);
+        foreach (var arg in server.ArgumentList) shell.ArgumentList.Add(arg);
+        shell.Environment.Clear();
+        foreach (var (key, value) in server.Environment) shell.Environment[key] = value;
+
+        var process = Process.Start(shell) ?? throw new InvalidOperationException("Failed to start the shell");
+        _spawnedProcesses.Add(process);
+        _orphanedPids.Add(int.Parse(process.StandardError.ReadLine() ?? throw new InvalidOperationException("The shell named no pid"), CultureInfo.InvariantCulture));
+
         return process;
     }
 
@@ -1796,9 +1838,7 @@ public class McpFlowsServerTests : IDisposable {
     }
 
     /// <summary>The whole path through the real process: the running harness's session, the hosting
-    /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.
-    /// It fails when the suite runs under the Claude desktop app: the child's ancestry walk counts the app and its
-    /// <c>claude</c> as two agents, judges the server nested and sheds <c>KCAP_AGENT_ID</c>.</summary>
+    /// agent's id, a worktree collapsed to its repository, and one request with nothing read back.</summary>
     [Test]
     public async Task Start_agent_posts_once_and_returns_without_reading_the_agent_back() {
         const string runningSession = "11111111-2222-3333-4444-555555555555";
@@ -1818,7 +1858,8 @@ public class McpFlowsServerTests : IDisposable {
             "aaaaaaaabbbbbbbbccccccccdddddddd",
             harnessSessionId:  runningSession,
             harnessProjectDir: Repo.Path,
-            hostedAgentId:     "0f1e2d3c");
+            hostedAgentId:     "0f1e2d3c",
+            orphaned:          true);
 
         try {
             var args = new JsonObject {
