@@ -22,6 +22,7 @@ public class ServerWorkContextSourceTests {
         public readonly Queue<TaskCompletionSource> Gates = new();
         public int Sent;
         public bool Disposed;
+        public readonly List<string> Paths = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) {
             Interlocked.Increment(ref Sent);
@@ -29,7 +30,10 @@ public class ServerWorkContextSourceTests {
             lock (Gates) gate = Gates.Count > 0 ? Gates.Dequeue() : null;
             if (gate is not null) await gate.Task.WaitAsync(ct);
             var path = request.RequestUri!.AbsolutePath;
-            var body = path.Contains("/summary", StringComparison.Ordinal) ? """{"session_id":"s","repositories":[],"pull_requests":[]}""" : "[]";
+            lock (Paths) Paths.Add(path);
+            var body = path.Contains("/summary", StringComparison.Ordinal) ? """{"session_id":"s","repositories":[],"pull_requests":[]}"""
+                : path.EndsWith("/identity", StringComparison.Ordinal) ? """{"user_id":"user_a","avatar_url":"https://example.test/a.png","ids":["user_a"]}"""
+                : "[]";
             return new HttpResponseMessage(Status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
         }
 
@@ -60,6 +64,22 @@ public class ServerWorkContextSourceTests {
 
         await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.SignedOut);
         await Assert.That(handlers).IsEmpty();
+        await source.DisposeAsync();
+    }
+
+    [Test]
+    public async Task The_viewer_is_asked_once_per_credential_and_carried_on_every_read() {
+        var (source, handlers) = Build(Config.Root, Profiles(Config.Root));
+
+        var first  = await source.ReadAsync(Session, CancellationToken.None);
+        var second = await source.ReadAsync(Session, CancellationToken.None);
+        source.InvalidateAuthentication();
+        await source.ReadAsync(Session, CancellationToken.None);
+
+        await Assert.That(first.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await Assert.That(second.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        var asked = handlers.Sum(h => h.Paths.Count(p => p == "/api/users/me/identity"));
+        await Assert.That(asked).IsEqualTo(2);
         await source.DisposeAsync();
     }
 
