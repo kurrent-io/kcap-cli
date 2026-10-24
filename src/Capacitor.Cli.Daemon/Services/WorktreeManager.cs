@@ -441,13 +441,14 @@ public partial class WorktreeManager(
             await RunGit(worktreePath, GitTimeout, time, noHooks, "config", setting.Key, setting.Value);
         // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. verbatim, .. standaloneOverrides], "add", "-A");
+        await RunGit(worktreePath, GitTimeout, time, sourceReadOnly: false, [.. noHooks, .. verbatim, .. standaloneOverrides],
+            NoSystemAttributes, "add", "-A");
         // Exit 0 = empty index (greenfield: nothing to copy). Exit 1 = staged content.
         // Any other code is a real git failure — without this check, commit --allow-empty would
         // hide it behind a successful empty tree.
         var staged = await RunGitCaptureResult(
             worktreePath, GitTimeout, time, sourceReadOnly: false,
-            [.. noHooks, .. verbatim, .. standaloneOverrides],
+            [.. noHooks, .. verbatim, .. standaloneOverrides], NoSystemAttributes,
             "diff", "--cached", "--quiet");
         if (staged.ExitCode is not (0 or 1))
             throw new InvalidOperationException(
@@ -458,11 +459,10 @@ public partial class WorktreeManager(
         var commitArgs = staged.ExitCode == 0
             ? new[] { "commit", "--allow-empty", "-m", "Initial snapshot" }
             : new[] { "commit", "-m", "Initial snapshot" };
-        await RunGit(worktreePath, GitTimeout,
-            time,
+        await RunGit(worktreePath, GitTimeout, time, sourceReadOnly: false,
             [.. noHooks, .. verbatim,
              new("user.email", "daemon@kcap.local"), new("user.name", "kcap"), new("commit.gpgsign", "false")],
-            commitArgs);
+            NoSystemAttributes, commitArgs);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }
@@ -511,6 +511,10 @@ public partial class WorktreeManager(
     /// empty one, so only the project's <c>.gitattributes</c> decides a file's conversion.</summary>
     static GitConfigOverride[] VerbatimLineEndings(string emptyAttributesFile) =>
         [new("core.autocrlf", "false"), new("core.safecrlf", "false"), new("core.attributesFile", emptyAttributesFile)];
+
+    /// <summary>The machine's attributes file is not the project's either, and no config replaces it, so the snapshot's
+    /// add, diff and commit skip it.</summary>
+    static readonly KeyValuePair<string, string>[] NoSystemAttributes = [new("GIT_ATTR_NOSYSTEM", "1")];
 
     /// <summary>An empty attributes file inside the snapshot's git dir, as a path git reads the same on every
     /// platform: a config value read from the environment is not unescaped, so it carries no backslash.</summary>
@@ -1756,8 +1760,8 @@ public partial class WorktreeManager(
     static readonly TimeSpan FetchTimeout = TimeSpan.FromMinutes(2);
 
     /// <summary>How long to wait for a timed-out git process to actually die after being killed,
-    /// before giving up and unwinding anyway. See the timeout path in
-    /// <see cref="RunGitCaptureResult"/> for why the wait matters.</summary>
+    /// before giving up and unwinding anyway. The wait is why the capture path's timeout cannot let a
+    /// killed git outlive the metadata gate its caller holds.</summary>
     static readonly TimeSpan KillGrace = TimeSpan.FromSeconds(5);
 
     static async Task<bool> IsGitRepoWithCommits(string path, TimeProvider time) {
@@ -1818,10 +1822,15 @@ public partial class WorktreeManager(
             params string[] args) =>
         RunGit(cwd, timeout, time, sourceReadOnly: false, config, args);
 
+    static Task RunGit(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
+            params string[] args) =>
+        RunGit(cwd, timeout, time, sourceReadOnly, config, [], args);
+
     static async Task RunGit(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
-            params string[] args) {
-        var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, args);
+            KeyValuePair<string, string>[] environment, params string[] args) {
+        var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, environment, args);
         if (result.ExitCode != 0)
             throw new InvalidOperationException(
                 $"git {string.Join(' ', args)} failed: {GitFailureDetail(result.Stderr, result.Stdout)}");
@@ -1854,12 +1863,17 @@ public partial class WorktreeManager(
         return string.Equals(result.Stdout.Trim(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
+    internal static Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
-            params string[] args) {
+            params string[] args) =>
+        RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, [], args);
+
+    static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
+            KeyValuePair<string, string>[] environment, params string[] args) {
         await ProveConfigTransportIfCarryingAsync(cwd, time, sourceReadOnly, config);
 
-        return await RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, args);
+        return await RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, environment, args);
     }
 
     /// <summary>
@@ -1888,10 +1902,16 @@ public partial class WorktreeManager(
     /// <summary>Runs git WITHOUT proving the transport first. Only the probe itself may use this — it is
     /// what the gate above is measuring, so routing it through the gate would deadlock on the
     /// non-reentrant semaphore.</summary>
+    static Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResultUnproven(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
+            params string[] args) =>
+        RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, [], args);
+
     static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResultUnproven(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
-            params string[] args) {
+            KeyValuePair<string, string>[] environment, params string[] args) {
         var psi = NewGitPsi(cwd, args, sourceReadOnly, config);
+        foreach (var (key, value) in environment) psi.Environment[key] = value;
         using var proc = Process.Start(psi)!;
         using var cts = new CancellationTokenSource(timeout, time);
 

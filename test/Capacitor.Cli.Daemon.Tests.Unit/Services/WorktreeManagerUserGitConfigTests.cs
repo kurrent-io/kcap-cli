@@ -1,6 +1,7 @@
 using Capacitor.Cli.Daemon.Services;
 using Capacitor.Tests.Helpers.Guards;
 using Microsoft.Extensions.Logging.Abstractions;
+using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
@@ -102,6 +103,30 @@ public class WorktreeManagerUserGitConfigTests {
         await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:crlf.txt").StdOut).IsEqualTo("one\r\ntwo\r\n");
         await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:project.txt").StdOut).IsEqualTo("one\ntwo\n");
         await Assert.That(snapshot.Do("check-attr", "text", "crlf.txt").Text).IsEqualTo("crlf.txt: text: unspecified");
+    }
+
+    /// <summary>The machine's attributes file lives at a path compiled into git, so no test can stage one. This pins
+    /// instead that the snapshot's add, diff and commit run with <c>GIT_ATTR_NOSYSTEM</c>, read from a recorder in front
+    /// of the real git. The <c>init</c> before them carries no such variable, which proves the recorder reads it.</summary>
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task A_standalone_snapshot_skips_the_machines_attributes_file() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("README.md", "hello");
+        var inherited = Environment.GetEnvironmentVariable("PATH") ?? "";
+        var realGit   = inherited.Split(Path.PathSeparator).Select(dir => Path.Combine(dir, "git")).First(File.Exists);
+        var log       = Tmp.PathTo("git.log");
+        var bin       = Tmp.CreateDir("bin");
+        bin.CreateExecutable("git",
+            $"#!/bin/sh\nprintf '%s %s\\n' \"${{GIT_ATTR_NOSYSTEM:-unset}}\" \"$1\" >> '{log}'\nexec '{realGit}' \"$@\"\n");
+        using var path = EnvScope.Exclusive("PATH", $"{bin}{Path.PathSeparator}{inherited}");
+
+        await NewManager().CreateAsync(source);
+
+        var calls = File.ReadAllLines(log);
+        await Assert.That(calls).Contains("unset init");
+        await Assert.That(calls).Contains("1 add");
+        await Assert.That(calls).Contains("1 diff");
+        await Assert.That(calls).Contains("1 commit");
     }
 
     /// <summary>A user who converts line endings strictly would have the snapshot refuse an LF file, and an agent
