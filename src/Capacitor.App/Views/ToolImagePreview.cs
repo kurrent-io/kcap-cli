@@ -22,6 +22,17 @@ public sealed class ToolImagePreview : Button {
     public static readonly StyledProperty<bool> ExpandsOnClickProperty =
         AvaloniaProperty.Register<ToolImagePreview, bool>(nameof(ExpandsOnClick), defaultValue: true);
 
+    public static readonly DirectProperty<ToolImagePreview, bool> UnavailableProperty =
+        AvaloniaProperty.RegisterDirect<ToolImagePreview, bool>(nameof(Unavailable), o => o.Unavailable);
+
+    bool _unavailable = true;
+
+    /// True when there is no path, or its load produced no image; false while a load is pending.
+    public bool Unavailable {
+        get => _unavailable;
+        private set => SetAndRaise(UnavailableProperty, ref _unavailable, value);
+    }
+
     readonly Image _image = new() {
         MaxHeight = Thumb,
         MaxWidth = 480,
@@ -86,6 +97,7 @@ public sealed class ToolImagePreview : Button {
         _expanded = false;
         _image.MaxHeight = Thumb;
         _image.MaxWidth = 480;
+        Unavailable = string.IsNullOrEmpty(path);
         if (string.IsNullOrEmpty(path)) return;
         var loaded = await Task.Run(() => ToolPreviewImages.Acquire(path)).ConfigureAwait(false);
         await Dispatcher.UIThread.InvokeAsync(() => {
@@ -96,6 +108,7 @@ public sealed class ToolImagePreview : Button {
             _loaded = loaded;
             _image.Source = loaded?.Image;
             IsVisible = _image.Source is not null;
+            Unavailable = !IsVisible;
         });
     }
 }

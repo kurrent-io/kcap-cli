@@ -128,12 +128,12 @@
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate x:DataType="vm:UserAttachment">
                                         <Panel Margin="0,2,8,2">
-                                            <views:ToolImagePreview Classes="kcapGhost" Path="{Binding PreviewPath}" ExpandsOnClick="False"
+                                            <views:ToolImagePreview x:Name="AttachmentPreview" Classes="kcapGhost" Path="{Binding PreviewPath}" ExpandsOnClick="False"
                                                                     ToolTip.Tip="{Binding FileName}"
                                                                     AutomationProperties.Name="{Binding FileName}"
                                                                     Command="{Binding $parent[views:ChatTabView].((vm:ChatTabViewModel)DataContext).OpenAttachmentCommand}"
                                                                     CommandParameter="{Binding}" />
-                                            <Border IsVisible="{Binding !HasPreview}" Padding="8,4" CornerRadius="8"
+                                            <Border IsVisible="{Binding #AttachmentPreview.Unavailable}" Padding="8,4" CornerRadius="8"
                                                     Background="{StaticResource KcapSurfaceBrush}"
                                                     BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1">
                                                 <StackPanel Orientation="Horizontal" Spacing="6">
