@@ -71,15 +71,17 @@ public class ClaudeCompletionNudgeTests {
     }
 
     [Test]
-    public async Task The_block_decision_is_one_json_object_naming_both_tools() {
+    public async Task The_block_decision_is_one_json_object_naming_the_close_declare_and_next_work_steps() {
         var decision = JsonNode.Parse(ClaudeCompletionNudge.BlockDecision)!;
 
         await Assert.That(ClaudeCompletionNudge.BlockDecision).DoesNotContain("\n");
         await Assert.That(decision["decision"]!.GetValue<string>()).IsEqualTo("block");
         await Assert.That(decision["reason"]!.GetValue<string>()).StartsWith("kcap: If the piece of work the user framed has reached a terminal state");
-        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(1) declare any remaining loose ends with declare_loose_end");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(1) close_loose_end each loose end this session declared or claimed whose work is now done");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("list_loose_ends with session_id or claimed_session_id");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(2) declare any remaining loose ends with declare_loose_end");
         await Assert.That(decision["reason"]!.GetValue<string>()).Contains("unless it says this session's attached work is still open");
-        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(2) call get_next_work");
+        await Assert.That(decision["reason"]!.GetValue<string>()).Contains("(3) call get_next_work");
     }
 
     static string Line(string text) =>
