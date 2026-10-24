@@ -18,7 +18,9 @@ public sealed record ChatSessionInfo(
         // Why the local daemon could not resume the agent after a restart. Null on the remote lane.
         string? Interruption = null,
         // When the local daemon saw the current turn start. Null on the remote lane and from an older daemon.
-        DateTime? WorkingSince = null) {
+        DateTime? WorkingSince = null,
+        // The local daemon's proof that a turn is running. Null on the remote lane and from an older daemon.
+        bool? TurnAttested = null) {
     /// True when this session is waiting on the user. Independent of the status word.
     public bool WaitsOnUser { get; init; }
 
@@ -37,7 +39,7 @@ public sealed record ChatSessionInfo(
         // the borrowed checkout for a reviewer.
         dto.WorktreePath ?? dto.RepoPath, dto.AwaitingInput,
         ended || SessionStatusDots.IsTerminal(dto.Status), ChatTabViewModel.ParticipantNotice(dto), dto.TranscriptPath,
-        dto.LiveSubagents, dto.UsageLimit, dto.TerminalDialog, dto.Interruption, dto.WorkingSince) {
+        dto.LiveSubagents, dto.UsageLimit, dto.TerminalDialog, dto.Interruption, dto.WorkingSince, dto.TurnAttested) {
         WaitsOnUser = SessionStatusDots.WaitsOnUser(dto), TakesAttachments = dto.Kind == "agent",
     };
 

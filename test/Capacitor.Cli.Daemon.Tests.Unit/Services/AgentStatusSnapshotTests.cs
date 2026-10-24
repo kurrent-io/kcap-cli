@@ -426,6 +426,28 @@ public class AgentStatusSnapshotTests {
         } finally { await fx.CleanupAsync(); }
     }
 
+    /// A relayed submit can attest a turn while the wait is already clear, so the attestation
+    /// pulses on its own; the wait flag alone would leave the app unaware the turn began.
+    [Test]
+    public async Task A_relayed_submit_attests_the_turn_on_the_wire_and_pulses_while_running() {
+        var fx = Build();
+        try {
+            var running = fx.Orchestrator.SeedAgentForTest("run");
+            var done    = fx.Orchestrator.SeedAgentForTest("done", status: "Completed");
+            string Json(string id) => JsonSerializer.Serialize(
+                fx.Orchestrator.SnapshotAgentsForStatus().Single(a => a.Id == id), StatusIpcJsonContext.Default.AgentStatusDto);
+            await Assert.That(Json("run")).Contains("\"turn_attested\":false");
+
+            var v0 = fx.Notifier.Version;
+            running.ActivityClock.SetAwaitingInput(false);
+            done.ActivityClock.SetAwaitingInput(false);
+
+            await Assert.That(fx.Notifier.Version).IsGreaterThan(v0);
+            await Assert.That(Json("run")).Contains("\"turn_attested\":true");
+            await Assert.That(Json("done")).Contains("\"turn_attested\":false");
+        } finally { await fx.CleanupAsync(); }
+    }
+
     /// A turn ending is a status change the app must see without waiting for another mutation,
     /// so the launch-path clock wiring pulses the generation on every flip.
     [Test]
