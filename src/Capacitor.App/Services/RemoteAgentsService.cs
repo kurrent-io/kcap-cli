@@ -14,6 +14,12 @@ public interface IRemoteAgentsService {
     IObservableCache<AgentInstanceDto, string> Agents { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; }
+    /// Replay-1, seeded unanswered at generation 0.
+    IObservable<DaemonListing> Listing { get; }
+    /// Replay-1, seeded with an empty list.
+    IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; }
+    /// Fetches the daemon listing now, ahead of any retry the backoff is waiting on.
+    Task RefreshDaemonsAsync();
 }
 
 /// An agents fetch's outcome: Rows is null on any failure (including Unauthorized), so a caller
@@ -28,16 +34,22 @@ public sealed record RemoteFetch(AgentInstanceDto[]? Rows, bool Unauthorized = f
 public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly SourceCache<AgentInstanceDto, string> _agents = new(a => a.AgentId);
     readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> _daemons = new([]);
+    readonly BehaviorSubject<DaemonListing> _listing = new(new(null, 0, false));
+    readonly BehaviorSubject<IReadOnlyList<DaemonAccountsDto>> _daemonAccounts = new([]);
     readonly IDisposable _subscriptions;
-    // Guards _generation/_lastSubject and each refresh kind's busy/rerun pair. _generation bumps
-    // on every Connected status carrying a subject, not only on a subject change, so any fetch
-    // issued before the latest connect is stale for both the cache-publish and the onUnauthorized
-    // check below.
-    // Admission (busy check / set rerun) and completion (rerun check / clear busy) share this
-    // same critical section, so a losing admission can never land between a drain loop reading
-    // rerun false and clearing busy.
     static readonly TimeSpan DaemonsRefreshTimeout = TimeSpan.FromSeconds(5);
+    // The listing otherwise refreshes only on a connect or a daemons push, so one failed fetch on a
+    // healthy connection would leave it unanswered, and account support unknown, until the next.
+    static readonly TimeSpan[] ListingRetryDelays = [
+        TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(6), TimeSpan.FromSeconds(12), TimeSpan.FromSeconds(24),
+        TimeSpan.FromSeconds(30),
+    ];
 
+    // Guards the mutable fields below. _generation bumps on every Connected status carrying a
+    // subject, so a fetch issued before the latest connect is stale for both publishing and
+    // onUnauthorized. Admission (busy check / set rerun) and completion (rerun check / clear busy)
+    // share one critical section, so a losing admission can never land between a drain loop
+    // reading rerun false and clearing busy.
     readonly Lock _lock = new();
     int _generation;
     string? _lastSubject;
@@ -46,17 +58,26 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     // park decision against the lane's CURRENT epoch rather than trusting this generation check
     // alone, whose lock releases before the callback runs.
     int _lastLaneEpoch;
+    bool _laneConnected;
+    bool _disposed;
     bool _agentsBusy;
     bool _agentsRerun;
     bool _daemonsBusy;
     bool _daemonsRerun;
+    bool _daemonAccountsBusy;
+    bool _daemonAccountsRerun;
     TaskCompletionSource? _daemonsInFlight;
+    ITimer? _listingRetry;
+    long _listingRetryTicket;
+    int _listingRetryAttempt;
+    readonly IServerLane _lane;
     readonly Action<int>? _onUnauthorized;
     readonly TimeProvider _time;
 
     public RemoteAgentsService(
             IServerLane lane, Func<CancellationToken, Task<RemoteFetch>> fetchAgents,
             TimeSpan? debounce = null, Action<int>? onUnauthorized = null, TimeProvider? time = null) {
+        _lane = lane;
         _onUnauthorized = onUnauthorized;
         _time = time ?? TimeProvider.System;
         var wait = debounce ?? TimeSpan.FromMilliseconds(250);
@@ -69,24 +90,25 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // Subscribed before the refresh triggers below (same lane.Status), so on a Connected
         // status this runs first: nothing seeded under one identity survives into another, even
         // when the refresh that follows fetches null and would otherwise leave stale rows in
-        // place. Caches clear only when the token subject changes; every Connected carrying a
-        // subject advances the generation, so an older fetch can neither publish nor report an
-        // auth failure.
-        var identityChange = lane.Status
-            .Where(s => s.State == ServerLaneState.Connected)
-            .Subscribe(s => {
-                lock (_lock) {
-                    if (s.Subject is not null) {
-                        if (_lastSubject is not null && _lastSubject != s.Subject) {
-                            _agents.Clear();
-                            _daemons.OnNext([]);
-                        }
-                        _generation++;
-                        _lastSubject = s.Subject;
+        // place, and the listing reads unanswered before the new generation's fetch starts.
+        var laneStatus = lane.Status.Subscribe(s => {
+            lock (_lock) {
+                _laneConnected = s.State == ServerLaneState.Connected;
+                ResetListingRetry();
+                if (!_laneConnected) return;
+                if (s.Subject is not null) {
+                    if (_lastSubject is not null && _lastSubject != s.Subject) {
+                        _agents.Clear();
+                        _daemons.OnNext([]);
+                        _daemonAccounts.OnNext([]);
                     }
-                    _lastLaneEpoch = s.Epoch;
+                    _generation++;
+                    _lastSubject = s.Subject;
+                    _listing.OnNext(new(null, _generation, false));
                 }
-            });
+                _lastLaneEpoch = s.Epoch;
+            }
+        });
 
         // Merge, not Concat: triggers must reach the refresh methods concurrently so a busy
         // refresh's admission check can actually observe contention and coalesce. Daemons
@@ -94,18 +116,25 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // RefreshAgentsAsync can await its completion before publishing rows that AgentDirectory
         // deduplicates against Daemons.
         var refreshDaemons = connected.Merge(lane.DaemonsChanged.Throttle(wait))
-            .Select(_ => Observable.FromAsync(async () => await RefreshDaemonsAsync(lane)))
+            .Select(_ => Observable.FromAsync(() => RefreshDaemonsAsync()))
+            .Merge()
+            .Subscribe();
+        var refreshDaemonAccounts = connected.Merge(lane.DaemonAccountsChanged.Throttle(wait))
+            .Select(_ => Observable.FromAsync(() => RefreshDaemonAccountsAsync()))
             .Merge()
             .Subscribe();
         var refreshAgents = connected.Merge(lane.AgentInstancesChanged.Throttle(wait))
             .Select(_ => Observable.FromAsync(async () => await RefreshAgentsAsync(fetchAgents)))
             .Merge()
             .Subscribe();
-        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(identityChange, refreshDaemons, refreshAgents);
+        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(
+            laneStatus, refreshDaemons, refreshDaemonAccounts, refreshAgents);
     }
 
     public IObservableCache<AgentInstanceDto, string> Agents => _agents.AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons => _daemons.AsObservable();
+    public IObservable<DaemonListing> Listing => _listing.AsObservable();
+    public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts => _daemonAccounts.AsObservable();
 
     async Task RefreshAgentsAsync(Func<CancellationToken, Task<RemoteFetch>> fetch) {
         lock (_lock) {
@@ -152,7 +181,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         }
     }
 
-    async Task RefreshDaemonsAsync(IServerLane lane) {
+    public async Task RefreshDaemonsAsync() {
         lock (_lock) {
             if (_daemonsBusy) { _daemonsRerun = true; return; }
             _daemonsBusy = true;
@@ -164,19 +193,80 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             IReadOnlyList<DaemonInfo>? result = null;
             using var cts = new CancellationTokenSource(DaemonsRefreshTimeout, _time);
             try {
-                result = await lane.GetConnectedDaemonsAsync(cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
+                result = await _lane.GetConnectedDaemonsAsync(cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
             } catch (Exception) {
             }
             TaskCompletionSource? completed;
             lock (_lock) {
-                if (result is not null && generation == _generation)
-                    _daemons.OnNext(result);
+                if (generation == _generation) {
+                    if (result is not null) {
+                        ResetListingRetry();
+                        _daemons.OnNext(result);
+                        _listing.OnNext(new(result, generation, false));
+                    } else {
+                        _listing.OnNext(new(null, generation, true));
+                        if (!_daemonsRerun) ScheduleListingRetry();
+                    }
+                }
                 if (_daemonsRerun) { _daemonsRerun = false; continue; }
                 _daemonsBusy = false;
                 completed = _daemonsInFlight;
                 _daemonsInFlight = null;
             }
             completed?.TrySetResult();
+            return;
+        }
+    }
+
+    // The three below run under _lock. Cancelling bumps the ticket, so a timer callback that lost
+    // the race with its own cancellation finds a newer ticket and does nothing.
+    void ScheduleListingRetry() {
+        CancelListingRetry();
+        if (_disposed || !_laneConnected) return;
+        var delay = ListingRetryDelays[Math.Min(_listingRetryAttempt++, ListingRetryDelays.Length - 1)];
+        var ticket = _listingRetryTicket;
+        _listingRetry = _time.CreateTimer(_ => RetryListing(ticket), null, delay, Timeout.InfiniteTimeSpan);
+    }
+
+    void ResetListingRetry() {
+        _listingRetryAttempt = 0;
+        CancelListingRetry();
+    }
+
+    void CancelListingRetry() {
+        _listingRetryTicket++;
+        _listingRetry?.Dispose();
+        _listingRetry = null;
+    }
+
+    void RetryListing(long ticket) {
+        lock (_lock) {
+            if (ticket != _listingRetryTicket) return;
+            CancelListingRetry();
+        }
+        _ = RefreshDaemonsAsync();
+    }
+
+    async Task RefreshDaemonAccountsAsync() {
+        lock (_lock) {
+            if (_daemonAccountsBusy) { _daemonAccountsRerun = true; return; }
+            _daemonAccountsBusy = true;
+        }
+        while (true) {
+            int generation;
+            lock (_lock) generation = _generation;
+            IReadOnlyList<DaemonAccountsDto>? result = null;
+            using var cts = new CancellationTokenSource(DaemonsRefreshTimeout, _time);
+            try {
+                result = await _lane.GetDaemonAccountsAsync(cts.Token).WaitAsync(cts.Token).ConfigureAwait(false);
+            } catch (Exception) {
+            }
+            lock (_lock) {
+                if (result is not null && generation == _generation)
+                    _daemonAccounts.OnNext(result);
+                if (_daemonAccountsRerun) { _daemonAccountsRerun = false; continue; }
+                _daemonAccountsBusy = false;
+            }
             return;
         }
     }
@@ -214,11 +304,15 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         _subscriptions.Dispose();
         TaskCompletionSource? inFlight;
         lock (_lock) {
+            _disposed = true;
+            ResetListingRetry();
             inFlight = _daemonsInFlight;
             _daemonsInFlight = null;
         }
         inFlight?.TrySetResult();
         _agents.Dispose();
         _daemons.Dispose();
+        _listing.Dispose();
+        _daemonAccounts.Dispose();
     }
 }

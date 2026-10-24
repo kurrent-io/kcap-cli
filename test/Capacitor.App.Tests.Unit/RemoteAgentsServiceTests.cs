@@ -1,5 +1,7 @@
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
+using Microsoft.Extensions.Time.Testing;
+using TUnit.Assertions.Enums;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -14,6 +16,12 @@ public class RemoteAgentsServiceTests {
             await Task.Delay(10);
         }
     }
+
+    static Task<RemoteFetch> NoAgents(CancellationToken _) => Task.FromResult(new RemoteFetch(null));
+
+    static IDisposable Record<T>(IObservable<T> source, List<T> into) => source.Subscribe(v => { lock (into) into.Add(v); });
+
+    static T[] Seen<T>(List<T> recorded) { lock (recorded) return [.. recorded]; }
 
     [Test]
     public async Task ConnectSeedsAgentsAndDaemons() {
@@ -285,5 +293,172 @@ public class RemoteAgentsServiceTests {
         var daemonsWhenAgentsPublished = await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await Assert.That(daemonsWhenAgentsPublished.Count).IsEqualTo(1);
         await Assert.That(svc.Agents.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task A_connect_publishes_an_unanswered_listing_then_the_list() {
+        IReadOnlyList<DaemonInfo> rows = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        var lane = new FakeServerLane { DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>(rows) };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+        var listings = new List<DaemonListing>();
+        using var sub = Record(svc.Listing, listings);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+
+        await Eventually(() => Seen(listings).Length == 3);
+        await Assert.That(Seen(listings)).IsEquivalentTo(
+            [new DaemonListing(null, 0, false), new DaemonListing(null, 1, false), new DaemonListing(rows, 1, false)],
+            CollectionOrdering.Matching);
+    }
+
+    /// Pins the first two backoff steps (3 s, then 6 s) and that an answer stops the retries.
+    [Test]
+    public async Task A_failed_fetch_publishes_FetchFailed_and_retries_with_backoff() {
+        var time = new FakeTimeProvider();
+        var calls = 0;
+        IReadOnlyList<DaemonInfo> rows = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        var lane = new FakeServerLane {
+            DaemonsHandler = () => Interlocked.Increment(ref calls) switch {
+                1 => Task.FromResult<IReadOnlyList<DaemonInfo>?>(null),
+                2 => throw new InvalidOperationException("hub call failed"),
+                _ => Task.FromResult<IReadOnlyList<DaemonInfo>?>(rows),
+            },
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: time);
+        var listings = new List<DaemonListing>();
+        using var listingSub = Record(svc.Listing, listings);
+        var daemons = new List<IReadOnlyList<DaemonInfo>>();
+        using var daemonsSub = Record(svc.Daemons, daemons);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(1);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(null, 1, true));
+
+        time.Advance(TimeSpan.FromSeconds(3) - TimeSpan.FromTicks(1));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(1);
+        time.Advance(TimeSpan.FromTicks(1));
+        await Eventually(() => Volatile.Read(ref calls) == 2);
+        await Eventually(() => Seen(listings).Length == 4);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(null, 1, true));
+
+        time.Advance(TimeSpan.FromSeconds(6) - TimeSpan.FromTicks(1));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+        time.Advance(TimeSpan.FromTicks(1));
+        await Eventually(() => Seen(listings)[^1].Daemons is not null);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(rows, 1, false));
+        await Assert.That(Seen(daemons).Select(d => d.Count)).IsEquivalentTo([0, 1], CollectionOrdering.Matching);
+
+        time.Advance(TimeSpan.FromMinutes(5));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task A_reconnect_returns_the_listing_to_unanswered_until_it_answers() {
+        var calls = 0;
+        IReadOnlyList<DaemonInfo> first = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        IReadOnlyList<DaemonInfo> second = [new DaemonInfo { Name = "home-mac", Connected = true }];
+        var gate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane {
+            DaemonsHandler = () => Interlocked.Increment(ref calls) == 1 ? Task.FromResult<IReadOnlyList<DaemonInfo>?>(first) : gate.Task,
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+        var listings = new List<DaemonListing>();
+        using var sub = Record(svc.Listing, listings);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(first, 1, false));
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(null, 2, false));
+
+        gate.SetResult(second);
+        await Eventually(() => Seen(listings).Length == 5);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(second, 2, false));
+    }
+
+    [Test]
+    public async Task RefreshDaemonsAsync_fetches_at_once() {
+        var time = new FakeTimeProvider();
+        var calls = 0;
+        IReadOnlyList<DaemonInfo> rows = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        var lane = new FakeServerLane {
+            DaemonsHandler = () => Task.FromResult<IReadOnlyList<DaemonInfo>?>(Interlocked.Increment(ref calls) == 1 ? null : rows),
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: time);
+        var listings = new List<DaemonListing>();
+        using var sub = Record(svc.Listing, listings);
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(null, 1, true));
+
+        await svc.RefreshDaemonsAsync();
+
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+        await Assert.That(Seen(listings)[^1]).IsEqualTo(new DaemonListing(rows, 1, false));
+        // The answer withdrew the retry the failure had scheduled.
+        time.Advance(TimeSpan.FromSeconds(30));
+        await Assert.That(Volatile.Read(ref calls)).IsEqualTo(2);
+    }
+
+    /// A fetch issued before a reconnect answers after it: neither Listing nor Daemons may carry
+    /// that answer, and the coalesced refetch under the new connection is what publishes.
+    [Test]
+    public async Task A_result_from_a_superseded_generation_is_dropped() {
+        var calls = 0;
+        IReadOnlyList<DaemonInfo> stale = [new DaemonInfo { Name = "old-mac", Connected = true }];
+        IReadOnlyList<DaemonInfo> fresh = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        var gate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane {
+            DaemonsHandler = () => Interlocked.Increment(ref calls) == 1 ? gate.Task : Task.FromResult<IReadOnlyList<DaemonInfo>?>(fresh),
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+        var listings = new List<DaemonListing>();
+        using var listingSub = Record(svc.Listing, listings);
+        var daemons = new List<IReadOnlyList<DaemonInfo>>();
+        using var daemonsSub = Record(svc.Daemons, daemons);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        gate.SetResult(stale);
+
+        await Eventually(() => Volatile.Read(ref calls) == 2);
+        await Eventually(() => Seen(listings)[^1].Daemons is not null);
+        await Assert.That(Seen(listings)).IsEquivalentTo(
+            [new DaemonListing(null, 0, false), new DaemonListing(null, 1, false), new DaemonListing(null, 2, false),
+             new DaemonListing(fresh, 2, false)],
+            CollectionOrdering.Matching);
+        await Assert.That(Seen(daemons).Any(d => ReferenceEquals(d, stale))).IsFalse();
+    }
+
+    [Test]
+    public async Task Daemon_accounts_are_seeded_on_connect_refreshed_on_the_push_and_cleared_on_a_subject_change() {
+        static DaemonAccountsDto Row(long revision) => new() { DaemonName = "work-mac", HostId = "h1", Revision = revision };
+        var calls = 0;
+        var lane = new FakeServerLane {
+            DaemonAccountsHandler = () => Task.FromResult<IReadOnlyList<DaemonAccountsDto>?>(Interlocked.Increment(ref calls) switch {
+                1 => [Row(1)],
+                2 => [Row(2)],
+                _ => null,
+            }),
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+        var seen = new List<IReadOnlyList<DaemonAccountsDto>>();
+        using var sub = Record(svc.DaemonAccounts, seen);
+        long[] Revisions() => [.. Seen(seen).Select(l => l.Select(d => d.Revision).SingleOrDefault())];
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u1"));
+        await Eventually(() => Revisions().Length == 2);
+        lane.DaemonAccountsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Revisions().Length == 3);
+        // A failed fetch keeps the last list.
+        lane.DaemonAccountsChangedSubject.OnNext(System.Reactive.Unit.Default);
+        await Eventually(() => Volatile.Read(ref calls) == 3);
+        lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected, Subject: "u2"));
+        await Eventually(() => Volatile.Read(ref calls) == 4);
+
+        await Assert.That(Revisions()).IsEquivalentTo([0L, 1L, 2L, 0L], CollectionOrdering.Matching);
     }
 }

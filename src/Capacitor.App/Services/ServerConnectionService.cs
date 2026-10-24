@@ -104,6 +104,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     public IObservable<ServerLaneStatus> Status => _status.AsObservable();
     public IObservable<Unit> AgentInstancesChanged => _agentsChanged.AsObservable();
     public IObservable<Unit> DaemonsChanged => _daemonsChanged.AsObservable();
+    public IObservable<Unit> DaemonAccountsChanged => _daemonAccountsChanged.AsObservable();
     public IObservable<LaunchFailure> LaunchFailures => _launchFailures.AsObservable();
     public IObservable<string> PermissionPending => _permissionPending.AsObservable();
     public IObservable<PermissionRespondedPing> PermissionResponded => _permissionResponded.AsObservable();
@@ -369,6 +370,16 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         if (hub is not { State: HubConnectionState.Connected }) return null;
         try {
             return await hub.InvokeAsync<List<DaemonInfo>>(HubMethods.GetConnectedDaemons, ct).ConfigureAwait(false);
+        } catch (Exception) {
+            return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<DaemonAccountsDto>?> GetDaemonAccountsAsync(CancellationToken ct) {
+        var hub = _hub;
+        if (hub is not { State: HubConnectionState.Connected }) return null;
+        try {
+            return await hub.InvokeAsync<List<DaemonAccountsDto>>(HubMethods.GetDaemonAccounts, ct).ConfigureAwait(false);
         } catch (Exception) {
             return null;
         }
