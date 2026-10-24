@@ -88,13 +88,25 @@ public class CloudTerminalSinkTests {
 
     [Test]
     public async Task A_send_that_fails_while_not_ready_is_held_and_delivered_in_order() {
-        await using var rig   = new Rig();
-        var             fails = 8;
+        await using var rig        = new Rig();
+        var             fails      = 8;
+        var             readiness  = new Lock();
+        var             generation = 0;
         rig.Mirror.OnSend = (_, _) => {
             if (Interlocked.Decrement(ref fails) < 0) return Task.CompletedTask;
 
-            rig.Mirror.Ready = false;
-            _ = Task.Delay(20, CancellationToken.None).ContinueWith(_ => rig.Mirror.Ready = true, TaskScheduler.Default);
+            // The sink reads readiness right after the throw. An earlier failure's recovery landing there would count
+            // this one as a failure while ready, and enough of those desync the sink, so only the latest recovers.
+            int mine;
+            lock (readiness) {
+                mine             = ++generation;
+                rig.Mirror.Ready = false;
+            }
+
+            _ = Task.Delay(20, CancellationToken.None).ContinueWith(_ => {
+                lock (readiness)
+                    if (generation == mine) rig.Mirror.Ready = true;
+            }, TaskScheduler.Default);
 
             throw new InvalidOperationException("transport down");
         };
