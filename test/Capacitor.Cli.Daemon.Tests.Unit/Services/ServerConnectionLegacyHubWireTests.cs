@@ -10,8 +10,9 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Capacitor.Cli.Daemon.Tests.Unit.Services;
 
 /// <summary>
-/// A server that predates <c>AgentRegisteredAcked</c>, as a real SignalR hub: the method-missing answer is the
-/// one its dispatcher actually sends, not a string a test double chose. Detailed errors stay off, as on a tenant.
+/// A real SignalR hub with no <c>AgentRegisteredAcked</c> method, which a server older than the daemon can still be:
+/// the missing-method answer is the one its dispatcher actually sends, not a string a test double chose. Detailed
+/// errors stay off, as on a tenant.
 /// </summary>
 public class ServerConnectionLegacyHubWireTests {
     static readonly TimeSpan HangGuard = TimeSpan.FromSeconds(15);
