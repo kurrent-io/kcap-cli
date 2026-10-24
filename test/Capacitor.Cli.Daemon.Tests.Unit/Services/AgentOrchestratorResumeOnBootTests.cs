@@ -102,17 +102,18 @@ public class AgentOrchestratorResumeOnBootTests {
             Fixture f, string agentId, string? worktree = null, string? vendorSession = "vendor-session-1",
             bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null,
             string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false,
-            string vendor = "cursor", string? permissionMode = null, IReadOnlyList<string>? inherited = null) {
+            string vendor = "cursor", string? permissionMode = null, string title = "the thing", bool? titleDerived = null,
+            IReadOnlyList<string>? inherited = null) {
         var stamp = at ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
             WorktreePath: worktree ?? Tmp.CreateDir($"wt-{agentId}"), Work: WorkLocation.OwnedWorktree,
             GitRelativeCwd: null, SandboxPolicy: null, ApprovalPolicy: null, PermissionPreset: null,
-            McpConfigPath: null, Title: "the thing", IsPrivate: isPrivate, Origin: "server",
+            McpConfigPath: null, Title: title, IsPrivate: isPrivate, Origin: "server",
             RequesterUserId: "user-1", RequesterDisplay: "User One", ConsentSource: "default",
             ConsentAt: stamp.ToString("O"), FlowRunId: null, FlowRole: null,
             WorktreeBranch: $"capacitor/custom-{agentId}", WorktreeIsStandalone: standalone, WorktreeSourceRepo: f.Repo,
-            PermissionMode: permissionMode);
+            PermissionMode: permissionMode, TitleDerived: titleDerived);
         var entry = new ResumeLedgerEntry(
             ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, vendor, "acp",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
@@ -163,6 +164,50 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(consentLog).Contains("\"agent_id\":\"resume-1\"");
         await Assert.That(consentLog).Contains("\"source\":\"resume\"");
         await Assert.That(f.Orch.ResumingClaims()).IsEmpty();
+    }
+
+    /// <summary>A start title cut from the prompt stays a placeholder on resume: re-registered as the caller's,
+    /// it would outrank the title the session has since been given.</summary>
+    [Test]
+    public async Task A_resumed_prompt_cut_title_registers_as_derived() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-derived", title: "build the thing", titleDerived: true);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-derived")!;
+        await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("build the thing", Derived: true));
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-derived")!.Launch.TitleDerived ?? false).IsTrue();
+    }
+
+    [Test]
+    public async Task A_resumed_explicit_title_stays_the_callers() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-explicit", title: "Named by the caller", titleDerived: false);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-explicit")!;
+        await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("Named by the caller", Derived: false));
+    }
+
+    /// <summary>An entry without the flag cannot say which kind its title is, so it resumes as derived: a resumed
+    /// session already holds its start title, and a placeholder never displaces it.</summary>
+    [Test]
+    public async Task A_resumed_title_without_the_flag_registers_as_derived() {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-legacy", title: "build the thing", titleDerived: null);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var agent = f.Orch.GetAgentForTest("resume-legacy")!;
+        await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("build the thing", Derived: true));
     }
 
     /// <summary>A native resume keeps its agent id, so an agent that was itself a successor goes on naming the agent it
