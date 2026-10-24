@@ -54,6 +54,22 @@ public class ClaudeServerParityTests {
         await Assert.That(e[0].CacheCreationTokens).IsEqualTo(27055L);
     }
 
+    /// <summary>A vendor's own <c>total_tokens</c> and <c>reasoning_tokens</c> fill their canonical slots, as the agent
+    /// schema maps them, so neither is dropped with the other canonical keys; without a vendor total the slot is the
+    /// sum of the four counts.</summary>
+    [Test]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}""", 20L, null)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"total_tokens":99}""", 99L, null)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"reasoning_tokens":4}""", 15L, 4L)]
+    public async Task A_vendor_total_and_reasoning_count_fill_their_slots(string usageJson, long total, long? reasoning) {
+        var usage = E(Assistant(Uuid, usageJson))[0].Usage!;
+
+        await Assert.That(usage.TotalTokens).IsEqualTo(total);
+        await Assert.That(usage.HasReasoningTokens ? usage.ReasoningTokens : (long?)null).IsEqualTo(reasoning);
+        await Assert.That(usage.AdditionalCounts?.Fields.ContainsKey("total_tokens") ?? false).IsFalse();
+        await Assert.That(usage.AdditionalCounts?.Fields.ContainsKey("reasoning_tokens") ?? false).IsFalse();
+    }
+
     /// <summary>A usage of canonical counts alone carries no extras.</summary>
     [Test]
     public async Task Usage_of_canonical_counts_alone_carries_no_additional_counts() =>

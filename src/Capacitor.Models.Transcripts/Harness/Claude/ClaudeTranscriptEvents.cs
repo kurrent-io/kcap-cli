@@ -340,15 +340,18 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         var output     = usage.Num("output_tokens");
         var cacheRead  = usage.Num("cache_read_input_tokens");
         var cacheWrite = usage.Num("cache_creation_input_tokens");
+        var reasoning  = usage.Num("reasoning_tokens");
         var tuple      = (input ?? 0, output ?? 0, cacheRead ?? 0, cacheWrite ?? 0);
         var repeat     = ctx.PreviousUsage == tuple;
         ctx.PreviousUsage = tuple;
-        if (repeat || input is null && output is null && cacheRead is null && cacheWrite is null) return null;
+        if (repeat || input is null && output is null && cacheRead is null && cacheWrite is null && reasoning is null) return null;
 
-        var token = new TokenUsage { TotalTokens = tuple.Item1 + tuple.Item2 + tuple.Item3 + tuple.Item4 };
+        // A vendor's own total wins: the agent schema maps it to the canonical slot as reported.
+        var token = new TokenUsage { TotalTokens = usage.Num("total_tokens") ?? tuple.Item1 + tuple.Item2 + tuple.Item3 + tuple.Item4 };
         if (input is { } i) token.InputTokens            = i;
         if (output is { } o) token.OutputTokens          = o;
         if (cacheRead is { } r) token.CachedInputTokens  = r;
+        if (reasoning is { } t) token.ReasoningTokens    = t;
         if (message.Str("model") is { } model) token.Model = model;
         var extras = StructOf(usage);
         foreach (var key in CanonicalUsageKeys) extras.Fields.Remove(key);
