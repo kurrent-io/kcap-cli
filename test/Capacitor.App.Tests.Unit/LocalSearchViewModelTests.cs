@@ -1,4 +1,5 @@
 using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Reactive.Threading.Tasks;
 using Capacitor.App.Services;
@@ -25,13 +26,16 @@ public class LocalSearchViewModelTests {
         public LocalEmbeddingSetting? Setting;
         /// What the installed stack's manifest offers; looked up again on every reconnect.
         public LocalEmbeddingModelManifest? Offered;
+        /// Set before construction to hold the lookup open.
+        public TaskCompletionSource<LocalEmbeddingModelManifest?>? Lookup;
 
-        public Harness(LocalEmbeddingSetting? setting, bool offered = true) {
+        public Harness(LocalEmbeddingSetting? setting, bool offered = true, TaskCompletionSource<LocalEmbeddingModelManifest?>? lookup = null) {
+            Lookup  = lookup;
             Setting = setting;
             Offered = offered ? new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]) : null;
             Search  = new LocalSearchController(() => Cli, action => action(), held: () => Upgrade.Running);
             Upgrade = new LocalUpgradeController(() => Cli, action => action(), held: () => Search.Running);
-            Vm = new LocalSearchViewModel(() => Setting, _ => Task.FromResult(Offered), Status, Search, Upgrade, () => {
+            Vm = new LocalSearchViewModel(() => Setting, _ => Lookup?.Task ?? Task.FromResult(Offered), Status, Search, Upgrade, () => {
                 Reconnects++;
                 return Task.CompletedTask;
             }, CancellationToken.None, ImmediateScheduler.Instance);
@@ -73,6 +77,32 @@ public class LocalSearchViewModelTests {
 
             await Assert.That(h.Vm.Choice.BuiltinEnabled).IsTrue();
             await Assert.That(h.Vm.Choice.UseBuiltin).IsTrue();
+        });
+    }
+
+    [Test]
+    public async Task Builtin_cannot_be_applied_as_a_new_choice_while_the_lookup_is_pending() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var lookup = new TaskCompletionSource<LocalEmbeddingModelManifest?>();
+            using var h = new Harness(LocalEmbeddingSetting.Declined, lookup: lookup);
+
+            h.Vm.Choice.UseBuiltin = true;
+
+            await Assert.That(h.Vm.Choice.BuiltinEnabled).IsFalse();
+            await Assert.That(h.Vm.Choice.UseKeyword).IsTrue();
+            await Assert.That(h.Vm.CanApply).IsFalse();
+
+            var offered = h.Vm.Choice.WhenAnyValue(x => x.BuiltinEnabled).Where(enabled => enabled).FirstAsync().ToTask();
+            lookup.SetResult(h.Offered);
+            await offered.WaitAsync(TimeSpan.FromSeconds(5));
+            h.Vm.Choice.UseBuiltin = true;
+
+            await Assert.That(h.Vm.Choice.Choice.Args).IsEquivalentTo(["--builtin-embeddings"]);
+            await Assert.That(h.Vm.CanApply).IsTrue();
+
+            using var recorded = new Harness(LocalEmbeddingSetting.Builtin(new string('a', 64)), lookup: new());
+            await Assert.That(recorded.Vm.Choice.BuiltinEnabled).IsTrue();
+            await Assert.That(recorded.Vm.Choice.UseBuiltin).IsTrue();
         });
     }
 

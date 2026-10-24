@@ -28,6 +28,7 @@ public class SearchChoiceViewModelTests {
             var running = false;
             var vm = new SearchChoiceViewModel(_ => Task.FromResult(running), () => false);
             vm.Prefill(null);
+            vm.OfferBuiltin(Offered);
             await vm.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(vm.UseBuiltin).IsTrue();
             await Assert.That(vm.OllamaEnabled).IsFalse();
@@ -50,6 +51,7 @@ public class SearchChoiceViewModelTests {
         await AvaloniaSession.DispatchAsync(async () => {
             var picked = new SearchChoiceViewModel(_ => Task.FromResult(true), () => true);
             picked.Prefill(null);
+            picked.OfferBuiltin(Offered);
             await picked.CheckOllamaCommand.Execute().ToTask();
             picked.UseBuiltin = true;
             await picked.CheckOllamaCommand.Execute().ToTask();
@@ -98,11 +100,41 @@ public class SearchChoiceViewModelTests {
         });
     }
 
+    /// Until the lookup answers, built-in is neither recommended nor selectable as a new choice, so nothing can ask a
+    /// stack without a built-in model for it; a recorded built-in model stays selectable.
+    [Test]
+    public async Task Builtin_is_offered_as_a_new_choice_only_once_the_lookup_finds_it() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var vm = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
+            vm.Prefill(null);
+            await vm.CheckOllamaCommand.Execute().ToTask();
+            await Assert.That(vm.BuiltinEnabled).IsFalse();
+            await Assert.That(vm.BuiltinStatus).IsEqualTo(SearchChoiceViewModel.BuiltinLookingUp);
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.KeywordOnly));
+
+            vm.UseBuiltin = true;
+            await Assert.That(vm.UseKeyword).IsTrue();
+            await Assert.That(vm.Choice.Args).IsEmpty();
+
+            vm.OfferBuiltin(Offered);
+            await Assert.That(vm.BuiltinEnabled).IsTrue();
+            await Assert.That(vm.BuiltinStatus).IsNull();
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(LocalEmbeddingChoice.Builtin));
+
+            var recorded = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
+            recorded.Prefill(LocalEmbeddingSetting.Builtin(new string('a', 64)));
+            await Assert.That(recorded.BuiltinEnabled).IsTrue();
+            await Assert.That(recorded.Choice).IsEqualTo(LocalEmbeddingChoice.Builtin);
+            return true;
+        });
+    }
+
     [Test]
     public async Task A_builtin_pick_the_stack_cannot_honour_falls_back_but_a_recorded_one_stays() {
         await AvaloniaSession.DispatchAsync(async () => {
             var picked = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
             picked.Prefill(LocalEmbeddingSetting.Declined);
+            picked.OfferBuiltin(Offered);
             picked.UseBuiltin = true;
             picked.OfferBuiltin(null);
             await Assert.That(picked.UseKeyword).IsTrue();

@@ -12,6 +12,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     public const string Explainer = "Choose how to find information saved in kcap.";
     public static readonly string BuiltinDetail = BuiltinDetailFor("about 320 MB");
     public const string BuiltinUnavailable = "The version of kcap local this Mac runs has no built-in model.";
+    public const string BuiltinLookingUp = "Checking whether the version of kcap local this Mac runs has a built-in model…";
     public const string MeaningDetail = "Finds related information even when you use different words. Uses an AI model that runs in Ollama on this Mac.";
     public const string KeywordDetail = "Finds information using matching words. No AI model needed. You can change this later from kcap local in the sidebar.";
     public const string DefaultLabel = $"{LocalEmbeddingChoice.DefaultModel} (about 670 MB)";
@@ -24,13 +25,13 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     readonly Func<CancellationToken, Task<bool>> _ollamaAvailable;
     readonly Func<bool> _ollamaInstalled;
     readonly IUrlOpener _opener;
-    Mode _mode = Mode.Builtin;
+    Mode _mode = Mode.Keyword;
     bool _useOther, _checking, _ollamaInstalledNow;
     // Until someone picks, or a recorded choice is loaded, the selection follows the recommendation: Ollama when it
     // answers, else the built-in model when the stack offers it, else keyword search.
     bool _followRecommendation = true;
     bool _recordedOllama, _recordedBuiltin;
-    // Null until looked up, and offered meanwhile: setup still decides for itself.
+    // Null until looked up, and not offered meanwhile: a stack without the model would refuse the flag.
     bool? _builtinOffered;
     long? _builtinBytes;
     bool? _ollamaRunning;
@@ -56,7 +57,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
 
     public bool UseBuiltin {
         get => _mode == Mode.Builtin;
-        set { if (value && _mode != Mode.Builtin) Pick(Mode.Builtin); }
+        set { if (value && _mode != Mode.Builtin && BuiltinEnabled) Pick(Mode.Builtin); }
     }
 
     public bool UseOllama {
@@ -93,9 +94,14 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
     bool OllamaRunning => _ollamaRunning == true;
 
     /// A recorded built-in model stays selectable, so a switch away from it can be undone.
-    public bool BuiltinEnabled => _builtinOffered != false || _recordedBuiltin;
+    public bool BuiltinEnabled => _builtinOffered == true || _recordedBuiltin;
 
-    public string? BuiltinStatus => _builtinOffered == false ? BuiltinUnavailable : null;
+    public string? BuiltinStatus => _builtinOffered switch {
+        _ when _recordedBuiltin => null,
+        false                   => BuiltinUnavailable,
+        null                    => BuiltinLookingUp,
+        _                       => null,
+    };
 
     public string BuiltinDescription => _builtinBytes is { } bytes
         ? BuiltinDetailFor($"about {(bytes / (1024.0 * 1024.0)).ToString("0", CultureInfo.InvariantCulture)} MB")
@@ -116,7 +122,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         this.RaisePropertyChanged(nameof(BuiltinDescription));
     }
 
-    Mode Recommendation => OllamaRunning ? Mode.Ollama : _builtinOffered != false ? Mode.Builtin : Mode.Keyword;
+    Mode Recommendation => OllamaRunning ? Mode.Ollama : _builtinOffered == true ? Mode.Builtin : Mode.Keyword;
 
     /// A model can only be pulled through a running Ollama; a recorded model stays selectable, so a
     /// switch away from it can be undone while Ollama is stopped.
@@ -194,6 +200,7 @@ public sealed class SearchChoiceViewModel : ReactiveObject {
         _recordedOllama       = recorded?.Model is not null;
         _recordedBuiltin      = recorded?.Provider == LocalEmbeddingProvider.Builtin;
         this.RaisePropertyChanged(nameof(BuiltinEnabled));
+        this.RaisePropertyChanged(nameof(BuiltinStatus));
         switch (recorded) {
             case null:
                 _useOther = false;
