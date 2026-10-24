@@ -84,4 +84,22 @@ public class WorktreeManagerUserGitConfigTests {
         await Assert.That(worktree.IsStandalone).IsTrue();
         await Assert.That(GitRepo.At(worktree.Path).Try("ls-tree", "--name-only", "HEAD").Text).Contains("README.md");
     }
+
+    /// <summary>A user who converts line endings strictly would have the snapshot refuse an LF file, and an agent
+    /// later diffing it would see every file changed. The snapshot keeps the bytes it copied.</summary>
+    [Test]
+    public async Task A_standalone_snapshot_keeps_lf_files_when_the_user_converts_line_endings_strictly() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("lf.txt", "one\ntwo\n");
+        using var config = UserGlobalConfig("[core]\n    autocrlf = true\n    safecrlf = true\n");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        var snapshot = GitRepo.At(worktree.Path);
+        await Assert.That(snapshot.Try("ls-tree", "--name-only", "HEAD").Text).Contains("lf.txt");
+        await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:lf.txt").StdOut).IsEqualTo("one\ntwo\n");
+        // The snapshot's own config outranks the user's, so the agent's later checkouts and diffs keep LF too.
+        await Assert.That(snapshot.Do("config", "--local", "core.autocrlf").Text).IsEqualTo("false");
+        await Assert.That(snapshot.Do("config", "--local", "core.safecrlf").Text).IsEqualTo("false");
+    }
 }

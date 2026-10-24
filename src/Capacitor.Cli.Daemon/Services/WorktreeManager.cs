@@ -435,15 +435,18 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
+        // Kept in the snapshot's own config too, so the agent's later diffs compare the bytes that were copied.
+        foreach (var setting in VerbatimLineEndings())
+            await RunGit(worktreePath, GitTimeout, time, noHooks, "config", setting.Key, setting.Value);
         // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. standaloneOverrides], "add", "-A");
+        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. VerbatimLineEndings(), .. standaloneOverrides], "add", "-A");
         // Exit 0 = empty index (greenfield: nothing to copy). Exit 1 = staged content.
         // Any other code is a real git failure — without this check, commit --allow-empty would
         // hide it behind a successful empty tree.
         var staged = await RunGitCaptureResult(
             worktreePath, GitTimeout, time, sourceReadOnly: false,
-            [.. noHooks, .. standaloneOverrides],
+            [.. noHooks, .. VerbatimLineEndings(), .. standaloneOverrides],
             "diff", "--cached", "--quiet");
         if (staged.ExitCode is not (0 or 1))
             throw new InvalidOperationException(
@@ -456,7 +459,8 @@ public partial class WorktreeManager(
             : new[] { "commit", "-m", "Initial snapshot" };
         await RunGit(worktreePath, GitTimeout,
             time,
-            [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap"), new("commit.gpgsign", "false")],
+            [.. noHooks, .. VerbatimLineEndings(),
+             new("user.email", "daemon@kcap.local"), new("user.name", "kcap"), new("commit.gpgsign", "false")],
             commitArgs);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
@@ -504,6 +508,11 @@ public partial class WorktreeManager(
     /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it
     /// fails outright; and a fetch that recursed would reach each submodule's own remote. Neither may
     /// depend on the user's git config.</summary>
+    /// <summary>A standalone snapshot records the bytes it copied: a user's line-ending conversion would rewrite
+    /// them, and its strict form refuses the commit outright.</summary>
+    static GitConfigOverride[] VerbatimLineEndings() =>
+        [new("core.autocrlf", "false"), new("core.safecrlf", "false")];
+
     static GitConfigOverride[] NoSubmoduleRecursion() =>
         [new("submodule.recurse", "false"), new("fetch.recurseSubmodules", "false")];
 
