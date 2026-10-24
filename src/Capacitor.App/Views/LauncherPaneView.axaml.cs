@@ -12,6 +12,7 @@ using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.Cli.Core.Accounts;
 
 namespace Capacitor.App.Views;
 
@@ -411,6 +412,8 @@ public partial class LauncherPaneView : UserControl {
         var faint = Brush("KcapFaintBrush");
         var raised = Brush("KcapSurfaceRaisedBrush");
         var border = Brush("KcapBorderBrush");
+        var warning = Brush("KcapWarningBrush");
+        var recording = RecordingStates.Token(RecordingState.Recording);
 
         var currentTab = vm.SelectedVendor;
 
@@ -493,6 +496,84 @@ public partial class LauncherPaneView : UserControl {
             return row;
         }
 
+        async void PickAccount(string? accountId) {
+            await vm.PickAccountAsync(accountId);
+            RebuildRows();
+        }
+
+        Button AccountRow(AccountChoice choice) {
+            var account = choice.Row;
+            var title = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal };
+            title.Children.Add(new TextBlock {
+                Text = account.Label, FontSize = 13.5, FontWeight = FontWeight.SemiBold, Foreground = text,
+                VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+            });
+            if (choice.Removed)
+                title.Children.Add(new TextBlock {
+                    Text = " — removed", FontSize = 13.5, Foreground = muted,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                });
+            if (account.IsDefault)
+                title.Children.Add(new Border {
+                    Background = raised, BorderBrush = border, BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(999), Padding = new Thickness(8, 3), Margin = new Thickness(8, 0, 0, 0),
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                    Child = new TextBlock { Text = "Default", FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = muted },
+                });
+
+            var titles = new StackPanel();
+            titles.Children.Add(title);
+            // A removed row is the choice the snapshot no longer lists, so it has no directory or state to show.
+            if (!choice.Removed) {
+                var sub = new StackPanel {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 2, 0, 0),
+                };
+                sub.Children.Add(new TextBlock { Text = account.Directory, FontSize = 10.5, Foreground = faint });
+                if (!string.Equals(account.RecordingState, recording, StringComparison.Ordinal))
+                    sub.Children.Add(new TextBlock {
+                        Text = RecordingStateLabels.Label(account.Vendor, account.RecordingState), FontSize = 10.5,
+                        Foreground = RecordingStateLabels.IsAttention(account.Vendor, account.RecordingState) ? warning : muted,
+                    });
+                titles.Children.Add(sub);
+            }
+
+            var body = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            body.Children.Add(titles);
+            var check = SelectionCheck(choice.Selected);
+            Grid.SetColumn(check, 1);
+            body.Children.Add(check);
+
+            var id = account.Id;
+            var row = ChoiceButton(body, () => PickAccount(id));
+            row.Padding = new Thickness(10, 7);
+            AutomationProperties.SetName(row, ChoiceName(account.Label, choice.Selected));
+            return row;
+        }
+
+        // The pending line stands in for the rows, never beside them, even while the view-model still publishes rows.
+        void AddAccountSection() {
+            rows.Children.Add(new TextBlock { Text = "Account", Classes = { "sectionMeta" }, Margin = new Thickness(10, 4, 10, 2) });
+            if (vm.AccountPendingText is { } pending) {
+                var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(10, 4) };
+                line.Children.Add(new TextBlock {
+                    Text = pending, FontSize = 12.5, Foreground = muted,
+                    VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+                });
+                if (vm.AccountRetryVisible) {
+                    var retry = new Button {
+                        Content = "Retry", Command = vm.RetryAccountsCommand, Padding = new Thickness(10, 3), FontSize = 12,
+                    };
+                    retry.Classes.Add("kcapChip");
+                    Grid.SetColumn(retry, 1);
+                    line.Children.Add(retry);
+                }
+                rows.Children.Add(line);
+            } else {
+                foreach (var choice in vm.AccountRows) rows.Children.Add(AccountRow(choice));
+            }
+            rows.Children.Add(ChoiceSeparator());
+        }
+
         void AddVendorRows(HarnessOption option, Func<ModelChoice, bool> matches, bool includeDefault) {
             var vendor = option.Vendor;
             var isCurrentVendor = string.Equals(vm.SelectedVendor, vendor, StringComparison.OrdinalIgnoreCase);
@@ -512,6 +593,7 @@ public partial class LauncherPaneView : UserControl {
             var term = searchBox.Text?.Trim() ?? "";
 
             if (term.Length == 0) {
+                if (vm.AccountSection) AddAccountSection();
                 var option = vm.Harnesses.FirstOrDefault(
                     o => string.Equals(o.Vendor, currentTab, StringComparison.OrdinalIgnoreCase));
                 if (option is not null) AddVendorRows(option, _ => true, includeDefault: true);
@@ -591,13 +673,15 @@ public sealed class VendorGlyphConverter : IValueConverter {
 
 /// AgentChip's label: "Claude · Fable 5" — vendor label plus the model's label, resolved first
 /// against the effective model catalog (4th binding), then the curated fallback (raw slug when neither
-/// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions.
+/// carries it, "Default" for the "" sentinel). Same "left · right" shape as Effort/Permissions. The
+/// chosen account (5th binding) follows as "· work", and is null while the default is chosen.
 public sealed class AgentChipTextConverter : IMultiValueConverter {
     public static readonly AgentChipTextConverter Instance = new();
 
     public object? Convert(IList<object?> values, Type targetType, object? parameter, CultureInfo culture) =>
         values is [IReadOnlyList<HarnessOption> options, string vendor, string model, ..]
             ? $"{HostedHarnessCatalog.LabelFor(options, vendor)} · {ModelLabel(vendor, model, values.Count > 3 ? values[3] : null)}"
+              + (values.Count > 4 && values[4] is string account ? $" · {account}" : "")
             : "";
 
     static string ModelLabel(string vendor, string model, object? catalog) {
