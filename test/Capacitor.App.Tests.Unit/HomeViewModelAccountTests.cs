@@ -805,4 +805,34 @@ public class HomeViewModelAccountTests {
             await Assert.That(rig.Launch.Requests.Single().AccountId).IsEqualTo("a2");
         });
     }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_model_from_the_picked_accounts_catalog_survives_support_going_unknown_and_back() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.StartAsync(local: FakeDaemonClientService.Snap(
+                vendorModels: new(StringComparer.Ordinal) { ["claude"] = [new("machine-model", "Machine")] },
+                vendorModelsByAccount: new(StringComparer.Ordinal) { ["a2"] = [new("work-model", "Work")] }));
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName)));
+            await vm.SelectRepositoryAsync(Repo);
+            rig.LocalAccounts.OnNext(Snapshot("h1", 1, Home, Work));
+            await vm.PickAccountAsync("a2");
+            vm.SelectedModel = "work-model";
+
+            rig.Remote.ListingSubject.OnNext(new DaemonListing(null, 2, false));
+            await Assert.That(vm.SelectedAccountLabel).IsEqualTo("work — unavailable");
+            await Assert.That(vm.SelectedModel).IsEqualTo("work-model");
+
+            rig.Remote.ListingSubject.OnNext(Answered(2, Listed(LocalName)));
+            await Assert.That(vm.SelectedAccountLabel).IsEqualTo("work");
+            await Assert.That(vm.SelectedModel).IsEqualTo("work-model");
+            await Assert.That(vm.ModelChoicesFor("claude").Select(m => m.Slug)).IsEquivalentTo(new[] { "work-model" });
+
+            vm.Goal = "g";
+            await vm.StartCommand.Execute();
+            await Assert.That(rig.Launch.Requests.Single().AccountId).IsEqualTo("a2");
+            await Assert.That(rig.Launch.Requests.Single().Model).IsEqualTo("work-model");
+        });
+    }
 }

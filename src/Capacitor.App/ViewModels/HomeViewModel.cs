@@ -1449,8 +1449,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         SelectedAccountLabel = chooser.SelectedLabel;
         _accountPending.OnNext(chooser.State == AccountSelectionState.Pending);
         _accountTip.OnNext(chooser.PendingText);
-        _accountCatalogKey.OnNext(chooser.State == AccountSelectionState.ExplicitValid && _accountTarget is { } target
-            ? (target.Vendor, chooser.SelectedAccountId!) : null);
+        // Invalid keeps the key too: a reconnect that briefly unsettles support must not reset a model
+        // only the account lists.
+        _accountCatalogKey.OnNext(chooser.State is AccountSelectionState.ExplicitValid or AccountSelectionState.ExplicitInvalid
+            && _accountTarget is { } target ? (target.Vendor, chooser.SelectedAccountId!) : null);
     }
 
     /// Written off the UI thread in call order: the chooser also forgets an entry from inside its recompute.
