@@ -34,6 +34,8 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
 
     readonly Dictionary<string, CliBinaryStat?>   _baselines        = new(StringComparer.Ordinal);
     readonly Dictionary<string, CatalogPathStat[]> _catalogBaselines = new(StringComparer.Ordinal);
+    // The poll loop and a caller forcing a tick can overlap, and a Dictionary corrupts under two writers.
+    readonly Lock                                  _gate             = new();
 
     /// <summary>Fingerprints recorded when the advertisement was probed. The advertisement
     /// describes the files as they were then, so a vendor that updates before this service starts
@@ -113,6 +115,10 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     /// a rebuild cannot absorb a change the next tick has yet to see; the recorded binary fingerprints
     /// serve only the first call.</summary>
     internal void PrimeBaselines() {
+        lock (_gate) PrimeBaselinesUnlocked();
+    }
+
+    void PrimeBaselinesUnlocked() {
         var watched          = new HashSet<string>(StringComparer.Ordinal);
         var recordedCatalogs = _recordedCatalogs();
         foreach (var (vendor, cliPath, catalogPaths) in Watched) {
@@ -142,9 +148,19 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
     /// <summary>One poll iteration (timer-driven; also the unit-test entry point). All vendors
     /// that changed since the last tick share one refresh, since a refresh re-probes them all.</summary>
     internal void Tick() {
+        string? reason;
+        lock (_gate) reason = TickUnlocked();
+        if (reason is null) return;
+
+        LogChanged(_logger, reason);
+        Refresh(reason);
+    }
+
+    // The refresh is raised outside the gate: it is a trigger into the orchestrator, not state of this class.
+    string? TickUnlocked() {
         if (Interlocked.Exchange(ref _rebuildRequested, 0) == 1 && _config is not null && _factories is not null) {
             Watched = WatchSet(_config, _factories, _accounts());
-            PrimeBaselines();
+            PrimeBaselinesUnlocked();
         }
 
         List<string>? changed = null;
@@ -160,10 +176,7 @@ internal sealed partial class VendorCliWatcher : BackgroundService {
             (changed ??= []).Add(vendor);
         }
 
-        if (changed is null) return;
-        var reason = $"{string.Join(", ", changed)} CLI binary or catalog files changed on disk";
-        LogChanged(_logger, reason);
-        Refresh(reason);
+        return changed is null ? null : $"{string.Join(", ", changed)} CLI binary or catalog files changed on disk";
     }
 
     CliBinaryStat? StatCli(string cliPath) => string.IsNullOrEmpty(cliPath) ? null : StatBinary(cliPath);
