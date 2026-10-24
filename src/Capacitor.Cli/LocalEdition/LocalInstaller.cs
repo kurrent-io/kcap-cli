@@ -252,7 +252,7 @@ sealed class LocalInstaller(
     /// <summary>Brings the recorded embedding setting and the unit together. The setting is marked pending before the
     /// unit changes and cleared after, so a setup that stops anywhere in between rewrites the unit next time; a refused
     /// rewrite restores what was recorded before. Files fetched for the recorded built-in model set are a repair: the
-    /// server loads the model only once, so the record is marked pending before the files land and the unit is
+    /// server loads the model only once, so the files land only once the record is marked pending, and the unit is
     /// rewritten to restart it.</summary>
     /// <returns>The unit as installed.</returns>
     async Task<LocalServerUnit> ReuseEmbeddingsAsync(LocalServerUnit unit, LocalInstallAnswers answers, Func<LocalInstallFailure> notOurs,
@@ -266,10 +266,9 @@ sealed class LocalInstaller(
         var repairing = false;
         var models    = new LocalModelSetDownloader(root, bundles) {
             Publishing = m => {
-                if (previous is not { Provider: LocalEmbeddingProvider.Builtin } || previous.ModelSetId != m.ModelSet) return;
+                if (previous is not { Provider: LocalEmbeddingProvider.Builtin } || previous.ModelSetId != m.ModelSet) return true;
 
-                repairing = true;
-                LocalEmbeddingStep.Record(root, previous with { Pending = true }, _progress);
+                return repairing = LocalEmbeddingStep.Record(root, previous with { Pending = true }, _progress);
             },
         };
         var target  = await DecideEmbeddingsAsync(answers, models, ct) ?? (previous is { Pending: true } || repairing ? previous! with { Pending = false } : null);

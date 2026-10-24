@@ -15,8 +15,9 @@ public sealed class LocalModelSetDownloader(LocalRoot root, LocalBundleClient bu
     /// <summary>This instance put a model set in place.</summary>
     public bool Fetched { get; private set; }
 
-    /// <summary>Runs once every file of a download has verified, before the set is moved into place.</summary>
-    public Action<LocalEmbeddingModelManifest>? Publishing { get; init; }
+    /// <summary>Runs once every file of a download has verified, before the set is moved into place; false leaves
+    /// the download unpublished.</summary>
+    public Func<LocalEmbeddingModelManifest, bool>? Publishing { get; init; }
 
     string SetDirectory(LocalEmbeddingModelManifest m) => Path.Combine(Models, m.ModelSet);
 
@@ -45,8 +46,9 @@ public sealed class LocalModelSetDownloader(LocalRoot root, LocalBundleClient bu
 
     /// <exception cref="LocalModelDownloadException">The publication lacks a file, the network failed or timed out,
     /// or a file is not what the manifest signed.</exception>
-    public async Task DownloadAsync(LocalEmbeddingModelManifest m, IProgress<(long Received, long Total)> progress, CancellationToken ct) {
-        if (IsPresent(m)) return;
+    /// <returns>False when <see cref="Publishing"/> refused the download.</returns>
+    public async Task<bool> DownloadAsync(LocalEmbeddingModelManifest m, IProgress<(long Received, long Total)> progress, CancellationToken ct) {
+        if (IsPresent(m)) return true;
 
         var partial = Path.Combine(Models, $".partial-{Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(8))}");
         var total   = m.TotalSize;
@@ -65,9 +67,12 @@ public sealed class LocalModelSetDownloader(LocalRoot root, LocalBundleClient bu
                 done += file.Size;
             }
 
-            Publishing?.Invoke(m);
+            if (Publishing?.Invoke(m) == false) return false;
+
             Install(m, partial);
             Fetched = true;
+
+            return true;
         } catch (Exception e) when (e is IOException or UnauthorizedAccessException) {
             throw new LocalModelDownloadException(LocalModelDownloadCode.DownloadFailed, $"Could not store the model set: {e.Message}", e);
         } finally {

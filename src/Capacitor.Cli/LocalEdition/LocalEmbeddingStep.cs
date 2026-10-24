@@ -73,7 +73,7 @@ static class LocalEmbeddingStep {
     }
 
     /// <summary>Downloads <paramref name="manifest"/>'s model set unless it is already in place and verifies.</summary>
-    /// <returns>False when the download failed, which is reported.</returns>
+    /// <returns>False when the download failed, which is reported, or the downloader's publishing step refused it.</returns>
     public static async Task<bool> FetchBuiltinAsync(LocalModelSetDownloader models, LocalEmbeddingModelManifest manifest,
         LocalEmbeddingSetting? current, IProgress<LocalInstallEvent> progress, CancellationToken ct) {
         if (models.IsPresent(manifest)) return true;
@@ -81,9 +81,8 @@ static class LocalEmbeddingStep {
         progress.Report(new LocalInstallEvent.EmbeddingBuiltinDownloading(manifest.TotalSize));
 
         try {
-            await models.DownloadAsync(manifest, new SyncProgress<(long Received, long Total)>(Throttled(
+            return await models.DownloadAsync(manifest, new SyncProgress<(long Received, long Total)>(Throttled(
                 p => new LocalInstallEvent.EmbeddingBuiltinProgress(p.Received, p.Total), progress)), ct);
-            return true;
         } catch (LocalModelDownloadException ex) {
             Skipped(progress, LocalEmbeddingSkipCode.ModelDownloadFailed, $"The built-in search model could not be downloaded ({ex.Message})", current);
             return false;

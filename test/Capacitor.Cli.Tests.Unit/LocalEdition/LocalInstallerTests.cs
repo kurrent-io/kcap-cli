@@ -843,6 +843,35 @@ public class LocalInstallerTests {
         await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
     }
 
+    /// <summary>Repaired files published without the pending marker would verify on the next setup, which then has no
+    /// reason to restart a server still holding its failed load; so the damaged set stays until the marker is written.</summary>
+    [Test]
+    public async Task A_repair_whose_marker_cannot_be_written_is_not_published_and_the_next_setup_repairs() {
+        await Install();
+        await ReuseOffering(new LocalEmbeddingAnswer.Builtin());
+        File.WriteAllBytes(ModelFile, [1, 2, 3]);
+        var record = LocalEmbeddingFile.PathFor(Root);
+        _log.Clear();
+        _events.Reports.Clear();
+
+        using (FaultPoints.Arm(point => {
+                   if (point == $"rename:{record}") throw new IOException("read-only");
+               }))
+            await ReuseOffering(new LocalEmbeddingAnswer.Default());
+
+        await Assert.That(File.ReadAllBytes(ModelFile)).IsEquivalentTo(new byte[] { 1, 2, 3 });
+        await Assert.That(_log).DoesNotContain("install");
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingsSkipped>().Single().Code).IsEqualTo(LocalEmbeddingSkipCode.WriteFailed);
+        await Assert.That(_events.Reports.OfType<LocalInstallEvent.EmbeddingBuiltinConfigured>()).IsEmpty();
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
+
+        await ReuseOffering(new LocalEmbeddingAnswer.Default());
+
+        await Assert.That(File.ReadAllBytes(ModelFile).SequenceEqual(ModelOnnx)).IsTrue();
+        await Assert.That(_log).Contains("install");
+        await Assert.That(LocalEmbeddingFile.Read(Root)).IsEqualTo(LocalEmbeddingSetting.Builtin(Models.ModelSet));
+    }
+
     [Test]
     public async Task Reuse_over_a_foreign_unit_pulls_no_model() {
         using var ollama = new FakeOllama().Running().Pulls("""{"status":"success"}""").Embeds(1024);
