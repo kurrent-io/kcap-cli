@@ -14,6 +14,9 @@ public interface IRemoteAgentsService {
     IObservableCache<AgentInstanceDto, string> Agents { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; }
+    /// Replay-1. True once a fetch in the lane's current connection returned rows; false while the
+    /// lane is not Connected and after a fetch that returned none, when Agents is retained history.
+    IObservable<bool> Current { get; }
 }
 
 /// An agents fetch's outcome: Rows is null on any failure (including Unauthorized), so a caller
@@ -28,6 +31,7 @@ public sealed record RemoteFetch(AgentInstanceDto[]? Rows, bool Unauthorized = f
 public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly SourceCache<AgentInstanceDto, string> _agents = new(a => a.AgentId);
     readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> _daemons = new([]);
+    readonly BehaviorSubject<bool> _current = new(false);
     readonly IDisposable _subscriptions;
     // Guards _generation/_lastSubject and each refresh kind's busy/rerun pair. _generation bumps
     // on every Connected status carrying a subject, not only on a subject change, so any fetch
@@ -72,6 +76,9 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // place. Caches clear only when the token subject changes; every Connected carrying a
         // subject advances the generation, so an older fetch can neither publish nor report an
         // auth failure.
+        var laneLost = lane.Status
+            .Where(s => s.State != ServerLaneState.Connected)
+            .Subscribe(_ => _current.OnNext(false));
         var identityChange = lane.Status
             .Where(s => s.State == ServerLaneState.Connected)
             .Subscribe(s => {
@@ -101,11 +108,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             .Select(_ => Observable.FromAsync(async () => await RefreshAgentsAsync(fetchAgents)))
             .Merge()
             .Subscribe();
-        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(identityChange, refreshDaemons, refreshAgents);
+        _subscriptions = new System.Reactive.Disposables.CompositeDisposable(laneLost, identityChange, refreshDaemons, refreshAgents);
     }
 
     public IObservableCache<AgentInstanceDto, string> Agents => _agents.AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons => _daemons.AsObservable();
+    public IObservable<bool> Current => _current.AsObservable();
 
     async Task RefreshAgentsAsync(Func<CancellationToken, Task<RemoteFetch>> fetch) {
         lock (_lock) {
@@ -129,6 +137,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                         .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
             var notifyUnauthorized = false;
+            bool? current = null;
             bool rerun;
             lock (_lock) {
                 // A completion from before the latest connect must never repopulate the cache or
@@ -138,11 +147,13 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                     if (result?.Rows is { } rows)
                         _agents.EditDiff(rows, EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;
+                    current = result?.Rows is not null;
                 }
                 rerun = _agentsRerun;
                 if (rerun) _agentsRerun = false;
                 else _agentsBusy = false;
             }
+            if (current is { } evidence) _current.OnNext(evidence);
             // Invoked outside this lock (arbitrary caller code — ServerConnectionService.
             // ParkSignedOut in production), carrying the lane epoch this fetch started under so
             // the lane itself re-validates the park at the moment it actually runs, rather than
@@ -220,5 +231,6 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         inFlight?.TrySetResult();
         _agents.Dispose();
         _daemons.Dispose();
+        _current.Dispose();
     }
 }

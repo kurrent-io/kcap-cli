@@ -13,6 +13,7 @@ internal sealed class NoRemoteAgents : IRemoteAgentsService {
     public IObservableCache<AgentInstanceDto, string> Agents { get; } =
         new SourceCache<AgentInstanceDto, string>(a => a.AgentId).AsObservableCache();
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons { get; } = Observable.Return<IReadOnlyList<DaemonInfo>>([]);
+    public IObservable<bool> Current { get; } = Observable.Return(false);
 }
 
 /// Paired with <see cref="NoRemoteAgents"/>: a lane that never connects.
