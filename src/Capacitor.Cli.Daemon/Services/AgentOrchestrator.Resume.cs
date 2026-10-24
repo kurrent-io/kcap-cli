@@ -688,6 +688,17 @@ internal partial class AgentOrchestrator {
     static bool IsTombstone(ResumeLedgerEntry entry) =>
         entry.State == ResumeState.Interrupted && entry.LastError?.StartsWith(TombstonePrefix, StringComparison.Ordinal) == true;
 
+    /// <summary>Whether boot will resume this participant under its own id. Read before the ledger is sorted.</summary>
+    bool ParticipantResumes(string agentId) {
+        try {
+            return ParticipantLedger?.TryRead(agentId) is { } entry
+                && ParticipantIneligibility(entry, _config.PriorInstanceId, _time.GetUtcNow(), _config.AutoResume) is null;
+        } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+            LogResumeLedgerFailed(ex, "reading", agentId);
+            return false;
+        }
+    }
+
     /// <summary>Why a participant entry must not be resumed, or null when it may.</summary>
     internal static string? ParticipantIneligibility(ResumeLedgerEntry entry, string? priorInstanceId, DateTimeOffset now, bool autoResume) =>
         !autoResume                                                                       ? "auto_resume_off"

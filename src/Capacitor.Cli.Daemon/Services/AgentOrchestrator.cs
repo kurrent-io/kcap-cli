@@ -889,7 +889,12 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         // a co-existing durable record's TRUSTED flow is routed through onRecordResolved by EmitAndClear.
         _markerCandidates = new MarkerCandidateStore(recordRoot, logger);
         _orphanReaper = new OrphanReaper(_pidRecords, _daemonId, _daemonEpoch, logger, time,
-            onRecordResolved: (a, e, fr, role) => _resolvedLedger?.Upsert(a, e, fr, role),
+            onRecordResolved: (a, e, fr, role) => {
+                // The server clears the flow role this evidence names, and a participant resumed under its own
+                // id still holds that role.
+                var resuming = ParticipantResumes(a);
+                _resolvedLedger?.Upsert(a, e, resuming ? null : fr, resuming ? null : role);
+            },
             markerStore: _markerCandidates,
             onMarkerResolved: (a, e) => _resolvedLedger?.Upsert(a, e, null, null));
 
