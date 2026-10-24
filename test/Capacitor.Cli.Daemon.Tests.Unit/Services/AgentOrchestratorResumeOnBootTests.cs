@@ -146,6 +146,31 @@ public class AgentOrchestratorResumeOnBootTests {
         var ctx = f.Factory.Contexts.Single();
         await Assert.That(ctx.Prompt).IsEqualTo(nudged ? ResumeNudge.Build(entry.ResumingAt!.Value, "build the thing") : "");
         await Assert.That(f.Orch.GetAgentForTest("resume-idle")!.ActivityClock.AwaitingInput).IsEqualTo(!nudged);
+        // The running entry holds no waiting state of its own: a crash before the next keep-agents shutdown must
+        // not read a turn started since as waiting.
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-idle")!.AwaitingInput).IsNull();
+    }
+
+    /// <summary>A silently resumed agent is waiting from the moment anything can reach it, so a turn that starts
+    /// while the resume is still registering is not overwritten as waiting.</summary>
+    [Test]
+    public async Task A_turn_that_starts_while_a_silent_resume_registers_stays_working() {
+        var server = new CaptureServerConnection {
+            AgentRegisteredEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            AgentRegisteredGate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var f = Build(new ResumableFactory { PtyStyle = true, ResumesIdle = true }, server: server);
+        await using var _ = f.Orch;
+        Entry(f, "resume-busy", awaitingInput: true);
+
+        f.Orch.LoadResumeLedger();
+        var resuming = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await server.AgentRegisteredEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        f.Orch.GetAgentForTest("resume-busy")!.ActivityClock.SetAwaitingInput(false);
+        server.AgentRegisteredGate.SetResult();
+        await resuming;
+
+        await Assert.That(f.Orch.GetAgentForTest("resume-busy")!.ActivityClock.AwaitingInput).IsFalse();
     }
 
     [Test]
