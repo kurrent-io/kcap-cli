@@ -350,6 +350,21 @@ public class AgentDirectoryTests {
         sessions.MineLiveCache.AddOrUpdate(row);
     }
 
+    /// A daemon row knows when its agent registered, not when it last did anything; the listing does.
+    [Test]
+    public async Task A_hosted_row_takes_its_listings_activity_time() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        var row = Listed("S", "active") with { LastActivityAt = new DateTimeOffset(2026, 10, 24, 9, 30, 0, TimeSpan.Zero) };
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+
+        await Assert.That(dir.Rows.Lookup("local:a1").Value.LastActivityAt).IsEqualTo(new DateTime(2026, 10, 24, 9, 30, 0, DateTimeKind.Utc));
+    }
+
     /// A session the server lists with no daemon behind it has no agent here to answer for it: its
     /// permission requests get no card and no pip.
     [Test]

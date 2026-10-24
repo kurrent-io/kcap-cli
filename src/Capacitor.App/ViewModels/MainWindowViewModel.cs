@@ -169,6 +169,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
     readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
+    readonly IDisposable _onAppServer;
+    /// A session id names a session only within one server: a hand-off to the server's row is
+    /// sound only while the local daemon reports the app's server.
+    bool _localOnAppServer = true;
     readonly SerialDisposable _rebind = new();
 
     ISessionWorkspace? _currentWorkspace;
@@ -360,6 +364,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _originOf = originOf ?? (_ => AgentOrigin.Local);
         _remoteFactory = remoteWorkspaceFactory;
         _directory = directory;
+        _onAppServer = directory?.LocalDaemonOnAppServer.Subscribe(on => _localOnAppServer = on) ?? Disposable.Empty;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
         CloseWorkspaceCommand = ReactiveCommand.Create(CloseWorkspace);
@@ -742,7 +747,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// An open workspace follows its row across lanes, both directions, carrying the tab in use.
     /// Once its session ends it hands off to the server's row for that session, which opens the
     /// ended session read-only; a session the server never lists closes as the rail has dropped it,
-    /// and a failed local agent closes at once so its reason stays where the rail shows it.
+    /// and a failed local agent closes at once so its reason stays where the rail shows it. A
+    /// session-only workspace closes when its row leaves the directory: the kept row survives every
+    /// page cut, so the row leaves only on a deletion or an account change.
     void WatchOpen(ISessionWorkspace? workspace) {
         var moves = workspace switch {
             RemoteSessionViewModel { IsSessionOnly: false } remote => remote.OriginChangedChanges
@@ -761,10 +768,16 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(_ => {
                     if (!ReferenceEquals(CurrentWorkspace, workspace)) return;
-                    if (local.LastStatus == "Completed" && local.SessionId is { Length: > 0 } sessionId && _directory is { } directory)
+                    if (local.LastStatus == "Completed" && _localOnAppServer && local.SessionId is { Length: > 0 } sessionId && _directory is { } directory)
                         ArmHandoff(local, directory, sessionId, $"local:{local.AgentId}", closeWithout: true);
                     else CloseWorkspace();
                 }),
+            RemoteSessionViewModel { IsSessionOnly: true } session when _directory is { } directory => directory.Rows.Connect()
+                .ObserveOn(RxSchedulers.MainThreadScheduler)
+                .SelectMany(changes => changes)
+                .Where(change => change.Key == $"server:{session.AgentId}" && change.Reason == ChangeReason.Remove)
+                .Take(1)
+                .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); }),
             RemoteSessionViewModel { IsSessionOnly: false } remote => remote.SessionEndedChanges
                 .DistinctUntilChanged()
                 .Where(ended => ended)
@@ -826,14 +839,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void ArmHandoff(ISessionWorkspace open, IAgentDirectory directory, string sessionId, string daemonKey, bool closeWithout) {
         // The server spells the id its own way, so its row is found by identity rather than by key.
         AgentRow? EndedServerRow() => directory.Rows.Items.FirstOrDefault(r => r.IsEndedSession && SessionIds.SameSession(r.SessionId, sessionId));
-        // The daemon row has returned only when a change after arming shows it live: the directory
-        // can still carry it as running at the instant the workspace learns it completed.
+        // The daemon row has returned only when a change to that row after arming shows it live: the
+        // directory can still carry it as running at the instant the workspace learns it completed,
+        // and another row's revision proves nothing about it.
         var outcomes = directory.Rows.Connect(suppressEmptyChangeSets: false)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .Select(_ => true)
             .Skip(1)
+            .Select(changes => changes.Any(change => change.Key == daemonKey
+                && change.Reason is ChangeReason.Add or ChangeReason.Update or ChangeReason.Refresh
+                && !SessionStatusDots.IsTerminal(change.Current.Status)))
             .StartWith(false)
-            .Select(changed => changed && directory.Rows.Lookup(daemonKey) is { HasValue: true, Value: var back } && !SessionStatusDots.IsTerminal(back.Status)
+            .Select(returned => returned
                 ? HandoffOutcome.Returned
                 : EndedServerRow() is not null
                     ? HandoffOutcome.ServerRow

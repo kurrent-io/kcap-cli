@@ -443,6 +443,31 @@ public class SessionRailViewModelTests {
         });
     }
 
+    /// Two viewers in a row: the earlier one's read, however late, is not the shape to show.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_late_preferences_load_for_an_earlier_viewer_is_ignored() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var directory = new FakeAgentDirectory();
+            var sessions = new FakeServerSessionsService();
+            var loads = new Dictionary<string, TaskCompletionSource<RailPreferences>>();
+            var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, sessions: sessions,
+                bindUserPreferences: id => (loads[id] = new(TaskCreationOptions.RunContinuationsAsynchronously)).Task);
+            using (directory) using (sessions) using (rail) {
+                sessions.ViewerUserIdSubject.OnNext("u1");
+                sessions.ViewerUserIdSubject.OnNext("u2");
+                loads["u2"].SetResult(RailPreferences.Default with { Scope = RailScope.Team });
+                await WorkspaceFixtures.WaitUntilAsync(() => rail.Scope == RailScope.Team, what: "the later viewer's shape");
+
+                loads["u1"].SetResult(RailPreferences.Default with { Grouping = RailGrouping.Date });
+
+                await Task.Delay(100);
+                await Assert.That(rail.Scope).IsEqualTo(RailScope.Team);
+                await Assert.That(rail.Grouping).IsEqualTo(RailGrouping.Repository);
+            }
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_named_viewer_applies_that_users_remembered_shape_without_persisting_it() {

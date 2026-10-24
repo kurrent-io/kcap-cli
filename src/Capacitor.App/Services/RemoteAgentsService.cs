@@ -74,11 +74,16 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // status this runs first: nothing seeded under one identity survives into another, even
         // when the refresh that follows fetches null and would otherwise leave stale rows in
         // place. Caches clear only when the token subject changes; every Connected carrying a
-        // subject advances the generation, so an older fetch can neither publish nor report an
-        // auth failure.
+        // subject advances the generation, and so does a lost connection, so an older fetch can
+        // neither publish nor report an auth failure nor vouch for a lane that is gone.
         var laneLost = lane.Status
             .Where(s => s.State != ServerLaneState.Connected)
-            .Subscribe(_ => _current.OnNext(false));
+            .Subscribe(_ => {
+                lock (_lock) {
+                    _generation++;
+                    _current.OnNext(false);
+                }
+            });
         var identityChange = lane.Status
             .Where(s => s.State == ServerLaneState.Connected)
             .Subscribe(s => {
@@ -137,7 +142,6 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                         .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
             }
             var notifyUnauthorized = false;
-            bool? current = null;
             bool rerun;
             lock (_lock) {
                 // A completion from before the latest connect must never repopulate the cache or
@@ -147,13 +151,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                     if (result?.Rows is { } rows)
                         _agents.EditDiff(rows, EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;
-                    current = result?.Rows is not null;
+                    _current.OnNext(result?.Rows is not null);
                 }
                 rerun = _agentsRerun;
                 if (rerun) _agentsRerun = false;
                 else _agentsBusy = false;
             }
-            if (current is { } evidence) _current.OnNext(evidence);
             // Invoked outside this lock (arbitrary caller code — ServerConnectionService.
             // ParkSignedOut in production), carrying the lane epoch this fetch started under so
             // the lane itself re-validates the park at the moment it actually runs, rather than

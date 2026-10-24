@@ -1641,6 +1641,78 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// The kept row survives every page cut, so the server row leaves only on a deletion or an
+    /// account change: either way the transcript on screen is no longer the viewer's to see.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_only_workspace_closes_when_its_server_row_leaves_the_directory() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            var vm = NewVm(service, originOf: _ => AgentOrigin.Server,
+                serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory);
+            vm.OpenSession("S", AgentOrigin.Server);
+            await Assert.That(vm.CurrentWorkspace).IsNotNull();
+
+            host.Directory.Rows.Remove("server:S");
+
+            await Assert.That(vm.CurrentWorkspace).IsNull();
+        });
+    }
+
+    /// A session id names a session only within one server: while the local daemon reports another
+    /// one, a listed session sharing the id is somebody else's.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_workspace_closes_when_the_daemon_is_on_another_server() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            host.Directory.LocalOnAppServer.OnNext(false);
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local, serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, time: time);
+            vm.OpenSession("a1", AgentOrigin.Local);
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is null, what: "closed without a hand-off");
+        });
+    }
+
+    /// While the directory still carries the row as running, only a change to that row can mean it
+    /// came back; another session's revision proves nothing about it.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_unrelated_directory_change_does_not_cancel_the_hand_off() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => built = host.NewServer(id), directory: host.Directory, time: time);
+            vm.OpenSession("a1", AgentOrigin.Local);
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("other", "T"), new RepoIdentity("path:/repos/beta", "beta")));
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("local:a1");
+                rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            });
+
+            await WorkspaceFixtures.WaitUntilAsync(() => built is not null && ReferenceEquals(vm.CurrentWorkspace, built), what: "hand-off despite an unrelated change");
+            vm.CloseWorkspace();
+        });
+    }
+
     /// The daemon reports the hook's GUID as spelled; the server lists it as 32 hex digits.
     [Test]
     [NotInParallel("AvaloniaSession")]

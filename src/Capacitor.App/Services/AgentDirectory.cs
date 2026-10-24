@@ -356,6 +356,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
                 OwnerIsViewer = OwnerIsViewer(dto, mine.Contains(sid)),
+                LastActivityAt = dto.LastActivityAt.UtcDateTime,
             };
         }
         if (_scope == RailScope.Mine) {

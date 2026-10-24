@@ -56,6 +56,9 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     readonly BehaviorSubject<ServerSessionsSnapshot> _snapshots = new(ServerSessionsSnapshot.Empty);
     string? _kept;
     RepoSessionDto? _keptRow;
+    /// Deletions by arrival order: a read admitted before one still lists the session.
+    long _deleteSeq;
+    readonly Dictionary<string, long> _tombstones = new(StringComparer.Ordinal);
     TaskCompletionSource _settled = Completed();
     bool _disposed;
 
@@ -71,8 +74,12 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
         lane.Status.Subscribe(status => {
             if (status.State != ServerLaneState.Connected) {
-                lock (_lock) _connected = false;
-                _current.OnNext(false);
+                // A read that outlives its connection answers for a lane that is gone.
+                lock (_lock) {
+                    _connected = false;
+                    _generation++;
+                    _current.OnNext(false);
+                }
                 return;
             }
             lock (_lock) {
@@ -93,6 +100,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     _live.Remove(push.SessionId);
                     _mineLive.Remove(push.SessionId);
                     _ended.Remove(push.SessionId);
+                    _tombstones[push.SessionId] = ++_deleteSeq;
                     if (_kept == push.SessionId) _keptRow = null;
                     EmitSnapshot();
                 }
@@ -202,6 +210,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     async Task RunAsync() {
         while (true) {
             int generation, laneEpoch, pages;
+            long readSeq;
             RailScope scope;
             bool full;
             lock (_lock) {
@@ -211,6 +220,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 scope = _scope.Value;
                 full = _fullRequested;
                 _fullRequested = false;
+                readSeq = _deleteSeq;
             }
             Snapshot? snapshot = null;
             var unauthorized = false;
@@ -220,18 +230,13 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 // A data-plane read that throws is a missed refresh, never an app fault.
             }
             var notifyUnauthorized = false;
-            bool? current = null;
             bool rerun;
             TaskCompletionSource? settled = null;
             lock (_lock) {
                 // A read taken under another scope or page count answers a question no longer asked.
                 if (generation == _generation && !_disposed && scope == _scope.Value && pages == _pages) {
-                    if (snapshot is not null) {
-                        Publish(snapshot, pages);
-                        current = true;
-                    } else {
-                        current = false;
-                    }
+                    if (snapshot is not null) Publish(snapshot, pages, readSeq);
+                    _current.OnNext(snapshot is not null);
                     if (unauthorized) notifyUnauthorized = true;
                 }
                 rerun = _rerun;
@@ -242,7 +247,6 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     settled = _settled;
                 }
             }
-            if (current is { } evidence && !_disposed) _current.OnNext(evidence);
             if (notifyUnauthorized) _onUnauthorized?.Invoke(laneEpoch);
             if (rerun) continue;
             settled?.TrySetResult();
@@ -250,15 +254,19 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         }
     }
 
-    void Publish(Snapshot snapshot, int pages) {
-        _live.EditDiff(snapshot.Live, EqualityComparer<RepoSessionDto>.Default);
-        if (snapshot.MineLive is { } mine) _mineLive.EditDiff(mine, EqualityComparer<RepoSessionDto>.Default);
+    void Publish(Snapshot snapshot, int pages, long readSeq) {
+        // A deletion pushed after this read was admitted outranks what the read still lists.
+        bool Standing(RepoSessionDto row) => !(_tombstones.TryGetValue(row.SessionId, out var seq) && seq > readSeq);
+        _live.EditDiff(snapshot.Live.Where(Standing), EqualityComparer<RepoSessionDto>.Default);
+        if (snapshot.MineLive is { } mine) _mineLive.EditDiff(mine.Where(Standing), EqualityComparer<RepoSessionDto>.Default);
         else _mineLive.Clear();
         if (snapshot.Ended is { } ended) {
-            _ended.EditDiff(ended, EqualityComparer<RepoSessionDto>.Default);
+            var rows = ended.Where(Standing).ToArray();
+            _ended.EditDiff(rows, EqualityComparer<RepoSessionDto>.Default);
             var atCap = pages * PageSize >= OffsetCap;
-            _paging.OnNext(new(ended.Length, snapshot.EndedTotal, pages, ended.Length < snapshot.EndedTotal && !atCap, atCap));
+            _paging.OnNext(new(rows.Length, snapshot.EndedTotal, pages, rows.Length < snapshot.EndedTotal && !atCap, atCap));
         }
+        foreach (var id in _tombstones.Where(t => t.Value <= readSeq).Select(t => t.Key).ToList()) _tombstones.Remove(id);
         _liveNotShown.OnNext(snapshot.LiveNotShown);
         EmitSnapshot();
     }
@@ -334,6 +342,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _viewerUserId.OnNext(null);
         _kept = null;
         _keptRow = null;
+        _tombstones.Clear();
         EmitSnapshot();
     }
 

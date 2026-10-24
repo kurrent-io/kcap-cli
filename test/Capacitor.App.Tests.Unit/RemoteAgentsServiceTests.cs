@@ -301,6 +301,23 @@ public class RemoteAgentsServiceTests {
         await Eventually(() => seen[^1] == false);
     }
 
+    /// A read that outlives its connection reports on a lane that is no longer there.
+    [Test]
+    public async Task A_read_finishing_after_the_lane_drops_does_not_report_current() {
+        var lane = new FakeServerLane();
+        var gate = new TaskCompletionSource<RemoteFetch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var svc = new RemoteAgentsService(lane, _ => gate.Task, TimeSpan.Zero);
+        var seen = new List<bool>();
+        using var _ = svc.Current.Subscribe(seen.Add);
+
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        gate.SetResult(new RemoteFetch([]));
+
+        await Task.Delay(100);
+        await Assert.That(seen).DoesNotContain(true);
+    }
+
     [Test]
     public async Task Current_drops_when_the_lane_leaves_connected() {
         var lane = new FakeServerLane();

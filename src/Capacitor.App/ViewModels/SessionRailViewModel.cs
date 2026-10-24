@@ -261,11 +261,10 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         // The lane names the viewer after the rail has opened in the last user's shape; a read that
         // fails keeps the shape already showing.
         if (sessions is not null && bindUserPreferences is not null)
-            sessions.ViewerUserId
-                .Where(id => id is { Length: > 0 })
-                .DistinctUntilChanged()
-                .Select(id => Observable.FromAsync(() => bindUserPreferences(id!)).Catch(Observable.Empty<RailPreferences>()))
-                .Merge()
+            Observable.Switch(sessions.ViewerUserId
+                    .Where(id => id is { Length: > 0 })
+                    .DistinctUntilChanged()
+                    .Select(id => Observable.FromAsync(() => bindUserPreferences(id!)).Catch(Observable.Empty<RailPreferences>())))
                 .ObserveOn(RxSchedulers.MainThreadScheduler)
                 .Subscribe(ApplyPreferences)
                 .DisposeWith(_disposables);

@@ -397,6 +397,54 @@ public class ServerSessionsServiceTests {
         await Eventually(() => latest is { } s && !s.Ended.Any(r => r.SessionId == "s1"), "dropped on deselection");
     }
 
+    /// A read admitted before the deletion still lists the session; its publication must not bring it back.
+    [Test]
+    public async Task A_deleted_session_does_not_return_from_a_read_already_in_flight() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        var seen = new List<ServerSessionsSnapshot>();
+        using var sub = service.Snapshots.Subscribe(seen.Add);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        listing.Gate = q => q is { State: "ended", Offset: 0 } ? gate.Task : Task.CompletedTask;
+        service.Keep("s3");
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveRemoved, "live-me"));
+        await Eventually(() => listing.Count("ended", "me", 0) == 2, "re-read in flight");
+
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.Deleted, "s3"));
+        await Eventually(() => !service.Ended.Lookup("s3").HasValue, "dropped at once");
+        var before = seen.Count;
+        listing.Gate = null;
+        gate.SetResult();
+
+        await Eventually(() => seen.Count > before, "the in-flight read published");
+        await Assert.That(service.Ended.Lookup("s3").HasValue).IsFalse();
+        await Assert.That(seen[^1].Ended.Any(r => r.SessionId == "s3")).IsFalse();
+    }
+
+    /// A read that outlives its connection reports on a lane that is no longer there.
+    [Test]
+    public async Task A_read_finishing_after_the_lane_drops_does_not_report_current() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        var seen = new List<bool>();
+        using var sub = service.Current.Subscribe(seen.Add);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        listing.Gate = q => q is { State: "ended", Offset: 0 } ? gate.Task : Task.CompletedTask;
+
+        Connect(lane);
+        await Eventually(() => listing.Count("ended", "me", 0) == 1, "read in flight");
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+        listing.Gate = null;
+        gate.SetResult();
+
+        await Task.Delay(100);
+        await Assert.That(seen).DoesNotContain(true);
+    }
+
     [Test]
     public async Task Deleted_push_removes_the_row_at_once() {
         var (lane, listing, _, service) = Build();
