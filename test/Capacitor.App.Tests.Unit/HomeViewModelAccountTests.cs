@@ -659,6 +659,33 @@ public class HomeViewModelAccountTests {
         });
     }
 
+    /// A server without sign-in gives no viewer id: the local daemon's row is the one carrying its
+    /// name, and two rows with that name leave support unknown.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Without_a_viewer_id_the_local_target_matches_the_only_row_with_its_name() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var rig = new Rig(Tmp.PathTo("app-state.json"));
+            var vm = await rig.StartAsync(viewerId: _ => Task.FromResult<string?>(null));
+            await vm.SelectRepositoryAsync(Repo);
+            rig.LocalAccounts.OnNext(Snapshot("h1", 1, Home, Work));
+
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName, owner: "o1"), Listed(LocalName, owner: "o2")));
+            await Assert.That(vm.AccountPendingText).IsEqualTo(Loading);
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsFalse();
+
+            rig.Remote.ListingSubject.OnNext(Answered(1, Listed(LocalName, owner: "o1")));
+            await Assert.That(vm.AccountPendingText).IsNull();
+            await Assert.That(vm.AccountSection).IsTrue();
+            await Assert.That(await vm.StartCommand.CanExecute.FirstAsync()).IsTrue();
+
+            await vm.PickAccountAsync("a2");
+            vm.Goal = "g";
+            await vm.StartCommand.Execute();
+            await Assert.That(rig.Launch.Requests.Single().AccountId).IsEqualTo("a2");
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_listing_answered_before_the_viewer_id_resolved_is_read_again_once_it_does() {

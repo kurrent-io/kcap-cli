@@ -350,8 +350,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     AccountsSnapshotDto? _currentLocalAccounts;
     readonly BehaviorSubject<bool> _accountPending = new(false);
     readonly BehaviorSubject<string?> _accountTip = new(null);
-    // The account pipeline's copy of _lastViewerId: support read before the id resolved is read again once it does.
-    readonly BehaviorSubject<string?> _viewerIds = new(null);
+    // The account pipeline's copy of _lastViewerId. Unresolved reads as Unknown and is read again once
+    // it resolves; resolved to null is a server without sign-in.
+    readonly BehaviorSubject<(bool Resolved, string? Id)> _viewerIds = new((false, null));
     readonly BehaviorSubject<(string Vendor, string AccountId)?> _accountCatalogKey = new(null);
 
     bool _accountSection;
@@ -1272,7 +1273,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     async Task<IReadOnlyList<DaemonInfo>> OwnDaemonsAsync(IReadOnlyList<DaemonInfo> all) {
         var viewer = await _viewerId(_shutdown);
         _lastViewerId = viewer;
-        _viewerIds.OnNext(viewer);
+        _viewerIds.OnNext((true, viewer));
         if (viewer is null) return [];
         return all.Where(d => d.OwnerUserId == viewer && !IsLocalTwin(d)).ToList();
     }
@@ -1300,11 +1301,27 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     }
 
     /// Unknown until this connection's listing has answered for the daemon under the viewer: a
-    /// listing that answered without it is still Unknown, never Unsupported.
-    internal static AccountSupport SupportFor(DaemonListing listing, string machine, string? viewerId) =>
-        listing.Daemons is not { } daemons || FindDaemon(daemons, machine, viewerId) is not { } daemon ? AccountSupport.Unknown
-        : daemon.SupportsAccountLaunches ? AccountSupport.Supported
-        : AccountSupport.Unsupported;
+    /// listing that answered without it is still Unknown, never Unsupported. A server without
+    /// sign-in gives no viewer id, so the local daemon is then the one row carrying its name.
+    internal static AccountSupport SupportFor(DaemonListing listing, string machine, string? viewerId, bool remote) {
+        if (listing.Daemons is not { } daemons) return AccountSupport.Unknown;
+
+        var daemon = viewerId is null && !remote ? OnlyRowNamed(daemons, machine) : FindDaemon(daemons, machine, viewerId);
+        return daemon is null ? AccountSupport.Unknown
+            : daemon.SupportsAccountLaunches ? AccountSupport.Supported
+            : AccountSupport.Unsupported;
+    }
+
+    /// Two rows with the name cannot be told apart without an owner, so they match nothing.
+    static DaemonInfo? OnlyRowNamed(IReadOnlyList<DaemonInfo> daemons, string name) {
+        DaemonInfo? match = null;
+        foreach (var d in daemons) {
+            if (!string.Equals(d.Name, name, StringComparison.Ordinal)) continue;
+            if (match is not null) return null;
+            match = d;
+        }
+        return match;
+    }
 
     /// A remote launch is Ready only with the app's OWN server lane connected AND the selected
     /// daemon's latest reported Connected — the local daemon-down notices never apply here (they
@@ -1376,7 +1393,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// The one place a vendor change lands, so the model-reset invariant (ids are
     /// vendor-specific) can never be forgotten by a new call site.
     void SetVendor(string vendor) {
-        if (vendor != SelectedVendor) SelectedModel = "";
+        if (vendor != SelectedVendor) {
+            SelectedModel = "";
+            // An account refusal names the previous vendor's account, and its Use default would reset this one.
+            if (StartErrorOffersDefault) StartError = null;
+        }
         SelectedVendor = vendor;
     }
 
@@ -1384,7 +1405,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// call would drop the person's pick; nothing is published until support and snapshot follow.
     void ApplyAccountInputs(
             (string Name, bool Remote) sel, string repoPath, string vendor, DaemonListing listing,
-            IReadOnlyList<DaemonAccountsDto> remoteAccounts, AccountsSnapshotDto? localAccounts, string? viewerId) {
+            IReadOnlyList<DaemonAccountsDto> remoteAccounts, AccountsSnapshotDto? localAccounts, (bool Resolved, string? Id) viewer) {
         var machine = AccountMachine(sel.Name, sel.Remote);
         _applyingAccountInputs = true;
         try {
@@ -1393,7 +1414,8 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                 _accountTarget = (repoPath, vendor, machine, sel.Remote);
                 _accountChooser.EnterTarget(repoPath, vendor);
             }
-            _accountChooser.SetSupport(SupportFor(listing, machine, viewerId), listing.FetchFailed);
+            var support = viewer.Resolved ? SupportFor(listing, machine, viewer.Id, sel.Remote) : AccountSupport.Unknown;
+            _accountChooser.SetSupport(support, listing.FetchFailed);
             _accountChooser.SetSnapshot(AccountsSnapshotFor(sel.Remote, machine, remoteAccounts, localAccounts));
         } finally {
             _applyingAccountInputs = false;
@@ -1460,7 +1482,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         var machine = AccountMachine(draft.Machine, draft.Remote);
         var snapshot = AccountsSnapshotFor(draft.Remote, machine, _currentDaemonAccounts, _currentLocalAccounts);
         var listed = snapshot is not null && Services.AccountRows.For(snapshot, draft.Vendor).Any(r => r.Id == id);
-        return listed && SupportFor(_currentListing, machine, _lastViewerId) == AccountSupport.Supported
+        return listed && SupportFor(_currentListing, machine, _lastViewerId, draft.Remote) == AccountSupport.Supported
             ? null
             : AccountChooser.UnavailableReason(label ?? id);
     }

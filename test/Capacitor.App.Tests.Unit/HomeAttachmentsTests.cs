@@ -170,6 +170,11 @@ public class HomeAttachmentsTests {
             await Assert.That(rig.Vm.StartErrorOffersDefault).IsTrue();
             await Assert.That(rig.Vm.Tray.Count).IsEqualTo(1);
             await Assert.That(rig.Vm.Goal).IsEqualTo("g");
+
+            // The refusal named Claude's account; it does not follow the switch to Codex.
+            await rig.Vm.ChooseHarnessAsync("codex");
+            await Assert.That(rig.Vm.StartError).IsNull();
+            await Assert.That(rig.Vm.StartErrorOffersDefault).IsFalse();
         });
     }
 
