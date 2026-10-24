@@ -432,6 +432,34 @@ public class RemoteAgentsServiceTests {
         await Assert.That(Seen(daemons).Any(d => ReferenceEquals(d, stale))).IsFalse();
     }
 
+    /// The local edition connects without a subject, so the listing cannot ride the subject-keyed
+    /// generation: a reconnect still reads unanswered, and a fetch from before it never answers.
+    [Test]
+    public async Task A_reconnect_without_a_subject_returns_the_listing_to_unanswered_and_drops_the_stale_result() {
+        var calls = 0;
+        IReadOnlyList<DaemonInfo> stale = [new DaemonInfo { Name = "old-mac", Connected = true }];
+        IReadOnlyList<DaemonInfo> fresh = [new DaemonInfo { Name = "work-mac", Connected = true }];
+        var gate = new TaskCompletionSource<IReadOnlyList<DaemonInfo>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lane = new FakeServerLane {
+            DaemonsHandler = () => Interlocked.Increment(ref calls) == 1 ? gate.Task : Task.FromResult<IReadOnlyList<DaemonInfo>?>(fresh),
+        };
+        using var svc = new RemoteAgentsService(lane, NoAgents, TimeSpan.Zero, time: new FakeTimeProvider());
+        var listings = new List<DaemonListing>();
+        using var sub = Record(svc.Listing, listings);
+
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Retrying));
+        lane.StatusSubject.OnNext(new(ServerLaneState.Connected));
+        gate.SetResult(stale);
+
+        await Eventually(() => Volatile.Read(ref calls) == 2);
+        await Eventually(() => Seen(listings)[^1].Daemons is not null);
+        await Assert.That(Seen(listings)).IsEquivalentTo(
+            [new DaemonListing(null, 0, false), new DaemonListing(null, 1, false), new DaemonListing(null, 2, false),
+             new DaemonListing(fresh, 2, false)],
+            CollectionOrdering.Matching);
+    }
+
     [Test]
     public async Task Daemon_accounts_are_seeded_on_connect_refreshed_on_the_push_and_cleared_on_a_subject_change() {
         static DaemonAccountsDto Row(long revision) => new() { DaemonName = "work-mac", HostId = "h1", Revision = revision };

@@ -47,11 +47,14 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     // Guards the mutable fields below. _generation bumps on every Connected status carrying a
     // subject, so a fetch issued before the latest connect is stale for both publishing and
-    // onUnauthorized. Admission (busy check / set rerun) and completion (rerun check / clear busy)
+    // onUnauthorized. _listingGeneration bumps on every Connected status, subject or not: the
+    // local edition connects without one, and its listing must still read unanswered after a
+    // reconnect. Admission (busy check / set rerun) and completion (rerun check / clear busy)
     // share one critical section, so a losing admission can never land between a drain loop
     // reading rerun false and clearing busy.
     readonly Lock _lock = new();
     int _generation;
+    int _listingGeneration;
     string? _lastSubject;
     // The lane's own Epoch off the latest Connected status seen — captured per fetch and handed
     // to onUnauthorized, so ServerConnectionService.ParkSignedOut(int) can re-validate a delayed
@@ -104,8 +107,9 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                     }
                     _generation++;
                     _lastSubject = s.Subject;
-                    _listing.OnNext(new(null, _generation, false));
                 }
+                _listingGeneration++;
+                _listing.OnNext(new(null, _listingGeneration, false));
                 _lastLaneEpoch = s.Epoch;
             }
         });
@@ -188,8 +192,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             _daemonsInFlight = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
         while (true) {
-            int generation;
-            lock (_lock) generation = _generation;
+            int generation, listingGeneration;
+            lock (_lock) { generation = _generation; listingGeneration = _listingGeneration; }
             IReadOnlyList<DaemonInfo>? result = null;
             using var cts = new CancellationTokenSource(DaemonsRefreshTimeout, _time);
             try {
@@ -198,13 +202,14 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             }
             TaskCompletionSource? completed;
             lock (_lock) {
-                if (generation == _generation) {
+                if (result is not null && generation == _generation)
+                    _daemons.OnNext(result);
+                if (listingGeneration == _listingGeneration) {
                     if (result is not null) {
                         ResetListingRetry();
-                        _daemons.OnNext(result);
-                        _listing.OnNext(new(result, generation, false));
+                        _listing.OnNext(new(result, listingGeneration, false));
                     } else {
-                        _listing.OnNext(new(null, generation, true));
+                        _listing.OnNext(new(null, listingGeneration, true));
                         if (!_daemonsRerun) ScheduleListingRetry();
                     }
                 }
