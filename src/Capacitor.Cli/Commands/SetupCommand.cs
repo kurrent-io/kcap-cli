@@ -1110,7 +1110,8 @@ sealed class SetupCommand(
             CapacitorOnPath:        () => binaries.Finds("kcap"),
             InstallAgentSkills:     AgentsSkillsInstaller.Install,
             CleanLegacyCodexSkills: legacyDir => AgentsSkillsInstaller.CleanLegacyCodexSkills(legacyDir).RemovedAny,
-            InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses, pluginEnv.Stderr),
+            // Read when it runs: a reported run swaps stderr for the writer its failure line comes from.
+            InstallKiroHooks:       agentPath => PluginCommand.InstallKiroHooks(agentPath, harnesses, Console.Error),
             InstallPiExtension:     PiExtensionInstaller.Install,
             InstallOpenCodeExtension: OpenCodeExtensionInstaller.Install,
             InstallAntigravityHooks:  PluginCommand.InstallAntigravityHooks,
