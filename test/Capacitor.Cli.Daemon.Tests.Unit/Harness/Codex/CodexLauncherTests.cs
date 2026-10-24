@@ -116,6 +116,15 @@ public class CodexLauncherTests {
         }, CollectionOrdering.Matching);
     }
 
+    /// <summary>A resume of an agent that was waiting sends no turn: an empty prompt adds no argument.</summary>
+    [Test]
+    public async Task A_resume_with_an_empty_prompt_passes_no_prompt_argument() {
+        var args = NewLauncher().BuildArgs(NewCtx(prompt: "") with { ResumeSessionId = "019a-thread" }).Args;
+
+        await Assert.That(args).DoesNotContain("--");
+        await Assert.That(args).DoesNotContain("");
+    }
+
     [Test]
     public async Task Resume_is_supported() {
         await Assert.That(NewLauncher().SupportsResume).IsTrue();

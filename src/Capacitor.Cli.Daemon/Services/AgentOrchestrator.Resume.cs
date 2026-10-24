@@ -256,6 +256,7 @@ internal partial class AgentOrchestrator {
                     PredecessorInstanceId = _config.InstanceId,
                     ResumingAt            = now,
                     UpdatedAt             = now,
+                    AwaitingInput         = agent.ActivityClock.AwaitingInput,
                     SessionId             = agent.SessionId ?? entry.SessionId,
                     VendorSession         = agent.VendorSession ?? entry.VendorSession
                 });
@@ -870,8 +871,15 @@ internal partial class AgentOrchestrator {
             entry.Launch.RepoPath, entry.Vendor, entry.Launch.RequesterDisplay);
         var consent = _consentGate.GrantResume(entry.AgentId, input, entry.Launch.ConsentSource ?? "");
 
+        // An agent that was waiting comes back waiting: a nudge would start a turn nobody asked for.
+        var silent  = entry.AwaitingInput == true
+                   && _runtimeFactories.TryGetValue(entry.Vendor, out var factory) && factory.ResumesIdleWithoutPrompt(entry.Transport);
         var resume  = new ResumeLaunch(entry, ResumedWorktree(entry)) { Token = ct };
-        var outcome = await LaunchAdmittedAsync(BuildResumeCommand(entry, LastAlive(entry, null)), consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
+        var command = BuildResumeCommand(entry, LastAlive(entry, null)) is var built && silent ? built with { Prompt = "" } : built;
+        var outcome = await LaunchAdmittedAsync(command, consent, hold, resume, cancel: CancellationToken.None); // the resume's own token ends its start
+
+        // At once, so the next restart's turn-boundary wait does not sit out the quiet-turn detector.
+        if (silent) resume.Agent?.ActivityClock.SetAwaitingInput(true);
 
         if (resume.Agent is null && IsWithdrawn(entry.AgentId)) return (StoppedDuringResume, null);
 
