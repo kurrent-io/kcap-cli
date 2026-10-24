@@ -265,11 +265,10 @@ public class HarnessesStepViewModelTests {
         };
         await File.WriteAllTextAsync(ConfigPath, JsonSerializer.Serialize(existing, ProfileConfigJsonContext.Default.ProfileConfig));
 
-        var (visibility, useKey, note) = await AvaloniaSession.DispatchAsync(async () => {
+        var (visibility, useKey) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Config.Root) { ProviderKeys = new HashSet<string> { "ANTHROPIC_API_KEY" } };
             await h.Vm.OnEnterAsync(CancellationToken.None);
             await Assert.That(h.Vm.Visibility).IsNull();
-            await Assert.That(h.Vm.CurrentVisibilityNote).Contains("People I share a project with");
             await Assert.That(h.Vm.CanContinue).IsFalse();
             await Assert.That(h.Vm.UseProviderApiKey).IsTrue();
             h.Vm.Visibility        = "private";
@@ -278,12 +277,11 @@ public class HarnessesStepViewModelTests {
             await h.Vm.CanLeaveAsync(WizardNavigation.Next, CancellationToken.None);
 
             var profile = ConfigMutator.LoadPure(ConfigPath).Profiles["acme"];
-            return (profile.DefaultVisibility, profile.UseProviderApiKey, h.Vm.CurrentVisibilityNote);
+            return (profile.DefaultVisibility, profile.UseProviderApiKey);
         });
 
         await Assert.That(visibility).IsEqualTo("private");
         await Assert.That(useKey).IsTrue();
-        await Assert.That(note).IsEqualTo("Current setting: Only me.");
     }
 
     /// The question is only asked when a key is exported and the harness that would use it records.

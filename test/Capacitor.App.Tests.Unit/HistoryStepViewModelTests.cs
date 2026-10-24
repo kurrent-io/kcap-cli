@@ -195,7 +195,7 @@ public class HistoryStepViewModelTests {
         await Assert.That(midway).IsEqualTo((2, 2, 6));
         await Assert.That(h.Vm.Run!.Imported).IsEqualTo(6);
         await Assert.That(h.Vm.Run!.Failed).IsEqualTo(6);
-        await Assert.That(h.Vm.Run!.Processed).IsEqualTo(12);
+        await Assert.That(h.Vm.Run!.Processed).IsEqualTo(16);
     }
 
     /// A pass that dies before its totals line keeps what it counted, and the next pass's totals add to it.

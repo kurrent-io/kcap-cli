@@ -42,6 +42,10 @@ public interface IWizardStep {
     /// Already done with nothing left to ask: forward navigation steps over it.
     bool PassThrough => false;
 
+    /// False hides the shell's Finish later while this step is current. A step that changes it raises
+    /// PropertyChanged for it.
+    bool OffersFinishLater => true;
+
     bool CanContinue => true;
     bool CanSkip => true;
 

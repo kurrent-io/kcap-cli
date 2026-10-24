@@ -23,6 +23,8 @@
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
     </Style>
     <Style Selector="TextBlock.onboardingLede">
+        <Setter Property="MaxWidth" Value="500" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
         <Setter Property="FontSize" Value="15" />
         <Setter Property="LineHeight" Value="25" />
         <Setter Property="TextWrapping" Value="Wrap" />
@@ -249,6 +251,14 @@
         <Setter Property="Background" Value="{StaticResource OnboardingSurfaceBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
         <Setter Property="Foreground" Value="{StaticResource OnboardingTextBrush}" />
+    </Style>
+    <!-- An edition this machine cannot take: the head fades, the footer saying why stays legible. -->
+    <Style Selector="Button.onboardingEditionCard:disabled Grid.onboardingEditionHead">
+        <Setter Property="Opacity" Value="0.5" />
+    </Style>
+    <Style Selector="StackPanel.onboardingEditionFooter">
+        <Setter Property="Spacing" Value="14" />
+        <Setter Property="Margin" Value="0,16,0,0" />
     </Style>
     <Style Selector="Button.onboardingCompact">
         <Setter Property="Padding" Value="14,9" />

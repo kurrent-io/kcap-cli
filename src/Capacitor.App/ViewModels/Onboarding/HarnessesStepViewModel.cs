@@ -119,8 +119,6 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         }
     }
 
-    public string? CurrentVisibilityNote { get; private set; }
-
     bool Local => _onLocalPath?.Invoke() == true;
 
     public string SavedNote => Local
@@ -209,10 +207,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
             try {
                 var config = await AppConfig.LoadProfileConfig(_config, ct).ConfigureAwait(true);
                 var profileName = _resolveProfileName?.Invoke() ?? config.ActiveProfile;
-                if (config.Profiles.GetValueOrDefault(profileName ?? ProfileConfig.DefaultName) is { } profile) {
-                    NoteCurrentVisibility(profile.DefaultVisibility);
+                if (config.Profiles.GetValueOrDefault(profileName ?? ProfileConfig.DefaultName) is { } profile)
                     UseProviderApiKey = profile.UseProviderApiKey;
-                }
             } catch (Exception ex) {
                 Message = $"Could not read your settings: {ex.Message}. Go back and try again.";
                 return;
@@ -313,15 +309,8 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
         }
 
         Message = null;
-        NoteCurrentVisibility(visibility);
 
         return true;
-    }
-
-    void NoteCurrentVisibility(string? value) {
-        var current = VisibilityOptions.FirstOrDefault(o => o.Value == value);
-        CurrentVisibilityNote = current is null ? null : $"Current setting: {current.Label}.";
-        this.RaisePropertyChanged(nameof(CurrentVisibilityNote));
     }
 
     async Task InstallSelectedAsync() {

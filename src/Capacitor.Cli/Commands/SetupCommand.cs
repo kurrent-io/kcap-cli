@@ -1972,6 +1972,11 @@ sealed class SetupCommand(
             var (ensured, renameLine) = await SetupDaemonService.EnsureAsync(config, saved, home, time, previousName);
             if (renameLine is not null) AnsiConsole.MarkupLine(renameLine);
 
+            // Only over a service the ensure accepted: a refused unit must not be reloaded around its gate.
+            if (SetupDaemonService.IsUp(ensured)
+             && await SetupDaemonService.RefreshPathAsync(config, saved, home, time, harnesses) is { } pathLine)
+                AnsiConsole.MarkupLine(pathLine);
+
             return ensured;
         }
     }
