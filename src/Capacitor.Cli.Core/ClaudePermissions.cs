@@ -17,30 +17,53 @@ public static class ClaudePermissions {
         return doc.RootElement.Clone();
     }
 
-    /// The rules Claude itself suggested for the call, or a session rule for the whole tool when it suggested none; null
-    /// when the answer asks to save nothing.
-    public static JsonArray? UpdatesFor(JsonElement? applyPermissions, JsonElement? permissionSuggestions) {
-        if (applyPermissions is not { ValueKind: JsonValueKind.Array } entries) return null;
+    /// The rules Claude suggested for the call's own tool, or a session rule for that tool when it suggested none; null
+    /// when the answer approves no tool, or one other than the call's.
+    public static JsonArray? UpdatesFor(JsonElement? applyPermissions, JsonElement? permissionSuggestions, string? toolName) {
+        if (string.IsNullOrEmpty(toolName) || applyPermissions is not { ValueKind: JsonValueKind.Array } entries) return null;
 
-        var tools = entries.EnumerateArray()
-            .Where(e => e.ValueKind == JsonValueKind.Object && Text(e, "type") == ToolAlwaysAllow)
-            .Select(e => Text(e, "tool"))
-            .OfType<string>()
-            .Where(tool => tool.Length > 0)
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var approved = entries.EnumerateArray()
+            .Any(e => e.ValueKind == JsonValueKind.Object && Text(e, "type") == ToolAlwaysAllow && Text(e, "tool") == toolName);
 
-        if (tools.Count == 0) return null;
+        if (!approved) return null;
 
-        if (permissionSuggestions is { ValueKind: JsonValueKind.Array } suggested && suggested.GetArrayLength() > 0)
-            return JsonNode.Parse(suggested.GetRawText())!.AsArray();
+        var suggested = permissionSuggestions is { ValueKind: JsonValueKind.Array } all ? ForTool(all, toolName) : [];
 
-        return new JsonArray([.. tools.Select(tool => (JsonNode)new JsonObject {
-            ["type"]        = "addRules",
-            ["rules"]       = new JsonArray(new JsonObject { ["toolName"] = tool }),
-            ["behavior"]    = "allow",
-            ["destination"] = "session"
-        })]);
+        if (suggested.Count > 0) return suggested;
+
+        return [
+            new JsonObject {
+                ["type"]        = "addRules",
+                ["rules"]       = new JsonArray(new JsonObject { ["toolName"] = toolName }),
+                ["behavior"]    = "allow",
+                ["destination"] = "session"
+            }
+        ];
+    }
+
+    /// The suggested rule updates, each cut to its rules for the tool. Mode and directory changes name no tool, so none
+    /// of them is approved.
+    static JsonArray ForTool(JsonElement suggestions, string toolName) {
+        var kept = new JsonArray();
+
+        foreach (var suggestion in suggestions.EnumerateArray()) {
+            if (suggestion.ValueKind != JsonValueKind.Object
+             || !suggestion.TryGetProperty("rules", out var rules)
+             || rules.ValueKind != JsonValueKind.Array)
+                continue;
+
+            var own = rules.EnumerateArray()
+                .Where(rule => rule.ValueKind == JsonValueKind.Object && Text(rule, "toolName") == toolName)
+                .ToList();
+
+            if (own.Count == 0) continue;
+
+            var update = JsonNode.Parse(suggestion.GetRawText())!.AsObject();
+            update["rules"] = new JsonArray([.. own.Select(rule => JsonNode.Parse(rule.GetRawText()))]);
+            kept.Add((JsonNode)update);
+        }
+
+        return kept;
     }
 
     static string? Text(JsonElement entry, string name) =>

@@ -306,7 +306,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var request  = new StringContent($$"""{"session_id":"abc","permission_suggestions":{{suggestions}}}""", Encoding.UTF8, "application/json");
+            using var request  = new StringContent($$"""{"session_id":"abc","tool_name":"Bash","permission_suggestions":{{suggestions}}}""", Encoding.UTF8, "application/json");
             using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", request);
 
             var       body = await response.Content.ReadAsStringAsync();
@@ -405,7 +405,7 @@ public class LocalPermissionBridgeTests {
             await bridge.StartAsync(CancellationToken.None);
 
             using var client   = CreateClient();
-            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc" }));
+            using var response = await client.PostAsync($"{bridge.BaseUrl}/claude/permission-request", JsonContent.Create(new { session_id = "abc", tool_name = "Bash" }));
 
             await Assert.That((int)response.StatusCode).IsEqualTo(200);
 
