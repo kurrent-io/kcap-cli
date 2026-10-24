@@ -115,7 +115,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ILaunchClient _launch;
     readonly Func<Task<string[]>> _knownRepos;
     readonly Func<int>? _navigationGeneration;
-    readonly Action<string, int>? _openSessionIfCurrent;
+    readonly Action<string, AgentOrigin, int>? _openSessionIfCurrent;
     readonly Action<string>? _launchFailed;
     readonly CompositeDisposable _disposables = new();
 
@@ -403,10 +403,11 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly IAgentDirectory? _directory;
 
     /// One accepted launch awaiting settlement. UploadedAt is null for a text-only launch; both
-    /// stamps come from the same clock, so one TimeProvider governs every expiry.
+    /// stamps come from the same clock, so one TimeProvider governs every expiry. Generation is
+    /// the navigation generation captured before the launch call.
     sealed record PendingLaunch(
         DateTimeOffset At, AgentOrigin Lane, bool HadAttachments, DateTimeOffset? UploadedAt,
-        string RepoPath, string Machine);
+        string RepoPath, int Generation, string Machine);
 
     /// The only copy of a sent launch's bytes, held until the daemon settles that launch or the
     /// window closes. The two counters are what the composer looked like AFTER the launch emptied
@@ -445,9 +446,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// lands after the user navigated away open nothing.
     /// </param>
     /// <param name="openSessionIfCurrent">
-    /// The launch auto-open (MainWindowViewModel.OpenSessionIfCurrent), carrying that captured
-    /// generation. Never invoked for a launch that targeted a remote machine — that workspace is
-    /// backed by the local daemon socket, which can never find the remote agent.
+    /// The launch auto-open (MainWindowViewModel.OpenSessionIfCurrent), carrying the lane and that
+    /// captured generation. A remote launch has no placeholder row, so it opens only once its
+    /// directory row arrives — the remote workspace cannot open an id no lane holds.
     /// </param>
     /// <param name="requestSignIn">Opens the re-auth sign-in surface (App owns the window). Null
     /// leaves the Sign in button inert — a HomeViewModel with no windows to open.</param>
@@ -471,7 +472,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
             Func<Task<string[]>> knownRepos, TimeProvider time, CancellationToken shutdown = default,
             Func<int>? navigationGeneration = null,
-            Action<string, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
+            Action<string, AgentOrigin, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
             IObservable<IReadOnlyList<DaemonInfo>>? daemons = null,
             Func<CancellationToken, Task<string?>>? viewerId = null,
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
@@ -1362,18 +1363,22 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             lock (_launchTrackingLock)
                 _retainedDraft = new RetainedDraft(
                     agentId, draft, uploadedAt!.Value, clearedGoal, _goalEdits, clearedTray, Tray.Generation);
+        var lane = draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local;
         var tracked = RecordPendingLaunch(
-            agentId, draft.Remote ? AgentOrigin.Remote : AgentOrigin.Local, draft.Files.Count > 0,
-            uploadedAt, draft.RepoPath, draft.Machine);
-        // A remote launch's workspace is backed by the local daemon socket, which can never find
-        // an agent that isn't there — auto-open and the placeholder row only ever apply to a
-        // local target.
-        if (tracked && !draft.Remote)
+            agentId, lane, draft.Files.Count > 0, uploadedAt, draft.RepoPath, generation, draft.Machine);
+        // The placeholder is a local-lane row. A remote launch opens from ConfirmPendingRows when
+        // its row arrives, or here when that row beat the registration.
+        if (draft.Remote) {
+            if (!tracked && RowId(agentId, AgentOrigin.Remote) is { } rowId)
+                _openSessionIfCurrent?.Invoke(rowId, AgentOrigin.Remote, generation);
+            return;
+        }
+        if (tracked)
             _directory?.AddPlaceholder(agentId, draft.Vendor, draft.RepoPath, AgentRow.TitleFromPrompt(draft.Goal), draft.Model);
         // Untracked with no row is a failure that beat the call's own return: opening would cover
         // the launcher that has just worded it.
-        if (!draft.Remote && (tracked || RowExists(agentId, AgentOrigin.Local)))
-            _openSessionIfCurrent?.Invoke(agentId, generation);
+        if (tracked || RowExists(agentId, AgentOrigin.Local))
+            _openSessionIfCurrent?.Invoke(agentId, AgentOrigin.Local, generation);
     }
 
     async Task<bool> OwnsConnectedAsync(string machine) =>
@@ -1383,7 +1388,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// False when a row or a buffered failure has already settled the launch.
     bool RecordPendingLaunch(
             string agentId, AgentOrigin lane, bool hadAttachments, DateTimeOffset? uploadedAt,
-            string repoPath, string machine) {
+            string repoPath, int generation, string machine) {
         // A row for this id confirms success, and it can appear on either side of the registration
         // below: the launch may have succeeded before this method ran at all, or the directory's
         // Add may land while it runs — at which point ConfirmPendingRows finds nothing pending yet
@@ -1398,7 +1403,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         string? bufferedReason = null;
         lock (_launchTrackingLock) {
             _pendingLaunches[agentId] = new PendingLaunch(
-                _time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath, machine);
+                _time.GetUtcNow(), lane, hadAttachments, uploadedAt, repoPath, generation, machine);
             if (_recentFailures.TryGetValue(agentId, out var recent)) {
                 if (_time.GetUtcNow().UtcDateTime - recent.At <= RecentFailureTtl) {
                     bufferedReason = recent.Reason;
@@ -1443,9 +1448,10 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     // Directory keys preserve the row's incoming id spelling (e.g. a dashed Guid never becomes
     // "local:{N-form}"), so a lookup by the "N"-normalized pending id would miss it — scan and
     // compare under NormalizeAgentId instead, the same comparison ConfirmPendingRows uses.
-    bool RowExists(string agentId, AgentOrigin lane) =>
-        _directory is { } directory
-        && directory.Rows.Items.Any(r => r.Origin == lane && NormalizeAgentId(r.Id) == agentId);
+    bool RowExists(string agentId, AgentOrigin lane) => RowId(agentId, lane) is not null;
+
+    string? RowId(string agentId, AgentOrigin lane) =>
+        _directory?.Rows.Items.FirstOrDefault(r => r.Origin == lane && NormalizeAgentId(r.Id) == agentId)?.Id;
 
     void RecordRecentFailure(LaunchFailure failure) {
         if (NormalizeAgentId(failure.AgentId) is not { } agentId) return;
@@ -1523,7 +1529,9 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     /// A row for a tracked id is success confirmation: drop the pending entry and any buffered
     /// failure so a later, stale LaunchFailed for the same id cannot override it. Same
     /// NormalizeAgentId comparison as ApplyFailureIfPending, for the same id-shape reason.
+    /// A remote launch's row is also its auto-open: the remote workspace needs that row to exist.
     void ConfirmPendingRows(IChangeSet<AgentRow, string> changes) {
+        List<(string AgentId, int Generation)>? remoteOpens = null;
         lock (_launchTrackingLock) {
             // A pending row is the launch's own stand-in, so only a published one on the launch's
             // own lane settles it.
@@ -1533,8 +1541,16 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
                     _pendingLaunches.Remove(agentId);
                     _recentFailures.Remove(agentId);
                     if (_retainedDraft?.AgentId == agentId) _retainedDraft = null;
+                    if (pending.Lane == AgentOrigin.Remote && !IsExpired(pending))
+                        (remoteOpens ??= []).Add((change.Current.Id, pending.Generation));
                 }
         }
+        // Rows publish off the UI thread, and opening swaps the window's workspace.
+        if (remoteOpens is not null && _openSessionIfCurrent is { } open)
+            RxSchedulers.MainThreadScheduler.Schedule(() => {
+                if (_disposed) return;
+                foreach (var (agentId, generation) in remoteOpens) open(agentId, AgentOrigin.Remote, generation);
+            });
     }
 
     /// Shown when an older daemon still refuses an empty standalone snapshot. Current daemons

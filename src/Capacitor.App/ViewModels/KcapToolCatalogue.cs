@@ -83,6 +83,9 @@ public static class KcapToolCatalogue {
         new("list_flow_definitions",     ToolCategory.Flow,     "Listed flow options",      null),
         new("list_reviewer_vendors",     ToolCategory.Flow,     "Listed flow options",      null),
         new("list_start_agent_options",  ToolCategory.Flow,     "Listed flow options",      null),
+        new("schedule_wakeup",           ToolCategory.Flow,     "Scheduled wake-up",        "prompt"),
+        new("list_wakeups",              ToolCategory.Flow,     "Listed wake-ups",          null),
+        new("cancel_wakeup",             ToolCategory.Flow,     "Cancelled wake-up",        null),
     ];
 
     static readonly FrozenDictionary<string, KcapToolEntry> ByTool =

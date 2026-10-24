@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
@@ -61,14 +62,33 @@ public sealed partial class HistoryImportRun : ReactiveObject {
 
     public int PassesDone {
         get => _passesDone;
-        private set => this.RaiseAndSetIfChanged(ref _passesDone, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _passesDone, value);
+            this.RaisePropertyChanged(nameof(Progress));
+        }
     }
 
     /// Sessions this run has settled so far, whatever their outcome.
     public int Processed {
         get => _processed;
-        private set => this.RaiseAndSetIfChanged(ref _processed, value);
+        private set {
+            this.RaiseAndSetIfChanged(ref _processed, value);
+            this.RaisePropertyChanged(nameof(ProcessedOfExpected));
+            this.RaisePropertyChanged(nameof(Progress));
+        }
     }
+
+    /// "46 of 94" while the selection's count is an honest denominator, the bare count otherwise.
+    public string ProcessedOfExpected => Expected > 0 && Processed <= Expected
+        ? $"{Processed.ToString("N0", CultureInfo.CurrentCulture)} of {Expected.ToString("N0", CultureInfo.CurrentCulture)}"
+        : Processed.ToString("N0", CultureInfo.CurrentCulture);
+
+    /// Percent settled against the selection's count, or of passes when there is no count. Too-short and
+    /// excluded sessions never settle, so it can stop short of 100 before the run ends.
+    public double Progress =>
+        Expected > 0 ? Math.Min(100.0, 100.0 * Processed / Expected)
+        : Passes > 0 ? 100.0 * PassesDone / Passes
+        :              0;
 
     public List<string> Log { get; } = [];
 

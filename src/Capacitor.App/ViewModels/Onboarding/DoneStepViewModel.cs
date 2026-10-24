@@ -112,20 +112,12 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
 
     public string RepositoriesUnit => Import is { Repositories: 1 } ? "repository" : "repositories";
 
-    /// Sessions settled against the selection's count; passes when there is no count to measure against.
-    /// Too-short and excluded sessions never settle, so the bar can stop short of full before the run ends.
-    public double ProgressValue => Import switch {
-        { Expected: > 0 } run => Math.Min(100.0, 100.0 * run.Processed / run.Expected),
-        { Passes: > 0 } run   => 100.0 * run.PassesDone / run.Passes,
-        _                     => 0,
-    };
+    public double ProgressValue => Import?.Progress ?? 0;
 
     public string ActivityLine => Import switch {
-        { Processed: 0 }                  => "Looking through your history…",
-        { Expected: > 0 } run when run.Processed <= run.Expected
-            => $"{run.Processed.ToString("N0", CultureInfo.CurrentCulture)} of {run.Expected.ToString("N0", CultureInfo.CurrentCulture)} sessions checked",
-        { } run                           => $"{run.Processed.ToString("N0", CultureInfo.CurrentCulture)} sessions checked",
-        null                              => "",
+        { Processed: 0 } => "Looking through your history…",
+        { } run          => $"{run.ProcessedOfExpected} sessions checked",
+        null             => "",
     };
 
     public bool FailedVisible => Import is { State: ImportRunState.Failed or ImportRunState.Cancelled } or { Running: false, Failed: > 0 };
@@ -162,8 +154,10 @@ public sealed class DoneStepViewModel : ReactiveObject, IWizardStep {
             ? "kcap import brings your existing history over whenever you want"
             : null;
 
-    public string ServiceBody =>
-        $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
+    /// Starting agents remotely goes through a cloud workspace, so the local edition does not offer it.
+    public string ServiceBody => _current.Local
+        ? "Keeps kcap storing sessions when the app is closed"
+        : $"Keeps kcap storing sessions when the app is closed, and lets you start agents on {ThisDevice} from anywhere";
 
     public string ServicePill => ServiceState switch {
         BackgroundServiceState.Running    => "Running",

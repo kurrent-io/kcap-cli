@@ -210,6 +210,23 @@ public class AgentOrchestratorResumeOnBootTests {
         await Assert.That(agent.StartTitle).IsEqualTo(new AgentStartTitle("build the thing", Derived: true));
     }
 
+    /// <summary>A native resume keeps its agent id, so an agent that was itself a successor goes on naming the agent it
+    /// continued, the last one its ledger inherited; an agent that inherited nothing names none.</summary>
+    [Test]
+    [Arguments("", null)]
+    [Arguments("first-agent,previous-agent", "previous-agent")]
+    public async Task A_native_resume_announces_the_agent_its_ledger_says_it_continues(string inherited, string? continues) {
+        var f = Build();
+        await using var _ = f.Orch;
+        Entry(f, "resume-lineage", inherited: inherited.Length == 0 ? null : inherited.Split(','));
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        await Assert.That(f.Server.AgentRegisteredContinues.Single(r => r.AgentId == "resume-lineage").ContinuesAgentId)
+            .IsEqualTo(continues);
+    }
+
     /// <summary>A stop that missed the live table while the resume published finds the agent inside the
     /// discard's lock: nothing is discarded, and the agent comes back to be stopped as live.</summary>
     [Test]
