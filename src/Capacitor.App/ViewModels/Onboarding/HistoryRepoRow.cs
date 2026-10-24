@@ -56,12 +56,14 @@ public sealed class HistoryRepoRow : ReactiveObject {
         set => Level = value ? _imported : ImportLevel.Skip;
     }
 
-    /// Unchecked follows the recording privacy setting. A skipped repository has no audience to change.
+    /// Unchecked follows the recording privacy setting. A skipped repository keeps the audience for when
+    /// it is checked again, so an owner-wide Only me reaches it too.
     public bool OnlyMe {
         get => Level == ImportLevel.OnlyMe;
         set {
-            if (Level == ImportLevel.Skip) return;
-            Level = value ? ImportLevel.OnlyMe : ImportLevel.Shared;
+            var audience = value || Local ? ImportLevel.OnlyMe : ImportLevel.Shared;
+            if (Level == ImportLevel.Skip) _imported = audience;
+            else Level = audience;
         }
     }
 

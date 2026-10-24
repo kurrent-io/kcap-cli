@@ -168,6 +168,23 @@ public class HistoryStepViewModelTests {
         await Assert.That(acme.Mixed).IsFalse();
     }
 
+    /// The owner's Only me reaches a repository skipped at the time, so checking it later does not bring
+    /// it back shared.
+    [Test]
+    public async Task Only_me_on_the_owner_carries_to_a_skipped_repository() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+        var acme = h.Vm.Groups.Single(g => g.Owner == "acme");
+
+        h.Repo("acme/web").Included = false;
+        acme.OnlyMe = true;
+        var whileSkipped = h.Repo("acme/web").Level;
+        h.Repo("acme/web").Included = true;
+
+        await Assert.That(whileSkipped).IsEqualTo(ImportLevel.Skip);
+        await Assert.That(h.Repo("acme/web").Level).IsEqualTo(ImportLevel.OnlyMe);
+    }
+
     /// --private is per invocation, so each level is its own pass, with the window and titling choice.
     [Test]
     public async Task Next_starts_one_pass_per_level_and_moves_on_without_waiting() {
