@@ -802,19 +802,17 @@ public class LauncherPaneViewSmokeTests {
                 listing: Remote.Listing, daemonAccounts: Remote.DaemonAccounts, localAccounts: Snapshots);
         }
 
-        public async Task ResolveAsync() {
+        public void AnswerListing() =>
             Remote.ListingSubject.OnNext(new DaemonListing([new DaemonInfo {
                 Name = "daemon-a", OwnerUserId = "u1", Connected = true, SupportsAccountLaunches = true,
                 SupportedVendors = ["claude", "codex"],
             }], 1, false));
+
+        public async Task ResolveAsync() {
+            AnswerListing();
             await Vm.SelectRepositoryAsync("/repos/kcap-cli");
             Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));
-            for (var i = 0; i < 200 && (Vm.AccountPendingText is not null || !Vm.AccountSection); i++) {
-                await Task.Delay(10);
-                Dispatcher.UIThread.RunJobs();
-            }
-            if (Vm.AccountPendingText is not null || !Vm.AccountSection)
-                throw new TimeoutException("the account choice never resolved");
+            await UntilAsync(() => Vm.AccountPendingText is null && Vm.AccountSection, "the account choice resolving");
         }
 
         public void Dispose() {
@@ -822,6 +820,15 @@ public class LauncherPaneViewSmokeTests {
             Snapshots.Dispose();
             Remote.Dispose();
         }
+    }
+
+    static async Task UntilAsync(Func<bool> condition, string what, Window? window = null) {
+        for (var i = 0; i < 200 && !condition(); i++) {
+            await Task.Delay(10);
+            if (window is null) Dispatcher.UIThread.RunJobs();
+            else Settle(window);
+        }
+        if (!condition()) throw new TimeoutException($"timed out waiting for {what}");
     }
 
     static List<Button> PanelButtons(Flyout menu) =>
@@ -885,10 +892,7 @@ public class LauncherPaneViewSmokeTests {
             Settle(window);
             await Assert.That(work.IsFocused).IsTrue();
             window.KeyPressQwerty(PhysicalKey.Enter, RawInputModifiers.None);
-            for (var i = 0; i < 100 && NamedRow(agent, "work, selected") is null; i++) {
-                await Task.Delay(10);
-                Settle(window);
-            }
+            await UntilAsync(() => NamedRow(agent, "work, selected") is not null, "the picked row", window);
             await Assert.That(rig.Vm.SelectedAccountLabel).IsEqualTo("work");
             await Assert.That(agent.IsOpen).IsTrue();
             await Assert.That(NamedRow(agent, "home")).IsNotNull();
@@ -977,6 +981,47 @@ public class LauncherPaneViewSmokeTests {
             await Assert.That(chip.Text).IsEqualTo("Claude Code · Default");
             await Assert.That(rig.Launch.StartCount).IsEqualTo(starts);
 
+            window.Close();
+            Dispatcher.UIThread.RunJobs();
+        });
+    }
+
+    /// The open panel follows the view-model: the pending line and its Retry stand in for the rows
+    /// until the listing and snapshot answer, and the rows then replace them without a reopen.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task An_open_panel_shows_the_rows_once_the_listing_and_snapshot_answer() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var rig = new AccountRig(Tmp.PathTo("app-state.json"));
+            await rig.Vm.SelectRepositoryAsync("/repos/kcap-cli");
+            rig.Remote.ListingSubject.OnNext(new DaemonListing(null, 1, true));
+            await UntilAsync(() => rig.Vm.AccountRetryVisible, "the failed listing");
+            var view = new LauncherPaneView { DataContext = rig.Vm };
+            var window = new Window { Content = view, Width = 900, Height = 700 };
+            window.Show();
+            Settle(window);
+
+            var (agent, _) = OpenMenu(window, view, "AgentChip");
+            Settle(window);
+            static bool Pending(Flyout menu) => ((Control)menu.Content!).GetVisualDescendants().OfType<TextBlock>()
+                .Any(t => t.Text == "Loading accounts…");
+            static Button? Retry(Flyout menu) => PanelButtons(menu).SingleOrDefault(b => b.Content as string == "Retry");
+            await Assert.That(AccountHeader(agent)).IsNotNull();
+            await Assert.That(Pending(agent)).IsTrue();
+            await Assert.That(Retry(agent)).IsNotNull();
+            await Assert.That(NamedRow(agent, "work")).IsNull();
+
+            rig.AnswerListing();
+            rig.Snapshots.OnNext(AccountsSnapshot(1, HomeAccount, WorkAccount));
+            await UntilAsync(() => NamedRow(agent, "work") is not null, "the account rows", window);
+
+            await Assert.That(agent.IsOpen).IsTrue();
+            await Assert.That(NamedRow(agent, "home, selected")).IsNotNull();
+            await Assert.That(Pending(agent)).IsFalse();
+            await Assert.That(Retry(agent)).IsNull();
+
+            agent.Hide();
+            Settle(window);
             window.Close();
             Dispatcher.UIThread.RunJobs();
         });

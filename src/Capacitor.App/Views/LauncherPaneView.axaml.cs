@@ -1,4 +1,5 @@
 using Lucide.Avalonia;
+using System.ComponentModel;
 using System.Globalization;
 using System.Reactive.Linq;
 using System.Windows.Input;
@@ -648,6 +649,15 @@ public partial class LauncherPaneView : UserControl {
                 tabs.Children.Add(tile);
             }
         }
+
+        // The account choice can resolve while the panel is open; a closed panel keeps no handler.
+        void OnAccountChanged(object? _, PropertyChangedEventArgs e) {
+            if (e.PropertyName is nameof(HomeViewModel.AccountSection) or nameof(HomeViewModel.AccountRows)
+                or nameof(HomeViewModel.AccountPendingText) or nameof(HomeViewModel.AccountRetryVisible))
+                RebuildRows();
+        }
+        vm.PropertyChanged += OnAccountChanged;
+        flyout.Closed += (_, _) => vm.PropertyChanged -= OnAccountChanged;
 
         searchBox.TextChanged += (_, _) => RebuildRows();
         RebuildTabs();
