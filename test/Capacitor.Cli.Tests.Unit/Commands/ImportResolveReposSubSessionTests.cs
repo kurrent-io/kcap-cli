@@ -49,11 +49,11 @@ public class ImportResolveReposSubSessionTests {
 
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+        await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console)
             .ResolveTranscriptReposAsync(
             transcripts,
             codex: false,
-            new ImportCommand.ImportDisplay { Tty = false },
+            new TestImportTerminal().Display(),
             cwdRemap: null,
             sessionCwds: sessionCwds,
             worktreeAttributed: null

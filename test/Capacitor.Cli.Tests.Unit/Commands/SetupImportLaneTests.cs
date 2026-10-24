@@ -357,7 +357,7 @@ public class SetupImportLaneTests {
             ImportCommand.ImportDiscoveryResult? found = null;
 
             await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home,
-                TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+                TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console).HandleImport(
                 filterCwd:    null,
                 minLines:     1,
                 sources:      [new ClaudeImportSource(Config.Root, projects, router: new GitProviderRouter(), time: TimeProvider.System)],

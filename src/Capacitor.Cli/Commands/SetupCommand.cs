@@ -283,7 +283,7 @@ sealed class SetupImportLane(
         ImportCommand.ImportDiscoveryResult? found = null;
 
         // Quiet, because the caller owns the terminal for the duration and the figures go to a screen.
-        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
+        var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, ImportConsole.FromProcess(), accounts).HandleImport(
             filterCwd:    null,
             sources:      SetupCommand.BuildImportSources(config, harnesses, router, time, vendors, accounts?.TryLoad(), home),
             discoverOnly: true,
@@ -355,7 +355,8 @@ sealed class SetupImportLane(
         ImportCommand.ImportRunOutcome? outcome   = null;
 
         try {
-            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, accounts).HandleImport(
+            // The console as it stands when the pass runs: setup's reported run swaps it for its own writers.
+            var exit = await new ImportCommand(config, profiles, home, harnesses, http, router, time, ImportConsole.FromProcess(), accounts).HandleImport(
                 filterCwd:          null,
                 sources:            SetupCommand.BuildImportSources(config, harnesses, router, time, pass.Vendors, accounts?.TryLoad(), home),
                 since:              pass.Since,

@@ -269,7 +269,7 @@ internal sealed class GeminiImportSource : IImportSource {
         // re-run whether or not anything is actually new. Accepted — still strictly better
         // than defaulting false (which would risk hiding genuinely-new subagent content
         // behind the lifecycle-only-replay label).
-        var sentChildContent = await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ctx.Progress, ct);
+        var sentChildContent = await ImportSubagentsAsync(ctx.HttpClient, ctx.BaseUrl, classification.SessionId, transcriptPath, ctx.Progress, ctx.Stderr ?? Console.Error, ct);
 
         var endOk = await PostSyntheticHookAsync(
             ctx.HttpClient, ctx.BaseUrl, "session-end/gemini",
@@ -347,7 +347,7 @@ internal sealed class GeminiImportSource : IImportSource {
     /// </summary>
     async Task<bool> ImportSubagentsAsync(
         HttpClient client, string baseUrl, string parentSessionIdDashless, string transcriptPath,
-        IProgress<ImportProgress>? progress, CancellationToken ct
+        IProgress<ImportProgress>? progress, TextWriter stderr, CancellationToken ct
     ) {
         // Gemini has no completeness-fingerprint ledger (unlike OpenCode), so the omitted ids
         // are unused here — the diagnostic below only needs the count (and, when the below-cap
@@ -357,13 +357,13 @@ internal sealed class GeminiImportSource : IImportSource {
 
         if (omitted > 0) {
             var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
-            Console.Error.WriteLine(
+            stderr.WriteLine(
                 $"[kcap] gemini: root {parentSessionIdDashless} descendants_omitted={omitted}{lowerBoundNote} " +
                 $"(depth cap {GeminiSubagentDiscovery.MaxDescendantDepth} exceeded)");
         }
 
         if (unreadableDirs > 0) {
-            Console.Error.WriteLine(
+            stderr.WriteLine(
                 $"[kcap] gemini: root {parentSessionIdDashless} unreadable_descendant_dirs={unreadableDirs} " +
                 "(a descendant directory existed but could not be read — its subtree may be incomplete)");
         }

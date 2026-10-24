@@ -24,7 +24,7 @@ public class ImportPrivateTests : IDisposable {
         await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
-            ["sess1", "sess2", "sess3"], TimeProvider.System);
+            ["sess1", "sess2", "sess3"], TimeProvider.System, new ImportCommand.ImportDisplay { Terminal = TestImportConsole.Over() });
 
         var requests = _server.LogEntries
             .Where(e => e.RequestMessage.Method == "PUT")
@@ -57,7 +57,7 @@ public class ImportPrivateTests : IDisposable {
         await ImportCommand.SetVisibilityNoneForAll(
             client,
             _server.Url!,
-            ["sess1", "sess2", "sess3"], TimeProvider.System);
+            ["sess1", "sess2", "sess3"], TimeProvider.System, new ImportCommand.ImportDisplay { Terminal = TestImportConsole.Over() });
 
         var attempted = _server.LogEntries
             .Count(e => e.RequestMessage.Method == "PUT");
@@ -65,25 +65,21 @@ public class ImportPrivateTests : IDisposable {
         await Assert.That(attempted).IsEqualTo(3);
     }
 
-    /// <summary>
-    /// The failure line belongs to the phase heading above it, and this writer is a static with no
-    /// display to ask, so the margin has to arrive as an argument. Console is process-global, hence
-    /// the bare exclusion.
-    /// </summary>
+    /// <summary>The failure line goes to the run's stderr, under the phase heading above it.</summary>
     [Test]
-    [NotInParallel]
     public async Task SetVisibilityForAll_reports_a_failure_on_the_margin_it_was_given() {
         _server.Given(Request.Create().WithPath("/api/sessions/*/visibility").UsingPut())
             .RespondWith(Response.Create().WithStatusCode(400));
 
-        using var client  = new HttpClient();
-        using var capture = ConsoleOutput.StartErrorCapture("\n");
+        using var client = new HttpClient();
+        var       stderr = new StringWriter();
 
         var lost = await ImportCommand.SetVisibilityForAll(
-            client, _server.Url!, ["sess1"], "org", TimeProvider.System, indent: "    ");
+            client, _server.Url!, ["sess1"], "org", TimeProvider.System,
+            new ImportCommand.ImportDisplay { Terminal = TestImportConsole.Over(stderr: stderr), Nested = true });
 
         await Assert.That(lost).IsEquivalentTo(new[] { "sess1" });
-        await Assert.That(capture.GetCapturedError())
+        await Assert.That(stderr.ToString())
                     .StartsWith("    ! visibility=org failed for sess1: HTTP 400");
     }
 }

@@ -66,6 +66,7 @@ sealed class SetupImportRunner(
         }
     }
 
+    // The console as it stands when the pass runs: setup's reported run swaps it for its own writers.
     ImportCommand Command(ProfileContext profiles, ServiceProvider scoped) =>
-        new(config, profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>(), router, time, accounts);
+        new(config, profiles, home, harnesses, scoped.GetRequiredService<ICapacitorHttpClient>(), router, time, ImportConsole.FromProcess(), accounts);
 }

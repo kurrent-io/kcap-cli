@@ -111,6 +111,7 @@ public static class CommandServices {
         services.AddTransient<HarnessCommand>();
         services.AddTransient<IgnoreCommand>();
         services.AddTransient<AllowCommand>();
+        services.AddTransient(_ => ImportConsole.FromProcess());
         services.AddTransient<ImportCommand>();
         services.AddTransient<IOutgoingRecorders, OutgoingRecorders>();
         services.AddTransient<LocalCommand>();

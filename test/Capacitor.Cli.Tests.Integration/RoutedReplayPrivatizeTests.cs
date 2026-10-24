@@ -130,7 +130,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
         StubVisibilityPut();
     }
 
-    Task<int> RunAntigravityImport(bool forcePrivate) => new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+    Task<int> RunAntigravityImport(bool forcePrivate) => new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: TestImportConsole.Over()).HandleImport(
         filterCwd: null,
         minLines: 0,
         sources: [new AntigravityImportSource(new(new(_agHome), ""), TimeProvider.System)],
@@ -145,7 +145,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
     /// hardcoded Skipped, so it never joins <c>importedSessionIds</c> — before the fix that meant
     /// ZERO visibility PUTs and the newly-attached child content stayed publicly visible.
     /// </summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task private_run_privatizes_an_already_loaded_antigravity_root_that_attached_new_child_content() {
         WriteAntigravityTranscript(AgRootConvId, "build it");
         WriteAntigravityTranscript(AgChildConvId, "sub task");
@@ -163,7 +163,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
     /// outcome degrades from Skipped to Failed, which is excluded from the privatize set by a
     /// different arm. Privatization must not depend on the outcome classification at all.
     /// </summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task private_run_privatizes_an_antigravity_replay_whose_session_end_failed_after_child_content() {
         WriteAntigravityTranscript(AgRootConvId, "build it");
         WriteAntigravityTranscript(AgChildConvId, "sub task");
@@ -180,7 +180,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
     /// No-regression guard: widening the outcome-independent capture must never make a plain
     /// (non-private) import start touching visibility.
     /// </summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task non_private_antigravity_run_never_calls_set_visibility() {
         WriteAntigravityTranscript(AgRootConvId, "build it");
         WriteAntigravityTranscript(AgChildConvId, "sub task");
@@ -226,7 +226,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
     /// content lands BEFORE session-end — and a failing session-end turns the outcome into Failed,
     /// dropping the parent from the set with the child's content already public.
     /// </summary>
-    [Test, NotInParallel]
+    [Test]
     public async Task private_run_privatizes_a_gemini_replay_whose_session_end_failed_after_child_content() {
         WriteGeminiFixture();
 
@@ -244,7 +244,7 @@ public class RoutedReplayPrivatizeTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(400));
         StubVisibilityPut();
 
-        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: TestImportConsole.Over()).HandleImport(
             filterCwd: null,
             minLines: 0,
             sources: [new GeminiImportSource(_geminiHome, TimeProvider.System)],

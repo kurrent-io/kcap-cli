@@ -312,11 +312,11 @@ public class CaptureScopeTests {
         var resolved = new Dictionary<string, string>(StringComparer.Ordinal);
 
         await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home),
-                                new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+                                new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console)
             .ResolveTranscriptReposAsync(
                 [("s1", transcript, "")],
                 codex: false,
-                new ImportCommand.ImportDisplay { Tty = false },
+                new TestImportTerminal().Display(),
                 cwdRemap: [new CwdRemap { From = Path.Combine(repo, "worktrees", "*"), To = repo }],
                 sessionCwds: resolved
             );
