@@ -85,6 +85,25 @@ public class WorktreeManagerUserGitConfigTests {
         await Assert.That(GitRepo.At(worktree.Path).Try("ls-tree", "--name-only", "HEAD").Text).Contains("README.md");
     }
 
+    /// <summary>A user's own attributes file is not the project's: its <c>* text=auto</c> would normalise a copied CRLF
+    /// file in the snapshot, while the project's <c>.gitattributes</c> still applies.</summary>
+    [Test]
+    public async Task A_standalone_snapshot_keeps_crlf_files_under_the_users_own_attributes_file() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("crlf.txt", "one\r\ntwo\r\n");
+        source.CreateFile("project.txt", "one\r\ntwo\r\n");
+        source.CreateFile(".gitattributes", "project.txt text eol=lf\n");
+        var attributes = Tmp.CreateFile("user.gitattributes", "* text=auto\n");
+        using var config = UserGlobalConfig($"[core]\n    attributesFile = {attributes.Replace('\\', '/')}\n");
+
+        var worktree = await NewManager().CreateAsync(source);
+
+        var snapshot = GitRepo.At(worktree.Path);
+        await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:crlf.txt").StdOut).IsEqualTo("one\r\ntwo\r\n");
+        await Assert.That(snapshot.Do("cat-file", "blob", "HEAD:project.txt").StdOut).IsEqualTo("one\ntwo\n");
+        await Assert.That(snapshot.Do("check-attr", "text", "crlf.txt").Text).IsEqualTo("crlf.txt: text: unspecified");
+    }
+
     /// <summary>A user who converts line endings strictly would have the snapshot refuse an LF file, and an agent
     /// later diffing it would see every file changed. The snapshot keeps the bytes it copied.</summary>
     [Test]

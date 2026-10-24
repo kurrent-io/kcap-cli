@@ -435,18 +435,19 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
+        var verbatim = VerbatimLineEndings(CreateEmptyAttributesFile(worktreePath));
         // Kept in the snapshot's own config too, so the agent's later diffs compare the bytes that were copied.
-        foreach (var setting in VerbatimLineEndings())
+        foreach (var setting in verbatim)
             await RunGit(worktreePath, GitTimeout, time, noHooks, "config", setting.Key, setting.Value);
         // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. VerbatimLineEndings(), .. standaloneOverrides], "add", "-A");
+        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. verbatim, .. standaloneOverrides], "add", "-A");
         // Exit 0 = empty index (greenfield: nothing to copy). Exit 1 = staged content.
         // Any other code is a real git failure — without this check, commit --allow-empty would
         // hide it behind a successful empty tree.
         var staged = await RunGitCaptureResult(
             worktreePath, GitTimeout, time, sourceReadOnly: false,
-            [.. noHooks, .. VerbatimLineEndings(), .. standaloneOverrides],
+            [.. noHooks, .. verbatim, .. standaloneOverrides],
             "diff", "--cached", "--quiet");
         if (staged.ExitCode is not (0 or 1))
             throw new InvalidOperationException(
@@ -459,7 +460,7 @@ public partial class WorktreeManager(
             : new[] { "commit", "-m", "Initial snapshot" };
         await RunGit(worktreePath, GitTimeout,
             time,
-            [.. noHooks, .. VerbatimLineEndings(),
+            [.. noHooks, .. verbatim,
              new("user.email", "daemon@kcap.local"), new("user.name", "kcap"), new("commit.gpgsign", "false")],
             commitArgs);
 
@@ -505,14 +506,26 @@ public partial class WorktreeManager(
     /// (see <c>ProveConfigTransportIfCarryingAsync</c>), so nothing here has to remember to.</summary>
     static GitConfigOverride[] NoBranchHooks() => [new("core.hooksPath", NoHooksPath)];
 
+    /// <summary>A standalone snapshot records the bytes it copied: a user's line-ending conversion would rewrite
+    /// them, and its strict form refuses the commit outright. A user's own attributes file is replaced by an
+    /// empty one, so only the project's <c>.gitattributes</c> decides a file's conversion.</summary>
+    static GitConfigOverride[] VerbatimLineEndings(string emptyAttributesFile) =>
+        [new("core.autocrlf", "false"), new("core.safecrlf", "false"), new("core.attributesFile", emptyAttributesFile)];
+
+    /// <summary>An empty attributes file inside the snapshot's git dir, as a path git reads the same on every
+    /// platform: a config value read from the environment is not unescaped, so it carries no backslash.</summary>
+    static string CreateEmptyAttributesFile(string worktreePath) {
+        var info = Path.Combine(worktreePath, ".git", "info");
+        Directory.CreateDirectory(info);
+        var path = Path.Combine(info, "kcap-no-user-attributes");
+        File.WriteAllBytes(path, []);
+
+        return Path.GetFullPath(path).Replace('\\', '/');
+    }
+
     /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it
     /// fails outright; and a fetch that recursed would reach each submodule's own remote. Neither may
     /// depend on the user's git config.</summary>
-    /// <summary>A standalone snapshot records the bytes it copied: a user's line-ending conversion would rewrite
-    /// them, and its strict form refuses the commit outright.</summary>
-    static GitConfigOverride[] VerbatimLineEndings() =>
-        [new("core.autocrlf", "false"), new("core.safecrlf", "false")];
-
     static GitConfigOverride[] NoSubmoduleRecursion() =>
         [new("submodule.recurse", "false"), new("fetch.recurseSubmodules", "false")];
 
