@@ -1029,7 +1029,7 @@ class ImportCommand(
             if (scope is null) {
                 // The picker has already printed the specific reason (e.g. "No
                 // git-remote owners detected" or "No repositories detected in
-                // discovered sessions") via AnsiConsole. Don't tack on a
+                // discovered sessions") on the run's terminal. Don't tack on a
                 // misleading "cancelled" message.
                 return 1;
             }
@@ -2584,11 +2584,9 @@ class ImportCommand(
 
     /// <summary>
     /// Build a SessionId → repo lookup for every discovered transcript. Repo
-    /// detection (git + `gh pr view`) is the slow part of the discovery phase
-    /// and previously ran sequentially per-session, making `kcap import`
-    /// look frozen on large histories. This version deduplicates by cwd
-    /// (transcripts in the same project share a repo) and runs detection in
-    /// parallel, surfacing progress via a Spectre status spinner on a TTY and
+    /// detection (git + `gh pr view`) is the slow part of the discovery phase,
+    /// so it deduplicates by cwd (transcripts in the same project share a repo)
+    /// and runs in parallel, surfacing progress as a status spinner on a TTY and
     /// a plain status line otherwise.
     /// </summary>
     /// <summary>
@@ -3157,16 +3155,14 @@ class ImportCommand(
         /// <summary>
         /// Fired when a session's session-end hook returned, signalling that the
         /// background phase may enqueue title / what's-done work for it.
-        /// Renamed from the previous `OnSessionEnded` to disambiguate from the
-        /// slot-aware lifecycle event above.
         /// </summary>
         public required Action<(string SessionId, bool GenerateWhatsDone, HarnessId Vendor)> OnBackgroundWorkReady { get; init; }
     }
 
     /// <summary>
-    /// Dispatch chains across 4 parallel workers; sessions within a chain run
-    /// serially. Thread-safe: counters use Interlocked, callbacks must be
-    /// thread-safe (production wiring uses AnsiConsole + ConcurrentBag).
+    /// Dispatch chains across 4 parallel workers; sessions within a chain run serially. Counters use
+    /// Interlocked, and every callback is called from several workers at once, so it must be safe to:
+    /// the run's own wiring writes through the injected terminal's Spectre console and a ConcurrentBag.
     /// </summary>
     internal async Task<ImportChainsResult> ImportChainsAsync(
             HttpClient                        httpClient,
