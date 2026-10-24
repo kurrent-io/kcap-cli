@@ -1757,6 +1757,33 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// A row the daemon lane no longer vouches for is history on display, not a takeover.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_cached_local_row_without_its_socket_is_no_takeover() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            host.Directory.LocalConnected = false;
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, sessions: host.Sessions);
+            vm.OpenSession("S", AgentOrigin.Server);
+            var open = vm.CurrentWorkspace;
+
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("server:S");
+                rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            });
+
+            await Task.Delay(100);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(open);
+            vm.CloseWorkspace();
+        });
+    }
+
     /// One changeset can carry a live revision and the end together; the directory's state when the
     /// change is read is what counts.
     [Test]

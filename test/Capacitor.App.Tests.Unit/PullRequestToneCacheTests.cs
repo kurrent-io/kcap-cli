@@ -313,6 +313,23 @@ public class PullRequestToneCacheTests {
         await WaitUntilAsync(() => source.Lists == 2, what: "second read");
     }
 
+    /// A daemon taking the session up puts it back on the fast cadence at once, not after the slow
+    /// interval it was last given.
+    [Test]
+    public async Task A_session_a_daemon_takes_up_returns_to_the_fast_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(ServerRow("s1", "active"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        directory.Rows.AddOrUpdate(Row("a1", "s1"));
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+
+        await WaitUntilAsync(() => source.Lists == 2, what: "read on the fast cadence");
+    }
+
     /// Every listed session comes due at once after a connect or a scope switch; the reads go out a
     /// few at a time, not all together.
     [Test]

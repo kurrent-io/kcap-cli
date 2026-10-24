@@ -572,6 +572,28 @@ public class ServerSessionsServiceTests {
         await Assert.That(seen[^1]).IsFalse();
     }
 
+    /// One owners read at a time: a slow one is not joined by the cadence's retries.
+    [Test]
+    public async Task The_owners_retry_waits_for_the_read_in_flight() {
+        var attempts = 0;
+        var gate = new TaskCompletionSource<SessionOwnerOptionDto[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (lane, listing, time, service) = Build(owners: _ => { attempts++; return gate.Task; }, reconcileEvery: TimeSpan.FromSeconds(60));
+        using var _ = service;
+        ScriptDefault(listing);
+        IReadOnlySet<string>? ids = null;
+        using var sub = service.ViewerIds.Subscribe(v => ids = v);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first read");
+
+        time.Advance(TimeSpan.FromSeconds(60));
+        time.Advance(TimeSpan.FromSeconds(60));
+        await Task.Delay(50);
+        await Assert.That(attempts).IsEqualTo(1);
+
+        gate.SetResult(Owners("me"));
+        await Eventually(() => ids!.Count > 0, "owners resolved");
+    }
+
     /// The viewer stays unresolved only as long as the owners read keeps failing.
     [Test]
     public async Task A_failed_owners_read_is_retried_on_the_cadence() {

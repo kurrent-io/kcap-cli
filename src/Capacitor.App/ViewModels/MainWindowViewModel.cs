@@ -846,13 +846,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     static string? SessionOf(RemoteSessionViewModel remote) => remote.SessionId is { Length: > 0 } id ? id : null;
 
     /// The daemon row that has taken up a session the server lists under its own spelling of the id:
-    /// a live one, and a local one only while the local daemon reports the app's server. A completed
-    /// row the server row's removal exposes again is no takeover.
-    AgentRow? DaemonRowFor(IAgentDirectory directory, string serverSessionId) =>
-        directory.Rows.Items.FirstOrDefault(r =>
-            (r.Origin == AgentOrigin.Remote || (r.Origin == AgentOrigin.Local && _localOnAppServer))
-            && !SessionStatusDots.IsTerminal(r.Status)
-            && SessionIds.SameSession(serverSessionId, r.SessionId));
+    /// one its lane vouches for now. A completed row, or a cached one whose socket or registry is
+    /// gone, is history the server row's removal exposes again, not a takeover.
+    static AgentRow? DaemonRowFor(IAgentDirectory directory, string serverSessionId) =>
+        directory.Rows.Items.FirstOrDefault(r => directory.IsHostedNow(r) && SessionIds.SameSession(serverSessionId, r.SessionId));
 
     enum HandoffOutcome { ServerRow, Returned, Lapsed }
 

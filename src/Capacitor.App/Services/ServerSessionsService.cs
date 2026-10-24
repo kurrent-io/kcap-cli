@@ -54,6 +54,9 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     bool _busy;
     bool _rerun;
     bool _fullRequested;
+    bool _ownersBusy;
+    /// The owners endpoint answered once this connection; an account with no entry of its own is resolved too.
+    bool _ownersResolved;
     readonly BehaviorSubject<ServerSessionsSnapshot> _snapshots = new(ServerSessionsSnapshot.Empty);
     readonly Subject<string> _dropped = new();
     string? _kept;
@@ -94,6 +97,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 _generation++;
                 _laneEpoch = status.Epoch;
                 _connected = true;
+                _ownersResolved = false;
             }
             _ = RefreshOwnersAsync();
             _ = ReconcileAsync();
@@ -222,7 +226,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     /// the viewer unresolved until the next reconnect.
     void RetryOwnersIfUnresolved() {
         bool retry;
-        lock (_lock) retry = _connected && !_disposed && _viewerIds.Value.Count == 0;
+        lock (_lock) retry = _connected && !_disposed && !_ownersResolved && !_ownersBusy;
         if (retry) _ = RefreshOwnersAsync();
     }
 
@@ -339,11 +343,17 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     async Task RefreshOwnersAsync() {
         int generation;
-        lock (_lock) generation = _generation;
+        lock (_lock) {
+            if (_ownersBusy) return;
+            _ownersBusy = true;
+            generation = _generation;
+        }
         SessionOwnerOptionDto[]? owners = null;
         try {
             owners = await _fetchOwners(CancellationToken.None).ConfigureAwait(false);
         } catch (Exception) {
+        } finally {
+            lock (_lock) _ownersBusy = false;
         }
         if (owners is null) return;
         var me = owners.FirstOrDefault(o => o.IsMe);
@@ -351,6 +361,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             : (me.Ids is { Length: > 0 } aliases ? aliases.Append(me.UserId) : [me.UserId]).ToFrozenSet(StringComparer.Ordinal);
         lock (_lock) {
             if (generation != _generation || _disposed) return;
+            _ownersResolved = true;
             _viewerIds.OnNext(ids);
             _viewerUserId.OnNext(me?.UserId);
         }

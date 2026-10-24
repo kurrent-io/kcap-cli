@@ -13,6 +13,10 @@ namespace Capacitor.App.Services;
 
 public interface IAgentDirectory {
     IObservableCache<AgentRow, string> Rows { get; }
+    /// Whether a daemon lane currently vouches for the row: a live status under a connected local
+    /// socket on the app's server, or under a current registry. A retained row is history on
+    /// display, and a server row never qualifies.
+    bool IsHostedNow(AgentRow row);
     /// True while the server lane is not Connected — rail rows grey out on it.
     IObservable<bool> RemoteStale { get; }
     /// True while the local daemon reports the app's own server; replays on subscribe. A session
@@ -164,6 +168,17 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     public IObservableCache<AgentRow, string> Rows => _rows.AsObservableCache();
     public IObservable<bool> RemoteStale { get; }
     public IObservable<bool> LocalDaemonOnAppServer => _onAppServer;
+
+    public bool IsHostedNow(AgentRow row) {
+        if (ViewModels.SessionStatusDots.IsTerminal(row.Status)) return false;
+        lock (_lock) {
+            return row.Origin switch {
+                AgentOrigin.Local => _localConnected && _onAppServer.Value,
+                AgentOrigin.Remote => _registryCurrent,
+                _ => false,
+            };
+        }
+    }
 
     // The scope flag is an input, not just a consumer's filter: a flip changes the answer for rows
     // that never moved, so the map has to be republished on it.

@@ -76,6 +76,9 @@ public sealed class PullRequestToneCache : IDisposable {
                     _slowSessions = rows.Where(r => r.Origin == AgentOrigin.Server).Select(r => r.SessionId!)
                         .Except(rows.Where(r => r.Origin != AgentOrigin.Server).Select(r => r.SessionId!))
                         .ToFrozenSet(StringComparer.Ordinal);
+                    // A session a daemon took up keeps no wait it was given on the slow cadence.
+                    foreach (var (session, entry) in _entries)
+                        if (!_slowSessions.Contains(session) && entry.RefreshAfter > _refreshEvery) entry.RefreshAfter = _refreshEvery;
                 }
                 Tick();
             })
@@ -196,8 +199,9 @@ public sealed class PullRequestToneCache : IDisposable {
         } finally {
             lock (_lock) _inFlight.Remove(session);
             // A refresh may have invalidated this read while it was in flight, and a read held back
-            // for a free slot is due now.
-            Tick();
+            // for a free slot is due now. Queued, not inline: a read that finishes without awaiting
+            // would otherwise nest the next one on this stack, once per due session.
+            _ = Task.Run(Tick, CancellationToken.None);
         }
     }
 
