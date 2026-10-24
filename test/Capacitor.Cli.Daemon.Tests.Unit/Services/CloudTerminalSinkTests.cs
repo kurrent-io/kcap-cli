@@ -103,9 +103,6 @@ public class CloudTerminalSinkTests {
         rig.Emit("b");
         rig.Emit("c");
 
-        // Wait for the held chunks to actually land before stopping: a stop issued while a chunk
-        // is mid-retry now gives up on it the instant it next finds the connection not ready
-        // (the sink is already completing), racing the very recovery this test exercises.
         await WaitHarness.PollUntilAsync(() => rig.Mirror.Sent.Count == 3);
         await rig.Sink.StopAsync(HangGuard).WaitAsync(HangGuard);
 
