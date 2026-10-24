@@ -241,7 +241,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         var qs = new List<string> { $"q={Uri.EscapeDataString(q)}" };
         if (cwdRepoHash is not null) qs.Add($"repo={Uri.EscapeDataString(cwdRepoHash)}");
         if (machineId is not null) qs.Add($"machine={Uri.EscapeDataString(machineId)}");
-        if (TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
+        if (OptionalInt(args, "limit") is { } limit) qs.Add($"limit={limit}");
 
         return $"{baseUrl}/api/memories/search?{string.Join("&", qs)}";
     }
