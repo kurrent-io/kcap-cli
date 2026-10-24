@@ -574,6 +574,20 @@ partial class McpFlowsServer(
                 }
             }
 
+            if (WakeUpTools.Handles(toolName)) {
+                var (answer, how) = await WakeUpTools.SendAsync(toolName, arguments, client, apiRoot, requestingSessionId, callerAgentId, clock);
+                if (answer is null) return BuildToolResult(id, WakeUpTools.Unanswered(toolName, how), isError: true);
+
+                using (answer) {
+                    if (answer.StatusCode == HttpStatusCode.Unauthorized)
+                        return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(store, profiles.Name, apiRoot, time), isError: true);
+
+                    var (text, isError) = WakeUpTools.Render(toolName, (int)answer.StatusCode, await answer.Content.ReadAsStringAsync(), arguments);
+
+                    return BuildToolResult(id, text, isError);
+                }
+            }
+
             using var httpResponse = toolName switch {
                 "get_review_flow_status" or "get_flow_status" => await client.GetAsync(BuildFlowUrl(apiRoot, arguments)),
                 "close_review_flow"      or "close_flow"      => await client.PostAsync(BuildFlowUrl(apiRoot, arguments) + "/close", null),
@@ -2783,7 +2797,8 @@ partial class McpFlowsServer(
             McpToolAnnotations.Read
         ),
         StartAgentOptionsTool.Describe(),
-        StartAgentTool.Describe()
+        StartAgentTool.Describe(),
+        .. WakeUpTools.Describe()
     ];
 }
 

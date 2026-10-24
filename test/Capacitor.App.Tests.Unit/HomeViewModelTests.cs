@@ -1814,31 +1814,81 @@ public class HomeViewModelTests {
         });
     }
 
-    /// A remote workspace opens against the LOCAL daemon socket, which can never find a remote
-    /// agent — the auto-open must never fire for a launch that targeted a remote machine.
+    static AgentRow RemoteRow(string agentId) => AgentRow.FromRemote(new AgentInstanceDto {
+        AgentId = agentId, Status = "Running", DaemonName = "home-pc", OwnerUserId = "u1",
+        Vendor = "claude", RepoOwner = "o", RepoName = "r",
+    });
+
+    static HomeViewModel RemoteLauncher(
+            string path, FakeAgentDirectory directory, List<(string AgentId, AgentOrigin Origin, int Generation)> opened) {
+        var remote = new FakeRemoteAgents();
+        remote.DaemonsSubject.OnNext([
+            new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
+        ]);
+        var lane = new FakeServerLane();
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
+        return new HomeViewModel(
+            new FakeDaemonClientService(), new AppStateStore(path), new RecordingLaunchClient(), Known(), TimeProvider.System,
+            navigationGeneration: () => 7,
+            openSessionIfCurrent: (id, origin, generation) => opened.Add((id, origin, generation)),
+            daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status,
+            directory: directory);
+    }
+
+    /// A remote launch has no placeholder row, and the remote workspace cannot open an id no lane
+    /// holds — so the open waits for the remote row, carrying the generation captured at launch.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task ARemoteLaunchNeverAutoOpensTheWorkspace() {
+    public async Task ARemoteLaunchOpensItsSessionWhenItsRowArrives() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var tmp = TempDir.WithPathTo("app-state.json", out var path);
-            var daemon = new FakeDaemonClientService();
-            var launch = new RecordingLaunchClient();
-            var remote = new FakeRemoteAgents();
-            remote.DaemonsSubject.OnNext([
-                new DaemonInfo { Name = "home-pc", OwnerUserId = "u1", Connected = true, RepoPaths = ["/w/repo"] },
-            ]);
-            var lane = new FakeServerLane();
-            lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected));
-            var opened = new List<(string AgentId, int Generation)>();
-            using var vm = new HomeViewModel(
-                daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
-                openSessionIfCurrent: (id, generation) => opened.Add((id, generation)),
-                daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            using var vm = RemoteLauncher(path, directory, opened);
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+            await Assert.That(opened).IsEmpty();
+
+            directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
+
+            await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7)]);
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ARemoteRowThatBeatTheLaunchReturnOpensAtOnce() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var directory = new FakeAgentDirectory();
+            directory.Rows.AddOrUpdate(RemoteRow(LaunchedId));
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            using var vm = RemoteLauncher(path, directory, opened);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
             await vm.StartCommand.Execute();
 
-            await Assert.That(opened.Count).IsEqualTo(0);
+            await Assert.That(opened).IsEquivalentTo([(LaunchedId, AgentOrigin.Remote, 7)]);
+        });
+    }
+
+    /// A same-id local row is a different agent: only the remote lane's row opens a remote launch.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task ALocalRowWithTheSameIdDoesNotOpenARemoteLaunch() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var tmp = TempDir.WithPathTo("app-state.json", out var path);
+            using var directory = new FakeAgentDirectory();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
+            using var vm = RemoteLauncher(path, directory, opened);
+
+            await vm.SelectMachineAsync("home-pc", isLocal: false);
+            await vm.StartCommand.Execute();
+            directory.Rows.AddOrUpdate(AgentRow.FromLocal(
+                WorkspaceFixtures.Agent(LaunchedId, "claude", false, "/w/repo"), new RepoIdentity("path:/w/repo", "repo")));
+
+            await Assert.That(opened).IsEmpty();
         });
     }
 
@@ -1850,16 +1900,17 @@ public class HomeViewModelTests {
             var daemon = new FakeDaemonClientService();
             Connect(daemon);
             var launch = new RecordingLaunchClient();
-            var opened = new List<(string AgentId, int Generation)>();
+            var opened = new List<(string AgentId, AgentOrigin Origin, int Generation)>();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
-                openSessionIfCurrent: (id, generation) => opened.Add((id, generation)));
+                openSessionIfCurrent: (id, origin, generation) => opened.Add((id, origin, generation)));
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();
 
             await Assert.That(opened.Count).IsEqualTo(1);
             await Assert.That(opened[0].AgentId).IsEqualTo(LaunchedId);
+            await Assert.That(opened[0].Origin).IsEqualTo(AgentOrigin.Local);
         });
     }
 

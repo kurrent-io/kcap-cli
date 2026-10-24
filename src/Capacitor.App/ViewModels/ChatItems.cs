@@ -10,8 +10,11 @@ namespace Capacitor.App.ViewModels;
 /// One row of the Chat tab. Matched by DataTemplates on the concrete type.
 public abstract class ChatItemViewModel : ReactiveObject { }
 
-public sealed class UserTurnItem(string text) : ChatItemViewModel {
+public sealed class UserTurnItem(string text, IReadOnlyList<UserAttachment>? attachments = null) : ChatItemViewModel {
     public string Text { get; } = text;
+    public bool HasText => !string.IsNullOrWhiteSpace(Text);
+    public IReadOnlyList<UserAttachment> Attachments { get; } = attachments ?? [];
+    public bool HasAttachments => Attachments.Count > 0;
 }
 
 public sealed class AssistantTextItem(string text) : ChatItemViewModel {

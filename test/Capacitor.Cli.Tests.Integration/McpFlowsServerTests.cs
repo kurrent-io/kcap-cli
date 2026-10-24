@@ -306,22 +306,13 @@ public class McpFlowsServerTests : IDisposable {
 
             var tools = response["result"]?["tools"]?.AsArray();
             await Assert.That(tools).IsNotNull();
-            await Assert.That(tools!.Count).IsEqualTo(13);
-
-            var names = tools.Select(t => t?["name"]?.GetValue<string>()).ToHashSet();
-            await Assert.That(names.Contains("start_review_flow")).IsTrue();
-            await Assert.That(names.Contains("submit_review_round")).IsTrue();
-            await Assert.That(names.Contains("get_review_flow_status")).IsTrue();
-            await Assert.That(names.Contains("close_review_flow")).IsTrue();
-            await Assert.That(names.Contains("start_flow")).IsTrue();
-            await Assert.That(names.Contains("send_to_participant")).IsTrue();
-            await Assert.That(names.Contains("get_flow_status")).IsTrue();
-            await Assert.That(names.Contains("close_flow")).IsTrue();
-            await Assert.That(names.Contains("list_reviewer_vendors")).IsTrue();
-            await Assert.That(names.Contains("list_flow_definitions")).IsTrue();
-            await Assert.That(names.Contains("get_flow_definition")).IsTrue();
-            await Assert.That(names.Contains("start_agent")).IsTrue();
-            await Assert.That(names.Contains("list_start_agent_options")).IsTrue();
+            await Assert.That(tools!.Select(t => t?["name"]?.GetValue<string>() ?? "").ToArray()).IsEquivalentTo([
+                "start_review_flow", "submit_review_round", "get_review_flow_status", "close_review_flow",
+                "start_flow", "send_to_participant", "get_flow_status", "close_flow",
+                "list_reviewer_vendors", "list_flow_definitions", "get_flow_definition",
+                "list_start_agent_options", "start_agent",
+                "schedule_wakeup", "list_wakeups", "cancel_wakeup"
+            ]);
         } finally {
             await ShutdownAsync(proc);
         }

@@ -1585,7 +1585,7 @@ public partial class App : Application {
             service, appState,
             launch, new RepoPathStore(config, time).GetSortedPathsAsync, time, shutdownToken,
             navigationGeneration: () => vm?.NavigationGeneration ?? 0,
-            openSessionIfCurrent: (agentId, generation) => vm?.OpenSessionIfCurrent(agentId, generation),
+            openSessionIfCurrent: (agentId, origin, generation) => vm?.OpenSessionIfCurrent(agentId, origin, generation),
             requestSignIn: requestSignIn,
             daemons: remoteAgents?.Daemons, viewerId: viewerId, laneStatus: lane?.Status,
             localMachineId: localMachineId, launchFailures: lane?.LaunchFailures, directory: resolvedDirectory,

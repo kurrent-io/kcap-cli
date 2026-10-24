@@ -391,14 +391,14 @@ public class WorkspaceNavigationTests {
 
             nav.Vm.CloseWorkspace(); // any explicit navigation retires the captured generation
 
-            nav.Vm.OpenSessionIfCurrent(Id2, captured);
+            nav.Vm.OpenSessionIfCurrent(Id2, AgentOrigin.Local, captured);
 
             await Assert.That(nav.Vm.CurrentWorkspace).IsNull();
             await Assert.That(nav.Opened).IsEquivalentTo([Id1]);
 
             // The same call at the CURRENT generation is the control: the guard is the generation,
             // not a blanket refusal.
-            nav.Vm.OpenSessionIfCurrent(Id2, nav.Vm.NavigationGeneration);
+            nav.Vm.OpenSessionIfCurrent(Id2, AgentOrigin.Local, nav.Vm.NavigationGeneration);
             await Assert.That(nav.Vm.CurrentWorkspace!.AgentId).IsEqualTo(Id2);
         });
     }
@@ -433,7 +433,7 @@ public class WorkspaceNavigationTests {
 
             nav.Vm.LatchShutdown();
             nav.Vm.OpenSession(Id1);
-            nav.Vm.OpenSessionIfCurrent(Id1, nav.Vm.NavigationGeneration);
+            nav.Vm.OpenSessionIfCurrent(Id1, AgentOrigin.Local, nav.Vm.NavigationGeneration);
 
             await Assert.That(nav.Vm.CurrentWorkspace).IsNull();
             await Assert.That(nav.Opened).IsEmpty();

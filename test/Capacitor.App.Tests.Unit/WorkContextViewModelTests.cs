@@ -1521,6 +1521,50 @@ public class WorkContextViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    [Arguments("user_a", "https://example.test/a.png")]
+    [Arguments("github:5", "https://example.test/a.png")]
+    [Arguments(null, "https://example.test/a.png")]
+    [Arguments("user_b", null)]
+    public async Task The_requester_row_takes_the_viewers_own_avatar_when_the_requester_is_the_viewer(string? requester, string? expected) {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with {
+                    Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png", Ids = ["user_a", "github:5"] },
+                });
+                await h.PushAsync(Dto() with { RequesterDisplay = "Ada", Requester = requester });
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.NoWorkItem, what: "the read applied");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsEqualTo(expected);
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_signed_out_read_takes_the_viewers_avatar_off_the_requester_row() {
+        await RunOnUiAsync(async () => {
+            var h = new Harness();
+            try {
+                h.Source.Enqueue(Ready() with { Viewer = new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png" } });
+                await h.PushAsync(Dto() with { Requester = "user_a" });
+                await WaitUntilAsync(() => h.Vm.RequesterAvatarUrl is not null, what: "the viewer's avatar");
+
+                h.Source.Enqueue(WorkContextRead.Of(WorkContextReadKind.SignedOut));
+                h.SignIn.OnNext(ReactiveUnit.Default);
+                await WaitUntilAsync(() => h.Vm.Phase == WorkContextPhase.SignedOut, what: "the signed-out read");
+
+                await Assert.That(h.Vm.RequesterAvatarUrl).IsNull();
+            } finally {
+                await h.Vm.TeardownAsync();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     [Arguments("user_01HZZZZZZZZZZZZZZZZZZZZZZZ")]
     [Arguments("github:")]
     [Arguments("github:-5")]

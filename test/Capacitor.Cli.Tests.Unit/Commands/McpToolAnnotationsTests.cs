@@ -88,6 +88,9 @@ public class McpToolAnnotationsTests {
         await Assert.That(Tool("kcap-flows", "start_review_flow").Annotations.OpenWorldHint).IsTrue();
         await Assert.That(Tool("kcap-flows", "start_agent").Annotations).IsEqualTo(McpToolAnnotations.Launch);
         await Assert.That(Tool("kcap-flows", "list_start_agent_options").Annotations).IsEqualTo(McpToolAnnotations.Read);
+        await Assert.That(Tool("kcap-flows", "schedule_wakeup").Annotations).IsEqualTo(McpToolAnnotations.Additive);
+        await Assert.That(Tool("kcap-flows", "list_wakeups").Annotations).IsEqualTo(McpToolAnnotations.Read);
+        await Assert.That(Tool("kcap-flows", "cancel_wakeup").Annotations).IsEqualTo(McpToolAnnotations.Destructive);
     }
 
     [Test]

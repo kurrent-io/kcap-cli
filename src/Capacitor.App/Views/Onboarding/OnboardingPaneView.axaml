@@ -60,10 +60,7 @@
                     </Grid>
                 </Border>
 
-                <TextBlock Classes="onboardingNote" Margin="0,6,0,0">
-                    <Run Text="Your settings live in " /><Run Text="~/.config/kcap" FontFamily="{StaticResource OnboardingMonoFont}"
-                        Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=". Reopen setup anytime from Help and support in kcap." />
-                </TextBlock>
+                <TextBlock Classes="onboardingNote" Margin="0,6,0,0" Text="Reopen setup anytime from Help and support in kcap" />
             </StackPanel>
         </DataTemplate>
 
