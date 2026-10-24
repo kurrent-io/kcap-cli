@@ -12,9 +12,9 @@ public sealed class ClaudeTranscriptContext(string idScope) : TranscriptContext 
     /// hash it.
     public string IdScope { get; } = idScope;
 
-    /// The usage tuple of the last assistant record that carried one: Claude Code writes each block of
+    /// The whole usage object of the last assistant record that carried one: Claude Code writes each block of
     /// one response as its own record with the response's usage repeated, and only the first counts.
-    internal (long Input, long Output, long CacheRead, long CacheWrite)? PreviousUsage { get; set; }
+    internal JsonElement? PreviousUsage { get; set; }
 }
 
 /// Claude Code's project transcript (`~/.claude/projects/&lt;slug&gt;/&lt;session&gt;.jsonl`): one JSON
@@ -341,20 +341,25 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         var cacheRead  = usage.Num("cache_read_input_tokens");
         var cacheWrite = usage.Num("cache_creation_input_tokens");
         var reasoning  = usage.Num("reasoning_tokens");
-        var tuple      = (input ?? 0, output ?? 0, cacheRead ?? 0, cacheWrite ?? 0);
-        var repeat     = ctx.PreviousUsage == tuple;
-        ctx.PreviousUsage = tuple;
-        if (repeat || input is null && output is null && cacheRead is null && cacheWrite is null && reasoning is null) return null;
+        var total      = usage.Num("total_tokens");
+        // The whole object, so a field outside the canonical counts still tells two responses apart.
+        var repeat     = ctx.PreviousUsage is { } previous && JsonElement.DeepEquals(previous, usage);
+        ctx.PreviousUsage = usage.Clone();
+        var extras = StructOf(usage);
+        foreach (var key in CanonicalUsageKeys) extras.Fields.Remove(key);
+        var counted = input is not null || output is not null || cacheRead is not null || cacheWrite is not null || reasoning is not null;
+        if (repeat || !counted && total is null && extras.Fields.Count == 0) return null;
 
-        // A vendor's own total wins: the agent schema maps it to the canonical slot as reported.
-        var token = new TokenUsage { TotalTokens = usage.Num("total_tokens") ?? tuple.Item1 + tuple.Item2 + tuple.Item3 + tuple.Item4 };
+        // A vendor's own total wins: the agent schema maps it to the canonical slot as reported. A usage that counted
+        // nothing gets no total rather than a reported zero.
+        var token = new TokenUsage();
+        if ((total ?? (counted ? (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0) : null)) is { } sum)
+            token.TotalTokens = sum;
         if (input is { } i) token.InputTokens            = i;
         if (output is { } o) token.OutputTokens          = o;
         if (cacheRead is { } r) token.CachedInputTokens  = r;
         if (reasoning is { } t) token.ReasoningTokens    = t;
         if (message.Str("model") is { } model) token.Model = model;
-        var extras = StructOf(usage);
-        foreach (var key in CanonicalUsageKeys) extras.Fields.Remove(key);
         if (extras.Fields.Count > 0) token.AdditionalCounts = extras;
         return (token, cacheWrite is > 0 ? cacheWrite : null);
     }

@@ -75,8 +75,34 @@ public class ClaudeServerParityTests {
     public async Task Usage_of_canonical_counts_alone_carries_no_additional_counts() =>
         await Assert.That(E(Assistant(Uuid, U2))[0].Usage!.AdditionalCounts).IsNull();
 
+    /// <summary>A usage that reports only a vendor total, or only fields without a canonical slot, is still usage: it
+    /// is carried rather than dropped, and no total is invented for one that reported none.</summary>
+    [Test]
+    [Arguments("""{"total_tokens":42}""", 42L, null)]
+    [Arguments("""{"service_tier":"standard"}""", null, "service_tier")]
+    public async Task A_sparse_usage_is_kept(string usageJson, long? total, string? extra) {
+        var usage = E(Assistant(Uuid, usageJson))[0].Usage;
+
+        await Assert.That(usage).IsNotNull();
+        await Assert.That(usage!.HasTotalTokens ? usage.TotalTokens : (long?)null).IsEqualTo(total);
+        if (extra is not null) await Assert.That(usage.AdditionalCounts.Fields.ContainsKey(extra)).IsTrue();
+    }
+
+    /// <summary>A record repeating the previous record's usage, in any key order, is the same response and carries none;
+    /// one whose usage differs in any field, including one with no canonical slot, carries its own.</summary>
+    [Test]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"service_tier":"standard"}""", """{"service_tier":"standard","output_tokens":5,"input_tokens":10}""", false)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5,"service_tier":"standard"}""", """{"input_tokens":10,"output_tokens":5,"service_tier":"priority"}""", true)]
+    [Arguments("""{"input_tokens":10,"output_tokens":5}""", """{"input_tokens":10,"output_tokens":5,"reasoning_tokens":3}""", true)]
+    public async Task Only_a_repeat_of_the_whole_usage_is_suppressed(string first, string second, bool secondCarriesUsage) {
+        var ctx = Ctx();
+        E(Assistant(Uuid, first), ctx);
+
+        await Assert.That(E(Assistant(Uuid2, second), ctx)[0].Usage is not null).IsEqualTo(secondCarriesUsage);
+    }
+
     /// <summary>Claude Code writes each block of one response as its own record with the response's usage
-    /// repeated; only a change of tuple, or any record that is not an assistant one, re-arms it.</summary>
+    /// repeated; only a change of usage, or any record that is not an assistant one, re-arms it.</summary>
     [Test]
     public async Task The_usage_memory_suppresses_a_repeat_and_resets_on_any_other_record() {
         var ctx = Ctx();
