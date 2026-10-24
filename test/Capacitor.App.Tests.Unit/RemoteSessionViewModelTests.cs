@@ -26,12 +26,14 @@ public class RemoteSessionViewModelTests {
         public readonly FakePermissionService Permissions = new();
         public readonly FakeAgentDirectory Directory = new();
         public readonly AgentActionService Actions;
+        public readonly RecordingOpener Opener = new();
         public readonly FakeTimeProvider Time = new();
         public SessionDetailFetch Detail = new(RemoteFixtures.Detail());
 
         public Harness() {
-            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), new RecordingOpener(),
-                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm, lane: Lane);
+            Actions = new AgentActionService(new ScriptedLocalControlOps(), new RecordingNotifier(), Opener,
+                new ReplaySubject<Cli.Core.LocalIpc.DaemonStatusDto>(1), CancellationToken.None, NeverConfirm.Confirm,
+                fallbackServerUrl: "https://a.kcap.ai", lane: Lane);
             Access = new SessionAccessService(Lane, Time);
             Lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
         }
@@ -385,6 +387,37 @@ public class RemoteSessionViewModelTests {
             await Assert.That(source.Pages).IsEqualTo(pages);
             await Assert.That(vm.PullRequests.Section).IsEqualTo("checks");
             await Assert.That(vm.PullRequests.Rows).IsEquivalentTo(rows);
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task Open_in_web_on_a_session_only_workspace_opens_the_session_page() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1"));
+
+            vm.OpenInWebCommand.Execute().Subscribe();
+
+            await Assert.That(h.Opener.Opened).Count().IsEqualTo(1);
+            await Assert.That(h.Opener.Opened[0]).IsEqualTo("https://a.kcap.ai/sessions/s1");
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// A terminal or ended session has no agent here to answer for it: its server-lane requests
+    /// render no card in the read-only chat.
+    [Test]
+    public async Task A_session_only_workspace_renders_no_permission_cards() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1", "active"));
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            h.Permissions.Add(PermissionEntries.ServerEntry(sessionId: "s1"));
+
+            await Task.Delay(100);
+            await Assert.That(vm.Chat.Cards.HasPendingCards).IsFalse();
             await vm.TeardownAsync();
         });
     }

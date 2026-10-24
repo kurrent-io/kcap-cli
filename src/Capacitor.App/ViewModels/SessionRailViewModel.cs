@@ -52,6 +52,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             this.RaiseAndSetIfChanged(ref _selectedSessionKey, value);
             _selectedSessionKeyChanges.OnNext(value);
             _stateFilter.OnNext(StateFilter());
+            _sessions?.Keep(value is { } key && key.StartsWith("server:", StringComparison.Ordinal) ? key["server:".Length..] : null);
         }
     }
 

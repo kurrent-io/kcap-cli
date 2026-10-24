@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
@@ -23,6 +24,14 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     public IObservableCache<RepoSessionDto, string> Live => LiveCache.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> MineLive => MineLiveCache.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> Ended => EndedCache.AsObservableCache();
+    public string? Kept;
+    /// Derived from the three caches, so a test edits one cache and the directory sees the whole state.
+    public IObservable<ServerSessionsSnapshot> Snapshots => Observable.CombineLatest(
+        LiveCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
+        MineLiveCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
+        EndedCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),
+        (live, mine, ended) => new ServerSessionsSnapshot([.. live], [.. mine], [.. ended]));
+    public void Keep(string? sessionId) => Kept = sessionId;
     public IObservable<ServerSessionsPaging> Paging => PagingSubject;
     public IObservable<int> LiveNotShown => LiveNotShownSubject;
     public IObservable<IReadOnlySet<string>> ViewerIds => ViewerIdsSubject;

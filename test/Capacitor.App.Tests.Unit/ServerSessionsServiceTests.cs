@@ -317,6 +317,86 @@ public class ServerSessionsServiceTests {
         await Assert.That(service.Ended.Keys.Distinct(StringComparer.Ordinal).Count()).IsEqualTo(40);
     }
 
+    /// A live session's summary changes often; such a push re-reads the live listing alone, never the prefix.
+    [Test]
+    public async Task An_active_session_change_rereads_only_the_live_listing() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-me"));
+
+        await Eventually(() => listing.Count("active", null, 0) == 2, "live re-read");
+        await Task.Delay(100);
+        await Assert.That(listing.Count("ended", "me", 0)).IsEqualTo(1);
+        await Assert.That(service.Ended.Count).IsEqualTo(20);
+    }
+
+    /// The directory recomputes on every publication, so one read is one publication of all three sets.
+    [Test]
+    public async Task A_read_publishes_live_mine_and_ended_in_one_snapshot() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        var seen = new List<ServerSessionsSnapshot>();
+        using var sub = service.Snapshots.Subscribe(seen.Add);
+
+        Connect(lane);
+
+        await Eventually(() => seen.Any(s => s.Ended.Count == 20), "the read's snapshot");
+        var published = seen.Where(s => s.Live.Count > 0 || s.Ended.Count > 0).ToList();
+        await Assert.That(published).Count().IsEqualTo(1);
+        await Assert.That(published[0].Live.Count).IsEqualTo(2);
+        await Assert.That(published[0].MineLive.Count).IsEqualTo(1);
+    }
+
+    /// A scope switched while a read is in flight makes that read's rows another scope's.
+    [Test]
+    public async Task A_read_taken_under_the_previous_scope_publishes_nothing() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        listing.Answer("ended", null, 0, 2, Row("t1", owner: "other"), Row("t2", owner: "other"));
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "mine prefix");
+        var seen = new List<ServerSessionsSnapshot>();
+        using var sub = service.Snapshots.Subscribe(seen.Add);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        listing.Gate = q => q is { State: "ended", Owner: null, Offset: 0 } ? gate.Task : Task.CompletedTask;
+
+        service.Scope = RailScope.Team;
+        await Eventually(() => listing.Count("ended", null, 0) == 1, "team read in flight");
+        service.Scope = RailScope.Mine;
+        listing.Gate = null;
+        gate.SetResult();
+
+        await Eventually(() => listing.Count("ended", "me", 0) >= 2 && service.Ended.Count == 20, "mine re-read");
+        await Assert.That(seen.Any(s => s.Ended.Any(r => r.SessionId == "t1"))).IsFalse();
+    }
+
+    /// The rail's open row is exempt from the page cut while it stays selected.
+    [Test]
+    public async Task The_kept_session_survives_a_read_that_no_longer_lists_it() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing, endedTotal: 20, pagesScripted: 1);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        ServerSessionsSnapshot? latest = null;
+        using var sub = service.Snapshots.Subscribe(s => latest = s);
+
+        service.Keep("s1");
+        listing.Answer("ended", "me", 0, 20, Rows("s", 2, 20));
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveRemoved, "live-me"));
+        await Eventually(() => latest is { } s && s.Ended.Any(r => r.SessionId == "s21"), "re-read");
+        await Assert.That(latest!.Ended.Any(r => r.SessionId == "s1")).IsTrue();
+
+        service.Keep(null);
+        await Eventually(() => latest is { } s && !s.Ended.Any(r => r.SessionId == "s1"), "dropped on deselection");
+    }
+
     [Test]
     public async Task Deleted_push_removes_the_row_at_once() {
         var (lane, listing, _, service) = Build();

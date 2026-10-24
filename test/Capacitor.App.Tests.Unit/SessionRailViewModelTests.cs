@@ -431,6 +431,20 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task Selecting_a_server_row_keeps_its_session_in_the_listing() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) using (rail) {
+                rail.SelectedSessionKey = "server:s1";
+                await Assert.That(sessions.Kept).IsEqualTo("s1");
+                rail.SelectedSessionKey = "local:a1";
+                await Assert.That(sessions.Kept).IsNull();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task A_named_viewer_applies_that_users_remembered_shape_without_persisting_it() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var directory = new FakeAgentDirectory();

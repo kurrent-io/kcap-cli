@@ -14,6 +14,8 @@ public interface IServerSessionsService {
     IObservableCache<RepoSessionDto, string> MineLive { get; }
     /// The newest ended sessions of the scope, as many pages as were asked for.
     IObservableCache<RepoSessionDto, string> Ended { get; }
+    /// All three sets as one read left them, published once per read; replays the latest.
+    IObservable<ServerSessionsSnapshot> Snapshots { get; }
     IObservable<ServerSessionsPaging> Paging { get; }
     /// Live sessions of the scope the listing's offset cap kept out of Live; zero in practice.
     IObservable<int> LiveNotShown { get; }
@@ -29,4 +31,7 @@ public interface IServerSessionsService {
     Task ShowMoreAsync();
     /// Re-reads the live listing and the whole ended prefix and replaces the caches with the result.
     Task ReconcileAsync();
+    /// The session whose row is open in the rail: it stays in the snapshot's Ended set when a read
+    /// no longer lists it, until another (or none) is kept.
+    void Keep(string? sessionId);
 }

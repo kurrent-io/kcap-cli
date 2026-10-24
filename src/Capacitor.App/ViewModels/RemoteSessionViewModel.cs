@@ -319,7 +319,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         Chat = new ChatTabViewModel(
             row.Id, AgentOrigin.Remote, _session, Observable.Return<string[]?>(null), input, new NoAttachmentUploader(),
             key => new RemoteTranscriptFeed(key, row.Vendor, _accessStates, readDetail, lane, time, Log),
-            opener, time, permissions, runs, missingNote: MissingNote, sessionId: _sessionIds,
+            // A session-only chat has no agent here to answer for it: no session, no cards, no send.
+            opener, time, permissions, runs, missingNote: MissingNote, sessionId: IsSessionOnly ? Observable.Return<string?>(null) : _sessionIds,
             serverQueue: Observable.Switch(_sessionIds
                 .Select(sid => sid is null
                     ? Observable.Empty<IReadOnlyList<QueuedInputItem>>()
@@ -379,7 +380,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             })
             .DisposeWith(_disposables);
 
-        OpenInWebCommand = ReactiveCommand.Create(() => actions.OpenInWebRemote(row.Id));
+        OpenInWebCommand = ReactiveCommand.Create(() => {
+            if (IsSessionOnly) actions.OpenSessionInWeb(row.Id);
+            else actions.OpenInWebRemote(row.Id);
+        });
         var stopKey = AgentActionService.StopKey(AgentOrigin.Remote, row.Id);
         var canStop = _sessionEndedChanges
             .CombineLatest(_originChangedChanges, actions.StopsInFlight,

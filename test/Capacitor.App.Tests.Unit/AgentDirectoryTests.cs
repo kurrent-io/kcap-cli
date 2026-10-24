@@ -350,6 +350,37 @@ public class AgentDirectoryTests {
         sessions.MineLiveCache.AddOrUpdate(row);
     }
 
+    /// A session the server lists with no daemon behind it has no agent here to answer for it: its
+    /// permission requests get no card and no pip.
+    [Test]
+    public async Task A_server_row_is_not_a_session_agent() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S1"));
+        MineLive(sessions, "S2");
+        IReadOnlyDictionary<string, string>? map = null;
+        using var sub = dir.SessionAgents.Subscribe(m => map = m);
+
+        await Assert.That(map!["S1"]).IsEqualTo("a1");
+        await Assert.That(map.ContainsKey("S2")).IsFalse();
+    }
+
+    /// The daemon reports a hook's GUID as spelled; the server files it as 32 hex digits. One session, one row.
+    [Test]
+    public async Task A_local_row_matches_its_server_row_whatever_the_guid_spelling() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "0D1E2F30-4455-6677-8899-AABBCCDDEEFF"));
+        MineLive(sessions, "0d1e2f30445566778899aabbccddeeff");
+
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:0d1e2f30445566778899aabbccddeeff").HasValue).IsFalse();
+    }
+
     [Test]
     public async Task Server_rows_appear_beside_daemon_rows() {
         var (local, _, sessions, _, dir) = BuildWithSessions();

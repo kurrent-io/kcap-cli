@@ -1641,6 +1641,37 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// The daemon reports the hook's GUID as spelled; the server lists it as 32 hex digits.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_workspace_hands_off_when_the_server_spells_the_session_without_dashes() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            const string hook = "0D1E2F30-4455-6677-8899-AABBCCDDEEFF";
+            const string filed = "0d1e2f30445566778899aabbccddeeff";
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            service.Agents.AddOrUpdate(LocalWithSession("a1", hook));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", hook), new RepoIdentity("path:/repos/alpha", "alpha")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, id => NewWorkspace(service, id), rail,
+                originOf: id => id == filed ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => built = host.NewServer(id), directory: host.Directory, time: time);
+            vm.OpenSession("a1", AgentOrigin.Local);
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", hook, "Completed"));
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("local:a1");
+                rows.AddOrUpdate(RemoteHost.ServerRow(filed));
+            });
+
+            await WorkspaceFixtures.WaitUntilAsync(() => built is not null && ReferenceEquals(vm.CurrentWorkspace, built), what: "hand-off to the server row");
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo($"server:{filed}");
+            vm.CloseWorkspace();
+        });
+    }
+
     [Test]
     [NotInParallel("AvaloniaSession")]
     public async Task A_completed_local_workspace_closes_when_no_server_row_arrives() {

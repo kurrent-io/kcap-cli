@@ -24,7 +24,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     static readonly TimeSpan DefaultPushDebounce = TimeSpan.FromMilliseconds(250);
     static readonly TimeSpan DefaultReconcileEvery = TimeSpan.FromSeconds(60);
 
-    sealed record Snapshot(RepoSessionDto[] Live, RepoSessionDto[]? MineLive, RepoSessionDto[] Ended, int EndedTotal, int LiveNotShown);
+    /// A null Ended is a live-only read: the prefix held from the last full one stands.
+    sealed record Snapshot(RepoSessionDto[] Live, RepoSessionDto[]? MineLive, RepoSessionDto[]? Ended, int EndedTotal, int LiveNotShown);
     sealed record LiveRead(RepoSessionDto[] Rows, int Total);
 
     readonly SourceCache<RepoSessionDto, string> _live = new(r => r.SessionId);
@@ -51,6 +52,10 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     int _pages = 1;
     bool _busy;
     bool _rerun;
+    bool _fullRequested;
+    readonly BehaviorSubject<ServerSessionsSnapshot> _snapshots = new(ServerSessionsSnapshot.Empty);
+    string? _kept;
+    RepoSessionDto? _keptRow;
     TaskCompletionSource _settled = Completed();
     bool _disposed;
 
@@ -88,11 +93,19 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     _live.Remove(push.SessionId);
                     _mineLive.Remove(push.SessionId);
                     _ended.Remove(push.SessionId);
+                    if (_kept == push.SessionId) _keptRow = null;
+                    EmitSnapshot();
                 }
             }).DisposeWith(_subscriptions);
+        // A live session changes its summary often; only an ending can move the ended prefix.
         lane.SessionPushes
+            .Where(push => push.Kind is SessionPushKind.ActiveAdded or SessionPushKind.ActiveChanged)
             .Throttle(pushDebounce ?? DefaultPushDebounce)
-            .Subscribe(_ => ReconcileIfConnected()).DisposeWith(_subscriptions);
+            .Subscribe(_ => RequestIfConnected(full: false)).DisposeWith(_subscriptions);
+        lane.SessionPushes
+            .Where(push => push.Kind is SessionPushKind.ActiveRemoved or SessionPushKind.TitleChanged)
+            .Throttle(pushDebounce ?? DefaultPushDebounce)
+            .Subscribe(_ => RequestIfConnected(full: true)).DisposeWith(_subscriptions);
 
         var every = reconcileEvery ?? DefaultReconcileEvery;
         _cadence = time.CreateTimer(_ => ReconcileIfConnected(), null, every, every);
@@ -101,6 +114,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     public IObservableCache<RepoSessionDto, string> Live => _live.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> MineLive => _mineLive.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> Ended => _ended.AsObservableCache();
+    public IObservable<ServerSessionsSnapshot> Snapshots => _snapshots.AsObservable();
     public IObservable<ServerSessionsPaging> Paging => _paging.AsObservable();
     public IObservable<int> LiveNotShown => _liveNotShown.AsObservable();
     public IObservable<IReadOnlySet<string>> ViewerIds => _viewerIds.AsObservable();
@@ -118,9 +132,35 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 if (value == RailScope.Team) _mineLive.Clear();
                 _paging.OnNext(new(0, 0, 1, false, false));
                 _scope.OnNext(value);
+                EmitSnapshot();
             }
             ReconcileIfConnected();
         }
+    }
+
+    public void Keep(string? sessionId) {
+        lock (_lock) {
+            if (_disposed || _kept == sessionId) return;
+            _kept = sessionId;
+            _keptRow = sessionId is null ? null : Listed(sessionId);
+            EmitSnapshot();
+        }
+    }
+
+    RepoSessionDto? Listed(string sessionId) =>
+        _ended.Lookup(sessionId) is { HasValue: true, Value: var ended } ? ended
+        : _live.Lookup(sessionId) is { HasValue: true, Value: var live } ? live
+        : null;
+
+    /// Under the lock, after every cache change. The kept row rides along from the last read that
+    /// listed it once the current one does not.
+    void EmitSnapshot() {
+        var ended = _ended.Items.ToList();
+        if (_kept is { } kept) {
+            if (Listed(kept) is { } current) _keptRow = current;
+            else if (_keptRow is { } retained) ended.Add(retained);
+        }
+        _snapshots.OnNext(new([.. _live.Items], [.. _mineLive.Items], ended));
     }
 
     public Task ShowMoreAsync() {
@@ -133,9 +173,13 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     /// Admission and completion share the lock, so a request that loses admission is never
     /// dropped between the loop reading the rerun flag and clearing busy.
-    public Task ReconcileAsync() {
+    public Task ReconcileAsync() => RequestAsync(full: true);
+
+    /// A full request stays requested until a full read starts, so a live-only run in flight reruns full.
+    Task RequestAsync(bool full) {
         lock (_lock) {
             if (_disposed) return Task.CompletedTask;
+            if (full) _fullRequested = true;
             if (_busy) {
                 _rerun = true;
                 return _settled.Task;
@@ -147,26 +191,31 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         return _settled.Task;
     }
 
-    void ReconcileIfConnected() {
+    void ReconcileIfConnected() => RequestIfConnected(full: true);
+
+    void RequestIfConnected(bool full) {
         bool connected;
         lock (_lock) connected = _connected && !_disposed;
-        if (connected) _ = ReconcileAsync();
+        if (connected) _ = RequestAsync(full);
     }
 
     async Task RunAsync() {
         while (true) {
             int generation, laneEpoch, pages;
             RailScope scope;
+            bool full;
             lock (_lock) {
                 generation = _generation;
                 laneEpoch = _laneEpoch;
                 pages = _pages;
                 scope = _scope.Value;
+                full = _fullRequested;
+                _fullRequested = false;
             }
             Snapshot? snapshot = null;
             var unauthorized = false;
             try {
-                (snapshot, unauthorized) = await ReadAsync(scope, pages).ConfigureAwait(false);
+                (snapshot, unauthorized) = await ReadAsync(scope, pages, full).ConfigureAwait(false);
             } catch (Exception) {
                 // A data-plane read that throws is a missed refresh, never an app fault.
             }
@@ -175,7 +224,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             bool rerun;
             TaskCompletionSource? settled = null;
             lock (_lock) {
-                if (generation == _generation && !_disposed) {
+                // A read taken under another scope or page count answers a question no longer asked.
+                if (generation == _generation && !_disposed && scope == _scope.Value && pages == _pages) {
                     if (snapshot is not null) {
                         Publish(snapshot, pages);
                         current = true;
@@ -204,13 +254,16 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _live.EditDiff(snapshot.Live, EqualityComparer<RepoSessionDto>.Default);
         if (snapshot.MineLive is { } mine) _mineLive.EditDiff(mine, EqualityComparer<RepoSessionDto>.Default);
         else _mineLive.Clear();
-        _ended.EditDiff(snapshot.Ended, EqualityComparer<RepoSessionDto>.Default);
-        var atCap = pages * PageSize >= OffsetCap;
-        _paging.OnNext(new(snapshot.Ended.Length, snapshot.EndedTotal, pages, snapshot.Ended.Length < snapshot.EndedTotal && !atCap, atCap));
+        if (snapshot.Ended is { } ended) {
+            _ended.EditDiff(ended, EqualityComparer<RepoSessionDto>.Default);
+            var atCap = pages * PageSize >= OffsetCap;
+            _paging.OnNext(new(ended.Length, snapshot.EndedTotal, pages, ended.Length < snapshot.EndedTotal && !atCap, atCap));
+        }
         _liveNotShown.OnNext(snapshot.LiveNotShown);
+        EmitSnapshot();
     }
 
-    async Task<(Snapshot? Snapshot, bool Unauthorized)> ReadAsync(RailScope scope, int pages) {
+    async Task<(Snapshot? Snapshot, bool Unauthorized)> ReadAsync(RailScope scope, int pages, bool full) {
         var owner = scope == RailScope.Mine ? "me" : null;
         var (scoped, unauthorized) = await ReadLiveAsync(owner).ConfigureAwait(false);
         if (scoped is null) return (null, unauthorized);
@@ -219,6 +272,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             (all, unauthorized) = await ReadLiveAsync(null).ConfigureAwait(false);
             if (all is null) return (null, unauthorized);
         }
+        var liveNotShown = Math.Max(0, scoped.Total - scoped.Rows.Length);
+        if (!full) return (new Snapshot(all.Rows, owner is null ? null : scoped.Rows, null, 0, liveNotShown), false);
         var ended = new List<RepoSessionDto>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var total = 0;
@@ -231,7 +286,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             foreach (var row in result.Rows) if (seen.Add(row.SessionId)) ended.Add(row);
             if (result.Rows.Length < PageSize) break;
         }
-        return (new Snapshot(all.Rows, owner is null ? null : scoped.Rows, [.. ended], total, Math.Max(0, scoped.Total - scoped.Rows.Length)), false);
+        return (new Snapshot(all.Rows, owner is null ? null : scoped.Rows, [.. ended], total, liveNotShown), false);
     }
 
     async Task<(LiveRead? Read, bool Unauthorized)> ReadLiveAsync(string? owner) {
@@ -277,6 +332,9 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _liveNotShown.OnNext(0);
         _viewerIds.OnNext(FrozenSet<string>.Empty);
         _viewerUserId.OnNext(null);
+        _kept = null;
+        _keptRow = null;
+        EmitSnapshot();
     }
 
     static TaskCompletionSource Completed() {
@@ -344,5 +402,6 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _viewerUserId.Dispose();
         _current.Dispose();
         _scope.Dispose();
+        _snapshots.Dispose();
     }
 }

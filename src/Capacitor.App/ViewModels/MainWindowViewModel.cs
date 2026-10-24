@@ -4,6 +4,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.LocalIpc;
 using Avalonia.Media;
 using Capacitor.App.Services;
@@ -823,7 +824,8 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// back live first. `closeWithout` is the local workspace's rule: nothing arrived, so close as
     /// the rail already dropped it; a hosted remote workspace keeps its retained transcript instead.
     void ArmHandoff(ISessionWorkspace open, IAgentDirectory directory, string sessionId, string daemonKey, bool closeWithout) {
-        var serverKey = $"server:{sessionId}";
+        // The server spells the id its own way, so its row is found by identity rather than by key.
+        AgentRow? EndedServerRow() => directory.Rows.Items.FirstOrDefault(r => r.IsEndedSession && SessionIds.SameSession(r.SessionId, sessionId));
         // The daemon row has returned only when a change after arming shows it live: the directory
         // can still carry it as running at the instant the workspace learns it completed.
         var outcomes = directory.Rows.Connect(suppressEmptyChangeSets: false)
@@ -833,7 +835,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             .StartWith(false)
             .Select(changed => changed && directory.Rows.Lookup(daemonKey) is { HasValue: true, Value: var back } && !SessionStatusDots.IsTerminal(back.Status)
                 ? HandoffOutcome.Returned
-                : directory.Rows.Lookup(serverKey) is { HasValue: true, Value: var row } && row.IsEndedSession
+                : EndedServerRow() is not null
                     ? HandoffOutcome.ServerRow
                     : (HandoffOutcome?)null)
             .Where(outcome => outcome is not null)
@@ -843,7 +845,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _handoff.Disposable = outcomes.Subscribe(outcome => {
             if (!ReferenceEquals(CurrentWorkspace, open)) return;
             switch (outcome) {
-                case HandoffOutcome.ServerRow: Rebind(open, AgentOrigin.Server, sessionId, terminal: false, pullRequest: false); break;
+                case HandoffOutcome.ServerRow when EndedServerRow() is { } row: Rebind(open, AgentOrigin.Server, row.Id, terminal: false, pullRequest: false); break;
                 case HandoffOutcome.Lapsed when closeWithout: CloseWorkspace(); break;
             }
         });

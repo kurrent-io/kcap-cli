@@ -96,14 +96,17 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             .Subscribe(current => { lock (_lock) _registryCurrent = current; Recompute(); })
             .DisposeWith(_subscriptions);
         if (sessions is not null) {
-            sessions.Live.Connect().ToCollection()
-                .Subscribe(items => { lock (_lock) _serverLive = [.. items]; Recompute(); })
-                .DisposeWith(_subscriptions);
-            sessions.MineLive.Connect().ToCollection()
-                .Subscribe(items => { lock (_lock) _serverMineLive = [.. items]; Recompute(); })
-                .DisposeWith(_subscriptions);
-            sessions.Ended.Connect().ToCollection()
-                .Subscribe(items => { lock (_lock) _serverEnded = [.. items]; Recompute(); })
+            // One subscription for all three sets: a recompute between two of them would judge a
+            // live row against an ownership set from the previous read.
+            sessions.Snapshots
+                .Subscribe(snapshot => {
+                    lock (_lock) {
+                        _serverLive = [.. snapshot.Live];
+                        _serverMineLive = [.. snapshot.MineLive];
+                        _serverEnded = [.. snapshot.Ended];
+                    }
+                    Recompute();
+                })
                 .DisposeWith(_subscriptions);
             sessions.ScopeChanges
                 .Subscribe(scope => { lock (_lock) _scope = scope; Recompute(); })
@@ -193,8 +196,9 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
     /// Both session lookups answer for a server-lane session id. While the local daemon reports
     /// another server, its rows carry that server's ids and a match here is coincidence: the id
     /// names a different session, whose agent is not the local one.
+    /// A server row is left out: nothing here can answer for a session no daemon hosts.
     static IEnumerable<AgentRow> ServerSessionRows(IEnumerable<AgentRow> rows, bool localOnAppServer) =>
-        localOnAppServer ? rows : rows.Where(r => r.Origin != AgentOrigin.Local);
+        rows.Where(r => r.Origin != AgentOrigin.Server && (localOnAppServer || r.Origin != AgentOrigin.Local));
 
     // Local sorts before Remote in AgentOrigin, so the ordered pass's TryAdd lets a local row win
     // a session claimed by both an unproven twin pair — proven suppression already keeps a twin's
@@ -327,15 +331,27 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         // is as much the viewer's as one in the scoped live listing.
         var listed = new Dictionary<string, RepoSessionDto>(StringComparer.Ordinal);
         foreach (var dto in _serverLive) listed[dto.SessionId] = dto;
+        foreach (var dto in _serverMineLive) listed.TryAdd(dto.SessionId, dto);
         foreach (var dto in _serverEnded) listed.TryAdd(dto.SessionId, dto);
         var mine = _serverMineLive.Select(dto => dto.SessionId).ToHashSet(StringComparer.Ordinal);
         if (_scope == RailScope.Mine) foreach (var dto in _serverEnded) mine.Add(dto.SessionId);
 
         bool Matchable(AgentRow row) => row.Origin == AgentOrigin.Local ? localMatchable : registryMatchable;
+        // The daemon spells a hook's GUID as it came and an ACP id as the vendor gave it; the server
+        // files the first as 32 hex digits and the second under its own token. The server's spelling
+        // is the key throughout, so each daemon row is resolved to it once.
+        string? ListedId(AgentRow row) {
+            if (SessionIds.Canonical(row.SessionId) is not { } own) return null;
+            if (listed.ContainsKey(own)) return own;
+            var token = SessionIds.ServerToken(own);
+            return listed.ContainsKey(token) ? token : null;
+        }
+        var listedIdOf = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var row in next) if (row.Origin is AgentOrigin.Local or AgentOrigin.Remote) listedIdOf[row.Key] = ListedId(row);
 
         for (var i = 0; i < next.Count; i++) {
             var row = next[i];
-            if (row.SessionId is not { Length: > 0 } sid || !Matchable(row) || !listed.TryGetValue(sid, out var dto)) continue;
+            if (!Matchable(row) || listedIdOf.GetValueOrDefault(row.Key) is not { } sid || !listed.TryGetValue(sid, out var dto)) continue;
             next[i] = row with {
                 OwnerUserId = dto.Owner?.UserId,
                 OwnerName = dto.Owner?.DisplayName ?? dto.Owner?.Username,
@@ -345,7 +361,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
         if (_scope == RailScope.Mine) {
             next.RemoveAll(row => {
                 if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Remote) || !Matchable(row)) return false;
-                if (row.SessionId is { Length: > 0 } sid && listed.ContainsKey(sid)) return !mine.Contains(sid);
+                if (listedIdOf.GetValueOrDefault(row.Key) is { } sid) return !mine.Contains(sid);
                 return row.Origin == AgentOrigin.Remote;
             });
         }
@@ -359,7 +375,7 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             var suppressServer = false;
             var hostedNow = false;
             next.RemoveAll(row => {
-                if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Remote) || row.SessionId != sid || !Matchable(row)) return false;
+                if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Remote) || listedIdOf.GetValueOrDefault(row.Key) != sid || !Matchable(row)) return false;
                 if (row.Origin == AgentOrigin.Remote) {
                     if (!_registryCurrent) return true;
                     suppressServer = true;
