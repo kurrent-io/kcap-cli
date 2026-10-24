@@ -2,6 +2,7 @@ using Capacitor.App.Services;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Remote.Models;
 using DynamicData;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Capacitor.App.Tests.Unit;
 
@@ -313,5 +314,210 @@ public class AgentDirectoryTests {
         await Assert.That(sawRemoteTwin).IsFalse();
         await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
         await Assert.That(dir.Rows.Lookup("remote:a1").HasValue).IsFalse();
+    }
+
+    // ── the server lane ────────────────────────────────────────────────────────────────────────
+
+    static (FakeDaemonClientService Local, FakeRemoteAgents Remote, FakeServerSessionsService Sessions, FakeTimeProvider Time, AgentDirectory Dir)
+        BuildWithSessions() {
+        var local = new FakeDaemonClientService();
+        var remote = new FakeRemoteAgents();
+        var sessions = new FakeServerSessionsService();
+        var time = new FakeTimeProvider();
+        var dir = new AgentDirectory(
+            local, remote, new FakeServerLane(), new RepoIdentityResolver(_ => null), p => p,
+            "m1", Server, time, sessions);
+        return (local, remote, sessions, time, dir);
+    }
+
+    static RepoSessionDto Listed(string id, string status = "ended", string owner = "me", string ownerName = "Alexey") => new() {
+        SessionId = id, Status = status, AccessLevel = "full", Vendor = "claude", Title = id,
+        Owner = new() { UserId = owner, DisplayName = ownerName },
+        StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch,
+        EndedAt = status == "ended" ? DateTimeOffset.UnixEpoch : null,
+    };
+
+    /// The local daemon connected and reporting the app's own server.
+    static void LocalConnected(FakeDaemonClientService local) {
+        local.SnapshotsSubject.OnNext(FakeDaemonClientService.Snap());
+        local.StatusSubject.OnNext(new(AttachState.Connected, null, ["status/1"]));
+    }
+
+    /// A live session of the viewer's: in the unfiltered listing and in the Mine one.
+    static void MineLive(FakeServerSessionsService sessions, string id) {
+        var row = Listed(id, "active");
+        sessions.LiveCache.AddOrUpdate(row);
+        sessions.MineLiveCache.AddOrUpdate(row);
+    }
+
+    [Test]
+    public async Task Server_rows_appear_beside_daemon_rows() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        local.Agents.AddOrUpdate(LocalAgent("a1"));
+        sessions.EndedCache.AddOrUpdate(Listed("S1"));
+        MineLive(sessions, "S2");
+
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S1").Value.IsEndedSession).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S2").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S2").Value.IsTerminalSession).IsTrue();
+    }
+
+    [Test]
+    public async Task A_live_local_row_hides_the_server_row_for_its_session() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        MineLive(sessions, "S");
+
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_completed_local_row_yields_to_the_server_row() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S", status: "Completed"));
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_failed_local_row_keeps_hiding_the_server_row() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S", status: "Failed"));
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_cached_local_row_yields_to_an_ended_server_row_and_keeps_an_active_one_hidden() {
+        var (local, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        local.StatusSubject.OnNext(new(AttachState.Unreachable, "daemon_unreachable", null));
+
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsFalse();
+
+        sessions.EndedCache.RemoveKey("S");
+        MineLive(sessions, "S");
+        await Assert.That(dir.Rows.Lookup("local:a1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_retained_registry_row_yields_to_the_server_row() {
+        var (_, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        remote.CurrentSubject.OnNext(false);
+        remote.Cache.AddOrUpdate(Remote("b1", daemon: "home-pc", sessionId: "S"));
+        sessions.EndedCache.AddOrUpdate(Listed("S"));
+
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsFalse();
+
+        remote.CurrentSubject.OnNext(true);
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task A_server_row_keeps_hosted_presentation_within_the_grace() {
+        var (local, _, sessions, time, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        local.Agents.AddOrUpdate(LocalAgent("a1", sessionId: "S"));
+        MineLive(sessions, "S");
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsFalse();
+
+        local.Agents.RemoveKey("a1");
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsTerminalSession).IsFalse();
+
+        time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
+        await Assert.That(dir.Rows.Lookup("server:S").Value.IsTerminalSession).IsTrue();
+    }
+
+    [Test]
+    public async Task Mine_hides_a_teammates_hosted_row_and_keeps_unknown_local_rows() {
+        var (local, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        sessions.LiveCache.AddOrUpdate(Listed("S1", "active", owner: "other", ownerName: "Tony Young"));
+        MineLive(sessions, "S2");
+        remote.Cache.AddOrUpdate(Remote("b1", daemon: "home-pc", owner: "other", sessionId: "S1"));
+        remote.Cache.AddOrUpdate(Remote("b2", daemon: "home-pc", owner: "other", sessionId: "S9"));
+        remote.Cache.AddOrUpdate(Remote("b3", daemon: "home-pc", sessionId: "S2"));
+        local.Agents.AddOrUpdate(LocalAgent("a2"));
+        local.Pending.AddOrUpdate(new PendingLaunchDto("p1", "claude", "/r", "Launching", DateTime.UtcNow, "spawned"));
+
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsFalse(); // the listing names another owner
+        await Assert.That(dir.Rows.Lookup("remote:b2").HasValue).IsFalse(); // not listed: unknown on the registry lane
+        await Assert.That(dir.Rows.Lookup("remote:b3").HasValue).IsTrue();  // the viewer's own
+        await Assert.That(dir.Rows.Lookup("local:a2").HasValue).IsTrue();   // not listed: presumed the viewer's
+        await Assert.That(dir.Rows.Lookup("pending:p1").HasValue).IsTrue();
+
+        sessions.Scope = RailScope.Team;
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("remote:b2").HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task Ownership_comes_from_the_scoped_listing_without_owner_ids() {
+        var (local, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        LocalConnected(local);
+        sessions.LiveCache.AddOrUpdate(Listed("S1", "active", owner: "other", ownerName: "Tony Young"));
+        MineLive(sessions, "S2");
+        remote.Cache.AddOrUpdate(Remote("b1", daemon: "home-pc", owner: "other", sessionId: "S1"));
+        local.Agents.AddOrUpdate(LocalAgent("a2", sessionId: "S2"));
+
+        await Assert.That(dir.Rows.Lookup("remote:b1").HasValue).IsFalse();
+        var mine = dir.Rows.Lookup("local:a2").Value;
+        await Assert.That(mine.OwnerIsViewer).IsTrue();
+        await Assert.That(mine.OwnerName).IsEqualTo("Alexey");
+        await Assert.That(mine.OwnerUserId).IsEqualTo("me");
+
+        sessions.Scope = RailScope.Team;
+        var theirs = dir.Rows.Lookup("remote:b1").Value;
+        await Assert.That(theirs.OwnerName).IsEqualTo("Tony Young");
+        await Assert.That(theirs.OwnerIsViewer).IsNull();
+        sessions.ViewerIdsSubject.OnNext(new HashSet<string>(["me"]));
+        await Assert.That(dir.Rows.Lookup("remote:b1").Value.OwnerIsViewer).IsFalse();
+    }
+
+    [Test]
+    public async Task Server_keys_are_not_normalised() {
+        var (_, _, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        sessions.EndedCache.AddOrUpdate(Listed("ABC"));
+        sessions.EndedCache.AddOrUpdate(Listed("abc"));
+
+        await Assert.That(dir.Rows.Lookup("server:ABC").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:abc").HasValue).IsTrue();
     }
 }
