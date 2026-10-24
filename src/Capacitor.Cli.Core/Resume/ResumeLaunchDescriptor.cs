@@ -27,5 +27,7 @@ public sealed record ResumeLaunchDescriptor(
     bool? WorktreeIsStandalone = null,
     string? WorktreeSourceRepo = null,
     string? PermissionMode = null,
+    // Null in an entry written before the flag existed.
+    bool? TitleDerived = null,
     int? InactivityBoundSeconds = null
 );
