@@ -87,6 +87,23 @@ public class McpMemoryServerLogTests {
     }
 
     [Test]
+    [Arguments("search_memories", """{"query":5}""", "query", "string")]
+    [Arguments("save_memory", """{"audience":"org","slug":5,"description":"d","content":"c","kind":"project"}""", "slug", "string")]
+    [Arguments("save_memory", """{"audience":"org","slug":"s","description":"d","content":"c","kind":"project","team":["t"]}""", "team", "string")]
+    [Arguments("save_memory", """{"audience":"org","slug":"s","description":"d","content":"c","kind":"project","global":"yes"}""", "global", "boolean")]
+    [Arguments("update_memory", """{"id":"m1","kind":3}""", "kind", "string")]
+    [Arguments("rescope_memory", """{"id":"m1","audience":3}""", "audience", "string")]
+    [Arguments("rescope_memory", """{"id":"m1","global":true,"team":1}""", "team", "string")]
+    public async Task A_wrong_typed_argument_to_a_memory_tool_is_refused_by_name_and_sends_nothing(
+            string tool, string arguments, string field, string type) {
+        var call = await CallAsync(tool, arguments);
+
+        await Assert.That(call.IsError).IsTrue();
+        await Assert.That(call.Text).IsEqualTo($"Error: '{field}' must be a {type}.");
+        await Assert.That(call.Request).IsNull();
+    }
+
+    [Test]
     public async Task Settle_posts_the_resolution_to_the_entry_of_that_log() {
         var call = await CallAsync("settle_memory_entry", $$"""{"id":"{{MemoryId}}","entry_id":"{{EntryId}}","resolution":"Rotated."}""");
 

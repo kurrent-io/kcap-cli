@@ -235,7 +235,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         $"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(args))}/entries/{Uri.EscapeDataString(Required(args, "entry_id"))}";
 
     internal static string BuildSearchUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) {
-        var q = args?["query"]?.GetValue<string>();
+        var q = Optional(args, "query");
         if (string.IsNullOrWhiteSpace(q)) throw new ArgumentException("query is required");
 
         var qs = new List<string> { $"q={Uri.EscapeDataString(q)}" };
@@ -291,11 +291,11 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     // Responses are passed through as raw text, so only these request-body builders are affected.
     internal static JsonObject BuildSaveBody(JsonObject? args, string? cwdRepoHash, string? machineId) {
         string Req(string name) =>
-            args?[name]?.GetValue<string>() is { Length: > 0 } v ? v : throw new ArgumentException($"{name} is required");
+            Optional(args, name) is { Length: > 0 } v ? v : throw new ArgumentException($"{name} is required");
 
-        var global          = args?["global"]?.GetValue<bool>() == true;
-        var machineSpecific = args?["machine_specific"]?.GetValue<bool>() == true;
-        var project         = args?["project"]?.GetValue<string>();
+        var global          = ReadBool(args, "global");
+        var machineSpecific = ReadBool(args, "machine_specific");
+        var project         = Optional(args, "project");
 
         // A present-but-blank slug is malformed, not omitted: falling back to the repo or org home
         // would silently widen where the memory surfaces.
@@ -317,9 +317,9 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             ["description"]       = Req("description"),
             ["content"]           = Req("content"),
             ["kind"]              = Req("kind"),
-            ["team"]              = args?["team"]?.GetValue<string>(),
+            ["team"]              = Optional(args, "team"),
             // audience 'project' target — the people axis, distinct from the place-axis 'project' below.
-            ["audience_project"]  = args?["audience_project"]?.GetValue<string>(),
+            ["audience_project"]  = Optional(args, "audience_project"),
             // The place axis: a project home wins over the repo. The repo hash still rides along because a
             // server that does not know project homes ignores the field and reads a null hash as org-wide;
             // with the hash it lands the memory at the repo, narrower than asked rather than wider.
@@ -334,17 +334,17 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     }
 
     internal static JsonObject BuildUpdateBody(JsonObject? args) => new() {
-        ["description"]      = args?["description"]?.GetValue<string>(),
-        ["content"]          = args?["content"]?.GetValue<string>(),
-        ["kind"]             = args?["kind"]?.GetValue<string>(),
-        ["expected_version"] = args?["expected_version"]?.GetValue<string>(),
+        ["description"]      = Optional(args, "description"),
+        ["content"]          = Optional(args, "content"),
+        ["kind"]             = Optional(args, "kind"),
+        ["expected_version"] = Optional(args, "expected_version"),
         ["header"]           = Optional(args, "header")
     };
 
     internal static JsonObject BuildRescopeBody(JsonObject? args) {
-        var audience = args?["audience"]?.GetValue<string>();
-        var project  = args?["project"]?.GetValue<string>();
-        var repoHash = args?["repo_hash"]?.GetValue<string>();
+        var audience = Optional(args, "audience");
+        var project  = Optional(args, "project");
+        var repoHash = Optional(args, "repo_hash");
         var global   = ReadBool(args, "global");
 
         if (repoHash is not null && string.IsNullOrWhiteSpace(repoHash))
@@ -358,7 +358,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             // A server that does not know repo_hash/global drops them and would apply the audience
             // fields alone — a place move turned into a publish. Sent by itself, it gets a 400 instead.
             string[] audienceFields = ["audience", "team", "audience_project"];
-            if (audienceFields.Any(f => !string.IsNullOrWhiteSpace(args?[f]?.GetValue<string>())))
+            if (audienceFields.Any(f => !string.IsNullOrWhiteSpace(Optional(args, f))))
                 throw new ArgumentException("repo_hash and global: true must be sent alone — change the audience in a separate rescope_memory call.");
 
             return repoHash is not null ? new() { ["repo_hash"] = repoHash } : new() { ["global"] = true };
@@ -371,11 +371,11 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             throw new ArgumentException("audience, project, repo_hash or global: true is required");
         return new() {
             ["audience"] = string.IsNullOrWhiteSpace(audience) ? null : audience,
-            ["team"]     = args?["team"]?.GetValue<string>(),
+            ["team"]     = Optional(args, "team"),
             ["project"]  = string.IsNullOrWhiteSpace(project) ? null : project,
             // audience 'project' target (people axis) — distinct from the place-axis 'project' above; raw
             // like team, not whitespace-nulled, since unlike project it has no precedence branch to guard.
-            ["audience_project"] = args?["audience_project"]?.GetValue<string>(),
+            ["audience_project"] = Optional(args, "audience_project"),
         };
     }
 
@@ -383,7 +383,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         args?[key] switch {
             null                                            => false,
             JsonValue v when v.TryGetValue<bool>(out var b) => b,
-            _                                               => throw new ArgumentException($"'{key}' must be true or false.")
+            _                                               => throw new ArgumentException($"'{key}' must be a boolean.")
         };
 
     /// <summary>
