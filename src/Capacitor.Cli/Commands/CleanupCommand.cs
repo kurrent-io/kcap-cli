@@ -21,7 +21,7 @@ sealed class CleanupCommand(WatcherManager watchers, StandardStreams console) {
 
         foreach (var pidFile in pidFiles) {
             var key        = Path.GetFileNameWithoutExtension(pidFile);
-            var wasRunning = await watchers.KillWatcher(key);
+            var wasRunning = await watchers.KillWatcher(key, console.Error);
 
             if (wasRunning) {
                 await console.Out.WriteLineAsync($"Killed watcher {key}");

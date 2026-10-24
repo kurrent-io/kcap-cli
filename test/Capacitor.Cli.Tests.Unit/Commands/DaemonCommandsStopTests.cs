@@ -9,6 +9,7 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// <summary><c>daemon stop</c> asks the daemon to shut down with the operator's intent and kills it only
 /// when that request is not answered by an exit, marking the resume ledger interrupted on the kill.
 /// The "daemon" is a sleep child this test owns, named by a pid file carrying its real start token.</summary>
+[ParallelLimiter<SubprocessLimit>]
 public class DaemonCommandsStopTests {
     const string Name = "st";
 

@@ -19,6 +19,7 @@ using TUnit.Core.Enums;
 
 namespace Capacitor.Cli.Tests.Unit.Commands;
 
+[ParallelLimiter<SubprocessLimit>]
 public class UninstallCommandTests {
     // Uninstall runs `daemon stop --yes`, which enumerates this directory and kills the PIDs it
     // finds; a shared one holding the test runner's own PID makes it kill its own tree.
@@ -731,6 +732,7 @@ public class UninstallCommandTests {
         await Assert.That(exit).IsEqualTo(1);
         await Assert.That(fixture.Out.ToString()).Contains("No daemons are running.");
         await Assert.That(fixture.Out.ToString()).Contains("Could not stop watcher s-a");
+        await Assert.That(fixture.Err.ToString()).Contains("Error killing watcher s-a");
         await Assert.That(fixture.Err.ToString()).Contains("Watcher s-a is still running.");
     }
 
