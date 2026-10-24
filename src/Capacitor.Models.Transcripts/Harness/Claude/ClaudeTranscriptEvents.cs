@@ -347,13 +347,13 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         ctx.PreviousUsage = usage.Clone();
         var extras = StructOf(usage);
         foreach (var key in CanonicalUsageKeys) extras.Fields.Remove(key);
-        var counted = input is not null || output is not null || cacheRead is not null || cacheWrite is not null || reasoning is not null;
-        if (repeat || !counted && total is null && extras.Fields.Count == 0) return null;
+        var additive = input is not null || output is not null || cacheRead is not null || cacheWrite is not null;
+        if (repeat || !additive && reasoning is null && total is null && extras.Fields.Count == 0) return null;
 
-        // A vendor's own total wins: the agent schema maps it to the canonical slot as reported. A usage that counted
-        // nothing gets no total rather than a reported zero.
+        // A vendor's own total wins: the agent schema maps it to the canonical slot as reported. The computed total is
+        // the four additive counts, so a usage with none of them gets no total rather than a reported zero.
         var token = new TokenUsage();
-        if ((total ?? (counted ? (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0) : null)) is { } sum)
+        if ((total ?? (additive ? (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0) : null)) is { } sum)
             token.TotalTokens = sum;
         if (input is { } i) token.InputTokens            = i;
         if (output is { } o) token.OutputTokens          = o;

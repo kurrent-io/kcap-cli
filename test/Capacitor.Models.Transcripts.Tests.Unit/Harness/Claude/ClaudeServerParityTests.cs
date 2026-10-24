@@ -80,6 +80,7 @@ public class ClaudeServerParityTests {
     [Test]
     [Arguments("""{"total_tokens":42}""", 42L, null)]
     [Arguments("""{"service_tier":"standard"}""", null, "service_tier")]
+    [Arguments("""{"reasoning_tokens":3}""", null, null)]
     public async Task A_sparse_usage_is_kept(string usageJson, long? total, string? extra) {
         var usage = E(Assistant(Uuid, usageJson))[0].Usage;
 
