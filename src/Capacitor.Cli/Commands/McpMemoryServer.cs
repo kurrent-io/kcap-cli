@@ -134,13 +134,17 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
 
         try {
             using var httpResponse = toolName switch {
-                "search_memories" => await client.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash, machineId)),
-                "get_memory"      => await client.GetAsync(BuildGetUrl(baseUrl, arguments, cwdRepoHash, machineId)),
-                "save_memory"     => await client.PostAsync($"{baseUrl}/api/memories", ToJsonContent(BuildSaveBody(arguments, cwdRepoHash, machineId))),
-                "update_memory"   => await client.PutAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}", ToJsonContent(BuildUpdateBody(arguments))),
-                "rescope_memory"  => await client.PostAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}/rescope", ToJsonContent(BuildRescopeBody(arguments))),
-                "archive_memory"  => await client.DeleteAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}"),
-                _                 => throw new ArgumentException($"Unknown tool: {toolName}")
+                "search_memories"     => await client.GetAsync(BuildSearchUrl(baseUrl, arguments, cwdRepoHash, machineId)),
+                "get_memory"          => await client.GetAsync(BuildGetUrl(baseUrl, arguments, cwdRepoHash, machineId)),
+                "save_memory"         => await client.PostAsync($"{baseUrl}/api/memories", ToJsonContent(BuildSaveBody(arguments, cwdRepoHash, machineId))),
+                "update_memory"       => await client.PutAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}", ToJsonContent(BuildUpdateBody(arguments))),
+                "rescope_memory"      => await client.PostAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}/rescope", ToJsonContent(BuildRescopeBody(arguments))),
+                "archive_memory"      => await client.DeleteAsync($"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(arguments))}"),
+                "append_memory_entry" => await client.PostAsync(BuildAppendUrl(baseUrl, arguments, cwdRepoHash, machineId), ToJsonContent(BuildAppendBody(arguments))),
+                "settle_memory_entry" => await client.PostAsync($"{EntryUrl(baseUrl, arguments)}/settle", ToJsonContent(BuildSettleBody(arguments))),
+                "reopen_memory_entry" => await client.PostAsync($"{EntryUrl(baseUrl, arguments)}/reopen", null),
+                "list_memory_entries" => await client.GetAsync(BuildListEntriesUrl(baseUrl, arguments)),
+                _                     => throw new ArgumentException($"Unknown tool: {toolName}")
             };
 
             var body = await httpResponse.Content.ReadAsStringAsync();
@@ -149,11 +153,19 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
+            if (httpResponse.StatusCode == HttpStatusCode.NotFound && EntryTools.Contains(toolName) && !NamesWhatWasNotFound(body)) {
+                return BuildToolResult(id, LogsUnsupportedMessage, isError: true);
+            }
+
             if (!httpResponse.IsSuccessStatusCode) {
                 return BuildToolResult(id, $"Error: HTTP {(int)httpResponse.StatusCode} — {body}", isError: true);
             }
 
-            return BuildToolResult(id, toolName == "update_memory" ? WithUncheckedVersionNotice(arguments, body) : body);
+            return BuildToolResult(id, toolName switch {
+                "update_memory" => WithUncheckedVersionNotice(arguments, body),
+                "save_memory"   => WithLogFormNotice(arguments, body),
+                _               => body
+            });
         } catch (ArgumentException ex) {
             return BuildToolResult(id, $"Error: {ex.Message}", isError: true);
         } catch (HttpRequestException ex) {
@@ -173,10 +185,43 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         return $"{body}\nNote: this server does not support expected_version, so the update was applied without checking for concurrent changes.";
     }
 
+    /// <summary>A server that predates logs ignores <c>form</c> and saves an ordinary memory; its answer names no form.</summary>
+    internal static string WithLogFormNotice(JsonObject? args, string body) {
+        if (args?["form"]?.GetValue<string>() != "log") return body;
+
+        try {
+            if (JsonNode.Parse(body) is JsonObject { } answer && answer["memory"]?["form"] is not null) return body;
+        } catch (JsonException) { }
+
+        return $"{body}\nNote: this server does not support log memories, so it treats form: \"log\" as an ordinary memory and append_memory_entry will not work on it.";
+    }
+
+    static readonly HashSet<string> EntryTools =
+        new(StringComparer.Ordinal) { "append_memory_entry", "settle_memory_entry", "reopen_memory_entry", "list_memory_entries" };
+
+    const string LogsUnsupportedMessage =
+        "Error: this server does not support log memories — the entry tools need a newer kcap server.";
+
+    /// <summary>Every 404 the entry routes answer is a problem naming what was not found in <c>detail</c>. A server
+    /// without those routes answers an empty body or a bare status problem.</summary>
+    static bool NamesWhatWasNotFound(string body) {
+        try {
+            return JsonNode.Parse(body) is JsonObject answer
+                && answer["detail"] is JsonValue detail && detail.TryGetValue<string>(out var text) && text.Length > 0;
+        } catch (JsonException) {
+            return false;
+        }
+    }
+
     static StringContent ToJsonContent(JsonObject body) => new(body.ToJsonString(), Encoding.UTF8, "application/json");
 
-    static string Id(JsonObject? args) =>
-        args?["id"]?.GetValue<string>() is { Length: > 0 } id ? id : throw new ArgumentException("id is required");
+    static string Id(JsonObject? args) => Required(args, "id");
+
+    static string Required(JsonObject? args, string name) =>
+        args?[name]?.GetValue<string>() is { } v && !string.IsNullOrWhiteSpace(v) ? v : throw new ArgumentException($"{name} is required");
+
+    static string EntryUrl(string baseUrl, JsonObject? args) =>
+        $"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(args))}/entries/{Uri.EscapeDataString(Required(args, "entry_id"))}";
 
     internal static string BuildSearchUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) {
         var q = args?["query"]?.GetValue<string>();
@@ -190,17 +235,45 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         return $"{baseUrl}/api/memories/search?{string.Join("&", qs)}";
     }
 
-    internal static string BuildGetUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) {
-        var idOrSlug = args?["id_or_slug"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(idOrSlug)) throw new ArgumentException("id_or_slug is required");
+    internal static string BuildGetUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) =>
+        ResolvedMemoryUrl(baseUrl, args, "", cwdRepoHash, machineId);
+
+    static string BuildAppendUrl(string baseUrl, JsonObject? args, string? cwdRepoHash, string? machineId) =>
+        ResolvedMemoryUrl(baseUrl, args, "/entries", cwdRepoHash, machineId);
+
+    // A slug resolves against the caller's repo and machine, so a route that takes one carries both.
+    static string ResolvedMemoryUrl(string baseUrl, JsonObject? args, string suffix, string? cwdRepoHash, string? machineId) {
+        var idOrSlug = Required(args, "id_or_slug");
 
         var qs = new List<string>();
         if (cwdRepoHash is not null) qs.Add($"repo={Uri.EscapeDataString(cwdRepoHash)}");
         if (machineId is not null) qs.Add($"machine={Uri.EscapeDataString(machineId)}");
 
-        var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(idOrSlug)}";
+        var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(idOrSlug)}{suffix}";
         return qs.Count == 0 ? url : $"{url}?{string.Join("&", qs)}";
     }
+
+    static string BuildListEntriesUrl(string baseUrl, JsonObject? args) {
+        var qs = new List<string>();
+        if (args?["status"]?.GetValue<string>() is { Length: > 0 } status) qs.Add($"status={Uri.EscapeDataString(status)}");
+        if (args?["before"]?.GetValue<string>() is { Length: > 0 } before) qs.Add($"before={Uri.EscapeDataString(before)}");
+        if (TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
+
+        var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(args))}/entries";
+        return qs.Count == 0 ? url : $"{url}?{string.Join("&", qs)}";
+    }
+
+    static JsonObject BuildAppendBody(JsonObject? args) => new() {
+        ["title"]             = Required(args, "title"),
+        ["body"]              = Required(args, "body"),
+        ["idempotency_key"]   = args?["idempotency_key"]?.GetValue<string>(),
+        ["source_session_id"] = null,
+        ["harness"]           = "mcp"
+    };
+
+    static JsonObject BuildSettleBody(JsonObject? args) => new() {
+        ["resolution"] = args?["resolution"]?.GetValue<string>()
+    };
 
     // NOTE: request bodies use snake_case keys (repo_hash, machine_tag, source_session_id) —
     // the server's global JSON policy is JsonNamingPolicy.SnakeCaseLower.
@@ -244,7 +317,8 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             ["machine_tag"]       = machineSpecific ? machineId : null,
             ["machine_context"]   = machineId,
             ["source_session_id"] = null,
-            ["harness"]           = "mcp"
+            ["harness"]           = "mcp",
+            ["form"]              = args?["form"]?.GetValue<string>()
         };
     }
 
@@ -252,7 +326,8 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         ["description"]      = args?["description"]?.GetValue<string>(),
         ["content"]          = args?["content"]?.GetValue<string>(),
         ["kind"]             = args?["kind"]?.GetValue<string>(),
-        ["expected_version"] = args?["expected_version"]?.GetValue<string>()
+        ["expected_version"] = args?["expected_version"]?.GetValue<string>(),
+        ["header"]           = args?["header"]?.GetValue<string>()
     };
 
     internal static JsonObject BuildRescopeBody(JsonObject? args) {
@@ -378,18 +453,19 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["limit"] = new("number", "Max results (default 10, max 50).")
             }, ["query"]), McpToolAnnotations.Read),
         new("get_memory",
-            "Fetch a memory's full content by id or slug. Slug resolution precedence: your memories, then your teams', then org-wide; repo-scoped before global. The result's version is what update_memory takes as expected_version.",
+            "Fetch a memory's full content by id or slug. Slug resolution precedence: your memories, then your teams', then org-wide; repo-scoped before global. The result's version is what update_memory takes as expected_version. On a log (form: 'log'), content is its header and entries holds its open entries, newest first, then recently settled ones; open_next and settled_next, when present, continue them through list_memory_entries.",
             new("object", new() {
                 ["id_or_slug"] = new("string", "Memory id (32 hex) or slug.")
             }, ["id_or_slug"]), McpToolAnnotations.Read),
         new("save_memory",
-            "Save a durable learning to the server. Two orthogonal axes. PEOPLE (audience — who can see + edit): 'user' (private), 'team', 'org' (everyone), or 'project' (that project's members — pass audience_project). PLACE (where it surfaces): the cwd's repo by default; a project with project: '<slug>' (surfaces across that project's repos — use it for learnings that span repos instead of saving them org-wide); or the whole org with global: true. project wins over the repo. If the current repo can't be resolved, pass project or global: true, or the save fails. Prefer update_memory when the result reports a nearDuplicate.",
+            "Save a durable learning to the server. Two orthogonal axes. PEOPLE (audience — who can see + edit): 'user' (private), 'team', 'org' (everyone), or 'project' (that project's members — pass audience_project). PLACE (where it surfaces): the cwd's repo by default; a project with project: '<slug>' (surfaces across that project's repos — use it for learnings that span repos instead of saving them org-wide); or the whole org with global: true. project wins over the repo. If the current repo can't be resolved, pass project or global: true, or the save fails. Prefer update_memory when the result reports a nearDuplicate. For an inbox, a decision log or anything else that grows by items, save a log with form: 'log' and add the items with append_memory_entry.",
             new("object", new() {
                 ["audience"]         = new("string", "user | team | org | project"),
                 ["slug"]             = new("string", "kebab-case identifier, unique within the audience+place pool"),
                 ["description"]      = new("string", "One-line summary (max 300 chars)"),
-                ["content"]          = new("string", "Full memory body (max 64 KiB)"),
+                ["content"]          = new("string", "Full memory body (max 64 KiB); for a log, its header: what the log is for and how to use it (max 8 KiB)"),
                 ["kind"]             = new("string", "preference | feedback | project | reference"),
+                ["form"]             = new("string", "document (default) | log. A log holds entries appended with append_memory_entry instead of one body; fixed for the memory's life"),
                 ["team"]             = new("string", "Team name or id — required for audience 'team' if you are in several teams"),
                 ["audience_project"] = new("string", "Project slug — the PEOPLE axis: required for audience 'project'; that project's members become editors (you must be a member). Distinct from 'project' below"),
                 ["project"]          = new("string", "Project slug — the PLACE axis: homes the memory at that project so it surfaces across the project's repos (wins over the cwd repo; no membership needed). Distinct from 'audience_project' above"),
@@ -397,11 +473,12 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 ["machine_specific"] = new("boolean", "true = only relevant on this machine (user audience only)")
             }, ["audience", "slug", "description", "content", "kind"]), McpToolAnnotations.Additive),
         new("update_memory",
-            "Update an existing memory's description/content/kind (any subset). Content replaces the whole body, so build it from a fresh get_memory and pass that result's version as expected_version: if anyone changed the memory since, nothing is written and the 409 carries the current version and body — merge your change into that body and retry with its version (a 409 without them means call get_memory again first). Omitting expected_version overwrites whatever is there.",
+            "Update an existing memory's description/content/kind (any subset). Content replaces the whole body, so build it from a fresh get_memory and pass that result's version as expected_version: if anyone changed the memory since, nothing is written and the 409 carries the current version and body — merge your change into that body and retry with its version (a 409 without them means call get_memory again first). Omitting expected_version overwrites whatever is there. On a log, content is refused: add to it with append_memory_entry, and change its header with header.",
             new("object", new() {
                 ["id"]               = new("string", "Memory id"),
                 ["description"]      = new("string", "New one-line summary"),
-                ["content"]          = new("string", "New body"),
+                ["content"]          = new("string", "New body (a document only)"),
+                ["header"]           = new("string", "New header (a log only, max 8 KiB)"),
                 ["kind"]             = new("string", "preference | feedback | project | reference"),
                 ["expected_version"] = new("string", "The version get_memory returned; the update is refused if the memory changed since")
             }, ["id"]), McpToolAnnotations.Destructive),
@@ -418,6 +495,35 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
             }, ["id"]), McpToolAnnotations.Destructive),
         new("archive_memory",
             "Archive (soft-delete) a memory.",
-            new("object", new() { ["id"] = new("string", "Memory id") }, ["id"]), McpToolAnnotations.Destructive)
+            new("object", new() { ["id"] = new("string", "Memory id") }, ["id"]), McpToolAnnotations.Destructive),
+        new("append_memory_entry",
+            "Append one entry to a log memory (saved with form: 'log'). An append rewrites nothing and never conflicts with another writer, so for an inbox or anything else that grows by items, append here rather than update_memory. If a document memory is being used that way, suggest moving it to a log: archive it, save a log under the same slug with a short header, and append each open item. The entry stays open until settle_memory_entry. Pass an idempotency_key whenever you might retry: a retry with the same key returns the entry the first call appended instead of adding another.",
+            new("object", new() {
+                ["id_or_slug"]      = new("string", "The log's id (32 hex) or slug"),
+                ["title"]           = new("string", "One line (max 200 chars)"),
+                ["body"]            = new("string", "The entry (max 16 KiB)"),
+                ["idempotency_key"] = new("string", "Any string unique to this entry; the same key on a retry appends nothing new")
+            }, ["id_or_slug", "title", "body"]), McpToolAnnotations.Additive),
+        new("settle_memory_entry",
+            "Mark a log entry dealt with. Any editor of the log may settle any entry. Entries are never edited: to correct one, append a new entry and settle the old. Settling a settled entry changes nothing (changed: false).",
+            new("object", new() {
+                ["id"]         = new("string", "The log's memory id"),
+                ["entry_id"]   = new("string", "Entry id"),
+                ["resolution"] = new("string", "One line on how it was dealt with (max 300 chars)")
+            }, ["id", "entry_id"]), McpToolAnnotations.Upsert),
+        new("reopen_memory_entry",
+            "Reopen a settled log entry. Refused when the log already has 200 open entries, and after the entry's tenth reopen. Reopening an open entry changes nothing (changed: false).",
+            new("object", new() {
+                ["id"]       = new("string", "The log's memory id"),
+                ["entry_id"] = new("string", "Entry id")
+            }, ["id", "entry_id"]), McpToolAnnotations.Upsert),
+        new("list_memory_entries",
+            "Page through a log's entries of one status, newest first. get_memory already shows the open entries and recently settled ones; to read past them, pass its open_next (status open) or settled_next (status settled) as before, then each page's next_before. An entry whose body is null was cut to keep the answer bounded; a smaller limit returns it whole.",
+            new("object", new() {
+                ["id"]     = new("string", "The log's memory id"),
+                ["status"] = new("string", "open (default) | settled"),
+                ["before"] = new("string", "Cursor from get_memory's open_next / settled_next or a page's next_before"),
+                ["limit"]  = new("number", "Page size (default 20, max 50)")
+            }, ["id"]), McpToolAnnotations.Read)
     ];
 }

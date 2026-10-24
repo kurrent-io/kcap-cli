@@ -13,7 +13,8 @@ Subcommands:
                           review flows, and start separate hosted agents,
                           from within an agent session.
   memory                  Start the MCP memory server (stdio) — team memory
-                          tools (search, get, save, update, rescope, archive).
+                          tools (search, get, save, update, rescope, archive,
+                          and the log-entry tools).
   workitems               Start the MCP workitems server (stdio) — declare and
                           list a session's work-item attachments and structure.
   plans                   Start the MCP plans server (stdio) — declare the plan
@@ -110,11 +111,22 @@ mcp flows:
   flow guidance.
 
 mcp memory:
-  Exposes six tools — search_memories, get_memory, save_memory, update_memory,
-  rescope_memory, archive_memory — for agents to access team memories. Memories
-  have an audience (user/team/org/project members) and a home (the cwd repo, a
-  project, or the org), with optional machine context. Agents should search
-  before saving to avoid duplication. Requires `kcap login`.
+  Exposes ten tools — search_memories, get_memory, save_memory, update_memory,
+  rescope_memory, archive_memory, append_memory_entry, settle_memory_entry,
+  reopen_memory_entry, list_memory_entries — for agents to access team
+  memories. Memories have an audience (user/team/org/project members) and a
+  home (the cwd repo, a project, or the org), with optional machine context.
+  Agents should search before saving to avoid duplication. Requires
+  `kcap login`.
+
+  A memory saved with `form: "log"` is a log: its content is a short header,
+  and it grows by entries appended with append_memory_entry (a title and a body
+  of up to 16 KiB each), which any editor settles or reopens instead of
+  editing. get_memory on a log returns a bounded window of open and recently
+  settled entries; list_memory_entries pages past it. update_memory changes a
+  log's header with `header`; its `content` is refused. A server that predates
+  logs saves `form: "log"` as an ordinary memory, and the entry tools say it
+  does not support logs.
 
   `kcap setup` auto-registers `kcap-memory` for both Claude Code (plugin
   `.mcp.json`) and Codex CLI (`~/.codex/config.toml`), same as sessions/review,
