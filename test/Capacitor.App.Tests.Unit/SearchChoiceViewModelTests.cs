@@ -12,33 +12,64 @@ namespace Capacitor.App.Tests.Unit;
 public class SearchChoiceViewModelTests {
     [Test]
     public async Task Keyword_search_does_not_require_a_valid_model_and_preserves_the_custom_choice() {
-        var vm = new SearchChoiceViewModel { UseMeaning = true, UseOther = true, OtherModel = "bad model" };
+        var vm = new SearchChoiceViewModel { UseOllama = true, UseOther = true, OtherModel = "bad model" };
         await Assert.That(vm.Valid).IsFalse();
         vm.UseKeyword = true;
         await Assert.That(vm.Valid).IsTrue();
         await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.KeywordOnly);
         vm.OtherModel = "nomic-embed-text";
-        vm.UseMeaning = true;
+        vm.UseOllama = true;
         await Assert.That(vm.Choice.Model).IsEqualTo("nomic-embed-text");
     }
 
     [Test]
-    public async Task A_fresh_choice_follows_whether_ollama_is_running() {
+    public async Task A_fresh_choice_recommends_ollama_when_it_runs_and_the_builtin_model_otherwise_without_a_flag() {
         await AvaloniaSession.DispatchAsync(async () => {
             var running = false;
             var vm = new SearchChoiceViewModel(_ => Task.FromResult(running), () => false);
             vm.Prefill(null);
             await vm.CheckOllamaCommand.Execute().ToTask();
-            await Assert.That(vm.UseKeyword).IsTrue();
-            await Assert.That(vm.MeaningEnabled).IsFalse();
+            await Assert.That(vm.UseBuiltin).IsTrue();
+            await Assert.That(vm.OllamaEnabled).IsFalse();
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(ollama: false));
+            await Assert.That(vm.Choice.Args).IsEmpty();
 
             running = true;
             await vm.CheckOllamaCommand.Execute().ToTask();
-            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Default);
+            await Assert.That(vm.UseOllama).IsTrue();
+            await Assert.That(vm.Choice).IsEqualTo(LocalEmbeddingChoice.Recommended(ollama: true));
+            await Assert.That(vm.Choice.Args).IsEmpty();
             await Assert.That(vm.ModelChoiceVisible).IsTrue();
             await Assert.That(vm.OllamaStatus).IsNull();
             return true;
         });
+    }
+
+    [Test]
+    public async Task Picking_the_builtin_model_or_loading_it_as_recorded_names_it_with_its_flag() {
+        await AvaloniaSession.DispatchAsync(async () => {
+            var picked = new SearchChoiceViewModel(_ => Task.FromResult(true), () => true);
+            picked.Prefill(null);
+            await picked.CheckOllamaCommand.Execute().ToTask();
+            picked.UseBuiltin = true;
+            await picked.CheckOllamaCommand.Execute().ToTask();
+            await Assert.That(picked.Choice).IsEqualTo(LocalEmbeddingChoice.Builtin);
+            await Assert.That(picked.Choice.Args).IsEquivalentTo(["--builtin-embeddings"]);
+
+            var recorded = new SearchChoiceViewModel(_ => Task.FromResult(true), () => true);
+            recorded.Prefill(LocalEmbeddingSetting.Builtin(new string('a', 64)));
+            await recorded.CheckOllamaCommand.Execute().ToTask();
+            await Assert.That(recorded.UseBuiltin).IsTrue();
+            await Assert.That(recorded.Choice).IsEqualTo(LocalEmbeddingChoice.Builtin);
+            return true;
+        });
+    }
+
+    /// Both downloads name their size before anything is fetched.
+    [Test]
+    public async Task Each_search_by_meaning_option_names_its_download_size() {
+        await Assert.That(SearchChoiceViewModel.BuiltinDetail).Contains("(about 320 MB)");
+        await Assert.That(SearchChoiceViewModel.DefaultLabel).Contains("(about 670 MB)");
     }
 
     /// Installed-but-stopped needs a different action from not installed.
@@ -83,12 +114,12 @@ public class SearchChoiceViewModelTests {
             await Assert.That(model.Choice.Model).IsEqualTo("nomic-embed-text");
 
             var recorded = new SearchChoiceViewModel(_ => Task.FromResult(false), () => false);
-            recorded.Prefill(new LocalEmbeddingSetting("nomic-embed-text"));
+            recorded.Prefill(LocalEmbeddingSetting.Ollama("nomic-embed-text"));
             await recorded.CheckOllamaCommand.Execute().ToTask();
             await Assert.That(recorded.Choice.Model).IsEqualTo("nomic-embed-text");
             // Switching away from a recorded model while Ollama is stopped can still be undone.
             recorded.UseKeyword = true;
-            await Assert.That(recorded.MeaningEnabled).IsTrue();
+            await Assert.That(recorded.OllamaEnabled).IsTrue();
             return true;
         });
     }
@@ -108,13 +139,13 @@ public class SearchChoiceViewModelTests {
                 firstView.FindControl<RadioButton>("SearchKeywordOption")!.IsChecked = true;
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(first.UseKeyword).IsTrue();
-                await Assert.That(second.UseMeaning).IsTrue();
+                await Assert.That(second.UseOllama).IsTrue();
                 secondView.FindControl<RadioButton>("SearchOtherOption")!.IsChecked = true;
                 second.OtherModel = "nomic-embed-text";
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(first.Choice).IsEqualTo(LocalEmbeddingChoice.KeywordOnly);
                 await Assert.That(second.Choice.Model).IsEqualTo("nomic-embed-text");
-                firstView.FindControl<RadioButton>("SearchMeaningOption")!.IsChecked = true;
+                firstView.FindControl<RadioButton>("SearchOllamaOption")!.IsChecked = true;
                 Dispatcher.UIThread.RunJobs();
                 await Assert.That(first.Choice).IsEqualTo(LocalEmbeddingChoice.Default);
             } finally {
@@ -143,7 +174,7 @@ public class SearchChoiceViewModelTests {
                 window.Activate();
                 Dispatcher.UIThread.RunJobs();
                 await Task.Yield();
-                return vm.UseMeaning;
+                return vm.UseOllama;
             } finally {
                 other.Close();
                 window.Close();

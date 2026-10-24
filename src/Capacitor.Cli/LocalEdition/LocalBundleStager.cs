@@ -11,9 +11,14 @@ sealed class LocalBundleStager(LocalRoot root, LocalBundleClient bundles, ECDsa 
 
     string Bin => LocalBin.Directory(root);
 
+    /// <summary>Fetches model sets from the publication this stager stages from.</summary>
+    public LocalModelSetDownloader ModelSets() => new(root, bundles);
+
     /// <summary>Durable before it returns. A <c>bin/&lt;version&gt;</c> left by an earlier attempt is replaced, so the
     /// caller must never stage the version <c>bin/current</c> points at.</summary>
-    public async Task<string> StageAsync(string version, string stagingName, IProgress<LocalInstallEvent> progress, CancellationToken ct) {
+    /// <returns>The version directory, and the verified manifest it was staged from.</returns>
+    public async Task<(string VersionDirectory, LocalBundleManifest Manifest)> StageAsync(string version, string stagingName,
+        IProgress<LocalInstallEvent> progress, CancellationToken ct) {
         var staging = LocalBin.StagingDir(root, stagingName);
         var rid     = platform.Rid;
 
@@ -53,6 +58,6 @@ sealed class LocalBundleStager(LocalRoot root, LocalBundleClient bundles, ECDsa 
 
         progress.Report(new LocalInstallEvent.Unpacked(versionDir));
 
-        return versionDir;
+        return (versionDir, manifest);
     }
 }

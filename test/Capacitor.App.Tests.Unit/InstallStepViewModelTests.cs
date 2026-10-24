@@ -402,7 +402,7 @@ public class InstallStepViewModelTests {
         var (other, model) = await AvaloniaSession.DispatchAsync(async () => {
             var install = new InstallStepViewModel(
                 Controller(cli, LocalSetupScript.NoSetup(Config), Probe()), () => "default", () => "default", () => true,
-                () => new LocalEmbeddingSetting("nomic-embed-text"));
+                () => LocalEmbeddingSetting.Ollama("nomic-embed-text"));
             await EnterAndInstallAsync(install);
             await install.TryAgainCommand.Execute().ToTask();
 
@@ -486,7 +486,7 @@ public class InstallStepViewModelTests {
         var (canInstall, error) = await AvaloniaSession.DispatchAsync(async () => {
             var install = Step(Controller(cli, LocalSetupScript.NoSetup(Config), Probe()));
             await install.OnEnterAsync(CancellationToken.None);
-            install.Search.UseMeaning = true;
+            install.Search.UseOllama  = true;
             install.Search.UseOther   = true;
             install.Search.OtherModel = name;
 

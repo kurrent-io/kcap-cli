@@ -83,22 +83,25 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
     public string? StateText =>
         Running ? "setting up search"
         : !_loaded ? null
-        : _current?.Model is not null ? "search by meaning" : "keyword search";
+        : CurrentByMeaning ? "search by meaning" : "keyword search";
 
     public string? CurrentText => !_loaded ? null
-        : (_current?.Model is { } model
-            ? $"Searches by meaning with {model}."
-            : "Searches by keyword, unless an embedding provider is set in the server's own settings.")
+        : (_current switch {
+            { Model: { } model }                         => $"Searches by meaning with {model}.",
+            { Provider: LocalEmbeddingProvider.Builtin } => "Searches by meaning with the built-in model.",
+            _                                            => "Searches by keyword, unless an embedding provider is set in the server's own settings.",
+        })
         + (_current is { Pending: true } ? " The change is not applied yet." : "");
 
     public bool CanApply =>
         _loaded && !Running && !_upgrade.Running && Choice.Valid
-     && (Choice.Choice.Model != CurrentModel || _current is null or { Pending: true });
+     && (Differs(Choice.Choice) || _current is null or { Pending: true });
 
-    public string ApplyLabel => Choice.Choice.Model switch {
-        null                                  => "Use keyword search",
-        _ when CurrentModel is null           => "Turn on search by meaning",
-        _                                     => "Use this model",
+    public string ApplyLabel => Choice.Choice switch {
+        { ByMeaning: false }                         => "Use keyword search",
+        _ when !CurrentByMeaning                     => "Turn on search by meaning",
+        { Provider: LocalEmbeddingProvider.Builtin } => "Use the built-in model",
+        _                                            => "Use this model",
     };
 
     public string? FailureText => !Running && _search.Outcome is LocalInstallOutcome.Failed failed
@@ -107,7 +110,13 @@ public sealed class LocalSearchViewModel : ReactiveObject, IDisposable {
 
     public ReactiveCommand<Unit, Unit> ApplyCommand { get; }
 
-    string? CurrentModel => _current?.Model;
+    bool CurrentByMeaning => _current is { Model: not null } or { Provider: LocalEmbeddingProvider.Builtin };
+
+    bool Differs(LocalEmbeddingChoice choice) => choice.Provider switch {
+        LocalEmbeddingProvider.Builtin => _current?.Provider != LocalEmbeddingProvider.Builtin,
+        LocalEmbeddingProvider.Ollama  => _current?.Model != choice.Model,
+        _                              => CurrentByMeaning,
+    };
 
     Task ApplyAsync() => CanApply ? _search.StartAsync(Choice.Choice, _shutdown) : Task.CompletedTask;
 

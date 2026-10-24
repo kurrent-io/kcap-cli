@@ -7,7 +7,10 @@ public enum LocalEmbeddingSkipCode {
     OllamaNotFound,
     PullFailed,
     ModelUnusable,
-    WriteFailed
+    WriteFailed,
+    UnrecognisedProvider,
+    BuiltinUnavailable,
+    ModelDownloadFailed
 }
 
 public static class LocalEmbeddingSkipCodeExtensions {
@@ -18,6 +21,9 @@ public static class LocalEmbeddingSkipCodeExtensions {
         LocalEmbeddingSkipCode.PullFailed     => "pull_failed",
         LocalEmbeddingSkipCode.ModelUnusable  => "model_unusable",
         LocalEmbeddingSkipCode.WriteFailed    => "write_failed",
+        LocalEmbeddingSkipCode.UnrecognisedProvider => "unrecognised_provider",
+        LocalEmbeddingSkipCode.BuiltinUnavailable   => "builtin_unavailable",
+        LocalEmbeddingSkipCode.ModelDownloadFailed  => "model_download_failed",
         _                                     => throw new ArgumentOutOfRangeException(nameof(code), code, null)
     };
 }

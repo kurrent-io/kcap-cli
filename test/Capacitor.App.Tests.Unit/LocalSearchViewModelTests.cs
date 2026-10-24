@@ -47,7 +47,7 @@ public class LocalSearchViewModelTests {
     public async Task The_rail_names_how_the_server_searches() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var keyword = new Harness(null);
-            using var meaning = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+            using var meaning = new Harness(LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
             await Assert.That(keyword.Vm.StateText).IsEqualTo("keyword search");
             await Assert.That(meaning.Vm.StateText).IsEqualTo("search by meaning");
@@ -58,7 +58,7 @@ public class LocalSearchViewModelTests {
     [Test]
     public async Task The_recorded_choice_cannot_be_applied_again() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var h = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+            using var h = new Harness(LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
             await Assert.That(h.Vm.Choice.UseDefault).IsTrue();
             await Assert.That(h.Vm.CanApply).IsFalse();
@@ -71,13 +71,28 @@ public class LocalSearchViewModelTests {
     }
 
     [Test]
+    public async Task A_recorded_builtin_model_reads_as_search_by_meaning_and_only_a_change_applies() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var h = new Harness(LocalEmbeddingSetting.Builtin(new string('a', 64)));
+
+            await Assert.That(h.Vm.StateText).IsEqualTo("search by meaning");
+            await Assert.That(h.Vm.CurrentText).IsEqualTo("Searches by meaning with the built-in model.");
+            await Assert.That(h.Vm.CanApply).IsFalse();
+
+            h.Vm.Choice.UseKeyword = true;
+
+            await Assert.That(h.Vm.CanApply).IsTrue();
+        });
+    }
+
+    [Test]
     public async Task Turning_search_by_meaning_on_reruns_setup_with_the_model_and_reconnects() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var h = new Harness(LocalEmbeddingSetting.Declined);
-            h.Vm.Choice.UseMeaning = true;
+            h.Vm.Choice.UseOllama = true;
             await Assert.That(h.Vm.ApplyLabel).IsEqualTo("Turn on search by meaning");
 
-            h.Setting = new LocalEmbeddingSetting("mxbai-embed-large");
+            h.Setting = LocalEmbeddingSetting.Ollama("mxbai-embed-large");
             await h.ApplyAsync(0,
                 "{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"ollama\",\"model\":\"mxbai-embed-large\"}",
                 Reused, LocalSetupScript.Committed);
@@ -144,7 +159,7 @@ public class LocalSearchViewModelTests {
     [Test]
     public async Task A_reconnect_rereads_a_setting_changed_elsewhere() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
-            using var h = new Harness(new LocalEmbeddingSetting("mxbai-embed-large"));
+            using var h = new Harness(LocalEmbeddingSetting.Ollama("mxbai-embed-large"));
 
             h.Setting = LocalEmbeddingSetting.Declined;
             h.Status.OnNext(new(ServerLaneState.Retrying, "Connection refused"));

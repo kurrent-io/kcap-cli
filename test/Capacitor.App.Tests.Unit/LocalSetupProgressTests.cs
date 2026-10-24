@@ -137,6 +137,26 @@ public class LocalSetupProgressTests {
     }
 
     [Test]
+    public async Task A_builtin_download_runs_the_search_row_and_ends_in_the_builtin_model() {
+        var p = Run(
+            "{\"v\":1,\"event\":\"embeddings_builtin_downloading\",\"bytes\":336592896}");
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Running);
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading the built-in search model (321 MB)…");
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"embeddings_builtin_progress\",\"received\":84148224,\"bytes\":336592896}")!);
+
+        await Assert.That(p.Embeddings.PullText).IsEqualTo("Downloading the built-in search model (321 MB)… 25%");
+
+        p.Apply(LocalSetupLine.Parse("{\"v\":1,\"event\":\"embeddings_configured\",\"provider\":\"builtin\"}")!);
+
+        await Assert.That(p.Embeddings.Row.State).IsEqualTo(RowState.Done);
+        await Assert.That(p.Embeddings.Configured).IsTrue();
+        await Assert.That(p.Embeddings.Summary).IsEqualTo("Search by meaning with the built-in model.");
+        await Assert.That(p.Embeddings.ReembedNote).IsEqualTo("The search index for saved information is being built with the built-in model in the background.");
+    }
+
+    [Test]
     public async Task A_configured_model_ends_in_search_by_meaning_and_names_a_replaced_one() {
         var p = Run(
             "{\"v\":1,\"event\":\"embeddings_model_ready\",\"model\":\"nomic-embed-text\",\"dimensions\":768}",

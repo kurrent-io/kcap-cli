@@ -140,7 +140,7 @@ sealed class LocalInstaller(
             await StageAsync(details, ct);
             // Before the unit is written, so the first start already has the model; a rollback deletes it with data/.
             var previous = LocalEmbeddingFile.Read(root);
-            var setting  = await DecideEmbeddingsAsync(answers, ct);
+            var setting  = await DecideEmbeddingsAsync(answers, new LocalModelSetDownloader(root, bundles), ct);
             var recorded = setting is not null && LocalEmbeddingStep.Record(root, setting, _progress);
 
             entry = lease.Advance(entry, LocalSetupJournal.Unit, ServerStart.Fenced);
@@ -199,8 +199,8 @@ sealed class LocalInstaller(
 
     /// <summary>Takes over the unit lock. No port is taken and no journal is written: the profile is published only
     /// once the installation's own server answers unfenced. No bundle is downloaded unless an uninstall removed the
-    /// binaries; then the installed version is staged again over the data it kept. A changed embedding model rewrites
-    /// the unit, which restarts the server.</summary>
+    /// binaries; then the installed version is staged again over the data it kept. A changed embedding setting, or a
+    /// built-in model set put back, rewrites the unit, which restarts the server.</summary>
     async Task<LocalInstallEvent.Committed> ReuseAsync(LocalInstallation existing, LocalUnitLock unitLock, LocalInstallAnswers answers,
         CancellationToken ct) {
         var unit    = LocalServerUnit.ForInstallation(root, existing.Port);
@@ -251,7 +251,8 @@ sealed class LocalInstaller(
 
     /// <summary>Brings the recorded embedding setting and the unit together. The setting is marked pending before the
     /// unit changes and cleared after, so a setup that stops anywhere in between rewrites the unit next time; a refused
-    /// rewrite restores what was recorded before.</summary>
+    /// rewrite restores what was recorded before. A built-in model set fetched for an unchanged setting is a repair: the
+    /// server loads the model only once, so the unit is rewritten to restart it.</summary>
     /// <returns>The unit as installed.</returns>
     async Task<LocalServerUnit> ReuseEmbeddingsAsync(LocalServerUnit unit, LocalInstallAnswers answers, Func<LocalInstallFailure> notOurs,
         CancellationToken ct) {
@@ -260,16 +261,17 @@ sealed class LocalInstaller(
         if (owner is not { Loaded: OwnerReading.Absent, OnDisk: OwnerReading.Absent } && LocalRootIdentity.Decide(root, owner) != OwnerDecision.Ours)
             throw notOurs();
 
+        var models   = new LocalModelSetDownloader(root, bundles);
         var previous = LocalEmbeddingFile.Read(root);
-        var target   = await DecideEmbeddingsAsync(answers, ct) ?? (previous is { Pending: true } ? previous with { Pending = false } : null);
-        var rewrite  = target is not null && (previous is { Pending: true } || target.Model != unit.EmbeddingModel);
+        var target   = await DecideEmbeddingsAsync(answers, models, ct) ?? (previous is { Pending: true } ? previous with { Pending = false } : null);
+        var rewrite  = target is not null && (previous is { Pending: true } || !unit.Serves(target));
 
         if (rewrite && !LocalEmbeddingStep.Record(root, target! with { Pending = true }, _progress)) (rewrite, target) = (false, null);
 
-        if (rewrite) unit = unit with { EmbeddingModel = target!.Model };
+        if (rewrite) unit = unit with { Embedding = target };
 
         try {
-            LocalOwnUnit.Ensure(root, unit, service, notOurs, startPresent: true, replace: rewrite);
+            LocalOwnUnit.Ensure(root, unit, service, notOurs, startPresent: true, replace: rewrite || models.Fetched);
         } catch (LocalInstallFailure refused) when (rewrite) {
             try {
                 LocalEmbeddingStep.Restore(root, previous);
@@ -291,11 +293,32 @@ sealed class LocalInstaller(
     }
 
     /// <returns>The embedding setting to record, or null when the recorded one stands.</returns>
-    async Task<LocalEmbeddingSetting?> DecideEmbeddingsAsync(LocalInstallAnswers answers, CancellationToken ct) =>
+    async Task<LocalEmbeddingSetting?> DecideEmbeddingsAsync(LocalInstallAnswers answers, LocalModelSetDownloader models, CancellationToken ct) =>
         answers.Embeddings is { } answer
             ? await LocalEmbeddingStep.DecideAsync(root, answer,
-                Ollama ?? throw new InvalidOperationException("An embedding answer needs an Ollama client."), _progress, ct)
+                Ollama ?? throw new InvalidOperationException("An embedding answer needs an Ollama client."),
+                models, answers.BuiltinModel, _progress, ct)
             : null;
+
+    /// <summary>The built-in model set <paramref name="version"/>'s signed manifest names. No lease, no writes.</summary>
+    /// <returns>Null when the manifest names none, or cannot be fetched or verified: built-in is then not offered.</returns>
+    /// <exception cref="LocalInstallFailure"><paramref name="version"/> is not a release version, as the install refuses it.</exception>
+    public async Task<LocalEmbeddingModelManifest?> FetchEmbeddingManifestAsync(string version, CancellationToken ct) {
+        try {
+            byte[] bytes;
+            string signature;
+
+            try {
+                (bytes, signature) = await bundles.FetchManifestAsync(version, platform.Rid, ct);
+            } catch (ArgumentException ex) {
+                throw new LocalInstallFailure(LocalInstallFailureCode.InvalidArguments, ex.Message);
+            }
+
+            return LocalBundleManifest.Verify(bytes, signature, manifestKey, version, platform.Rid).EmbeddingModel;
+        } catch (LocalBundleException) {
+            return null;
+        }
+    }
 
     /// <summary>Stages the bundle, then points <c>bin/current</c> at it. Every step is durable before the journal can
     /// say <c>unit</c>.</summary>

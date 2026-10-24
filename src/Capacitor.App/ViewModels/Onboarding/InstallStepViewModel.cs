@@ -179,9 +179,10 @@ public sealed class InstallStepViewModel : ReactiveObject, IWizardStep {
     }
 
     static LocalEmbeddingChoice? Known(LocalEmbeddingSetting? recorded) => recorded switch {
-        null              => null,
-        { Model: null }   => LocalEmbeddingChoice.KeywordOnly,
-        { Model: { } m }  => new LocalEmbeddingChoice(m),
+        null                                         => null,
+        { Provider: LocalEmbeddingProvider.Builtin } => LocalEmbeddingChoice.Builtin,
+        { Model: null }                              => LocalEmbeddingChoice.KeywordOnly,
+        { Model: { } m }                             => new LocalEmbeddingChoice(m),
     };
 
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {

@@ -233,6 +233,7 @@ kcap setup --discover [--json]               # report workspaces only, configure
 kcap setup --org "Acme" --slug acme --no-prompt   # create a workspace, unattended
 kcap setup --local                           # run a kcap server on this machine
 kcap setup --local --embedding-model <model> # …embedding with this Ollama model
+kcap setup --local --builtin-embeddings      # …embedding with the built-in model
 kcap local uninstall [--purge]               # remove it, keeping (or deleting) its data
 ```
 
@@ -313,18 +314,18 @@ everyone:
 
 The first version is for a machine with one user: on a shared machine, other OS users can open the web UI and act as its admin. Setup therefore asks you to confirm that (`--single-user`) and to confirm the install itself (`--yes`); `--no-prompt` and `--json` cannot ask, so they require both for an install. Re-running `kcap setup --local` reuses the existing installation, which needs no confirmation beyond `--single-user`.
 
-**Search by meaning.** Finds related information saved in kcap even when your query uses different words. Keyword search matches words and needs no AI model. kcap does not install Ollama: install and start it separately to enable search by meaning. When [Ollama](https://ollama.com) is running on `http://localhost:11434`, setup offers it as the server's embedding provider, suggesting `mxbai-embed-large` (1024 dimensions, about 670 MB). It pulls the model if Ollama does not have it, checks that it embeds text, and writes the choice to `data/embedding.json` under the installation, which the server's service passes to it as `Embedding__Provider=ollama`, `Embedding__Ollama__Model` and `Embedding__Ollama__BaseUrl`. A new installation starts with it; on an existing one a changed model restarts the server. The model fixes the width of the stored vectors, so changing it later means embedding everything again, which the server does in the background.
+**Search by meaning.** Finds related information saved in kcap even when your query uses different words. Keyword search matches words and needs no AI model. Setup offers three choices: the built-in model, which setup downloads once (its size is shown first) and the local server runs itself; Ollama; or keyword search only. kcap does not install Ollama. When [Ollama](https://ollama.com) is running on `http://localhost:11434`, setup offers it as the server's embedding provider, suggesting `mxbai-embed-large` (1024 dimensions, about 670 MB). It pulls the model if Ollama does not have it, checks that it embeds text, and writes the choice to `data/embedding.json` under the installation, which the server's service passes to it as `Embedding__Provider=ollama`, `Embedding__Ollama__Model` and `Embedding__Ollama__BaseUrl`. A new installation starts with it; on an existing one a changed model restarts the server. The model fixes the width of the stored vectors, so changing it later means embedding everything again, which the server does in the background.
 
-- `--embedding-model <model>` picks the model without asking. `--no-embeddings` stops setup configuring Ollama, removing a model an earlier setup configured, and is remembered: a later setup without either flag, `--json` included, leaves search by keyword. An embedding provider set in the web UI's settings still applies.
-- `--no-prompt` asks nothing: with Ollama running and nothing recorded yet, it needs one of those two flags. A recorded model or decline is kept.
-- Without Ollama, setup carries on and search works by keyword; re-run `kcap setup --local` once Ollama runs. A failed pull or a model that cannot embed is reported the same way and never fails the install.
+- `--builtin-embeddings` picks the built-in model, `--embedding-model <model>` an Ollama model, without asking. `--no-embeddings` searches by keyword only, removing a model an earlier setup configured, and is remembered: a later setup without an embedding flag, `--json` included, leaves search by keyword. An embedding provider set in the web UI's settings still applies.
+- With no embedding flag, a recorded choice stands, and a recorded built-in model that is missing or damaged is downloaded again. With nothing recorded, setup uses Ollama when it is running and the built-in model otherwise; `--no-prompt` and `--json` take that without asking.
+- When neither is available, setup carries on and search works by keyword. A failed download or pull, or a model that cannot embed, is reported the same way and never fails the install.
 
 - A machine that already has a profile for another server is refused for now.
 - Every kcap that talks to the local server must be newer than 1.3.0, which does not keep to its rules. Setup asks the `kcap` on `PATH` and the desktop app's bundled one (in `/Applications` or `~/Applications`) for their versions, and stops if either is 1.3.0 or older, or does not report one: update it, or remove the one on `PATH`. The local server refuses an older kcap too, so its hooks and watcher record nothing there.
 - Builds of kcap for musl Linux are not supported.
 - `--local` cannot be combined with `<tenant>`, `--server-url`, `--discover`, `--org`, `--slug`, `--tier`, `--invite-code`, `--device`, `--github` or `--muse-assistant`, and is refused while `KCAP_URL` is set.
 
-`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model` and `--no-embeddings`, and uses a running Ollama with the configured model, or `mxbai-embed-large`, unless a flag says otherwise:
+`--json` without `--no-prompt` is for the desktop app. It writes one JSON object per line to stdout, ends with `committed` or `failed`, and runs only the server and login steps. (`--json --no-prompt` reports the whole run instead; see [Unattended setup](#unattended-setup).) It accepts only `--single-user`, `--yes`, `--no-update-check`, `--embedding-model`, `--no-embeddings` and `--builtin-embeddings`, and without one of the last three chooses as `--no-prompt` does. The built-in model reports `embeddings_builtin_downloading` (with `bytes`), `embeddings_builtin_progress` and `embeddings_configured` with `"provider":"builtin"` in place of the Ollama events:
 
 ```json
 {"v":1,"event":"preflight_passed","plan":"install","version":"0.13.0","root":"/Users/me/.config/kcap/local"}
@@ -396,7 +397,7 @@ kcap setup --org "Acme" --slug acme --tier team --default-visibility org_public 
 | Workspace to create (name, slug, plan, invite) | `--org`, `--slug`, `--tier`, `--invite-code` | — |
 | This machine has one user (local) | `--single-user` | required |
 | Install kcap local (local) | `--yes` | required, except to reuse an installation |
-| Ollama for search by meaning (local) | `--embedding-model <model>`, `--no-embeddings` | required while Ollama runs and nothing is recorded |
+| Search by meaning (local) | `--builtin-embeddings`, `--embedding-model <model>`, `--no-embeddings` | the recorded choice; else Ollama when it runs, the built-in model otherwise |
 | Default session visibility | `--default-visibility` | `org_public`; `private` with `--local` |
 | Install kcap for the detected agents? | `--skip-harnesses`, `--skip-<agent>-hooks` and friends | yes |
 | Let Codex's sandbox reach the server? | `--skip-codex-network-access` | yes |

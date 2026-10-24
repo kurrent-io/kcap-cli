@@ -26,6 +26,15 @@ check "size"                "6" "$(jq -r .size <<<"$out")"
 check "key id is the SPKI digest" "$(sha256_of "$tmp/k.der")" "$(jq -r .key_id <<<"$out")"
 check "deterministic"       "$out" "$(bash "$sh" 1.2.3 osx-arm64 "$tmp/dir/kcap-local-1.2.3-osx-arm64.tar.gz" "$tmp/k.pub")"
 
+model='{"model_id":"m","contract":1,"model_set":"abc","files":[{"name":"model.onnx","sha256":"d","size":3,"source_url":"https://u/x"}]}'
+check "no model, no key" "false" "$(jq 'has("embedding_model")' <<<"$out")"
+mkdir "$tmp/stage"; printf 'x' > "$tmp/stage/kcap-server"; printf '%s' "$model" > "$tmp/stage/embedding-model.json"
+tar -czf "$tmp/dir/with-model.tar.gz" -C "$tmp/stage" .
+withm="$(bash "$sh" 1.2.3 osx-arm64 "$tmp/dir/with-model.tar.gz" "$tmp/k.pub")"
+check "model carried verbatim" "$(jq -S . <<<"$model")" "$(jq -S .embedding_model <<<"$withm")"
+check "model key keeps the rest" "1" "$(jq -r .schema <<<"$withm")"
+check "deterministic with a model" "$withm" "$(bash "$sh" 1.2.3 osx-arm64 "$tmp/dir/with-model.tar.gz" "$tmp/k.pub")"
+
 set +e; bash "$sh" 1.2.3 osx-arm64 "$tmp/missing.tar.gz" "$tmp/k.pub" 2>/dev/null; rc=$?; set -e
 check "a missing archive fails" "1" "$rc"
 
