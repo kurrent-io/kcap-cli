@@ -38,7 +38,20 @@
                 <TextBlock x:Name="HistoryEmptyText" Classes="onboardingBody" Text="{Binding EmptyMessage}"
                            IsVisible="{Binding EmptyMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
 
-                <StackPanel IsVisible="{Binding HasRepos}">
+                <StackPanel Spacing="4" IsVisible="{Binding HasRepos}">
+                    <TextBlock x:Name="FoundLineText" Classes="onboardingLabel" FontSize="15" TextWrapping="Wrap" Text="{Binding FoundLine}" />
+                    <TextBlock x:Name="ImportLineText" Classes="onboardingBody" FontSize="13" TextWrapping="Wrap" Text="{Binding ImportLine}" />
+                    <Button x:Name="CustomizeButton" Classes="onboardingLink" HorizontalAlignment="Left" Margin="0,4,0,0"
+                            Command="{Binding ToggleCustomizeCommand}" AutomationProperties.Name="{Binding CustomizeLabel}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="{Binding CustomizeLabel}" VerticalAlignment="Center" />
+                            <icons:AppIcon Kind="ChevronDown" Size="14" IsVisible="{Binding !Customizing}" />
+                            <icons:AppIcon Kind="ChevronUp" Size="14" IsVisible="{Binding Customizing}" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding DetailsVisible}">
                     <Border Classes="onboardingRowRule" Padding="0,0,0,9">
                         <StackPanel Orientation="Horizontal" Spacing="14">
                             <TextBlock Classes="onboardingMicro" Text="FROM" VerticalAlignment="Center" />
@@ -119,10 +132,10 @@
                                IsVisible="{Binding UnmatchedNote, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                 </StackPanel>
 
-                <TextBlock Classes="onboardingNote" IsVisible="{Binding HasRepos}"
+                <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}"
                            Text="{Binding LevelsNote}" />
 
-                <StackPanel Spacing="8" IsVisible="{Binding HasRepos}" Margin="0,4,0,0">
+                <StackPanel Spacing="8" IsVisible="{Binding DetailsVisible}" Margin="0,4,0,0">
                     <TextBlock Classes="onboardingMicro" Text="HOW MUCH HISTORY" />
                     <ItemsControl x:Name="WindowOptions" ItemsSource="{Binding Windows}" IsEnabled="{Binding !ImportStarted}">
                         <ItemsControl.ItemsPanel>
@@ -152,22 +165,22 @@
                                   IsChecked="{Binding TitleLocally, Mode=TwoWay}" IsEnabled="{Binding !ImportStarted}"
                                   AutomationProperties.Name="Name sessions using my agent and quota" />
                         <StackPanel Grid.Column="1" Spacing="3">
-                            <TextBlock Classes="onboardingLabel" FontSize="13" Text="Name these sessions as they import" />
+                            <TextBlock Classes="onboardingLabel" FontSize="13" Text="Name sessions as they import" />
                             <TextBlock Classes="onboardingDetail" Foreground="{StaticResource OnboardingMutedBrush}"
-                                       Text="Uses your own agent and quota to generate titles. Untitled sessions stay searchable; titles make them easier to recognise." />
+                                       Text="Uses your own agent and quota" />
                         </StackPanel>
                     </Grid>
                 </Border>
 
                 <!-- Import is all this page decides; which repositories record from now on is a setting. -->
-                <TextBlock Classes="onboardingNote" IsVisible="{Binding HasRepos}">
+                <TextBlock Classes="onboardingNote" IsVisible="{Binding DetailsVisible}">
                     <Run Text="To record only some repositories from now on, set " /><Run Text="allowed_repos" FontFamily="{StaticResource OnboardingMonoFont}"
                         Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" or " /><Run Text="excluded_repos" FontFamily="{StaticResource OnboardingMonoFont}"
                         Foreground="{StaticResource OnboardingMutedBrush}" /><Run Text=" in your configuration." />
                 </TextBlock>
                 <Button x:Name="RepoSettingsDocsButton" Classes="onboardingLink" HorizontalAlignment="Left"
                         AutomationProperties.Name="Repository settings in the docs"
-                        Click="OnDocsClick" IsVisible="{Binding HasRepos}" Margin="0,-6,0,0">
+                        Click="OnDocsClick" IsVisible="{Binding DetailsVisible}" Margin="0,-6,0,0">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <TextBlock Text="Repository settings in the docs" VerticalAlignment="Center" />
                         <icons:AppIcon Kind="ArrowRight" Size="14" />

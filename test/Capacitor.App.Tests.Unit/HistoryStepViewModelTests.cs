@@ -1,3 +1,4 @@
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Capacitor.App.Services;
@@ -92,6 +93,26 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.NextLabel).IsEqualTo("Import 2 repositories");
     }
 
+    /// The page says what it found and what Next will import, and the second line follows the choices under Customize.
+    [Test]
+    public async Task The_summary_follows_the_repositories_and_window_chosen() {
+        var h = new Harness(Report());
+        await h.EnterAsync();
+        var found = h.Vm.FoundLine;
+        var byDefault = h.Vm.ImportLine;
+
+        h.Repo("acme/web").Level = ImportLevel.Skip;
+        foreach (var w in h.Vm.Windows) w.IsSelected = w.Since is null; // the pane's radio group does this
+        var narrowed = h.Vm.ImportLine;
+
+        foreach (var repo in h.Vm.Groups.SelectMany(g => g.Repos)) repo.Level = ImportLevel.Skip;
+
+        await Assert.That(found).IsEqualTo("Found 53 sessions in 3 repositories on test-mac");
+        await Assert.That(byDefault).IsEqualTo("kcap imports 27 sessions from all 3 repositories, covering the last 90 days");
+        await Assert.That(narrowed).IsEqualTo("kcap imports 13 sessions from 2 of 3 repositories, covering your whole history");
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("Nothing is selected to import");
+    }
+
     [Test]
     public async Task A_window_a_repository_did_not_report_shows_no_count_rather_than_zero() {
         var report = new ImportDiscoveryReport(
@@ -100,6 +121,7 @@ public class HistoryStepViewModelTests {
         await h.EnterAsync();
 
         await Assert.That(h.Vm.Windows.All(w => w.CountLabel is null)).IsTrue();
+        await Assert.That(h.Vm.ImportLine).IsEqualTo("kcap imports the last 90 days from the one repository");
     }
 
     /// The owner track is a bulk set; it reads a level back only when every repository agrees.
@@ -407,10 +429,11 @@ public class HistoryStepViewModelTests {
         await Assert.That(h.Vm.TitlingOffered).IsFalse();
     }
 
+    /// The tracks wait behind Customize; opening it draws one per owner and one per repository.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task The_pane_draws_a_track_per_owner_and_per_repository() {
-        var tracks = await AvaloniaSession.DispatchAsync(async () => {
+    public async Task The_pane_draws_a_track_per_owner_and_per_repository_once_customizing() {
+        var (before, after) = await AvaloniaSession.DispatchAsync(async () => {
             var h = new Harness(Report());
             var vm = new OnboardingViewModel([h.Vm, new DoneStepViewModel(() => DoneFacts.Empty)]);
             await vm.PendingEnterForTesting;
@@ -420,14 +443,19 @@ public class HistoryStepViewModelTests {
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            var count = window.GetVisualDescendants().OfType<ImportTrack>().Count();
+            int Shown() => window.GetVisualDescendants().OfType<ImportTrack>().Count(t => t.IsEffectivelyVisible);
+            var collapsed = Shown();
+            window.GetVisualDescendants().OfType<Button>().Single(b => b.Name == "CustomizeButton").Command!.Execute(null);
+            Dispatcher.UIThread.RunJobs();
+            var open = Shown();
 
             window.Close();
             Dispatcher.UIThread.RunJobs();
 
-            return count;
+            return (collapsed, open);
         });
 
-        await Assert.That(tracks).IsEqualTo(5); // two owners, three repositories
+        await Assert.That(before).IsEqualTo(0);
+        await Assert.That(after).IsEqualTo(5); // two owners, three repositories
     }
 }

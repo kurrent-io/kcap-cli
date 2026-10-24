@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.ComponentModel;
+using System.Reactive;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core.FirstRun;
 using Capacitor.Cli.Core.Harness;
@@ -12,7 +13,8 @@ public enum HistoryState { Looking, NoHarness, NoHistory, OnlyUnmatched, Unreada
 /// <summary>
 /// Which repositories' past sessions to upload, how far each goes, and how far back. Discovery
 /// runs on entry for the harnesses the Harnesses page turned recording on for; Next starts the
-/// import and moves on at once, because the import outlives the page.
+/// import and moves on at once, because the import outlives the page. The page leads with what
+/// it found and what it will import, and keeps the per-repository choices behind Customize.
 /// </summary>
 public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     internal const string DocsUrl = "https://github.com/kurrent-io/kcap-cli#configuration";
@@ -27,6 +29,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     bool                      _discoveredLocal;
     HistoryState              _state = HistoryState.Looking;
     bool                      _titleLocally = true;
+    bool                      _customizing;
     int                       _unmatched;
     HistoryImportRun?         _run;
     CancellationTokenSource?  _discovery;
@@ -40,6 +43,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         _time        = time;
         _onLocalPath = onLocalPath ?? (() => false);
         MachineName = machineName;
+
+        ToggleCustomizeCommand = ReactiveCommand.Create(() => { Customizing = !Customizing; });
     }
 
     public WizardStepId Id         => WizardStepId.Import;
@@ -72,6 +77,7 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
             this.RaisePropertyChanged(nameof(DeclineNote));
             this.RaisePropertyChanged(nameof(CloudDeclineVisible));
             this.RaisePropertyChanged(nameof(LocalDeclineVisible));
+            this.RaisePropertyChanged(nameof(DetailsVisible));
             Restate();
         }
     }
@@ -125,6 +131,51 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         !HasRepos || _unmatched == 0 ? null
         : _onLocalPath()             ? $"{SessionCount(_unmatched)} on disk don't match a repository. Those sessions stay on this Mac."
         :                              $"{SessionCount(_unmatched)} on disk don't match a repository. Use kcap remap to link them.";
+
+    /// Off until asked for: most people import everything found, so the per-repository choices wait behind Customize.
+    public bool Customizing {
+        get => _customizing;
+        private set {
+            this.RaiseAndSetIfChanged(ref _customizing, value);
+            this.RaisePropertyChanged(nameof(DetailsVisible));
+            this.RaisePropertyChanged(nameof(CustomizeLabel));
+        }
+    }
+
+    public bool DetailsVisible => HasRepos && Customizing;
+
+    public string CustomizeLabel => Customizing ? "Hide options" : "Customize";
+
+    public ReactiveCommand<Unit, Unit> ToggleCustomizeCommand { get; }
+
+    /// What discovery found, before any choice narrows it.
+    public string? FoundLine {
+        get {
+            var repos = Groups.SelectMany(g => g.Repos).ToList();
+            if (repos.Count == 0) return null;
+
+            return $"Found {SessionCount(repos.Sum(r => r.Sessions))} in {RepositoryCount(repos.Count)} on {MachineName}";
+        }
+    }
+
+    /// What Next will import, following the repositories and window chosen under Customize.
+    public string? ImportLine {
+        get {
+            var total = Groups.Sum(g => g.Repos.Count);
+            if (total == 0 || _windows.Count == 0) return null;
+            if (SelectedCount == 0) return "Nothing is selected to import";
+
+            var from = total == 1         ? "the one repository"
+                : SelectedCount == total ? $"all {total.ToString("N0", CultureInfo.CurrentCulture)} repositories"
+                :                          $"{SelectedCount.ToString("N0", CultureInfo.CurrentCulture)} of {RepositoryCount(total)}";
+            var window = SelectedWindow;
+            var span   = window.Since is null ? "your whole history" : $"the {window.Label.ToLowerInvariant()}";
+
+            return CountFor(window) is { } count
+                ? $"kcap imports {count} from {from}, covering {span}"
+                : $"kcap imports {span} from {from}";
+        }
+    }
 
     /// Titling runs your own agent, so it is a choice only where a harness that titles is in scope.
     public bool TitlingOffered => HasRepos && FromHarnesses.Any(h => h is HarnessId.Claude or HarnessId.Codex);
@@ -340,6 +391,8 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
         foreach (var window in Windows) window.CountLabel = CountFor(window);
         this.RaisePropertyChanged(nameof(SelectedCount));
         this.RaisePropertyChanged(nameof(NextLabel));
+        this.RaisePropertyChanged(nameof(FoundLine));
+        this.RaisePropertyChanged(nameof(ImportLine));
     }
 
     string? CountFor(HistoryWindowOption window) {
@@ -352,4 +405,6 @@ public sealed class HistoryStepViewModel : ReactiveObject, IWizardStep {
     }
 
     internal static string SessionCount(int count) => count == 1 ? "1 session" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} sessions";
+
+    static string RepositoryCount(int count) => count == 1 ? "1 repository" : $"{count.ToString("N0", CultureInfo.CurrentCulture)} repositories";
 }
