@@ -114,7 +114,7 @@ public class McpFlowsServerWakeUpTests {
             scheduled_at: 2026-10-24T08:00:00+00:00
             settled_at: 2026-10-24T09:00:15+00:00
             prompt: Check CI.
-            """);
+            """.ReplaceLineEndings("\n"));
     }
 
     [Test]
