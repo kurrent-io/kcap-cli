@@ -17,8 +17,8 @@ under the same agent id, remembering its earlier rounds?
 | Step | Outcome |
 |---|---|
 | Install branch build, `kcap daemon restart` | interactive resume failed for the two agents whose ledger held a dashless vendor session (learned by transcript discovery after an earlier `kcap continue` fallback): Claude got `--resume <32-hex>`, read it as a picker search, and the pasted nudge landed in it. Fixed in `a34d4d1b` (launcher passes the dashed form) |
-| Reinstall with the fix, restart: the same two agents resume | passed: daemon `1.4.0-beta.4.43`; all three hosted Claude agents (dashless ledger sessions included) resumed on their own sessions |
-| Round 1 | pending |
+| Reinstall with the fix, restart: the same two agents resume | failed: the server refused all three ids (`recorded_failure`) and the daemon continued them under new ids. After the previous restart's resume, the hook-side sweep posted `parent_exited` for each old process: their claims, written by the released kcap, record no agent id, so the fence could not place them, and the server's death bridge reaped the resumed agent by session id. Fixed in `02672eec` (the fence finds the agent by session) |
+| Round 1 | flow `6889c9b8`, reviewer `d4b638ab`, participant entry running, vendor session `4736ee85…`; findings returned |
 | Restart between rounds: same reviewer agent id | pending |
 | Round 2 recalls a detail only round 1 saw | pending |
 | `kcap daemon restart --force` mid-round: same agent id answers the round | pending |
