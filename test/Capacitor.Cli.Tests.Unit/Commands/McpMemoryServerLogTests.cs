@@ -104,6 +104,18 @@ public class McpMemoryServerLogTests {
     }
 
     [Test]
+    [Arguments("\"5\"")]
+    [Arguments("2.5")]
+    [Arguments("{\"n\":5}")]
+    public async Task A_list_limit_that_is_not_an_integer_is_refused_and_sends_nothing(string limit) {
+        var call = await CallAsync("list_memory_entries", $$"""{"id":"{{MemoryId}}","limit":{{limit}}}""");
+
+        await Assert.That(call.IsError).IsTrue();
+        await Assert.That(call.Text).IsEqualTo("Error: 'limit' must be an integer.");
+        await Assert.That(call.Request).IsNull();
+    }
+
+    [Test]
     public async Task Settle_posts_the_resolution_to_the_entry_of_that_log() {
         var call = await CallAsync("settle_memory_entry", $$"""{"id":"{{MemoryId}}","entry_id":"{{EntryId}}","resolution":"Rotated."}""");
 

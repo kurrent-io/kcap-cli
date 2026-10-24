@@ -268,10 +268,20 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
         var qs = new List<string>();
         if (Optional(args, "status") is { Length: > 0 } status) qs.Add($"status={Uri.EscapeDataString(status)}");
         if (Optional(args, "before") is { Length: > 0 } before) qs.Add($"before={Uri.EscapeDataString(before)}");
-        if (TryReadInt(args, "limit", out var limit)) qs.Add($"limit={limit}");
+        if (OptionalInt(args, "limit") is { } limit) qs.Add($"limit={limit}");
 
         var url = $"{baseUrl}/api/memories/{Uri.EscapeDataString(Id(args))}/entries";
         return qs.Count == 0 ? url : $"{url}?{string.Join("&", qs)}";
+    }
+
+    static int? OptionalInt(JsonObject? args, string name) {
+        if (args?[name] is null) return null;
+
+        try {
+            if (TryReadInt(args, name, out var value)) return value;
+        } catch (ArgumentException) { }
+
+        throw new ArgumentException($"'{name}' must be an integer.");
     }
 
     static JsonObject BuildAppendBody(JsonObject? args) => new() {
