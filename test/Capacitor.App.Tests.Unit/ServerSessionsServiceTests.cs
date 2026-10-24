@@ -594,6 +594,35 @@ public class ServerSessionsServiceTests {
         await Eventually(() => ids!.Count > 0, "owners resolved");
     }
 
+    /// A reconnect while an owners read is pending is not left to the cadence: the stale read's end
+    /// starts the new connection's read at once.
+    [Test]
+    public async Task A_stale_owners_read_hands_over_to_the_new_connections_read_at_once() {
+        var attempts = 0;
+        var gates = new List<TaskCompletionSource<SessionOwnerOptionDto[]?>>();
+        var (lane, listing, _, service) = Build(owners: _ => {
+            attempts++;
+            var gate = new TaskCompletionSource<SessionOwnerOptionDto[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (gates) gates.Add(gate);
+            return gate.Task;
+        });
+        using var _ = service;
+        ScriptDefault(listing);
+        IReadOnlySet<string>? ids = null;
+        using var sub = service.ViewerIds.Subscribe(v => ids = v);
+        Connect(lane, epoch: 1);
+        await Eventually(() => attempts == 1, "first owners read");
+        Connect(lane, epoch: 2);
+        await Eventually(() => listing.Count("ended", "me", 0) == 2, "the second connection's listing read");
+
+        gates[0].SetResult(Owners("me"));
+
+        await Eventually(() => attempts == 2, "the new connection's owners read");
+        await Assert.That(ids!.Count).IsEqualTo(0);
+        gates[1].SetResult(Owners("me"));
+        await Eventually(() => ids!.Count > 0, "resolved for the new connection");
+    }
+
     /// The viewer stays unresolved only as long as the owners read keeps failing.
     [Test]
     public async Task A_failed_owners_read_is_retried_on_the_cadence() {

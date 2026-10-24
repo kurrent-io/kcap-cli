@@ -352,15 +352,23 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         try {
             owners = await _fetchOwners(CancellationToken.None).ConfigureAwait(false);
         } catch (Exception) {
-        } finally {
-            lock (_lock) _ownersBusy = false;
+        }
+        bool stale;
+        lock (_lock) {
+            _ownersBusy = false;
+            stale = generation != _generation;
+        }
+        // A reconnect while this read was pending found it busy and skipped its own; this starts it.
+        if (stale) {
+            RetryOwnersIfUnresolved();
+            return;
         }
         if (owners is null) return;
         var me = owners.FirstOrDefault(o => o.IsMe);
         IReadOnlySet<string> ids = me is null ? FrozenSet<string>.Empty
             : (me.Ids is { Length: > 0 } aliases ? aliases.Append(me.UserId) : [me.UserId]).ToFrozenSet(StringComparer.Ordinal);
         lock (_lock) {
-            if (generation != _generation || _disposed) return;
+            if (_disposed) return;
             _ownersResolved = true;
             _viewerIds.OnNext(ids);
             _viewerUserId.OnNext(me?.UserId);
