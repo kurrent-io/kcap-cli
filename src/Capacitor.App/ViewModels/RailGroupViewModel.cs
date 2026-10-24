@@ -12,12 +12,16 @@ using ReactiveUI.Reactive;
 
 namespace Capacitor.App.ViewModels;
 
-/// Repository heading and its sessions. Streams arrive on the UI thread from the rail root.
-public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
-    public string RootPath { get; }
-    /// RootPath in a form worth showing a user, for the header tooltip.
+/// One rail group and its sessions: a repository, a day, a status, or the single headerless group
+/// of an ungrouped rail. Streams arrive on the UI thread from the rail root.
+public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
+    public string Key { get; }
+    public RailGrouping Kind { get; }
+    /// The repository key in a form worth showing a user, for the header tooltip; the label elsewhere.
     public string RootDisplay { get; }
-    public string Label { get; }
+    string _label;
+    public string Label { get => _label; private set => this.RaiseAndSetIfChanged(ref _label, value); }
+    public bool ShowsHeader => Kind != RailGrouping.None;
     public bool IsNoRepository { get; }
     bool _isExpanded;
     public bool IsExpanded {
@@ -43,8 +47,8 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
     readonly BehaviorSubject<bool> _expanded;
     readonly Action<bool> _setExpanded;
 
-    public RailRepoViewModel(
-            IGroup<AgentRow, string, string> group,
+    public RailGroupViewModel(
+            IGroup<AgentRow, string, string> group, RailGrouping kind, string label,
             IObservable<string?> selectedSessionKey, IObservable<IReadOnlySet<string>> agentsWithPending,
             IObservable<bool> remoteStale,
             Action<string> openLocal, Action<string> openRemote, TimeProvider time,
@@ -52,12 +56,13 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             IObservable<IReadOnlyDictionary<string, int>> agentsRunningCommands,
             IObservable<IReadOnlyDictionary<string, RailPullRequestSummary>> pullRequests,
             IObservable<bool> localOnAppServer, Action<string, AgentOrigin, PullRequestSubjectDto?>? openPullRequest,
-            bool isExpanded, Action<bool> setExpanded, IObservable<Unit>? ageTicks = null) {
-        RootPath = group.Key;
-        // Rows in one group share RepoGroupLabel by construction — any member names it.
-        Label = group.Cache.Items[0].RepoGroupLabel;
-        IsNoRepository = Label == "No repository";
-        RootDisplay = DisplayFor(RootPath, Label);
+            bool isExpanded, Action<bool> setExpanded, IObservable<Unit>? ageTicks,
+            IObservable<IComparer<RailSessionViewModel>> rowComparer) {
+        Key = group.Key;
+        Kind = kind;
+        _label = label;
+        IsNoRepository = kind == RailGrouping.Repository && label == "No repository";
+        RootDisplay = kind == RailGrouping.Repository ? DisplayFor(Key, label) : label;
         _isExpanded = isExpanded;
         _setExpanded = setExpanded;
         _expanded = new BehaviorSubject<bool>(isExpanded).DisposeWith(_disposables);
@@ -85,8 +90,8 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
             .ToProperty(this, x => x.Tooltip, initialValue: RootDisplay).DisposeWith(_disposables);
         header.Subscribe(_ => this.RaisePropertyChanged(nameof(ToggleAccessibleName))).DisposeWith(_disposables);
 
-        _countText = group.Cache.CountChanged
-            .Select(c => c == 1 ? "1 session" : $"{c} sessions")
+        _countText = query
+            .Select(rows => CountTextFor(rows.Items))
             .ToProperty(this, x => x.CountText, initialValue: "")
             .DisposeWith(_disposables);
 
@@ -96,12 +101,27 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
                 openLocal, openRemote, time, agentsAwaitingAnswer, agentsRunningCommands,
                 pullRequests, localOnAppServer, openPullRequest, ageTicks), (vm, row) => vm.Update(row))
             .DisposeMany()
-            .SortAndBind(_sessionsSource, SessionComparer)
+            .SortAndBind(_sessionsSource, rowComparer)
             .Subscribe()
             .DisposeWith(_disposables);
     }
 
     internal void Expand() => SetExpanded(true);
+
+    /// The rail's remembered fold for this key, applied without persisting it again.
+    internal void ApplyExpanded(bool expanded) {
+        if (IsExpanded == expanded) return;
+        IsExpanded = expanded;
+        _expanded.OnNext(expanded);
+        this.RaisePropertyChanged(nameof(ToggleAccessibleName));
+    }
+
+    /// A day group's name moves with the calendar; the key does not.
+    internal void Relabel(string label) {
+        if (Label == label) return;
+        Label = label;
+        this.RaisePropertyChanged(nameof(ToggleAccessibleName));
+    }
 
     void SetExpanded(bool expanded) {
         if (IsExpanded == expanded) return;
@@ -111,16 +131,21 @@ public sealed class RailRepoViewModel : ReactiveObject, IDisposable {
         this.RaisePropertyChanged(nameof(ToggleAccessibleName));
     }
 
-    static readonly IComparer<RailSessionViewModel> SessionComparer = Comparer<RailSessionViewModel>.Create((a, b) => {
-        var created = a.CreatedAt.CompareTo(b.CreatedAt);
-        if (created != 0) return created;
-        var id = StringComparer.Ordinal.Compare(a.Id, b.Id);
-        return id != 0 ? id : StringComparer.Ordinal.Compare(a.Key, b.Key);
-    });
+    /// Mixed groups count each kind; a group of one kind reads as it always did.
+    static string CountTextFor(IEnumerable<AgentRow> rows) {
+        int live = 0, ended = 0;
+        foreach (var row in rows) {
+            if (row.IsEndedSession) ended++;
+            else live++;
+        }
+        if (ended > 0 && live > 0) return $"{live} live · {ended} ended";
+        var count = live + ended;
+        return count == 1 ? "1 session" : $"{count} sessions";
+    }
 
-    // RootPath's own prefixes ("repo:", "path:", "daemon:{owner}/{daemon}:{path}") are a group
-    // identity, not display text (RepoIdentity's own rule) — this is the one place that reads
-    // them anyway, to turn the key into something worth a tooltip.
+    // Key's own prefixes ("repo:", "path:", "daemon:{owner}/{daemon}:{path}") are a group identity,
+    // not display text (RepoIdentity's own rule) — this is the one place that reads them anyway,
+    // to turn the key into something worth a tooltip.
     static string DisplayFor(string rootPath, string label) {
         if (rootPath.StartsWith("repo:", StringComparison.Ordinal))
             return rootPath["repo:".Length..];

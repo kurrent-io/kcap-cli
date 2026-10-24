@@ -17,6 +17,9 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
     public string Key { get; }
     DateTime _createdAt;
     public DateTime CreatedAt { get => _createdAt; private set => this.RaiseAndSetIfChanged(ref _createdAt, value); }
+    /// The server's last activity for a listed session; null for a row only a daemon knows.
+    DateTime? _lastActivityAt;
+    public DateTime? LastActivityAt { get => _lastActivityAt; private set => this.RaiseAndSetIfChanged(ref _lastActivityAt, value); }
     string? _checkoutPath;
     public string? CheckoutPath { get => _checkoutPath; private set => this.RaiseAndSetIfChanged(ref _checkoutPath, value); }
     /// Null when the row has no title, in which case the chips line stands alone as the row.
@@ -145,6 +148,7 @@ public sealed class RailSessionViewModel : ReactiveObject, IDisposable {
         var oldVendor = Vendor;
         var oldMachine = MachineBadge;
         CreatedAt = row.CreatedAt;
+        LastActivityAt = row.LastActivityAt;
         CheckoutPath = (row.WorkLocation == WorkLocationText.Borrowed ? row.BorrowedFrom : row.WorktreePath) ?? row.RepoPath;
         var kindExtra = row.Kind == "agent" ? null : row.Kind;
         var borrowed = row.WorkLocation == WorkLocationText.Borrowed ? "borrowed" : null;

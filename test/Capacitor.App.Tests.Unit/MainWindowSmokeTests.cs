@@ -659,7 +659,7 @@ public class MainWindowSmokeTests {
             var headers = window.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("railRepoHeader")).ToArray();
             await Assert.That(headers).Count().IsEqualTo(2);
             foreach (var header in headers) {
-                var repo = (RailRepoViewModel)header.DataContext!;
+                var repo = (RailGroupViewModel)header.DataContext!;
                 var label = header.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("eyebrow"));
                 var count = header.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("sectionMeta"));
                 var row = RailRow(window, repo.Sessions[0].Primary!);
@@ -726,7 +726,7 @@ public class MainWindowSmokeTests {
             pending.OnNext(new HashSet<string> { "a1" });
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
-            await Assert.That(rail.Repos[0].IsExpanded).IsFalse();
+            await Assert.That(rail.Groups[0].IsExpanded).IsFalse();
             await Assert.That(RailRow(window, "Waiting session").IsEffectivelyVisible).IsFalse();
             await Assert.That(mark.FindControl<TextBlock>("StatusWord")!.Text).IsEqualTo("Needs you");
             await Assert.That(ToolTip.GetTip(header) as string).Contains("Pending response");

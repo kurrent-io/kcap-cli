@@ -388,9 +388,9 @@
                 <Panel>
                     <TextBlock Text="No sessions" Foreground="{StaticResource KcapFaintBrush}" Margin="8,16"
                                IsVisible="{Binding ShowsNoSessions}" />
-                    <ItemsControl x:Name="RailRepos" ItemsSource="{Binding Rail.Repos, FallbackValue={x:Null}}">
+                    <ItemsControl x:Name="RailGroups" ItemsSource="{Binding Rail.Groups, FallbackValue={x:Null}}">
                         <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RailRepoViewModel">
+                            <DataTemplate x:DataType="vm:RailGroupViewModel">
                                 <StackPanel Margin="8,10,8,0">
                                     <Button Classes="sectionHeader expandable railRepoHeader" Command="{Binding ToggleCommand}"
                                             ToolTip.Tip="{Binding Tooltip}" AutomationProperties.Name="{Binding ToggleAccessibleName}">

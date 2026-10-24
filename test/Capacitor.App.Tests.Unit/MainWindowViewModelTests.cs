@@ -905,9 +905,9 @@ public class MainWindowViewModelTests {
             var vm = NewVm(service, id => NewWorkspace(service, id), rail,
                 originOf: _ => remote ? AgentOrigin.Remote : AgentOrigin.Local,
                 remoteWorkspaceFactory: _ => remoteWorkspace, directory: host.Directory);
-            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
-            var target = rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id));
-            var other = rail.Repos.Single(repo => repo != target);
+            foreach (var repo in rail.Groups) repo.ToggleCommand.Execute().Subscribe();
+            var target = rail.Groups.Single(repo => repo.Sessions.Any(session => session.Id == id));
+            var other = rail.Groups.Single(repo => repo != target);
             vm.OpenSessionIfCurrent(id, vm.NavigationGeneration);
             await Assert.That(target.IsExpanded).IsTrue();
             await Assert.That(other.IsExpanded).IsFalse();
@@ -922,7 +922,7 @@ public class MainWindowViewModelTests {
             var current = host.Directory.Rows.Items.Single(r => r.Id == id);
             host.Directory.Rows.Remove(current.Key);
             host.Directory.Rows.AddOrUpdate(current);
-            await Assert.That(rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id)).IsExpanded).IsTrue();
+            await Assert.That(rail.Groups.Single(repo => repo.Sessions.Any(session => session.Id == id)).IsExpanded).IsTrue();
             vm.CloseWorkspace();
             await workspace!.TeardownAsync();
         });
@@ -955,7 +955,7 @@ public class MainWindowViewModelTests {
 
             vm.OpenSession("a1");
             await Assert.That(rail.SelectedSessionKey).IsEqualTo("local:a1");
-            await Assert.That(rail.Repos[0].Sessions[0].IsSelected).IsTrue();
+            await Assert.That(rail.Groups[0].Sessions[0].IsSelected).IsTrue();
 
             vm.CloseWorkspace();
             await Assert.That(rail.SelectedSessionKey).IsNull();
@@ -1066,7 +1066,7 @@ public class MainWindowViewModelTests {
                 WorkspaceFixtures.Agent("a1", "claude", false, "/repos/kcap-cli"),
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
-            var sessions = rail.Repos.SelectMany(repo => repo.Sessions).ToList();
+            var sessions = rail.Groups.SelectMany(repo => repo.Sessions).ToList();
             var local = sessions.Single(row => !row.IsRemote);
             var remote = sessions.Single(row => row.IsRemote);
             var vm = NewVm(service,
@@ -1111,7 +1111,7 @@ public class MainWindowViewModelTests {
                 directory: host.Directory);
 
             vm.OpenSession("r1");
-            foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
+            foreach (var repo in rail.Groups) repo.ToggleCommand.Execute().Subscribe();
             var remote = (RemoteSessionViewModel)vm.CurrentWorkspace!;
             await remote.ShowTerminalCommand.Execute().ToTask();
             await Assert.That(remote.IsTerminalActive).IsTrue();
@@ -1122,13 +1122,13 @@ public class MainWindowViewModelTests {
                 new RepoIdentity("path:/repos/kcap-cli", "kcap-cli")));
             host.Directory.Rows.Remove("remote:r1");
 
-            await Assert.That(rail.Repos.Any(repo => repo.IsExpanded)).IsFalse();
+            await Assert.That(rail.Groups.Any(repo => repo.IsExpanded)).IsFalse();
             await Assert.That(remote.OriginChangedToLocal).IsTrue();
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<WorkspaceViewModel>();
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).AgentId).IsEqualTo("r1");
             await Assert.That(((WorkspaceViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
             await Assert.That(rail.SelectedSessionKey).IsEqualTo("local:r1");
-            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("local:r1");
+            await Assert.That(rail.Groups.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("local:r1");
         });
     }
 
@@ -1203,7 +1203,7 @@ public class MainWindowViewModelTests {
             await Assert.That(vm.CurrentWorkspace).IsTypeOf<RemoteSessionViewModel>();
             await Assert.That(((RemoteSessionViewModel)vm.CurrentWorkspace!).IsTerminalActive).IsTrue();
             await Assert.That(rail.SelectedSessionKey).IsEqualTo("remote:a1");
-            await Assert.That(rail.Repos.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("remote:a1");
+            await Assert.That(rail.Groups.SelectMany(repo => repo.Sessions).Single(row => row.IsSelected).Key).IsEqualTo("remote:a1");
         });
     }
 
