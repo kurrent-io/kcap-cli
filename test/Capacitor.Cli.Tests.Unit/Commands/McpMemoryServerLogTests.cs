@@ -129,6 +129,22 @@ public class McpMemoryServerLogTests {
         if (!tooOld) await Assert.That(call.Text).Contains(body);
     }
 
+    /// <summary>Without the entry routes, a POST to one reaches the GET-only page fallback, which answers 405.</summary>
+    [Test]
+    [Arguments("append_memory_entry")]
+    [Arguments("settle_memory_entry")]
+    [Arguments("reopen_memory_entry")]
+    [Arguments("list_memory_entries")]
+    public async Task A_405_on_an_entry_route_is_named_as_too_old_for_logs(string tool) {
+        var arguments = $$"""{"id_or_slug":"inbox","id":"{{MemoryId}}","entry_id":"{{EntryId}}","title":"t","body":"b"}""";
+
+        var call = await CallAsync(tool, arguments, status: 405,
+            body: """{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.6","title":"Method Not Allowed","status":405}""");
+
+        await Assert.That(call.IsError).IsTrue();
+        await Assert.That(call.Text).Contains("does not support log memories");
+    }
+
     [Test]
     public async Task A_missing_document_memory_is_not_mistaken_for_an_older_server() {
         var call = await CallAsync("get_memory", """{"id_or_slug":"gone"}""", status: 404, body: "");

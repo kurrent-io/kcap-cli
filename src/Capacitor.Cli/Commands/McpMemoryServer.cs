@@ -153,7 +153,7 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
                 return BuildToolResult(id, await AuthRejectionNotice.ForPersistentUnauthorizedAsync(tokens, profiles.Name, baseUrl, time), isError: true);
             }
 
-            if (httpResponse.StatusCode == HttpStatusCode.NotFound && EntryTools.Contains(toolName) && !NamesWhatWasNotFound(body)) {
+            if (EntryTools.Contains(toolName) && IsServerWithoutLogs(httpResponse.StatusCode, body)) {
                 return BuildToolResult(id, LogsUnsupportedMessage, isError: true);
             }
 
@@ -202,8 +202,12 @@ sealed class McpMemoryServer(ConfigRoot config, ProfileContext profiles, TokenSt
     const string LogsUnsupportedMessage =
         "Error: this server does not support log memories — the entry tools need a newer kcap server.";
 
-    /// <summary>Every 404 the entry routes answer is a problem naming what was not found in <c>detail</c>. A server
-    /// without those routes answers an empty body or a bare status problem.</summary>
+    /// <summary>A server without the entry routes answers a POST to one with 405, from its GET-only page fallback, and
+    /// a GET with a 404 carrying no <c>detail</c>. The entry routes never answer 405, and every 404 they answer names
+    /// what was not found in <c>detail</c>.</summary>
+    static bool IsServerWithoutLogs(HttpStatusCode status, string body) =>
+        status == HttpStatusCode.MethodNotAllowed || (status == HttpStatusCode.NotFound && !NamesWhatWasNotFound(body));
+
     static bool NamesWhatWasNotFound(string body) {
         try {
             return JsonNode.Parse(body) is JsonObject answer
