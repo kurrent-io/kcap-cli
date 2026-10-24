@@ -88,6 +88,8 @@ public class WorkContextReaderTests {
     [Test]
     [Arguments(0, true)]
     [Arguments(200, true)]
+    [Arguments(429, true)]
+    [Arguments(503, true)]
     [Arguments(404, false)]
     public async Task A_viewer_read_without_a_usable_answer_fails_and_a_refused_one_settles_empty(int status, bool failed) {
         var channel = new ScriptedChannel { Viewer = new(status, null, null) };

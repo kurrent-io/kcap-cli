@@ -1,5 +1,6 @@
 using Capacitor.Cli.Core.Auth;
 using System.Net;
+using Microsoft.Extensions.Time.Testing;
 using System.Text;
 using Capacitor.App.Services;
 using Capacitor.Cli.Core;
@@ -46,14 +47,15 @@ public class ServerWorkContextSourceTests {
     static ProfileContext Profiles(ConfigRoot config) => Resolutions.At("http://server.test", config);
 
     static (ServerWorkContextSource Source, List<ScriptedHandler> Handlers) Build(
-            ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null, Action<ScriptedHandler>? created = null) {
+            ConfigRoot config, ProfileContext? profiles, Func<AuthStatus>? status = null, Action<ScriptedHandler>? created = null,
+            TimeProvider? time = null) {
         var handlers = new List<ScriptedHandler>();
         var source = new ServerWorkContextSource(config, profiles, ProfileOverrides.None, MachineAuth.None, (_, _, _, _) => {
             var handler = new ScriptedHandler();
             created?.Invoke(handler);
             handlers.Add(handler);
             return Task.FromResult((new HttpClient(handler), status?.Invoke() ?? AuthStatus.Ok));
-        });
+        }, time);
         return (source, handlers);
     }
 
@@ -82,6 +84,25 @@ public class ServerWorkContextSourceTests {
         var asked = handlers.Sum(h => h.Paths.Count(p => p == "/api/users/me/identity"));
         await Assert.That(asked).IsEqualTo(2);
         await Assert.That(source.Cached(Session)!.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await source.DisposeAsync();
+    }
+
+    /// A token the recovery handler swaps in moves no generation, so only the lifetime brings the
+    /// identity back into question.
+    [Test]
+    public async Task A_settled_viewer_is_asked_again_once_its_lifetime_passes() {
+        var time = new FakeTimeProvider();
+        var (source, handlers) = Build(Config.Root, Profiles(Config.Root), time: time);
+        int Asked() => handlers.Sum(h => h.Paths.Count(p => p == "/api/users/me/identity"));
+
+        await source.ReadAsync(Session, CancellationToken.None);
+        time.Advance(ServerWorkContextSource.ViewerLifetime - TimeSpan.FromSeconds(1));
+        await source.ReadAsync(Session, CancellationToken.None);
+        await Assert.That(Asked()).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        await source.ReadAsync(Session, CancellationToken.None);
+        await Assert.That(Asked()).IsEqualTo(2);
         await source.DisposeAsync();
     }
 

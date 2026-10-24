@@ -7,7 +7,8 @@ public enum WorkContextReadKind { Ready, SessionUnknown, SignedOut, NotInPlan, U
 /// <see cref="TopologyFailed"/> and <see cref="SummaryFailed"/> degrade a section without failing
 /// the read. <see cref="Item"/> is served for the primary and may carry a different id than it.
 /// <see cref="Viewer"/> is read only when asked for; <see cref="ViewerFailed"/> means no usable
-/// answer arrived, so the caller should ask again. A refusal such as an older server's 404 is an answer.
+/// answer arrived, so the caller should ask again: no response, a 2xx without a body, a 408, 429 or
+/// 5xx. Any other refusal, such as an older server's 404, is an answer.
 public sealed record WorkContextRead(
         WorkContextReadKind                         Kind,
         IReadOnlyList<SessionWorkItemAssignmentDto> Assignments,
@@ -76,7 +77,7 @@ public static class WorkContextReader {
             SummaryFailed: !summary.Succeeded,
             Detail: null) {
             Viewer       = viewer is { Succeeded: true } ? viewer.Body : null,
-            ViewerFailed = viewer is { StatusCode: 0 } or { StatusCode: >= 200 and < 300, Body: null },
+            ViewerFailed = viewer is { StatusCode: 0 or 408 or 429 or >= 500 } or { StatusCode: >= 200 and < 300, Body: null },
         };
     }
 
