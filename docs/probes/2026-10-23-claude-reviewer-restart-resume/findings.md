@@ -16,7 +16,8 @@ under the same agent id, remembering its earlier rounds?
 
 | Step | Outcome |
 |---|---|
-| Install branch build, `kcap daemon restart` | pending |
+| Install branch build, `kcap daemon restart` | interactive resume failed for the two agents whose ledger held a dashless vendor session (learned by transcript discovery after an earlier `kcap continue` fallback): Claude got `--resume <32-hex>`, read it as a picker search, and the pasted nudge landed in it. Fixed in `a34d4d1b` (launcher passes the dashed form) |
+| Reinstall with the fix, restart: the same two agents resume | passed: daemon `1.4.0-beta.4.43`; all three hosted Claude agents (dashless ledger sessions included) resumed on their own sessions |
 | Round 1 | pending |
 | Restart between rounds: same reviewer agent id | pending |
 | Round 2 recalls a detail only round 1 saw | pending |
