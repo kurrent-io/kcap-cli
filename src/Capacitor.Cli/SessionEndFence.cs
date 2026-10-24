@@ -42,8 +42,21 @@ static class SessionEndFence {
     public static bool ShouldHold(HostedAgent hosted, string? endingSession = null) =>
         ShouldHold(hosted.AgentId, hosted.DaemonEpoch, endingSession, LocateInEnvironmentStore, TimeProvider.System);
 
-    public static bool ShouldHold(ExitedSession exited) =>
-        ShouldHold(exited.Origin?.AgentId, exited.Origin?.DaemonEpoch, exited.Session.Value, LocateInEnvironmentStore, TimeProvider.System);
+    public static bool ShouldHold(ExitedSession exited) => ShouldHold(exited, DaemonStore.FromEnvironment(), TimeProvider.System);
+
+    /// <summary>A process claimed by a kcap that recorded no hosted agent is placed by its session instead:
+    /// otherwise the first restart after an update would end, on the server, every agent it resumed.</summary>
+    internal static bool ShouldHold(ExitedSession exited, DaemonStore store, TimeProvider time) {
+        string? agentId;
+
+        try {
+            agentId = exited.Origin?.AgentId ?? ResumeLedgerStore.FindAgentIdBySession(store, exited.Session.Value);
+        } catch {
+            return false;
+        }
+
+        return ShouldHold(agentId, exited.Origin?.DaemonEpoch, exited.Session.Value, id => ResumeLedgerStore.LocateByAgentId(store, id), time);
+    }
 
     /// <summary>A process with no epoch can only be placed once the run has been resumed: every process of
     /// the original run is then from an earlier one.</summary>

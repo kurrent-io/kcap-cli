@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Capacitor.Cli.Core.WorkItems;
 
 namespace Capacitor.Cli.Core.Resume;
 
@@ -128,6 +129,30 @@ public sealed class ResumeLedgerStore(string resumeDirectory, TimeProvider? time
 
         return null;
     }
+
+    /// <summary>The agent whose entry runs <paramref name="sessionId"/>, by its kcap or vendor session id.</summary>
+    public static string? FindAgentIdBySession(DaemonStore store, string sessionId) {
+        if (WorkContextIds.CanonicalSessionId(sessionId) is not { } wanted || !Directory.Exists(store.Directory)) return null;
+
+        foreach (var daemonDirectory in Directory.EnumerateDirectories(store.Directory)) {
+            var resume = Path.Combine(daemonDirectory, "resume");
+
+            foreach (var candidate in new[] { new ResumeLedgerStore(resume), new ResumeLedgerStore(ParticipantsDirectory(resume)) }) {
+                try {
+                    foreach (var entry in candidate.ReadAll())
+                        if (Runs(entry, wanted)) return entry.AgentId;
+                } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) {
+                    // One unreadable daemon directory must not hide an entry in the next.
+                }
+            }
+        }
+
+        return null;
+    }
+
+    static bool Runs(ResumeLedgerEntry entry, string canonicalSession) =>
+        string.Equals(WorkContextIds.CanonicalSessionId(entry.SessionId), canonicalSession, StringComparison.OrdinalIgnoreCase)
+     || string.Equals(WorkContextIds.CanonicalSessionId(entry.VendorSession), canonicalSession, StringComparison.OrdinalIgnoreCase);
 
     static ResumeLedgerEntry? ReadFile(string path) {
         string json;

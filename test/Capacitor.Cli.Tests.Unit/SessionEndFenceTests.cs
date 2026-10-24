@@ -1,3 +1,4 @@
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Resume;
 using Microsoft.Extensions.Time.Testing;
 
@@ -53,6 +54,30 @@ public class SessionEndFenceTests {
     public async Task An_end_without_an_epoch_holds_only_once_the_run_was_resumed() {
         await Assert.That(Hold("agent-1", null, Seed(ResumeState.Running))).IsFalse();
         await Assert.That(Hold("agent-1", null, Seed(ResumeState.Running, runEpoch: "epoch-2"))).IsTrue();
+    }
+
+    const string DashedSession = "beb87a2e-1116-4f08-be82-bd0da91b236d";
+
+    static ExitedSession ClaimedWithoutAgent(string session) =>
+        new(SessionId.Parse(session)!, new ClaimOrigin("claude", "https://kcap.example", null, null));
+
+    /// <summary>The claim was written by a kcap that recorded no agent, and the entry by a daemon that
+    /// recorded no launch epoch; this daemon has since resumed the run.</summary>
+    [Test]
+    public async Task A_claim_without_an_agent_is_held_by_a_resumed_run_of_its_session() {
+        Store.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Running) with { RunEpoch = "epoch-2", SessionId = DashedSession });
+
+        var held = SessionEndFence.ShouldHold(ClaimedWithoutAgent(DashedSession.Replace("-", "")), Tmp.Store, new FakeTimeProvider(Now));
+
+        await Assert.That(held).IsTrue();
+        await Assert.That(Store.TryRead("agent-1")!.EndCommittedAt).IsNull();
+    }
+
+    [Test]
+    public async Task A_claim_without_an_agent_or_a_ledgered_session_posts() {
+        Store.Write(ResumeLedgerEntries.For("agent-1", ResumeState.Resuming) with { SessionId = "0df3418a3ad14e60a1276b9605c3e4ec" });
+
+        await Assert.That(SessionEndFence.ShouldHold(ClaimedWithoutAgent(DashedSession), Tmp.Store, new FakeTimeProvider(Now))).IsFalse();
     }
 
     [Test]
