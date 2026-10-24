@@ -10,6 +10,7 @@ public class WorkContextReaderTests {
         public WorkContextOutcome<WorkItemDto> Item = new(200, new WorkItemDto { WorkItemId = "w1", Title = "T" }, null);
         public WorkContextOutcome<WorkItemTopologyDto> Topology = new(200, new WorkItemTopologyDto(), null);
         public WorkContextOutcome<SessionSummaryDto> Summary = new(200, new SessionSummaryDto { SessionId = "s1" }, null);
+        public WorkContextOutcome<ViewerIdentityDto> Viewer = new(200, new ViewerIdentityDto { UserId = "user_a", AvatarUrl = "https://example.test/a.png" }, null);
         public readonly List<string> Calls = [];
         public TaskCompletionSource SummaryGate = new();
         public TaskCompletionSource ItemGate = new();
@@ -36,6 +37,11 @@ public class WorkContextReaderTests {
             Calls.Add($"summary:{sessionId}");
             if (GateSummary) await SummaryGate.Task;
             return Summary;
+        }
+
+        public Task<WorkContextOutcome<ViewerIdentityDto>> GetViewerIdentityAsync(CancellationToken ct) {
+            Calls.Add("viewer");
+            return Task.FromResult(Viewer);
         }
     }
 
@@ -64,6 +70,44 @@ public class WorkContextReaderTests {
         await Assert.That(read.SummaryFailed).IsFalse();
         await Assert.That(channel.Calls).Contains("item:w1");
         await Assert.That(channel.Calls).Contains("topology:w1");
+    }
+
+    [Test]
+    public async Task The_viewer_is_read_only_when_asked_for() {
+        var channel = new ScriptedChannel();
+
+        var unasked = await Read(channel);
+        var asked   = await WorkContextReader.ReadAsync(channel, "s1", readViewer: true, CancellationToken.None);
+
+        await Assert.That(unasked.Viewer).IsNull();
+        await Assert.That(channel.Calls.Count(c => c == "viewer")).IsEqualTo(1);
+        await Assert.That(asked.Viewer!.AvatarUrl).IsEqualTo("https://example.test/a.png");
+        await Assert.That(asked.ViewerFailed).IsFalse();
+    }
+
+    [Test]
+    [Arguments(0, true)]
+    [Arguments(200, true)]
+    [Arguments(429, true)]
+    [Arguments(503, true)]
+    [Arguments(404, false)]
+    public async Task A_viewer_read_without_a_usable_answer_fails_and_a_refused_one_settles_empty(int status, bool failed) {
+        var channel = new ScriptedChannel { Viewer = new(status, null, null) };
+
+        var read = await WorkContextReader.ReadAsync(channel, "s1", readViewer: true, CancellationToken.None);
+
+        await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.Ready);
+        await Assert.That(read.Viewer).IsNull();
+        await Assert.That(read.ViewerFailed).IsEqualTo(failed);
+    }
+
+    [Test]
+    public async Task A_401_on_the_viewer_alone_signs_the_read_out() {
+        var channel = new ScriptedChannel { Viewer = new(401, null, null) };
+
+        var read = await WorkContextReader.ReadAsync(channel, "s1", readViewer: true, CancellationToken.None);
+
+        await Assert.That(read.Kind).IsEqualTo(WorkContextReadKind.SignedOut);
     }
 
     [Test]

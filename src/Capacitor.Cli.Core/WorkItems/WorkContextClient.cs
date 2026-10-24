@@ -30,6 +30,9 @@ public sealed class WorkContextClient(HttpClient http, string serverUrl) : IWork
             ? GetAsync($"{_base}/api/sessions/{Uri.EscapeDataString(id)}/summary", CapacitorJsonContext.Default.SessionSummaryDto, ct)
             : Task.FromResult(Refused<SessionSummaryDto>());
 
+    public Task<WorkContextOutcome<ViewerIdentityDto>> GetViewerIdentityAsync(CancellationToken ct) =>
+        GetAsync($"{_base}/api/users/me/identity", CapacitorJsonContext.Default.ViewerIdentityDto, ct);
+
     static WorkContextOutcome<T> Refused<T>() where T : class => new(0, null, null);
 
     async Task<WorkContextOutcome<T>> GetAsync<T>(string url, JsonTypeInfo<T> typeInfo, CancellationToken ct) where T : class {
