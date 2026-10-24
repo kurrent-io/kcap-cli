@@ -694,13 +694,16 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             first["widened_to_all_repos"] = true;
 
             // Each flag describes one request. A null no_lexical_match is unknown (a timed-out transcript lane), so
-            // "no match" survives only when both requests said so; null lane flags mean that request ran no lexical search.
-            if (first.ContainsKey("no_lexical_match") || widened.ContainsKey("no_lexical_match")) {
+            // "no match" survives only when both requests said so. A body without the flag says nothing, so the other
+            // request's answer stands; null lane flags mean that request ran no lexical search.
+            if (first.ContainsKey("no_lexical_match") && widened.ContainsKey("no_lexical_match")) {
                 var firstNoLexical   = ReadBool(first, "no_lexical_match");
                 var widenedNoLexical = ReadBool(widened, "no_lexical_match");
                 first["no_lexical_match"] = firstNoLexical is false || widenedNoLexical is false ? false
                                           : firstNoLexical is true && widenedNoLexical is true ? true
                                           : null;
+            } else if (widened.ContainsKey("no_lexical_match")) {
+                first["no_lexical_match"] = widened["no_lexical_match"]?.DeepClone();
             }
 
             foreach (var field in new[] { "bounded_lanes", "timed_out_lanes" }) {

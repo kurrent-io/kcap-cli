@@ -641,7 +641,8 @@ public class McpSessionsServerTests {
     }
 
     /// <summary>A match in either scope is a match; "no match" needs both scopes to say so, and a scope whose
-    /// transcript lane timed out (<c>null</c>) leaves the answer unknown. A field neither body carries stays absent.</summary>
+    /// transcript lane timed out (<c>null</c>) leaves the answer unknown. A scope whose body carries no flag at all
+    /// says nothing, so the other scope's answer stands; a field neither body carries stays absent.</summary>
     [Test]
     [Arguments("true", "true", "true")]
     [Arguments("false", "true", "false")]
@@ -650,7 +651,10 @@ public class McpSessionsServerTests {
     [Arguments("null", "true", "null")]
     [Arguments("true", "null", "null")]
     [Arguments("null", "null", "null")]
-    [Arguments(null, "true", "null")]
+    [Arguments(null, "true", "true")]
+    [Arguments("true", null, "true")]
+    [Arguments(null, "false", "false")]
+    [Arguments(null, "null", "null")]
     [Arguments(null, null, null)]
     public async Task MergeWidenedBody_combines_no_lexical_match_across_scopes(string? first, string? widened, string? expected) =>
         await AssertMergedField("no_lexical_match", first, widened, expected);
