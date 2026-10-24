@@ -39,13 +39,14 @@ public class MainWindowViewModelTests {
             SessionRailViewModel? rail = null, Func<string, AgentOrigin?>? originOf = null,
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             Action<Func<Task>>? trackWorkspaceTeardown = null, IAgentDirectory? directory = null,
-            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null) {
+            Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, TimeProvider? time = null) {
         return new MainWindowViewModel(
-            service, CancellationToken.None, TestActivity.New(), TimeProvider.System,
+            service, CancellationToken.None, TestActivity.New(), time ?? TimeProvider.System,
             trackWorkspaceTeardown: trackWorkspaceTeardown,
             workspaceFactory: workspaceFactory, rail: rail,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: directory,
-            openFeedback: openFeedback, opener: opener);
+            openFeedback: openFeedback, opener: opener, serverWorkspaceFactory: serverWorkspaceFactory);
     }
 
     /// A real WorkspaceViewModel over the fake service and scripted attach/surface fakes — same
@@ -1514,6 +1515,155 @@ public class MainWindowViewModelTests {
             var canExecute = false;
             using (vm.ReloadDaemonCommand.CanExecute.Subscribe(x => canExecute = x)) { }
             await Assert.That(canExecute).IsFalse();
+        });
+    }
+
+    // ── server rows and the ended hand-off ─────────────────────────────────────────────────────
+
+    static AgentStatusDto LocalWithSession(string id, string sessionId, string status = "Running") =>
+        WorkspaceFixtures.Agent(id, "claude", false, "/repos/alpha", sessionId: sessionId) with { Status = status };
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task Opening_a_server_row_selects_its_server_key() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, rail: rail, originOf: _ => AgentOrigin.Server,
+                serverWorkspaceFactory: id => built = host.NewServer(id), directory: host.Directory);
+
+            await Assert.That(vm.OpenSession("S", AgentOrigin.Server)).IsTrue();
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
+            await Assert.That(built!.IsSessionOnly).IsTrue();
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("server:S");
+
+            vm.OpenSession("S", AgentOrigin.Server);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
+            vm.CloseWorkspace();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_workspace_hands_off_to_the_server_row_within_the_grace() {
+        // A real WorkspaceViewModel's status pushes reach the UI dispatcher, so this runs on a pumped one.
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            using var rail = new SessionRailViewModel(host.Directory, _ => { }, _ => { }, TimeProvider.System);
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, id => NewWorkspace(service, id), rail,
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => built = host.NewServer(id), directory: host.Directory, time: time);
+            vm.OpenSession("a1", AgentOrigin.Local);
+            var local = vm.CurrentWorkspace;
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("local:a1");
+                rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            });
+
+            await WorkspaceFixtures.WaitUntilAsync(() => built is not null && ReferenceEquals(vm.CurrentWorkspace, built), what: "hand-off to the server row");
+            await Assert.That(built!.IsSessionOnly).IsTrue();
+            await Assert.That(rail.SelectedSessionKey).IsEqualTo("server:S");
+            vm.CloseWorkspace();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_completed_local_workspace_closes_when_no_server_row_arrives() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local, serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, time: time);
+            vm.OpenSession("a1", AgentOrigin.Local);
+            var local = vm.CurrentWorkspace;
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+            await WorkspaceFixtures.WaitUntilAsync(() => ((WorkspaceViewModel)local!).SessionEnded, what: "the agent's end reached the workspace");
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(local);
+
+            time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is null, what: "closed after the grace");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_failed_local_workspace_keeps_todays_behaviour() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: _ => AgentOrigin.Local, serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory);
+            vm.OpenSession("a1", AgentOrigin.Local);
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Failed"));
+
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is null, what: "closed on failure");
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_removed_remote_row_hands_off_once_the_server_lists_the_session_ended() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "S"), serverWorkspaceFactory: id => built = host.NewServer(id),
+                directory: host.Directory, time: time);
+            vm.OpenSession("r1", AgentOrigin.Remote);
+            var remote = vm.CurrentWorkspace;
+
+            host.Directory.Rows.RemoveKey("remote:r1");
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(remote);
+
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(built);
+            await Assert.That(built!.IsSessionOnly).IsTrue();
+            vm.CloseWorkspace();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_remote_row_that_returns_within_the_grace_cancels_the_hand_off() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            var vm = NewVm(service, originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Remote,
+                remoteWorkspaceFactory: id => host.New(id, "S"), serverWorkspaceFactory: id => host.NewServer(id),
+                directory: host.Directory, time: time);
+            vm.OpenSession("r1", AgentOrigin.Remote);
+            var remote = vm.CurrentWorkspace;
+            var row = host.Directory.Rows.Lookup("remote:r1").Value;
+
+            host.Directory.Rows.RemoveKey("remote:r1");
+            host.Directory.Rows.AddOrUpdate(row);
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(remote);
+            time.Advance(AgentDirectory.HandoverGrace + TimeSpan.FromSeconds(1));
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(remote);
+            vm.CloseWorkspace();
         });
     }
 }

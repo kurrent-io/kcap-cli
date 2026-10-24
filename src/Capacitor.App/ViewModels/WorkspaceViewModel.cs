@@ -36,6 +36,14 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
     readonly ObservableAsPropertyHelper<bool> _sessionEnded;
     public bool SessionEnded => _sessionEnded.Value;
 
+    readonly ObservableAsPropertyHelper<string?> _sessionId;
+    /// The session the daemon reports for this agent, which a finished agent's workspace hands off by.
+    public string? SessionId => _sessionId.Value;
+
+    readonly ObservableAsPropertyHelper<string?> _lastStatus;
+    /// The daemon's latest status word for this agent; Completed and Failed end differently.
+    public string? LastStatus => _lastStatus.Value;
+
     readonly ObservableAsPropertyHelper<bool> _isStarting;
     /// A launch the daemon has not published yet; the header and the starting panel read the
     /// directory's pending row until the first dto lands.
@@ -312,6 +320,12 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
         }).DisposeWith(_disposables);
         _sessionEnded = presence.Select(p => p.SessionEnded)
             .ToProperty(this, x => x.SessionEnded, initialValue: false)
+            .DisposeWith(_disposables);
+        _sessionId = presence.Select(p => p.Dto?.SessionId)
+            .ToProperty(this, x => x.SessionId, initialValue: null)
+            .DisposeWith(_disposables);
+        _lastStatus = presence.Select(p => p.Dto?.Status)
+            .ToProperty(this, x => x.LastStatus, initialValue: null)
             .DisposeWith(_disposables);
 
         presence

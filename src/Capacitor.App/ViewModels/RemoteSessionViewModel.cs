@@ -157,6 +157,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     readonly ReplaySubject<Unit> _ended = new(1);
     public IObservable<Unit> Ended => _ended.Take(1);
+    /// Every flip of SessionEnded: a hosted row's removal or terminal status, and a session-only
+    /// row's end, which fires nothing on Ended.
+    public IObservable<bool> SessionEndedChanges => _sessionEndedChanges.AsObservable();
+    /// The session this workspace is on, as the row last named it.
+    public string? SessionId => _sessionIds.Value;
     // A transient empty registry snapshot also removes a live row, so only a removal after an
     // accepted stop counts as an end. Either may arrive first.
     bool _stopAccepted;
