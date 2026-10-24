@@ -34,7 +34,29 @@ public class ClaudeServerParityTests {
         await Assert.That(usage.TotalTokens).IsEqualTo(20L);
         await Assert.That(usage.Model).IsEqualTo("claude-x");
         await Assert.That(e[0].CacheCreationTokens).IsEqualTo(2L);
+        await Assert.That(usage.AdditionalCounts).IsNull();
+        await Assert.That(e[0].ServiceTier).IsNull();
         await Assert.That(e[1].Usage).IsNull();
+    }
+
+    /// <summary>Pins that the Anthropic billing extras ride beside the cache-write total rather than replacing it:
+    /// the split and request counts as additional counts, a reported zero kept, and the tier on its own.</summary>
+    [Test]
+    public async Task Usage_carries_the_anthropic_billing_extras_beside_the_cache_write_total() {
+        const string usage = """{"input_tokens":6,"output_tokens":274,"cache_read_input_tokens":19041,"cache_creation_input_tokens":27055,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":27055},"server_tool_use":{"web_search_requests":2,"web_fetch_requests":1},"service_tier":"priority"}""";
+        var e = E(Assistant(Uuid, usage));
+
+        await Assert.That(e[0].Usage!.AdditionalCounts).IsNotNull();
+        var counts = e[0].Usage!.AdditionalCounts.Fields.ToDictionary(kv => kv.Key, kv => kv.Value.NumberValue);
+        await Assert.That(counts).IsEquivalentTo(new Dictionary<string, double> {
+            ["ephemeral_5m_input_tokens"] = 0,
+            ["ephemeral_1h_input_tokens"] = 27055,
+            ["web_search_requests"]       = 2,
+            ["web_fetch_requests"]        = 1,
+        });
+        await Assert.That(e[0].CacheCreationTokens).IsEqualTo(27055L);
+        await Assert.That(e[0].ServiceTier).IsEqualTo("priority");
+        await Assert.That(e[1].ServiceTier).IsNull();
     }
 
     /// <summary>Claude Code writes each block of one response as its own record with the response's usage

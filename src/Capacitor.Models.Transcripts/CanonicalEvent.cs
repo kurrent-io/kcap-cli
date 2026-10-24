@@ -15,7 +15,8 @@ public sealed record CanonicalEvent(
         TokenUsage?     Usage               = null,
         bool            UsageIsEcho         = false,
         long?           CacheCreationTokens = null,
-        IReadOnlyList<TranscriptAttachment>? Attachments = null
+        IReadOnlyList<TranscriptAttachment>? Attachments = null,
+        string?         ServiceTier         = null
     );
 
 /// A whole extension block for one slug, to shallow-merge over what the target already holds.

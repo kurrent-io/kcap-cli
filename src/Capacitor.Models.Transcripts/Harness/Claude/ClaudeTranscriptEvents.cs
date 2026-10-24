@@ -93,7 +93,7 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         public IReadOnlyList<CanonicalEvent> Events => _events;
 
         /// The record's usage, for its first emitted event only.
-        public (TokenUsage Usage, long? CacheCreation)? Usage { get; set; }
+        public (TokenUsage Usage, long? CacheCreation, string? ServiceTier)? Usage { get; set; }
 
         public void Add(int blockIndex, IMessage payload, Struct? claudeCode, IReadOnlyList<TranscriptAttachment>? attachments = null) {
             if (claudeCode is not null) SchemaExtensions.Of(payload)![ClaudeCodeExtension.Slug] = claudeCode;
@@ -101,7 +101,8 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
             var id    = first ? record.Id : TranscriptIds.ClaudeBlock(record.Id, blockIndex);
             var usage = first ? Usage : null;
             _events.Add(new CanonicalEvent(CanonicalEventTypes.Of(payload), payload, id, record.At, record.RecordTimestamp, record.CausedBy,
-                Usage: usage?.Usage, CacheCreationTokens: usage?.CacheCreation, Attachments: attachments is { Count: > 0 } ? attachments : null));
+                Usage: usage?.Usage, CacheCreationTokens: usage?.CacheCreation, Attachments: attachments is { Count: > 0 } ? attachments : null,
+                ServiceTier: usage?.ServiceTier));
         }
     }
 
@@ -333,7 +334,7 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
 
     /// The record's usage when it is new: compared against the memory and then stored, whether or not the
     /// record goes on to emit anything. A record without usage leaves the memory as it was.
-    static (TokenUsage, long?)? UsageOf(JsonElement message, ClaudeTranscriptContext ctx) {
+    static (TokenUsage, long?, string?)? UsageOf(JsonElement message, ClaudeTranscriptContext ctx) {
         if (message.Obj("usage") is not { } usage) return null;
 
         var input      = usage.Num("input_tokens");
@@ -350,7 +351,23 @@ public sealed class ClaudeTranscriptEvents : ITranscriptProjection {
         if (output is { } o) token.OutputTokens          = o;
         if (cacheRead is { } r) token.CachedInputTokens  = r;
         if (message.Str("model") is { } model) token.Model = model;
-        return (token, cacheWrite is > 0 ? cacheWrite : null);
+        if (BillingExtras(usage) is { } extras) token.AdditionalCounts = extras;
+        return (token, cacheWrite is > 0 ? cacheWrite : null, usage.Str("service_tier") is { Length: > 0 } tier ? tier : null);
+    }
+
+    /// The cache-write split by lifetime and the server-side tool request counts, each priced at its own rate.
+    /// The split refines `cache_creation_input_tokens`, which stays the total.
+    static Struct? BillingExtras(JsonElement usage) {
+        Struct? extras = null;
+        Add("cache_creation", "ephemeral_5m_input_tokens");
+        Add("cache_creation", "ephemeral_1h_input_tokens");
+        Add("server_tool_use", "web_search_requests");
+        Add("server_tool_use", "web_fetch_requests");
+        return extras;
+
+        void Add(string section, string count) {
+            if (usage.Obj(section)?.Num(count) is { } value) (extras ??= new Struct()).Fields[count] = Value.ForNumber(value);
+        }
     }
 
     // Arguments is always an object: a non-object input is wrapped, an absent one is empty.
