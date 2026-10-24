@@ -186,7 +186,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
             IPlanSource? plans = null, IPlanArtifactSource? planArtifacts = null, BackgroundCommandActivity? commands = null,
             ComposerDrafts? drafts = null, Func<string, Action>? inputSending = null,
             Func<string, ResumeLedgerEntry?>? resumeLedger = null, LastReads<PullRequestSnapshot>? pullRequestSnapshots = null,
-            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null) {
+            LocalTranscripts? transcripts = null, Action<string>? pullRequestLinksChanged = null, IMessageSenderSource? senders = null) {
         AgentId = agentId;
         _drafts = drafts;
         _opener = opener;
@@ -325,7 +325,8 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                     ? new TerminalChatInput(Terminal, agentId, daemon, ops, presence)
                     : new LocalFrameChatInput(agentId, daemon, ops, presence);
                 Chat = new ChatTabViewModel(
-                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts) {
+                    agentId, daemon, input, uploader, projection, opener, time, permissions, runs, note, sessionIds, localDaemonOnAppServer, planActivity, OpenCard, drafts, transcripts,
+                    senders) {
                     ShowTerminal = hasTerminal ? () => ActiveTab = WorkspaceTab.Terminal : null,
                     InputSending = inputSending,
                 };
