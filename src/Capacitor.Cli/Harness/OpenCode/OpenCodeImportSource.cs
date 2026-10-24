@@ -89,7 +89,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
-            Console.Error.WriteLine($"[kcap] OpenCode discovery skipped ({_dbPath}): {SurfaceCause(ex)}");
+            (filters.Stderr ?? Console.Error).WriteLine($"[kcap] OpenCode discovery skipped ({_dbPath}): {SurfaceCause(ex)}");
             return Task.FromResult<IReadOnlyList<DiscoveredSession>>([]);
         }
         return Task.FromResult<IReadOnlyList<DiscoveredSession>>(result);
@@ -135,7 +135,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
                 // can't see the WHOLE omitted subtree — a ledger AlreadyLoaded hit can no longer
                 // be trusted to reflect completeness. Surface it and fall through past the
                 // ledger check below (never silent).
-                Console.Error.WriteLine(
+                (ctx.Stderr ?? Console.Error).WriteLine(
                     $"[kcap] opencode: root {s.SessionId} descendant-count ceiling " +
                     $"({OpenCodeDb.MaxCountingNodes}) hit — omitted-subtree signature is a lower " +
                     "bound; skipping the completeness ledger for this session.");
@@ -243,7 +243,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
         var descendantsOk           = true;
         OperationCanceledException? cancellation = null;
         try {
-            await ImportDescendantsAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ctx.Progress, ct);
+            await ImportDescendantsAsync(ctx.HttpClient, ctx.BaseUrl, c.SessionId, ctx.Progress, ctx.Stderr ?? Console.Error, ct);
         } catch (OperationCanceledException oce) {
             cancellation = oce;
         } catch {
@@ -311,7 +311,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
     /// silent) via a stderr diagnostic. Throws on the first descendant whose lifecycle can't be
     /// posted (caller wraps this in a finally-style re-close).
     /// </summary>
-    async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, IProgress<ImportProgress>? progress, CancellationToken ct) {
+    async Task ImportDescendantsAsync(HttpClient client, string baseUrl, string rootId, IProgress<ImportProgress>? progress, TextWriter stderr, CancellationToken ct) {
         using var db = new OpenCodeDb(_dbPath);
         var (descendants, omitted, _, countTruncated) = db.QueryDescendants(rootId); // BFS, per-level ordered like QueryChildren
 
@@ -319,7 +319,7 @@ internal sealed class OpenCodeImportSource : IImportSource {
             // Once the below-cap counting ceiling is hit, `omitted` is a LOWER BOUND, not an
             // exact count — say so, rather than implying completeness.
             var lowerBoundNote = countTruncated ? " (lower bound — counting ceiling hit)" : "";
-            Console.Error.WriteLine(
+            stderr.WriteLine(
                 $"[kcap] opencode: root {rootId} descendants_omitted={omitted}{lowerBoundNote} " +
                 $"(depth cap {OpenCodeDb.MaxDescendantDepth} exceeded)");
         }

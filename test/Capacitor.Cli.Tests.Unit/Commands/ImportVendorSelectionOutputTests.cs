@@ -10,14 +10,14 @@ namespace Capacitor.Cli.Tests.Unit.Commands;
 /// names it prints are the ids a user types, not the enum the code carries them as — a script greps
 /// these lines, and a user retypes what they read into the next flag.
 /// </summary>
-// Console is process-global.
-[NotInParallel]
 public class ImportVendorSelectionOutputTests : IDisposable {
     [TempHome] public required TempHome Home { get; init; }
 
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
     readonly WireMockServer _server = WireMockServer.Start();
+
+    readonly TestImportTerminal _terminal = new();
 
     public void Dispose() => _server.Stop();
 
@@ -39,7 +39,7 @@ public class ImportVendorSelectionOutputTests : IDisposable {
     }
 
     Task<int> Run(params IImportSource[] sources) =>
-        new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+        new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: _terminal.Console)
             .HandleImport(
             filterCwd:               null,
             sources:                 sources,
@@ -48,25 +48,21 @@ public class ImportVendorSelectionOutputTests : IDisposable {
 
     [Test]
     public async Task a_named_harness_this_machine_lacks_is_reported_by_its_id() {
-        using var capture = ConsoleOutput.StartErrorCapture();
-
         var exit = await Run(new Source(HarnessId.Claude, IsAvailable: true),
                              new Source(HarnessId.OpenCode, IsAvailable: false));
 
         await Assert.That(exit).IsEqualTo(0);
-        await Assert.That(capture.GetCapturedError())
+        await Assert.That(_terminal.Error.ToString())
                     .Contains("Skipping opencode (not detected on this machine).");
     }
 
     [Test]
     public async Task nothing_named_being_present_lists_what_was_asked_for_as_flags() {
-        using var capture = ConsoleOutput.StartErrorCapture();
-
         var exit = await Run(new Source(HarnessId.Cursor, IsAvailable: false),
                              new Source(HarnessId.Antigravity, IsAvailable: false));
 
         await Assert.That(exit).IsEqualTo(1);
-        await Assert.That(capture.GetCapturedError())
+        await Assert.That(_terminal.Error.ToString())
                     .Contains("--cursor, --antigravity specified but no matching installation detected on this machine.");
     }
 }

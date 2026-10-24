@@ -38,7 +38,7 @@ public class ImportSelectionReportingTests : IDisposable {
     }
 
     ImportCommand Import() => new(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home,
-        TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System);
+        TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console);
 
     [Test]
     public async Task Capped_run_reports_selection_before_the_first_upload_and_a_partition_at_the_end() {

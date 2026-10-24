@@ -12,7 +12,7 @@ public class ImportMissingCwdsReportTests {
     // which under a TempDir is the host's.
     static readonly char Sep = Path.DirectorySeparatorChar;
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Reports_missing_cwds_with_session_count_and_sample() {
         using var tmp = new TempDir();
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
@@ -31,7 +31,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).Contains("kcap remap");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Hint_shifts_to_update_when_cwd_remap_already_configured() {
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["s1"] = "/does/not/exist/repo-a",
@@ -43,7 +43,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).Contains("update or add mappings");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Stays_silent_when_all_cwds_exist() {
         using var tmp = new TempDir();
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
@@ -55,7 +55,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).IsEmpty();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Stays_silent_when_no_sessions_have_cwds() {
         var output = Capture(d => ImportCommand.ReportMissingCwds(new Dictionary<string, string>(), cwdRemap: null, d, Home));
 
@@ -116,7 +116,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(roots).IsEquivalentTo(new[] { "/a/x", "/a/y" });
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Report_collapses_worktree_descendants_in_output() {
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["s1"] = "/dev/kapacitor",
@@ -135,25 +135,25 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).DoesNotContain("worktrees/agent-2");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task ReportWorktreeAttributions_stays_silent_when_zero() {
         var output = Capture(d => ImportCommand.ReportWorktreeAttributions(0, d));
         await Assert.That(output).IsEmpty();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task ReportWorktreeAttributions_reports_singular_phrasing_for_one() {
         var output = Capture(d => ImportCommand.ReportWorktreeAttributions(1, d));
         await Assert.That(output).Contains("Attributed 1 session to a parent project via worktree path.");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task ReportWorktreeAttributions_reports_plural_phrasing_for_many() {
         var output = Capture(d => ImportCommand.ReportWorktreeAttributions(477, d));
         await Assert.That(output).Contains("Attributed 477 sessions to a parent project via worktree path.");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Truncates_sample_to_five_distinct_paths() {
         var sessionCwds = new Dictionary<string, string>(StringComparer.Ordinal) {
             ["s1"] = "/missing/a",
@@ -235,7 +235,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(families).IsEmpty();
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Report_suggests_a_wildcard_rule_instead_of_listing_the_family() {
         using var tmp  = new TempDir();
         var       repo = tmp.CreateDir("repo");
@@ -259,7 +259,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).DoesNotContain("Run `kcap remap <from> <to>`");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Report_suggests_a_rule_for_a_session_that_ran_below_its_worktree() {
         using var tmp  = new TempDir();
         var       repo = tmp.CreateDir("repo");
@@ -276,7 +276,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).Contains($"  kcap remap '{repo.PathTo("worktrees")}{Sep}*' {repo.Path}");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Report_still_lists_paths_outside_any_family() {
         using var tmp  = new TempDir();
         var       repo = tmp.CreateDir("repo");
@@ -297,7 +297,7 @@ public class ImportMissingCwdsReportTests {
         await Assert.That(output).Contains("Run `kcap remap <from> <to>`");
     }
 
-    [Test, NotInParallel]
+    [Test]
     public async Task Report_lists_a_family_whose_project_is_not_a_repository() {
         using var tmp   = new TempDir();
         var       plain = tmp.CreateDir("plain");
@@ -314,10 +314,8 @@ public class ImportMissingCwdsReportTests {
     }
 
     static string Capture(Action<ImportCommand.ImportDisplay> render) {
-        using var capture = ConsoleOutput.StartCapture();
-        render(new() { Tty = false });
-        // Normalize CRLF→LF so line-anchored assertions (e.g. Contains("…\n"))
-        // hold on Windows, where the writer emits Environment.NewLine.
-        return capture.GetCapturedOutput().Replace("\r\n", "\n");
+        var terminal = new TestImportTerminal();
+        render(terminal.Display());
+        return terminal.Plain.ToString();
     }
 }

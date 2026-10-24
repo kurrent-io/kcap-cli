@@ -46,7 +46,7 @@ public class ImportCommandCappedVisibilityTests : IDisposable {
         var projects = Projects();
 
         await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home),
-                new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System)
+                new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console)
             .HandleImport(
                 filterCwd: null, minLines: 1,
                 sources: [new ClaudeImportSource(Config.Root, projects.Path, router: new GitProviderRouter(), time: TimeProvider.System)],

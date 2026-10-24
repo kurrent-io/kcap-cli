@@ -53,6 +53,20 @@ public class OpenCodeImportSourceTests {
         await Assert.That(source.IsAvailable).IsFalse();
     }
 
+    /// An unreadable database skips OpenCode and says so on the run's own stderr.
+    [Test]
+    public async Task an_unreadable_database_is_reported_on_the_runs_stderr() {
+        using var tmp    = new TempDir();
+        var       db     = tmp.CreateFile("opencode.db", "not a database");
+        var       source = new OpenCodeImportSource(db, tmp.PathTo("ledger.json"), TimeProvider.System);
+        var       stderr = new StringWriter();
+
+        var sessions = await source.DiscoverAsync(new DiscoveryFilters(null, null, null, 0) { Stderr = stderr }, CancellationToken.None);
+
+        await Assert.That(sessions).IsEmpty();
+        await Assert.That(stderr.ToString()).Contains("OpenCode discovery skipped");
+    }
+
     [Test]
     public async Task discovery_treats_ms_as_ms_and_seconds_as_seconds() {
         using var tmp = new OpenCodeDbFixture();

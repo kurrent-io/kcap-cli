@@ -119,16 +119,16 @@ public class AntigravitySkippedChildOverrideRoutedLoopTests : IDisposable {
         });
     }
 
-    static async Task<string> CaptureStdoutAsync(Func<Task> action) {
-        using var capture = ConsoleOutput.StartCapture();
-        await action();
-        return capture.GetCapturedOutput();
+    static async Task<string> CaptureStdoutAsync(Func<ImportConsole, Task> action) {
+        var stdout = new StringWriter();
+        await action(TestImportConsole.Over(stdout));
+        return stdout.ToString();
     }
 
     static bool LineMatches(string text, string label, int value) =>
         Regex.IsMatch(text, $@"(?m)^\s*{Regex.Escape(label)}\s+{value}\s*$");
 
-    [Test, NotInParallel]
+    [Test]
     public async Task already_loaded_root_with_new_child_content_counts_loaded_and_is_privatized_via_replay_scope() {
         WriteAntigravityTranscript(RootConvId, "build it");
         WriteAntigravityTranscript(ChildConvId, "sub task");
@@ -165,8 +165,8 @@ public class AntigravitySkippedChildOverrideRoutedLoopTests : IDisposable {
         var gemini      = new GeminiImportSource(_geminiTmpDir, TimeProvider.System);
 
         var exitCode = 0;
-        var stdout = await CaptureStdoutAsync(async () => {
-            exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System).HandleImport(
+        var stdout = await CaptureStdoutAsync(async console => {
+            exitCode = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home, TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: console).HandleImport(
                 filterCwd: null,
                 minLines: 0,
                 sources: [antigravity, gemini],

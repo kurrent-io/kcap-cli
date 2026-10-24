@@ -66,7 +66,7 @@ public class ImportAccountsTests : IDisposable {
         ImportCommand.ImportRunOutcome? outcome = null;
         var exit = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home,
                 TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(),
-                time: TimeProvider.System, accounts: TestAccounts.None)
+                time: TimeProvider.System, accounts: TestAccounts.None, console: new TestImportTerminal().Console)
             .HandleImport(filterCwd: null, minLines: 1, sources: sources, scope: new ImportScope.All(),
                           skipConfirmation: true, skipTitle: true, onFinished: o => outcome = o);
 
@@ -99,7 +99,7 @@ public class ImportAccountsTests : IDisposable {
         ImportCommand.ImportRunOutcome? outcome = null;
         var exit = await new ImportCommand(Config.Root, Resolutions.At(_server.Url!, Config.Root), Home,
                 TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(),
-                time: TimeProvider.System, accounts: TestAccounts.None)
+                time: TimeProvider.System, accounts: TestAccounts.None, console: new TestImportTerminal().Console)
             .HandleImport(filterCwd: null, minLines: 1, sources: sources, scope: new ImportScope.All(),
                           skipConfirmation: true, skipTitle: true, onFinished: o => outcome = o);
 
@@ -117,7 +117,7 @@ public class ImportAccountsTests : IDisposable {
         ImportCommand.ImportDiscoveryResult? found = null;
         var exit = await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home,
                 TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(),
-                time: TimeProvider.System, accounts: TestAccounts.None)
+                time: TimeProvider.System, accounts: TestAccounts.None, console: new TestImportTerminal().Console)
             .HandleImport(filterCwd: null, minLines: 1, sources: sources, discoverOnly: true, onDiscovered: r => found = r);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -142,7 +142,7 @@ public class ImportAccountsTests : IDisposable {
         ImportCommand.ImportDiscoveryResult? found = null;
         var exit = await new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home,
                 TestHarnesses.Under(Home), new FixedCapacitorHttpClient(), router: new GitProviderRouter(),
-                time: TimeProvider.System, accounts: TestAccounts.None)
+                time: TimeProvider.System, accounts: TestAccounts.None, console: new TestImportTerminal().Console)
             .HandleImport(filterCwd: null, minLines: 1, sources: sources, discoverOnly: true, onDiscovered: r => found = r);
 
         await Assert.That(exit).IsEqualTo(0);
@@ -239,7 +239,7 @@ public class ImportAccountsTests : IDisposable {
 
     ImportCommand CodexImport(AccountStore store) =>
         new(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home),
-            new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, accounts: store);
+            new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, console: new TestImportTerminal().Console, accounts: store);
 
     static ImportCommand.SessionClassification AlreadyLoadedCodex(string sessionId, string rollout) => new() {
         SessionId  = sessionId,
@@ -301,7 +301,7 @@ public class ImportAccountsTests : IDisposable {
             .RespondWith(Response.Create().WithStatusCode(200));
 
         var import = new ImportCommand(Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.Under(Home),
-            new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, accounts: store);
+            new FixedCapacitorHttpClient(), router: new GitProviderRouter(), time: TimeProvider.System, accounts: store, console: new TestImportTerminal().Console);
 
         var session = new ImportCommand.SessionClassification {
             SessionId  = CodexSid,
