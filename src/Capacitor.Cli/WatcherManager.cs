@@ -308,7 +308,8 @@ public sealed partial class WatcherManager(
             string? cwd               = null,
             bool    skipTitle         = false,
             string  vendor            = "claude",
-            int?    parentPid         = null
+            int?    parentPid         = null,
+            TextWriter? stderr        = null
         ) {
         if (agentId is null) ClaimAgentProcess(key, vendor, transcriptPath, cwd);
 
@@ -328,17 +329,20 @@ public sealed partial class WatcherManager(
                 // Alive but its heartbeat is stale: wedged. A watcher the reap could not stop
                 // keeps its pid file; spawning over it would leave two watchers on this key, the
                 // first one unaddressable. A later call retries the reap.
-                await Console.Error.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
+                var log = stderr ?? Console.Error;
+                await log.WriteLineAsync($"Watcher {key} heartbeat stale; reaping wedged watcher and respawning");
 
-                if (!await TryStopWatcher(key)) {
-                    await Console.Error.WriteLineAsync($"Watcher {key} could not be stopped; not respawning");
+                if (!await TryStopWatcher(key, log)) {
+                    await log.WriteLineAsync($"Watcher {key} could not be stopped; not respawning");
 
                     return;
                 }
             }
 
             await spawner.SpawnAsync(
-                new WatcherSpawnRequest(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor, parentPid));
+                new WatcherSpawnRequest(key, transcriptPath, agentId, sessionIdOverride, cwd, skipTitle, vendor, parentPid) {
+                    Stderr = stderr,
+                });
         });
     }
 
@@ -350,7 +354,7 @@ public sealed partial class WatcherManager(
             AgentSessions.OnThisMachine(config).Claim(agentPid, session, new ClaimOrigin(vendor, Url, transcriptPath, cwd));
     }
 
-    public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude") {
+    public void SpawnWhatsDoneGenerator(string sessionId, string vendor = "claude", TextWriter? stderr = null) {
         try {
             var kcapPath = Environment.ProcessPath ?? "kcap";
 
@@ -377,14 +381,14 @@ public sealed partial class WatcherManager(
             // Don't let this detached child inherit the agent's pipe descriptors —
             // same pipe-leak hazard as the watcher spawn above.
             if (starter.StartDetached(psi) is not { } pid) {
-                Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}");
+                (stderr ?? Console.Error).WriteLine($"Failed to spawn what's-done generator for {sessionId}");
 
                 return;
             }
 
-            Console.Error.WriteLine($"Spawned what's-done generator for {sessionId} (PID {pid})");
+            (stderr ?? Console.Error).WriteLine($"Spawned what's-done generator for {sessionId} (PID {pid})");
         } catch (Exception ex) {
-            Console.Error.WriteLine($"Failed to spawn what's-done generator for {sessionId}: {ex.Message}");
+            (stderr ?? Console.Error).WriteLine($"Failed to spawn what's-done generator for {sessionId}: {ex.Message}");
         }
     }
 
