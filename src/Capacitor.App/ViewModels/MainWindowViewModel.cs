@@ -235,11 +235,13 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public HistoryImportRun? HistoryImport { get; }
     public bool HistoryImportVisible => HistoryImport is not null;
     public bool HistoryImportRunning => HistoryImport is { Running: true };
+    /// Counts against the same total setup showed, so the figure reads as one run across both windows.
     public string HistoryImportStatus => HistoryImport is not { } run ? ""
-        : run.Running ? $"Importing history · {run.Processed:N0} sessions processed"
+        : run.Running ? $"Importing history · {run.ProcessedOfExpected} sessions processed"
         : run.State is ImportRunState.Failed or ImportRunState.Cancelled
-            ? $"History import didn't finish · {run.Processed:N0} sessions processed. Reopen setup to retry."
+            ? $"History import didn't finish · {run.ProcessedOfExpected} sessions processed. Reopen setup to retry"
         : $"History imported · {run.Processed:N0} sessions processed";
+    public double HistoryImportProgress => HistoryImport?.Progress ?? 0;
 
     ObservableAsPropertyHelper<bool>? _signInVisible;
     /// True while the rail reads Signed out and a sign-in action exists — the help flyout
@@ -420,11 +422,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
         this.WhenActivated(disposables => {
             if (historyImport is not null)
-                historyImport.WhenAnyValue(x => x.State, x => x.Processed, (state, processed) => (state, processed))
+                historyImport.WhenAnyValue(x => x.State, x => x.Processed, x => x.PassesDone, (state, processed, passes) => (state, processed, passes))
                     .ObserveOn(RxSchedulers.MainThreadScheduler)
                     .Subscribe(_ => {
                         this.RaisePropertyChanged(nameof(HistoryImportStatus));
                         this.RaisePropertyChanged(nameof(HistoryImportRunning));
+                        this.RaisePropertyChanged(nameof(HistoryImportProgress));
                     })
                     .DisposeWith(disposables);
             var status    = service.Status.ObserveOn(RxSchedulers.MainThreadScheduler);

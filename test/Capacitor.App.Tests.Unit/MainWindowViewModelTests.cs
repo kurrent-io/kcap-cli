@@ -3,7 +3,9 @@ using System.Reactive.Threading.Tasks;
 using Avalonia.Media;
 using Capacitor.App.Services;
 using Capacitor.App.ViewModels;
+using Capacitor.App.ViewModels.Onboarding;
 using Capacitor.App.Views;
+using Capacitor.Cli.Core;
 using Capacitor.Cli.Core.Commands;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.PullRequests;
@@ -67,6 +69,34 @@ public class MainWindowViewModelTests {
         return new WorkspaceViewModel(
             agentId, service, actions, attach.Factory, () => new FakeTerminalSurface(), new FakeTimeProvider(), new RecordingOpener(),
             new FakePermissionService(), new FakeWorkContextSource(), new ScriptedLocalControlOps(), new NoAttachmentUploader(), pullRequests: pullRequests, drafts: drafts);
+    }
+
+    /// After setup closes, the main window keeps counting against the total setup showed.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_running_import_keeps_its_total_and_progress_after_setup() {
+        var gate = new TaskCompletionSource<StreamingResult>();
+        Action<StreamedLine>? emit = null;
+        var cli = new FakeKcapCli {
+            ImportBehavior = (_, onLine, _) => {
+                emit = onLine;
+                return gate.Task;
+            },
+        };
+        var run = new HistoryImportRun(94, 2, "from the last 90 days", 1, action => action());
+        run.Start(cli, [new ImportRequest(ImportScopeChoice.Repo, null, [], ["a/b"])]);
+        for (var i = 0; i < 46; i++) emit!(new StreamedLine(ProcessStreamKind.Stdout, $"  Loading s{i} (claude)"));
+
+        var (status, progress) = await AvaloniaSession.DispatchAsync(() => {
+            var vm = new MainWindowViewModel(
+                new FakeDaemonClientService(), CancellationToken.None, TestActivity.New(), TimeProvider.System, historyImport: run);
+            return (vm.HistoryImportStatus, vm.HistoryImportProgress);
+        });
+        gate.SetResult(new StreamingResult(0, false, []));
+        await run.Completion;
+
+        await Assert.That(status).IsEqualTo("Importing history · 46 of 94 sessions processed");
+        await Assert.That(progress).IsEqualTo(100.0 * 46 / 94);
     }
 
     [Test]
