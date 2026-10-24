@@ -212,6 +212,15 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     public ReactiveCommand<Unit, Unit> OpenSettingsCommand { get; }
     volatile Action? _openSettings;
 
+    /// Off macOS, the in-window menu's way to the uninstall; shown only where the app can remove itself.
+    public ReactiveCommand<Unit, Unit> UninstallCommand { get; }
+    volatile Action? _uninstall;
+
+    public bool ShowsUninstall {
+        get;
+        private set => this.RaiseAndSetIfChanged(ref field, value);
+    }
+
     /// Off macOS no native app menu is drawn, so Settings, the changelog and the version ride the
     /// rail's help flyout instead.
     public bool AppMenuInWindow { get; }
@@ -339,7 +348,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
             Action? requestSignIn = null, IObservable<Action?>? settingsAction = null,
-            bool? appMenuInWindow = null, Action? requestSetup = null,
+            IObservable<Action?>? uninstallAction = null, bool? appMenuInWindow = null, Action? requestSetup = null,
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null) {
@@ -372,6 +381,12 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         OpenSettingsCommand = ReactiveCommand.Create(
             () => _openSettings?.Invoke(),
             settings.Select(open => open is not null).ObserveOn(RxSchedulers.MainThreadScheduler));
+        var uninstall       = (uninstallAction ?? Observable.Return<Action?>(null)).ObserveOn(RxSchedulers.MainThreadScheduler);
+        uninstall.Subscribe(run => {
+            _uninstall     = run;
+            ShowsUninstall = run is not null;
+        });
+        UninstallCommand    = ReactiveCommand.Create(() => _uninstall?.Invoke(), uninstall.Select(run => run is not null));
         SignInCommand       = ReactiveCommand.Create(() => { requestSignIn?.Invoke(); });
         CanOpenSetup = requestSetup is not null;
         SetupCommand = ReactiveCommand.Create(() => requestSetup?.Invoke());

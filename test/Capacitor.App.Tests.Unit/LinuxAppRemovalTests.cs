@@ -1,0 +1,102 @@
+using Capacitor.App.Platform.Linux;
+using Capacitor.Cli.Core;
+using Microsoft.Extensions.Time.Testing;
+using TUnit.Core.Enums;
+
+namespace Capacitor.App.Tests.Unit;
+
+/// <summary>What an AppImage install removes of itself once the CLI uninstall has run: the links into the CLI it
+/// copied out of the mount, that copy, and the image, which goes to the freedesktop.org home Trash.</summary>
+public class LinuxAppRemovalTests {
+    [TempDir] public required TempDir Tmp { get; init; }
+
+    sealed class Runner : IProcessRunner {
+        public List<(string File, string[] Args)> Calls { get; } = [];
+
+        public Task<ProcessResult> RunAsync(string fileName, string[] args, RunOptions options, CancellationToken ct) {
+            Calls.Add((fileName, args));
+            return Task.FromResult(new ProcessResult(0, "", "", false));
+        }
+
+        public Task<StreamingResult> RunStreamingAsync(string fileName, string[] args, RunOptions options,
+                Action<StreamedLine> onLine, CancellationToken ct) => Task.FromResult(new StreamingResult(0, false, []));
+    }
+
+    readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 10, 24, 9, 30, 15, TimeSpan.Zero));
+
+    string Staged => Tmp.PathTo("data", "kcap", "desktop");
+
+    LinuxAppRemoval Removal(Runner? runner = null, string? image = null) =>
+        new(runner ?? new Runner(), image ?? Tmp.PathTo("apps", "kcap-x86_64.AppImage"), Staged,
+            [Tmp.PathTo("links-a"), Tmp.PathTo("links-b")], Tmp.PathTo("data", "Trash"), _time);
+
+    [Test, ExcludeOn(OS.Windows)]
+    public async Task Only_links_into_the_staged_cli_are_removed() {
+        var stagedCli = Tmp.CreateFile("data/kcap/desktop/bin/kcap", "cli");
+        var other     = Tmp.CreateFile("other/kcap", "npm cli");
+        Tmp.CreateDir("links-a");
+        Tmp.CreateDir("links-b");
+        File.CreateSymbolicLink(Tmp.PathTo("links-a", "kcap"), stagedCli);
+        File.CreateSymbolicLink(Tmp.PathTo("links-b", "kcap"), other);
+
+        var left = await Removal().RemoveLinksAsync(CancellationToken.None);
+
+        await Assert.That(left).IsEmpty();
+        await Assert.That(File.Exists(Tmp.PathTo("links-a", "kcap")) || new FileInfo(Tmp.PathTo("links-a", "kcap")).LinkTarget is not null).IsFalse();
+        await Assert.That(new FileInfo(Tmp.PathTo("links-b", "kcap")).LinkTarget).IsEqualTo(other);
+    }
+
+    [Test]
+    public async Task The_staged_cli_and_plugin_are_deleted_and_the_rest_of_the_data_directory_is_kept() {
+        Tmp.CreateFile("data/kcap/desktop/bin/kcap", "cli");
+        Tmp.CreateFile("data/kcap/desktop/kcap/plugin.json", "{}");
+        Tmp.CreateFile("data/kcap/local/registry.json", "{}");
+
+        Removal().DeleteSupportFiles();
+
+        await Assert.That(Directory.Exists(Staged)).IsFalse();
+        await Assert.That(File.Exists(Tmp.PathTo("data", "kcap", "local", "registry.json"))).IsTrue();
+    }
+
+    [Test]
+    public async Task The_image_goes_to_the_home_trash_with_its_info_and_a_second_one_takes_a_free_name() {
+        var first = Tmp.CreateFile("apps/kcap-x86_64.AppImage", "one");
+
+        await Assert.That(await Removal(image: first).TrashBundleAsync(CancellationToken.None)).IsTrue();
+        Tmp.CreateFile("apps/kcap-x86_64.AppImage", "two");
+        await Assert.That(await Removal(image: first).TrashBundleAsync(CancellationToken.None)).IsTrue();
+
+        await Assert.That(File.Exists(first)).IsFalse();
+        await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.AppImage"))).IsEqualTo("one");
+        await Assert.That(File.ReadAllText(Tmp.PathTo("data", "Trash", "files", "kcap-x86_64.2.AppImage"))).IsEqualTo("two");
+        var info = File.ReadAllText(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.AppImage.trashinfo"));
+        await Assert.That(info).StartsWith("[Trash Info]\n");
+        await Assert.That(info).Contains($"\nPath={first}\n");
+        await Assert.That(info).Contains($"\nDeletionDate={_time.GetLocalNow():yyyy-MM-ddTHH:mm:ss}\n");
+        await Assert.That(File.Exists(Tmp.PathTo("data", "Trash", "info", "kcap-x86_64.2.AppImage.trashinfo"))).IsTrue();
+    }
+
+    [Test]
+    public async Task An_image_that_is_gone_is_not_reported_trashed() {
+        await Assert.That(await Removal(image: Tmp.PathTo("apps", "gone.AppImage")).TrashBundleAsync(CancellationToken.None)).IsFalse();
+        await Assert.That(Directory.Exists(Tmp.PathTo("data", "Trash"))).IsFalse();
+    }
+
+    [Test]
+    public async Task A_path_with_reserved_characters_is_escaped_in_the_trash_info() {
+        var info = LinuxAppRemoval.TrashInfo("/home/me/My Apps/kcap%.AppImage", _time.GetLocalNow());
+
+        await Assert.That(info).Contains("\nPath=/home/me/My%20Apps/kcap%25.AppImage\n");
+    }
+
+    [Test]
+    public async Task Revealing_opens_the_folder_holding_the_image() {
+        var runner = new Runner();
+
+        Removal(runner).RevealBundle();
+
+        var call = runner.Calls.Single();
+        await Assert.That(call.File).IsEqualTo("xdg-open");
+        await Assert.That(call.Args).IsEquivalentTo([Tmp.PathTo("apps")]);
+    }
+}

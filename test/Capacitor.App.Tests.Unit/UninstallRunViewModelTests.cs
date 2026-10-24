@@ -112,7 +112,8 @@ public class UninstallRunViewModelTests {
 
         await Assert.That(vm.State).IsEqualTo(UninstallRunState.TrashFailed);
         await Assert.That(string.Join(",", calls)).IsEqualTo("links,support,trash,reveal");
-        await Assert.That(vm.Lines.Any(l => l.Contains("drag kcap to the Trash to finish"))).IsTrue();
+        await Assert.That(vm.Heading).IsEqualTo("Drag kcap to the Trash to finish");
+        await Assert.That(vm.Lines.Any(l => l.Contains("Drag kcap to the Trash to finish"))).IsTrue();
         await Assert.That(await vm.RetryCommand.CanExecute.FirstAsync()).IsFalse();
 
         await vm.CloseCommand.Execute();
