@@ -2583,20 +2583,6 @@ class ImportCommand(
     }
 
     /// <summary>
-    /// Build a SessionId → repo lookup for every discovered transcript. Repo
-    /// detection (git + `gh pr view`) is the slow part of the discovery phase,
-    /// so it deduplicates by cwd (transcripts in the same project share a repo)
-    /// and runs in parallel, surfacing progress as a status spinner on a TTY and
-    /// a plain status line otherwise.
-    /// </summary>
-    /// <summary>
-    /// Print a one-shot summary of transcript cwds that don't exist on disk.
-    /// Most users with a long history accumulate references to deleted
-    /// worktrees and renamed repo directories, and those sessions silently
-    /// fail to match an --org/--repo scope. This output lets them spot the
-    /// gap before the import proceeds.
-    /// </summary>
-    /// <summary>
     /// Surface how many sessions were transparently attributed to their parent
     /// project via the worktree-path fallback (cwd lived under
     /// <c>&lt;dir&gt;/.&lt;X&gt;/worktrees/&lt;slug&gt;</c> but the worktree
@@ -2634,6 +2620,11 @@ class ImportCommand(
         }
     }
 
+    /// <summary>
+    /// Print a one-shot summary of transcript cwds that don't exist on disk. A long history accumulates
+    /// references to deleted worktrees and renamed repo directories, and those sessions silently fail to
+    /// match an --org/--repo scope; this lets the user spot the gap before the import proceeds.
+    /// </summary>
     internal static void ReportMissingCwds(
             IReadOnlyDictionary<string, string> sessionCwds,
             IReadOnlyList<CwdRemap>?            cwdRemap,
@@ -2881,6 +2872,11 @@ class ImportCommand(
         return final;
     }
 
+    /// <summary>
+    /// Build a SessionId → repo lookup for every discovered transcript. Repo detection (git + `gh pr view`) is
+    /// the slow part of discovery, so it runs once per distinct cwd (transcripts in one project share a repo), in
+    /// parallel, with a status spinner on a TTY and a plain status line otherwise.
+    /// </summary>
     internal async Task<Dictionary<string, (string Owner, string Name)?>> ResolveTranscriptReposAsync(
             IReadOnlyList<(string SessionId, string FilePath, string EncodedCwd)> transcripts,
             bool                                                                  codex,
@@ -3161,7 +3157,7 @@ class ImportCommand(
 
     /// <summary>
     /// Dispatch chains across 4 parallel workers; sessions within a chain run serially. Counters use
-    /// Interlocked, and every callback is called from several workers at once, so it must be safe to:
+    /// Interlocked. Several workers call each callback at once, so every callback must be thread-safe;
     /// the run's own wiring writes through the injected terminal's Spectre console and a ConcurrentBag.
     /// </summary>
     internal async Task<ImportChainsResult> ImportChainsAsync(
@@ -3568,11 +3564,6 @@ class ImportCommand(
         public void Report(ImportProgress value) => onReport(value);
     }
 
-    /// <summary>
-    /// Probe each transcript against the server's last-line API and classify
-    /// what the import phase should do with it. Probes run concurrently via
-    /// SemaphoreSlim(8) — idempotent GETs, safe to parallelize.
-    /// </summary>
     /// <summary>
     /// Decides whether a classified session should be force-flipped to Excluded
     /// after the prompt loop. Repo and path exclusions are independent gates:
