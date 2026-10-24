@@ -42,6 +42,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
     readonly Subject<Unit> _regroup = new();
     readonly BehaviorSubject<IComparer<RailSessionViewModel>> _rowComparer;
     readonly BehaviorSubject<IComparer<RailGroupViewModel>> _groupComparer;
+    readonly BehaviorSubject<RailGrouping> _groupingChanges;
     DateOnly _today;
 
     string? _selectedSessionKey;
@@ -83,6 +84,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             if (_grouping == value) return;
             this.RaiseAndSetIfChanged(ref _grouping, value);
             _groupComparer.OnNext(GroupComparer(value));
+            _groupingChanges.OnNext(value);
             _regroup.OnNext(Unit.Default);
             Persist();
         }
@@ -158,6 +160,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         _stateFilter = new BehaviorSubject<Func<AgentRow, bool>>(StateFilter()).DisposeWith(_disposables);
         _rowComparer = new BehaviorSubject<IComparer<RailSessionViewModel>>(RowComparer(_sort, _descending)).DisposeWith(_disposables);
         _groupComparer = new BehaviorSubject<IComparer<RailGroupViewModel>>(GroupComparer(_grouping)).DisposeWith(_disposables);
+        _groupingChanges = new BehaviorSubject<RailGrouping>(_grouping).DisposeWith(_disposables);
         _disposables.Add(_regroup);
 
         var ageTicks = new Subject<Unit>().DisposeWith(_disposables);
@@ -219,7 +222,7 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
                     if (expanded) _collapsed.Remove(g.Key);
                     else _collapsed.Add(g.Key);
                     Persist();
-                }, ageTicks, _rowComparer))
+                }, ageTicks, openServerSession, _groupingChanges, _rowComparer))
             .DisposeMany()
             .SortAndBind(_groupsSource, _groupComparer)
             .Subscribe()

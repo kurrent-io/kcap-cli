@@ -442,6 +442,13 @@
                                                                     <!-- Reserve the measured PR link width so machine and age never paint beneath its hit target. -->
                                                                     <Grid ColumnDefinitions="*,Auto">
                                                                         <WrapPanel VerticalAlignment="Center">
+                                                                            <!-- Another user's row names them by initials; identity stays in muted tokens. -->
+                                                                            <Border Width="16" Height="16" CornerRadius="8" Margin="0,0,6,0" VerticalAlignment="Center"
+                                                                                    Background="{StaticResource KcapSurfaceRaisedBrush}" BorderBrush="{StaticResource KcapBorderBrush}" BorderThickness="1"
+                                                                                    IsVisible="{Binding ShowsOwner}" ToolTip.Tip="{Binding OwnerTooltip}" AutomationProperties.Name="{Binding OwnerTooltip}">
+                                                                                <TextBlock Text="{Binding OwnerInitials}" FontSize="8" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                                                           Foreground="{StaticResource KcapMutedBrush}" />
+                                                                            </Border>
                                                                             <Border Classes="vendorMark" Width="16" Height="16" Margin="0,0,6,0"
                                                                                     VerticalAlignment="Center" Background="Transparent" IsVisible="{Binding HasVendor}"
                                                                                     AutomationProperties.Name="{Binding Vendor, Converter={x:Static views:VendorLabelConverter.Instance}}">
@@ -456,6 +463,17 @@
                                                                             <TextBlock Text="{Binding MachineLabel}" Classes="railChipLabel" TextTrimming="CharacterEllipsis"
                                                                                        Foreground="{StaticResource KcapMutedBrush}" />
                                                                         </Border>
+                                                                        <Border Classes="railChip" IsVisible="{Binding IsTerminalSession}" Margin="0,0,6,0"
+                                                                                ToolTip.Tip="{x:Static vm:RailSessionViewModel.TerminalTooltip}"
+                                                                                AutomationProperties.Name="{x:Static vm:RailSessionViewModel.TerminalTooltip}">
+                                                                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                                                                <views:AppIcon Kind="Terminal" Size="10" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                                                                <TextBlock Text="terminal" Classes="railChipLabel" Foreground="{StaticResource KcapMutedBrush}" />
+                                                                            </StackPanel>
+                                                                        </Border>
+                                                                        <TextBlock Text="{Binding RepoLabel}" Classes="railMeta" MaxWidth="140" Margin="0,0,6,0"
+                                                                                   IsVisible="{Binding ShowsRepo}" TextTrimming="CharacterEllipsis"
+                                                                                   Foreground="{StaticResource KcapMutedBrush}" />
                                                                     <TextBlock Text="{Binding Meta}" Classes="railMeta" MaxWidth="180"
                                                                                IsVisible="{Binding Meta, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                                                                                TextTrimming="CharacterEllipsis" HorizontalAlignment="Left"
