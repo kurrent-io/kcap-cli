@@ -23,7 +23,7 @@ public class AgentCommandAccountTests {
 
     AgentCommand Command() =>
         new(Daemons.Store, Accounts, Config.Root, Resolutions.None(Config.Root), Home, TestHarnesses.All(),
-            TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System);
+            TestBinaries.None, new WorkingDirectory(Daemons.Root), TimeProvider.System, new StandardStreams(TextWriter.Null, TextWriter.Null, TextReader.Null));
 
     Task<int> Start(params string[] args) =>
         Command().HandleAsync(["agent", "start", .. args, "--daemon", DaemonName], Server);
