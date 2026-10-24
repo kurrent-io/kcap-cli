@@ -61,7 +61,10 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     /// Deletions by arrival order: a read admitted before one still lists the session.
     long _deleteSeq;
     readonly Dictionary<string, long> _tombstones = new(StringComparer.Ordinal);
-    TaskCompletionSource _settled = Completed();
+    /// Requests awaiting the next admitted read, and those the read in progress answers: a request
+    /// is settled by its own read, whatever refreshes queue behind it.
+    List<TaskCompletionSource> _waiting = [];
+    List<TaskCompletionSource> _serving = [];
     bool _disposed;
 
     public ServerSessionsService(
@@ -99,6 +102,9 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         lane.SessionPushes
             .Where(push => push.Kind == SessionPushKind.Deleted)
             .Subscribe(push => {
+                // The drop is announced before the snapshot without the row, so a consumer acting
+                // on the removal alone does not mistake a daemon row it exposes for a takeover.
+                _dropped.OnNext(push.SessionId);
                 lock (_lock) {
                     _live.Remove(push.SessionId);
                     _mineLive.Remove(push.SessionId);
@@ -107,7 +113,6 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     if (_kept == push.SessionId) _keptRow = null;
                     EmitSnapshot();
                 }
-                _dropped.OnNext(push.SessionId);
             }).DisposeWith(_subscriptions);
         var window = pushDebounce ?? DefaultPushDebounce;
         var scheduler = pushScheduler ?? DefaultScheduler.Instance;
@@ -195,18 +200,20 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     /// A full request stays requested until a full read starts, so a live-only run in flight reruns full.
     Task RequestAsync(bool full) {
+        TaskCompletionSource waiter;
         lock (_lock) {
             if (_disposed) return Task.CompletedTask;
             if (full) _fullRequested = true;
+            waiter = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _waiting.Add(waiter);
             if (_busy) {
                 _rerun = true;
-                return _settled.Task;
+                return waiter.Task;
             }
             _busy = true;
-            _settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
         }
         _ = RunAsync();
-        return _settled.Task;
+        return waiter.Task;
     }
 
     void ReconcileIfConnected() => RequestIfConnected(full: true);
@@ -239,6 +246,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 full = _fullRequested;
                 _fullRequested = false;
                 readSeq = _deleteSeq;
+                _serving = _waiting;
+                _waiting = [];
             }
             Snapshot? snapshot = null;
             var unauthorized = false;
@@ -249,7 +258,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             }
             var notifyUnauthorized = false;
             bool rerun;
-            TaskCompletionSource? settled = null;
+            List<TaskCompletionSource> served;
             lock (_lock) {
                 // A read taken under another scope or page count answers a question no longer asked,
                 // and one admitted while the lane is down answers for a lane that is not there.
@@ -259,16 +268,14 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     if (unauthorized) notifyUnauthorized = true;
                 }
                 rerun = _rerun;
-                if (rerun) {
-                    _rerun = false;
-                } else {
-                    _busy = false;
-                    settled = _settled;
-                }
+                if (rerun) _rerun = false;
+                else _busy = false;
+                served = _serving;
+                _serving = [];
             }
+            foreach (var waiter in served) waiter.TrySetResult();
             if (notifyUnauthorized) _onUnauthorized?.Invoke(laneEpoch);
             if (rerun) continue;
-            settled?.TrySetResult();
             return;
         }
     }
@@ -353,6 +360,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     void ClearForNewAccount() {
         var gone = _live.Keys.Concat(_mineLive.Keys).Concat(_ended.Keys).Append(_kept)
             .OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        foreach (var id in gone) _dropped.OnNext(id);
         _live.Clear();
         _mineLive.Clear();
         _ended.Clear();
@@ -365,13 +373,6 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _keptRow = null;
         _tombstones.Clear();
         EmitSnapshot();
-        foreach (var id in gone) _dropped.OnNext(id);
-    }
-
-    static TaskCompletionSource Completed() {
-        var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        source.SetResult();
-        return source;
     }
 
     /// Authenticated GET of one listing page through the waiting verb, so a token the hub refreshed
@@ -415,15 +416,17 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     };
 
     public void Dispose() {
-        TaskCompletionSource settled;
+        List<TaskCompletionSource> waiters;
         lock (_lock) {
             if (_disposed) return;
             _disposed = true;
-            settled = _settled;
+            waiters = [.. _waiting, .. _serving];
+            _waiting = [];
+            _serving = [];
         }
         _subscriptions.Dispose();
         _cadence.Dispose();
-        settled.TrySetResult();
+        foreach (var waiter in waiters) waiter.TrySetResult();
         _live.Dispose();
         _mineLive.Dispose();
         _ended.Dispose();

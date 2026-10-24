@@ -1705,6 +1705,58 @@ public class MainWindowViewModelTests {
         });
     }
 
+    /// Dropping the server row lets a completed daemon row for the same session show again; that row
+    /// is no takeover, and the server's word that the session is gone closes the workspace.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_dropped_session_closes_even_when_a_completed_daemon_row_resurfaces() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, sessions: host.Sessions);
+            vm.OpenSession("S", AgentOrigin.Server);
+
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("server:S");
+                rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S", "Completed"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            });
+            host.Sessions.DroppedSubject.OnNext("S");
+
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is null, what: "closed on the drop");
+        });
+    }
+
+    /// While the local daemon reports another server, a local row sharing the id is another session.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_only_workspace_ignores_a_local_row_from_another_server() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            host.Directory.LocalOnAppServer.OnNext(false);
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S", "active"));
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => host.NewServer(id, "active"), directory: host.Directory, sessions: host.Sessions);
+            vm.OpenSession("S", AgentOrigin.Server);
+            var open = vm.CurrentWorkspace;
+
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("server:S");
+                rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            });
+
+            await Task.Delay(100);
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(open);
+            vm.CloseWorkspace();
+        });
+    }
+
     /// One changeset can carry a live revision and the end together; the directory's state when the
     /// change is read is what counts.
     [Test]

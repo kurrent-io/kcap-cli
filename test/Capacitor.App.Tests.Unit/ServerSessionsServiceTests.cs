@@ -1,4 +1,5 @@
 using System.Reactive.Concurrency;
+using System.Reactive.Linq;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -446,6 +447,54 @@ public class ServerSessionsServiceTests {
 
         await Task.Delay(100);
         await Assert.That(seen).DoesNotContain(true);
+    }
+
+    /// The drop is announced before the snapshot without the row: a consumer acting on the removal
+    /// alone would otherwise treat a daemon row the removal exposes as a takeover.
+    [Test]
+    public async Task A_deletion_is_announced_before_the_snapshot_that_lacks_it() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        var order = new List<string>();
+        using var dropped = service.Dropped.Subscribe(id => order.Add($"dropped {id}"));
+        using var snapshots = service.Snapshots.Where(s => s.Ended.All(r => r.SessionId != "s3")).Take(1).Subscribe(_ => order.Add("snapshot"));
+
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.Deleted, "s3"));
+
+        await Eventually(() => order.Count >= 2, "both announcements");
+        await Assert.That(order[0]).IsEqualTo("dropped s3");
+        await Assert.That(order[1]).IsEqualTo("snapshot");
+    }
+
+    /// A paging request is answered by the read admitted after it, whatever refreshes queue behind.
+    [Test]
+    public async Task A_paging_request_completes_while_pushes_keep_arriving() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first page");
+        var liveReads = listing.Count("active", "me", 0);
+        var pageGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var rerunGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        listing.Gate = q => q switch {
+            { State: "ended", Offset: 20 } => pageGate.Task,
+            { State: "active", Owner: "me" } when listing.Count("active", "me", 0) > liveReads + 1 => rerunGate.Task,
+            _ => Task.CompletedTask,
+        };
+
+        var more = service.ShowMoreAsync();
+        await Eventually(() => listing.Count("ended", "me", 20) == 1, "second page in flight");
+        lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveRemoved, "live-me"));
+        await Task.Delay(50);
+        pageGate.SetResult();
+
+        await more.WaitAsync(TimeSpan.FromSeconds(2));
+        await Assert.That(service.Ended.Count).IsEqualTo(40);
+        rerunGate.SetResult();
     }
 
     [Test]
