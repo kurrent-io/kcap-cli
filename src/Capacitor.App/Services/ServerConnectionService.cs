@@ -41,6 +41,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     readonly BehaviorSubject<ServerLaneStatus> _status = new(new(ServerLaneState.Dormant));
     readonly Subject<Unit> _agentsChanged = new();
     readonly Subject<Unit> _daemonsChanged = new();
+    readonly Subject<Unit> _daemonAccountsChanged = new();
     readonly Subject<LaunchFailure> _launchFailures = new();
     readonly Subject<string> _permissionPending = new();
     readonly Subject<PermissionRespondedPing> _permissionResponded = new();
@@ -306,6 +307,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
             .Build();
         hub.On(HubBroadcasts.AgentInstancesChanged, () => _agentsChanged.OnNext(Unit.Default));
         hub.On(HubBroadcasts.DaemonsChanged, () => _daemonsChanged.OnNext(Unit.Default));
+        hub.On(HubBroadcasts.DaemonAccountsChanged, () => _daemonAccountsChanged.OnNext(Unit.Default));
         hub.On<string, string>(HubBroadcasts.LaunchFailed, (agentId, reason) => _launchFailures.OnNext(new(agentId, reason)));
         hub.On<string>(HubBroadcasts.PermissionPending, _permissionPending.OnNext);
         hub.On<string, string?>(HubBroadcasts.PermissionResponded, (sid, rid) => _permissionResponded.OnNext(new(sid, rid)));
@@ -548,6 +550,7 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
         _status.Dispose();
         _agentsChanged.Dispose();
         _daemonsChanged.Dispose();
+        _daemonAccountsChanged.Dispose();
         _launchFailures.Dispose();
         _permissionPending.Dispose();
         _permissionResponded.Dispose();
