@@ -397,10 +397,9 @@ record McpToolsResult(McpTool[] Tools);
 
 record McpTool(string Name, string Description, McpInputSchema InputSchema, McpToolAnnotations Annotations);
 
-record McpInputSchema(string Type, Dictionary<string, McpSchemaProperty> Properties, string[] Required) {
-    /// <summary>Always false: the stdio loop refuses an undeclared argument, and the schema says so to the client.</summary>
-    public bool AdditionalProperties { get; }
-}
+// No additionalProperties keyword: Gemini's function declarations reject it, and the stdio loop refuses an
+// undeclared argument on every host anyway.
+record McpInputSchema(string Type, Dictionary<string, McpSchemaProperty> Properties, string[] Required);
 
 // Items was added when the work-items server declared the first `array`-typed properties in any of
 // these MCP servers, and an array with no `items` is incomplete JSON Schema — a strict client can
