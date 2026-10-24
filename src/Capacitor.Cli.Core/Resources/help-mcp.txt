@@ -91,6 +91,17 @@ mcp flows:
       get_flow_status        Get status, rounds, and pending messages.
       close_flow             Close a flow run.
 
+    Wake-up tools (a running hosted agent only):
+      schedule_wakeup        Have a prompt delivered to this agent later, by
+                             `delay_minutes` or `at` (1 minute to 7 days), waking
+                             it if idle. A terminal session or flow participant is
+                             refused.
+      list_wakeups           This session's pending wake-ups, and those settled in
+                             the last 24 hours with how they ended.
+      cancel_wakeup          Cancel a pending wake-up by `wakeup_id`.
+    A server without wake-ups (or with `Features:AgentWakeUps` off) is reported
+    as not supporting them.
+
   The reviewer vendor is chosen independently of the driver harness. Pass the
   lowercase canonical token; naming a reviewer is never inferred from the driver.
   The tokens above are the protocol vocabulary — availability is per daemon: the
