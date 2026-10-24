@@ -192,6 +192,13 @@ public class PullRequestToneCacheTests {
     static AgentRow Row(string id, string? sessionId) => AgentRow.FromLocal(
         new(id, "agent", "claude", "/repo", "Running", null, null, null, DateTime.UtcNow, null, null, SessionId: sessionId), Repo);
 
+    static AgentRow Ended(string sessionId) => AgentRow.FromServer(new Capacitor.Remote.Models.RepoSessionDto {
+        SessionId = sessionId, Status = "ended", AccessLevel = "full", Vendor = "claude", Title = "Ended",
+        Owner = new() { UserId = "u1", DisplayName = "Alexey" },
+        StartedAt = DateTimeOffset.UnixEpoch, LastActivityAt = DateTimeOffset.UnixEpoch.AddHours(1), EndedAt = DateTimeOffset.UnixEpoch.AddHours(1),
+        Repo = new() { Hash = "h", Owner = "kurrent-io", Name = "kcap-cli" },
+    }, hostedPresentation: false);
+
     static (FakeAgentDirectory Directory, FakePullRequestSource Source, FakeTimeProvider Time, PullRequestToneCache Cache) Build() {
         var directory = new FakeAgentDirectory();
         var time = new FakeTimeProvider();
@@ -264,6 +271,24 @@ public class PullRequestToneCacheTests {
         await Assert.That(source.Lists).IsEqualTo(1);
 
         time.Advance(TimeSpan.FromMinutes(2));
+        await WaitUntilAsync(() => source.Lists == 2, what: "second read");
+    }
+
+    /// An ended session's pull requests move rarely, so its rows read on the slow cadence while a
+    /// live row keeps the two-minute one.
+    [Test]
+    public async Task An_ended_sessions_pull_requests_refresh_on_the_slow_cadence() {
+        var (directory, source, time, cache) = Build();
+        using var _c = cache;
+        using var _d = directory;
+        source.AccessSeconds = 3600;
+        directory.Rows.AddOrUpdate(Ended("s1"));
+        await WaitUntilAsync(() => source.Lists == 1, what: "first read");
+
+        time.Advance(TimeSpan.FromMinutes(2).Add(TimeSpan.FromSeconds(1)));
+        await Assert.That(source.Lists).IsEqualTo(1);
+
+        time.Advance(TimeSpan.FromMinutes(8));
         await WaitUntilAsync(() => source.Lists == 2, what: "second read");
     }
 

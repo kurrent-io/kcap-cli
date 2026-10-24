@@ -14,6 +14,7 @@ namespace Capacitor.App.Services;
 /// rather than mapped to None, so consumers can test membership.
 public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
+    static readonly TimeSpan DefaultEndedRefreshEvery = TimeSpan.FromMinutes(10);
     static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(1);
 
     /// What the cache holds for one listed session. The version is reissued on every invalidation, so
@@ -37,6 +38,7 @@ public sealed class PullRequestToneCache : IDisposable {
     readonly IPullRequestSource _source;
     readonly TimeProvider _time;
     readonly TimeSpan _refreshEvery;
+    readonly TimeSpan _endedRefreshEvery;
     readonly object _lock = new();
     readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     /// Outlives a removed entry: a session listed again waits for the read it still has in flight.
@@ -48,20 +50,30 @@ public sealed class PullRequestToneCache : IDisposable {
     readonly CancellationTokenSource _cancel = new();
     readonly ITimer _timer;
     IReadOnlySet<string> _sessions = FrozenSet<string>.Empty;
+    /// Listed only as ended: their pull requests move rarely, so they read on the slow cadence.
+    IReadOnlySet<string> _endedSessions = FrozenSet<string>.Empty;
     bool _disposed;
 
-    public PullRequestToneCache(IAgentDirectory directory, IPullRequestSource source, TimeProvider time, TimeSpan? refreshEvery = null) {
+    public PullRequestToneCache(
+            IAgentDirectory directory, IPullRequestSource source, TimeProvider time,
+            TimeSpan? refreshEvery = null, TimeSpan? endedRefreshEvery = null) {
         _source = source;
         _time = time;
         _refreshEvery = refreshEvery ?? DefaultRefreshEvery;
+        _endedRefreshEvery = endedRefreshEvery ?? DefaultEndedRefreshEvery;
         // A local row's session id names a session on whatever server the daemon reports; only
         // while that is the app's own server can it be read here (the directory's own rule).
         directory.Rows.Connect().ToCollection()
             .CombineLatest(directory.LocalDaemonOnAppServer, (rows, localOnAppServer) => rows
                 .Where(r => r.SessionId is { Length: > 0 } && (localOnAppServer || r.Origin != AgentOrigin.Local))
-                .Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal))
-            .Subscribe(sessions => {
-                lock (_lock) _sessions = sessions;
+                .ToList())
+            .Subscribe(rows => {
+                lock (_lock) {
+                    _sessions = rows.Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal);
+                    _endedSessions = rows.Where(r => r.IsEndedSession).Select(r => r.SessionId!)
+                        .Except(rows.Where(r => !r.IsEndedSession).Select(r => r.SessionId!))
+                        .ToFrozenSet(StringComparer.Ordinal);
+                }
                 Tick();
             })
             .DisposeWith(_subscriptions);
@@ -94,6 +106,8 @@ public sealed class PullRequestToneCache : IDisposable {
         return entry;
     }
 
+    TimeSpan CadenceFor(string session) => _endedSessions.Contains(session) ? _endedRefreshEvery : _refreshEvery;
+
     /// The entry a read started at <paramref name="version"/> may still write to, or null when that read is stale.
     Entry? LiveEntry(string session, long version) =>
         !_disposed && _entries.TryGetValue(session, out var entry) && entry.Version == version ? entry : null;
@@ -124,7 +138,7 @@ public sealed class PullRequestToneCache : IDisposable {
             due = _sessions
                 .Select(s => (Session: s, Entry: _entries[s]))
                 .Where(e => !_inFlight.Contains(e.Session)
-                    && (e.Entry.ReadAt is not { } at || _time.GetElapsedTime(at) >= (e.Entry.RefreshAfter ?? _refreshEvery)))
+                    && (e.Entry.ReadAt is not { } at || _time.GetElapsedTime(at) >= (e.Entry.RefreshAfter ?? CadenceFor(e.Session))))
                 .Select(e => (e.Session, e.Entry.Version)).ToList();
             foreach (var (session, _) in due) {
                 _inFlight.Add(session);
@@ -204,7 +218,7 @@ public sealed class PullRequestToneCache : IDisposable {
                 entry.Access = (_time.GetTimestamp(), remaining);
                 var readFor    = entry.ReadAt is { } at ? _time.GetElapsedTime(at).TotalSeconds : 0;
                 var renewAfter = readFor + Math.Max(1, remaining - 10);
-                entry.RefreshAfter = TimeSpan.FromSeconds(Math.Clamp(renewAfter, 1, _refreshEvery.TotalSeconds));
+                entry.RefreshAfter = TimeSpan.FromSeconds(Math.Clamp(renewAfter, 1, CadenceFor(session).TotalSeconds));
             }
             PublishSummaries();
         }
