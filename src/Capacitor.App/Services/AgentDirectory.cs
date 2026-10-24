@@ -363,7 +363,8 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             next.RemoveAll(row => {
                 if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Remote) || !Matchable(row)) return false;
                 if (listedIdOf.GetValueOrDefault(row.Key) is { } sid) return !mine.Contains(sid);
-                return row.Origin == AgentOrigin.Remote;
+                // The registry names the owner before the listing names the session.
+                return row.Origin == AgentOrigin.Remote && !(row.OwnerUserId is { } owner && _viewerIds.Contains(owner));
             });
         }
 
@@ -378,7 +379,13 @@ public sealed class AgentDirectory : IAgentDirectory, IDisposable {
             next.RemoveAll(row => {
                 if (row.Origin is not (AgentOrigin.Local or AgentOrigin.Remote) || listedIdOf.GetValueOrDefault(row.Key) != sid || !Matchable(row)) return false;
                 if (row.Origin == AgentOrigin.Remote) {
-                    if (!_registryCurrent) return true;
+                    // A stale registry is not an ended session: the retained row stands while the
+                    // listing says live, and yields only to the server's word that it ended.
+                    if (!_registryCurrent) {
+                        if (serverEnded) return true;
+                        suppressServer = true;
+                        return false;
+                    }
                     suppressServer = true;
                     hostedNow = true;
                     return false;

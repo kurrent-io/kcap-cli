@@ -318,6 +318,23 @@ public class RemoteAgentsServiceTests {
         await Assert.That(seen).DoesNotContain(true);
     }
 
+    /// A read admitted after the lane dropped is as stale as one that outlived it.
+    [Test]
+    public async Task A_refresh_admitted_after_the_lane_dropped_does_not_report_current() {
+        var lane = new FakeServerLane();
+        using var svc = new RemoteAgentsService(lane, _ => Task.FromResult(new RemoteFetch([])), TimeSpan.Zero);
+        var seen = new List<bool>();
+        using var _ = svc.Current.Subscribe(seen.Add);
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: "u1", Epoch: 1));
+        await Eventually(() => seen.Contains(true));
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+
+        lane.AgentsChangedSubject.OnNext(System.Reactive.Unit.Default);
+
+        await Task.Delay(100);
+        await Assert.That(seen[^1]).IsFalse();
+    }
+
     [Test]
     public async Task Current_drops_when_the_lane_leaves_connected() {
         var lane = new FakeServerLane();

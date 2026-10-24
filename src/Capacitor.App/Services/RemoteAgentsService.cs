@@ -44,6 +44,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     readonly Lock _lock = new();
     int _generation;
+    bool _connected;
     string? _lastSubject;
     // The lane's own Epoch off the latest Connected status seen — captured per fetch and handed
     // to onUnauthorized, so ServerConnectionService.ParkSignedOut(int) can re-validate a delayed
@@ -81,6 +82,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             .Subscribe(_ => {
                 lock (_lock) {
                     _generation++;
+                    _connected = false;
                     _current.OnNext(false);
                 }
             });
@@ -97,6 +99,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                         _lastSubject = s.Subject;
                     }
                     _lastLaneEpoch = s.Epoch;
+                    _connected = true;
                 }
             });
 
@@ -147,7 +150,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 // A completion from before the latest connect must never repopulate the cache or
                 // report an auth failure a fresher connect may already have superseded — checked
                 // under the same lock a connect's generation bump takes.
-                if (generation == _generation) {
+                // A refresh admitted after the lane dropped is as stale as one that outlived it.
+                if (generation == _generation && _connected) {
                     if (result?.Rows is { } rows)
                         _agents.EditDiff(rows, EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;

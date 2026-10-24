@@ -25,6 +25,8 @@ sealed class FakeServerSessionsService : IServerSessionsService, IDisposable {
     public IObservableCache<RepoSessionDto, string> MineLive => MineLiveCache.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> Ended => EndedCache.AsObservableCache();
     public string? Kept;
+    public readonly Subject<string> DroppedSubject = new();
+    public IObservable<string> Dropped => DroppedSubject;
     /// Derived from the three caches, so a test edits one cache and the directory sees the whole state.
     public IObservable<ServerSessionsSnapshot> Snapshots => Observable.CombineLatest(
         LiveCache.Connect(suppressEmptyChangeSets: false).ToCollection().StartWith((IReadOnlyCollection<RepoSessionDto>)[]),

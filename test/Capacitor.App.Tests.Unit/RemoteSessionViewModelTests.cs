@@ -391,6 +391,47 @@ public class RemoteSessionViewModelTests {
         });
     }
 
+    /// The directory already folded the owner through the account's aliases; the raw owner id is
+    /// an older spelling of the same viewer.
+    [Test]
+    public async Task A_server_row_the_listing_marks_as_the_viewers_reads_as_owned() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1") with { OwnerUserId = "legacy-id", OwnerIsViewer = true });
+            await WaitUntilAsync(() => vm.Access == RemoteSessionAccess.Ready, what: "ready");
+
+            await Assert.That(vm.Chat.UserTitle).IsEqualTo("You");
+            await vm.TeardownAsync();
+        });
+    }
+
+    [Test]
+    public async Task A_session_only_workspace_cannot_stop() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1", "active"));
+
+            await Assert.That(await vm.StopCommand.CanExecute.FirstAsync()).IsFalse();
+            await vm.TeardownAsync();
+        });
+    }
+
+    /// The listing shares a teammate's session at the level the server grants; below full there is no
+    /// chat to subscribe to, and the note says so instead of reporting a lost access.
+    [Test]
+    public async Task A_shared_server_row_below_full_access_opens_without_a_chat_lease() {
+        await RunOnUiAsync(async () => {
+            using var h = new Harness();
+            var vm = h.Build(Harness.ServerRow("s1") with { AccessLevel = "overview" });
+
+            await Task.Delay(100);
+            await Assert.That(vm.Access).IsEqualTo(RemoteSessionAccess.Denied);
+            await Assert.That(vm.AccessNote).Contains("overview");
+            await Assert.That(h.Lane.ChatSubscribes).DoesNotContain("s1");
+            await vm.TeardownAsync();
+        });
+    }
+
     [Test]
     public async Task Open_in_web_on_a_session_only_workspace_opens_the_session_page() {
         await RunOnUiAsync(async () => {

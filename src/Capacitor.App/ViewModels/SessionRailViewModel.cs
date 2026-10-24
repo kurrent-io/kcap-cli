@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using System.Globalization;
 using System.Reactive;
 using System.Reactive.Concurrency;
@@ -237,12 +238,6 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
         var commands = (agentsRunningCommands ?? Observable.Return<IReadOnlyDictionary<string, int>>(
                 FrozenDictionary<string, int>.Empty)).ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
 
-        _isEmpty = directory.Rows.CountChanged
-            .Select(c => c == 0)
-            .ObserveOn(RxSchedulers.MainThreadScheduler)
-            .ToProperty(this, x => x.IsEmpty, initialValue: directory.Rows.Count == 0)
-            .DisposeWith(_disposables);
-
         var paging = (sessions?.Paging ?? Observable.Return(new ServerSessionsPaging(0, 0, 1, false, false)))
             .ObserveOn(RxSchedulers.MainThreadScheduler).Replay(1).RefCount();
         _loadedText = paging.Select(p => p.Total == 0 && p.Loaded == 0 ? "" : $"{p.Loaded} of {p.Total}")
@@ -284,6 +279,13 @@ public sealed class SessionRailViewModel : ReactiveObject, IDisposable {
             .DisposeMany()
             .SortAndBind(_groupsSource, _groupComparer)
             .Subscribe()
+            .DisposeWith(_disposables);
+        // The groups, not the directory: a state filter that leaves nothing is an empty rail too.
+        _isEmpty = Observable.FromEventPattern<NotifyCollectionChangedEventHandler, NotifyCollectionChangedEventArgs>(
+                handler => _groupsSource.CollectionChanged += handler, handler => _groupsSource.CollectionChanged -= handler)
+            .Select(_ => _groupsSource.Count == 0)
+            .DistinctUntilChanged()
+            .ToProperty(this, x => x.IsEmpty, initialValue: _groupsSource.Count == 0)
             .DisposeWith(_disposables);
     }
 

@@ -169,6 +169,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     readonly Func<string, RemoteSessionViewModel?>? _remoteFactory;
     readonly Func<string, RemoteSessionViewModel?>? _serverFactory;
     readonly IAgentDirectory? _directory;
+    readonly IServerSessionsService? _sessions;
     readonly IDisposable _onAppServer;
     /// A session id names a session only within one server: a hand-off to the server's row is
     /// sound only while the local daemon reports the app's server.
@@ -350,7 +351,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
             HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null, Action? openLaunchApprovals = null,
-            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null) {
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null) {
         _service = service;
         _serverFactory = serverWorkspaceFactory;
         Time = time;
@@ -364,6 +365,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         _originOf = originOf ?? (_ => AgentOrigin.Local);
         _remoteFactory = remoteWorkspaceFactory;
         _directory = directory;
+        _sessions = sessions;
         _onAppServer = directory?.LocalDaemonOnAppServer.Subscribe(on => _localOnAppServer = on) ?? Disposable.Empty;
         Rail = rail;
         TenantName = ProfileLabelForRail(tenantName);
@@ -723,6 +725,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         var live = CurrentWorkspace;
         CurrentWorkspace = null;
         _rebind.Disposable = Disposable.Empty;
+        _handoff.Disposable = Disposable.Empty;
         if (Rail is not null) Rail.SelectedSessionKey = null;
         _navigation.Latch();
         if (live is not null) _trackTeardown(live.TeardownAsync);
@@ -739,6 +742,7 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
         };
         _navigation.Bump();
         if (outgoing is not null) _trackTeardown(outgoing.TeardownAsync);
+        _handoff.Disposable = Disposable.Empty;
         // Last, so a watch that fires synchronously on its first element cannot have the swap it
         // caused overwritten by the arming that is still returning.
         WatchOpen(next);
@@ -748,8 +752,9 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// Once its session ends it hands off to the server's row for that session, which opens the
     /// ended session read-only; a session the server never lists closes as the rail has dropped it,
     /// and a failed local agent closes at once so its reason stays where the rail shows it. A
-    /// session-only workspace closes when its row leaves the directory: the kept row survives every
-    /// page cut, so the row leaves only on a deletion or an account change.
+    /// session-only workspace closes on the server's own word that the session is gone, and follows
+    /// the session onto a daemon row that takes it up; a row removed by a page cut or a scope switch
+    /// is neither, and the workspace outlives it.
     void WatchOpen(ISessionWorkspace? workspace) {
         var moves = workspace switch {
             RemoteSessionViewModel { IsSessionOnly: false } remote => remote.OriginChangedChanges
@@ -772,12 +777,21 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
                         ArmHandoff(local, directory, sessionId, $"local:{local.AgentId}", closeWithout: true);
                     else CloseWorkspace();
                 }),
-            RemoteSessionViewModel { IsSessionOnly: true } session when _directory is { } directory => directory.Rows.Connect()
-                .ObserveOn(RxSchedulers.MainThreadScheduler)
-                .SelectMany(changes => changes)
-                .Where(change => change.Key == $"server:{session.AgentId}" && change.Reason == ChangeReason.Remove)
-                .Take(1)
-                .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); }),
+            RemoteSessionViewModel { IsSessionOnly: true } session when _directory is { } directory => new CompositeDisposable(
+                (_sessions?.Dropped ?? Observable.Empty<string>())
+                    .Where(id => id == session.AgentId)
+                    .Take(1)
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .Subscribe(_ => { if (ReferenceEquals(CurrentWorkspace, workspace)) CloseWorkspace(); }),
+                directory.Rows.Connect()
+                    .ObserveOn(RxSchedulers.MainThreadScheduler)
+                    .SelectMany(changes => changes)
+                    .Where(change => change.Key == $"server:{session.AgentId}" && change.Reason == ChangeReason.Remove)
+                    .Subscribe(_ => {
+                        if (!ReferenceEquals(CurrentWorkspace, workspace)) return;
+                        if (DaemonRowFor(directory, session.AgentId) is { } row)
+                            Rebind(session, row.Origin, row.Id, terminal: false, pullRequest: session.IsPullRequestActive);
+                    })),
             RemoteSessionViewModel { IsSessionOnly: false } remote => remote.SessionEndedChanges
                 .DistinctUntilChanged()
                 .Where(ended => ended)
@@ -831,6 +845,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
 
     static string? SessionOf(RemoteSessionViewModel remote) => remote.SessionId is { Length: > 0 } id ? id : null;
 
+    /// The daemon row hosting a session the server lists under its own spelling of the id.
+    static AgentRow? DaemonRowFor(IAgentDirectory directory, string serverSessionId) =>
+        directory.Rows.Items.FirstOrDefault(r => r.Origin is AgentOrigin.Local or AgentOrigin.Remote && SessionIds.SameSession(serverSessionId, r.SessionId));
+
     enum HandoffOutcome { ServerRow, Returned, Lapsed }
 
     /// Waits for the server's row for the session, within the grace, unless the daemon row comes
@@ -839,15 +857,17 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     void ArmHandoff(ISessionWorkspace open, IAgentDirectory directory, string sessionId, string daemonKey, bool closeWithout) {
         // The server spells the id its own way, so its row is found by identity rather than by key.
         AgentRow? EndedServerRow() => directory.Rows.Items.FirstOrDefault(r => r.IsEndedSession && SessionIds.SameSession(r.SessionId, sessionId));
-        // The daemon row has returned only when a change to that row after arming shows it live: the
-        // directory can still carry it as running at the instant the workspace learns it completed,
-        // and another row's revision proves nothing about it.
+        // The daemon row has returned only when a change to that row after arming shows it live and
+        // the directory still says so when the change is read: the directory can carry the row as
+        // running at the instant the workspace learns it completed, another row's revision proves
+        // nothing about it, and a burst can queue a live revision ahead of the end.
         var outcomes = directory.Rows.Connect(suppressEmptyChangeSets: false)
             .ObserveOn(RxSchedulers.MainThreadScheduler)
             .Skip(1)
             .Select(changes => changes.Any(change => change.Key == daemonKey
-                && change.Reason is ChangeReason.Add or ChangeReason.Update or ChangeReason.Refresh
-                && !SessionStatusDots.IsTerminal(change.Current.Status)))
+                    && change.Reason is ChangeReason.Add or ChangeReason.Update or ChangeReason.Refresh
+                    && !SessionStatusDots.IsTerminal(change.Current.Status))
+                && directory.Rows.Lookup(daemonKey) is { HasValue: true, Value: var back } && !SessionStatusDots.IsTerminal(back.Status))
             .StartWith(false)
             .Select(returned => returned
                 ? HandoffOutcome.Returned

@@ -431,6 +431,22 @@ public class SessionRailViewModelTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public async Task The_rail_is_empty_when_the_state_filter_leaves_no_rows() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            var (directory, sessions, _, _, rail) = BuildWithControls();
+            using (directory) using (sessions) using (rail) {
+                directory.Rows.AddOrUpdate(Server("ended"));
+                await Assert.That(rail.IsEmpty).IsFalse();
+
+                rail.State = RailState.Live;
+
+                await Assert.That(rail.IsEmpty).IsTrue();
+            }
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public async Task Selecting_a_server_row_keeps_its_session_in_the_listing() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             var (directory, sessions, _, _, rail) = BuildWithControls();
@@ -507,6 +523,8 @@ public class SessionRailViewModelTests {
 
                 time.Advance(TimeSpan.FromHours(12).Add(TimeSpan.FromMinutes(1)));
                 await Assert.That(Labels(rail)).IsEquivalentTo(["Yesterday", "Fri 23 Oct"], CollectionOrdering.Matching);
+                await Assert.That(rail.Groups[0].RootDisplay).IsEqualTo("Yesterday");
+                await Assert.That(rail.Groups[0].Tooltip).StartsWith("Yesterday");
             }
         });
     }

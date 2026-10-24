@@ -42,13 +42,14 @@ public class MainWindowViewModelTests {
             Func<string, RemoteSessionViewModel?>? remoteWorkspaceFactory = null,
             Action<Func<Task>>? trackWorkspaceTeardown = null, IAgentDirectory? directory = null,
             Action<FeedbackCategory>? openFeedback = null, IUrlOpener? opener = null,
-            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, TimeProvider? time = null) {
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, TimeProvider? time = null,
+            IServerSessionsService? sessions = null) {
         return new MainWindowViewModel(
             service, CancellationToken.None, TestActivity.New(), time ?? TimeProvider.System,
             trackWorkspaceTeardown: trackWorkspaceTeardown,
             workspaceFactory: workspaceFactory, rail: rail,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: directory,
-            openFeedback: openFeedback, opener: opener, serverWorkspaceFactory: serverWorkspaceFactory);
+            openFeedback: openFeedback, opener: opener, serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions);
     }
 
     /// A real WorkspaceViewModel over the fake service and scripted attach/surface fakes — same
@@ -1641,23 +1642,96 @@ public class MainWindowViewModelTests {
         });
     }
 
-    /// The kept row survives every page cut, so the server row leaves only on a deletion or an
-    /// account change: either way the transcript on screen is no longer the viewer's to see.
+    /// A scope switch or a daemon row taking the session removes the server row too; only the
+    /// server's own word that the session is gone closes the workspace.
     [Test]
     [NotInParallel("AvaloniaSession")]
-    public async Task A_session_only_workspace_closes_when_its_server_row_leaves_the_directory() {
+    public async Task A_session_only_workspace_survives_a_transient_row_removal() {
         await AvaloniaSession.WithImmediateRxScheduler(async () => {
             using var host = new RemoteHost();
             var service = new FakeDaemonClientService();
             host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
             var vm = NewVm(service, originOf: _ => AgentOrigin.Server,
-                serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory);
+                serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, sessions: host.Sessions);
             vm.OpenSession("S", AgentOrigin.Server);
-            await Assert.That(vm.CurrentWorkspace).IsNotNull();
+            var open = vm.CurrentWorkspace;
 
             host.Directory.Rows.Remove("server:S");
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+
+            await Assert.That(vm.CurrentWorkspace).IsSameReferenceAs(open);
+            vm.CloseWorkspace();
+        });
+    }
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_only_workspace_closes_when_the_server_drops_the_session() {
+        await AvaloniaSession.WithImmediateRxScheduler(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            var vm = NewVm(service, originOf: _ => AgentOrigin.Server,
+                serverWorkspaceFactory: id => host.NewServer(id), directory: host.Directory, sessions: host.Sessions);
+            vm.OpenSession("S", AgentOrigin.Server);
+
+            host.Sessions.DroppedSubject.OnNext("S");
 
             await Assert.That(vm.CurrentWorkspace).IsNull();
+        });
+    }
+
+    /// A daemon has taken the session up: the live workspace is the one to show.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_session_only_workspace_follows_the_session_onto_a_daemon_row() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            host.Directory.Rows.AddOrUpdate(RemoteHost.ServerRow("S", "active"));
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => host.NewServer(id, "active"), directory: host.Directory, sessions: host.Sessions);
+            vm.OpenSession("S", AgentOrigin.Server);
+
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.Edit(rows => {
+                rows.RemoveKey("server:S");
+                rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), new RepoIdentity("path:/repos/alpha", "alpha")));
+            });
+
+            await WorkspaceFixtures.WaitUntilAsync(() => vm.CurrentWorkspace is WorkspaceViewModel { AgentId: "a1" }, what: "the local workspace");
+            vm.CloseWorkspace();
+        });
+    }
+
+    /// One changeset can carry a live revision and the end together; the directory's state when the
+    /// change is read is what counts.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_live_revision_in_the_same_changeset_as_the_end_does_not_cancel_the_hand_off() {
+        await AvaloniaSession.RunOnUiAsync(async () => {
+            using var host = new RemoteHost();
+            var service = new FakeDaemonClientService();
+            var time = new FakeTimeProvider();
+            var repo = new RepoIdentity("path:/repos/alpha", "alpha");
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S"));
+            host.Directory.Rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S"), repo));
+            RemoteSessionViewModel? built = null;
+            var vm = NewVm(service, id => NewWorkspace(service, id),
+                originOf: id => id == "S" ? AgentOrigin.Server : AgentOrigin.Local,
+                serverWorkspaceFactory: id => built = host.NewServer(id), directory: host.Directory, time: time, sessions: host.Sessions);
+            vm.OpenSession("a1", AgentOrigin.Local);
+            service.Agents.AddOrUpdate(LocalWithSession("a1", "S", "Completed"));
+
+            host.Directory.Rows.Edit(rows => {
+                rows.AddOrUpdate(AgentRow.FromLocal(LocalWithSession("a1", "S") with { Title = "still running" }, repo));
+                rows.RemoveKey("local:a1");
+                rows.AddOrUpdate(RemoteHost.ServerRow("S"));
+            });
+
+            await WorkspaceFixtures.WaitUntilAsync(() => built is not null && ReferenceEquals(vm.CurrentWorkspace, built), what: "hand-off despite the live revision");
+            vm.CloseWorkspace();
         });
     }
 

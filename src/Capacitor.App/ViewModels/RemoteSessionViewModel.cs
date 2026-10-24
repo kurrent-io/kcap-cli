@@ -247,6 +247,8 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
 
     public string AccessNote => OriginChangedToLocal ? OriginChangedNote : Access switch {
         RemoteSessionAccess.Connecting => "Connecting to the session…",
+        RemoteSessionAccess.Denied when IsSessionOnly && _row.AccessLevel is { Length: > 0 } level && level != "full" =>
+            $"Shared with you at {level} access only · open it in web",
         RemoteSessionAccess.Denied => "You no longer have access to this session",
         RemoteSessionAccess.Offline => "Not connected to the server",
         RemoteSessionAccess.NoSession => !SessionEnded ? "Waiting for the session to start"
@@ -387,7 +389,7 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
         var stopKey = AgentActionService.StopKey(AgentOrigin.Remote, row.Id);
         var canStop = _sessionEndedChanges
             .CombineLatest(_originChangedChanges, actions.StopsInFlight,
-                (ended, movedLocal, inFlight) => !ended && !movedLocal && !inFlight.Contains(stopKey));
+                (ended, movedLocal, inFlight) => !IsSessionOnly && !ended && !movedLocal && !inFlight.Contains(stopKey));
         StopCommand = ReactiveCommand.Create(
             () => actions.RequestStop(row.Id, $"{_row.Vendor} · {_row.RepoGroupLabel}", _row.Kind, AgentOrigin.Remote,
                 accepted: () => RxSchedulers.MainThreadScheduler.Schedule(() => {
@@ -427,7 +429,11 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
             // and the end itself is the server's word on the row, not an agent's verdict.
             SessionEnded = row.IsEndedSession;
             _seenLive |= !SessionEnded;
-            if (sessionId is { Length: > 0 } && sessionId != _leasedSession) AcquireLease(sessionId);
+            // Below full access the server grants no chat; the note names the level instead of a loss.
+            if (row.AccessLevel is { Length: > 0 } level && level != "full") {
+                if (_leasedSession is not null) Release();
+                Access = RemoteSessionAccess.Denied;
+            } else if (sessionId is { Length: > 0 } && sessionId != _leasedSession) AcquireLease(sessionId);
             PublishSession(ended: SessionEnded);
             this.RaisePropertyChanged(nameof(IsSessionOnly));
             this.RaisePropertyChanged(nameof(ShowsStop));
@@ -494,8 +500,10 @@ public sealed class RemoteSessionViewModel : ReactiveObject, ISessionWorkspace {
     /// An unchanged row republishes nothing, so the pane's session handling runs only on a change.
     void PublishSession(bool ended) {
         var info = SessionInfo(_row, ended) with {
-            IsOwnedByCurrentUser = !string.IsNullOrWhiteSpace(_viewerSubject)
-                && string.Equals(_row.OwnerUserId, _viewerSubject, StringComparison.Ordinal),
+            // The directory folds the owner through the account's aliases where the listing names
+            // the session; the raw subject compare covers a registry row the listing has not.
+            IsOwnedByCurrentUser = _row.OwnerIsViewer ?? (!string.IsNullOrWhiteSpace(_viewerSubject)
+                && string.Equals(_row.OwnerUserId, _viewerSubject, StringComparison.Ordinal)),
         };
         if (info != _session.Value) _session.OnNext(info);
     }

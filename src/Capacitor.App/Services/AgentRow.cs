@@ -4,10 +4,6 @@ using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Services;
 
-/// Ordered: a session claimed on more than one lane resolves to the lowest. Server is a session
-/// the server lists with no daemon row behind it: live in a terminal, or ended.
-public enum AgentOrigin { Local, Remote, Pending, Server }
-
 /// One merged row. Key is SOURCE-scoped ("local:{id}" / "remote:{id}" / "pending:{id}" /
 /// "server:{sessionId}") so the lanes can never clobber each other; Id is the logical agent id
 /// workspaces bind to, which for a server row is the session id itself.
@@ -40,7 +36,9 @@ public sealed record AgentRow(
         // The server's stale flag on a live session: no activity for over an hour.
         bool IsStale = false,
         // A live server row no daemon hosts, past the hand-over grace: started in a terminal.
-        bool IsTerminalSession = false) {
+        bool IsTerminalSession = false,
+        // The listing's access level for the viewer; below "full" the server grants no chat.
+        string? AccessLevel = null) {
 
     /// A session the server lists as ended; a daemon row's Completed is not this.
     public bool IsEndedSession => Origin == AgentOrigin.Server && Status == "Completed";
@@ -84,7 +82,7 @@ public sealed record AgentRow(
             CheckoutKey: "@server", CheckoutLabel: "",
             OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
             LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
-            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation);
+            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

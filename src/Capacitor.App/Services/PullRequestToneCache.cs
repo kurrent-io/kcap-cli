@@ -16,6 +16,8 @@ public sealed class PullRequestToneCache : IDisposable {
     static readonly TimeSpan DefaultRefreshEvery = TimeSpan.FromMinutes(2);
     static readonly TimeSpan DefaultEndedRefreshEvery = TimeSpan.FromMinutes(10);
     static readonly TimeSpan TickEvery = TimeSpan.FromSeconds(1);
+    /// Every listed session comes due at once after a connect or a scope switch.
+    const int MaxConcurrentReads = 8;
 
     /// What the cache holds for one listed session. The version is reissued on every invalidation, so
     /// a read started before it recognises its result as stale.
@@ -50,8 +52,9 @@ public sealed class PullRequestToneCache : IDisposable {
     readonly CancellationTokenSource _cancel = new();
     readonly ITimer _timer;
     IReadOnlySet<string> _sessions = FrozenSet<string>.Empty;
-    /// Listed only as ended: their pull requests move rarely, so they read on the slow cadence.
-    IReadOnlySet<string> _endedSessions = FrozenSet<string>.Empty;
+    /// Sessions no daemon here hosts — ended, a terminal's, a teammate's: none is this app's to poll
+    /// every two minutes, and under Team there can be hundreds.
+    IReadOnlySet<string> _slowSessions = FrozenSet<string>.Empty;
     bool _disposed;
 
     public PullRequestToneCache(
@@ -70,8 +73,8 @@ public sealed class PullRequestToneCache : IDisposable {
             .Subscribe(rows => {
                 lock (_lock) {
                     _sessions = rows.Select(r => r.SessionId!).ToFrozenSet(StringComparer.Ordinal);
-                    _endedSessions = rows.Where(r => r.IsEndedSession).Select(r => r.SessionId!)
-                        .Except(rows.Where(r => !r.IsEndedSession).Select(r => r.SessionId!))
+                    _slowSessions = rows.Where(r => r.Origin == AgentOrigin.Server).Select(r => r.SessionId!)
+                        .Except(rows.Where(r => r.Origin != AgentOrigin.Server).Select(r => r.SessionId!))
                         .ToFrozenSet(StringComparer.Ordinal);
                 }
                 Tick();
@@ -106,7 +109,7 @@ public sealed class PullRequestToneCache : IDisposable {
         return entry;
     }
 
-    TimeSpan CadenceFor(string session) => _endedSessions.Contains(session) ? _endedRefreshEvery : _refreshEvery;
+    TimeSpan CadenceFor(string session) => _slowSessions.Contains(session) ? _endedRefreshEvery : _refreshEvery;
 
     /// The entry a read started at <paramref name="version"/> may still write to, or null when that read is stale.
     Entry? LiveEntry(string session, long version) =>
@@ -139,6 +142,7 @@ public sealed class PullRequestToneCache : IDisposable {
                 .Select(s => (Session: s, Entry: _entries[s]))
                 .Where(e => !_inFlight.Contains(e.Session)
                     && (e.Entry.ReadAt is not { } at || _time.GetElapsedTime(at) >= (e.Entry.RefreshAfter ?? CadenceFor(e.Session))))
+                .Take(Math.Max(0, MaxConcurrentReads - _inFlight.Count))
                 .Select(e => (e.Session, e.Entry.Version)).ToList();
             foreach (var (session, _) in due) {
                 _inFlight.Add(session);
@@ -190,13 +194,10 @@ public sealed class PullRequestToneCache : IDisposable {
             else if (!missed) Settle(session, version, revealed);
         } catch (OperationCanceledException) {
         } finally {
-            bool refresh;
-            lock (_lock) {
-                _inFlight.Remove(session);
-                refresh = !_entries.TryGetValue(session, out var entry) || entry.ReadAt is null;
-            }
-            // Refresh may have invalidated this read while it was in flight.
-            if (refresh) Tick();
+            lock (_lock) _inFlight.Remove(session);
+            // A refresh may have invalidated this read while it was in flight, and a read held back
+            // for a free slot is due now.
+            Tick();
         }
     }
 

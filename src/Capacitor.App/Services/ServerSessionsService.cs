@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reactive.Disposables;
 using System.Reactive.Disposables.Fluent;
+using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.Cli.Core;
@@ -54,6 +55,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
     bool _rerun;
     bool _fullRequested;
     readonly BehaviorSubject<ServerSessionsSnapshot> _snapshots = new(ServerSessionsSnapshot.Empty);
+    readonly Subject<string> _dropped = new();
     string? _kept;
     RepoSessionDto? _keptRow;
     /// Deletions by arrival order: a read admitted before one still lists the session.
@@ -67,7 +69,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             Func<ServerSessionsQuery, CancellationToken, Task<ServerSessionsFetch>> fetch,
             Func<CancellationToken, Task<SessionOwnerOptionDto[]?>> fetchOwners,
             TimeProvider time,
-            TimeSpan? pushDebounce = null, TimeSpan? reconcileEvery = null, Action<int>? onUnauthorized = null) {
+            TimeSpan? pushDebounce = null, TimeSpan? reconcileEvery = null, Action<int>? onUnauthorized = null,
+            IScheduler? pushScheduler = null) {
         _fetch = fetch;
         _fetchOwners = fetchOwners;
         _onUnauthorized = onUnauthorized;
@@ -104,25 +107,30 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                     if (_kept == push.SessionId) _keptRow = null;
                     EmitSnapshot();
                 }
+                _dropped.OnNext(push.SessionId);
             }).DisposeWith(_subscriptions);
-        // A live session changes its summary often; only an ending can move the ended prefix.
-        lane.SessionPushes
-            .Where(push => push.Kind is SessionPushKind.ActiveAdded or SessionPushKind.ActiveChanged)
-            .Throttle(pushDebounce ?? DefaultPushDebounce)
+        var window = pushDebounce ?? DefaultPushDebounce;
+        var scheduler = pushScheduler ?? DefaultScheduler.Instance;
+        // A live session changes its summary often; only an ending or a deletion can move the ended
+        // prefix. Sample, not Throttle, for the frequent kind: a debounce waits for a quiet an active
+        // org never gives. Zero is the tests' pass-through, which Sample cannot take as a period.
+        var livePushes = lane.SessionPushes.Where(push => push.Kind is SessionPushKind.ActiveAdded or SessionPushKind.ActiveChanged);
+        (window == TimeSpan.Zero ? livePushes.Throttle(window, scheduler) : livePushes.Sample(window, scheduler))
             .Subscribe(_ => RequestIfConnected(full: false)).DisposeWith(_subscriptions);
         lane.SessionPushes
-            .Where(push => push.Kind is SessionPushKind.ActiveRemoved or SessionPushKind.TitleChanged)
-            .Throttle(pushDebounce ?? DefaultPushDebounce)
+            .Where(push => push.Kind is SessionPushKind.ActiveRemoved or SessionPushKind.TitleChanged or SessionPushKind.Deleted)
+            .Throttle(window, scheduler)
             .Subscribe(_ => RequestIfConnected(full: true)).DisposeWith(_subscriptions);
 
         var every = reconcileEvery ?? DefaultReconcileEvery;
-        _cadence = time.CreateTimer(_ => ReconcileIfConnected(), null, every, every);
+        _cadence = time.CreateTimer(_ => { ReconcileIfConnected(); RetryOwnersIfUnresolved(); }, null, every, every);
     }
 
     public IObservableCache<RepoSessionDto, string> Live => _live.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> MineLive => _mineLive.AsObservableCache();
     public IObservableCache<RepoSessionDto, string> Ended => _ended.AsObservableCache();
     public IObservable<ServerSessionsSnapshot> Snapshots => _snapshots.AsObservable();
+    public IObservable<string> Dropped => _dropped.AsObservable();
     public IObservable<ServerSessionsPaging> Paging => _paging.AsObservable();
     public IObservable<int> LiveNotShown => _liveNotShown.AsObservable();
     public IObservable<IReadOnlySet<string>> ViewerIds => _viewerIds.AsObservable();
@@ -138,6 +146,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
                 _pages = 1;
                 _ended.Clear();
                 if (value == RailScope.Team) _mineLive.Clear();
+                // Retention exempts the open row from the page cut, not from whose sessions the scope shows.
+                _keptRow = null;
                 _paging.OnNext(new(0, 0, 1, false, false));
                 _scope.OnNext(value);
                 EmitSnapshot();
@@ -201,6 +211,14 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     void ReconcileIfConnected() => RequestIfConnected(full: true);
 
+    /// The owners read races the first listing read at connect; a miss there would otherwise leave
+    /// the viewer unresolved until the next reconnect.
+    void RetryOwnersIfUnresolved() {
+        bool retry;
+        lock (_lock) retry = _connected && !_disposed && _viewerIds.Value.Count == 0;
+        if (retry) _ = RefreshOwnersAsync();
+    }
+
     void RequestIfConnected(bool full) {
         bool connected;
         lock (_lock) connected = _connected && !_disposed;
@@ -233,8 +251,9 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
             bool rerun;
             TaskCompletionSource? settled = null;
             lock (_lock) {
-                // A read taken under another scope or page count answers a question no longer asked.
-                if (generation == _generation && !_disposed && scope == _scope.Value && pages == _pages) {
+                // A read taken under another scope or page count answers a question no longer asked,
+                // and one admitted while the lane is down answers for a lane that is not there.
+                if (generation == _generation && _connected && !_disposed && scope == _scope.Value && pages == _pages) {
                     if (snapshot is not null) Publish(snapshot, pages, readSeq);
                     _current.OnNext(snapshot is not null);
                     if (unauthorized) notifyUnauthorized = true;
@@ -332,6 +351,8 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
 
     /// Nothing listed under the previous account survives into the next one.
     void ClearForNewAccount() {
+        var gone = _live.Keys.Concat(_mineLive.Keys).Concat(_ended.Keys).Append(_kept)
+            .OfType<string>().Distinct(StringComparer.Ordinal).ToList();
         _live.Clear();
         _mineLive.Clear();
         _ended.Clear();
@@ -344,6 +365,7 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _keptRow = null;
         _tombstones.Clear();
         EmitSnapshot();
+        foreach (var id in gone) _dropped.OnNext(id);
     }
 
     static TaskCompletionSource Completed() {
@@ -412,5 +434,6 @@ public sealed class ServerSessionsService : IServerSessionsService, IDisposable 
         _current.Dispose();
         _scope.Dispose();
         _snapshots.Dispose();
+        _dropped.Dispose();
     }
 }

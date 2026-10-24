@@ -350,6 +350,38 @@ public class AgentDirectoryTests {
         sessions.MineLiveCache.AddOrUpdate(row);
     }
 
+    /// A registry read that fails or a lane blip makes the registry stale, not the session ended:
+    /// while the listing says live, the retained row stands and the server row stays hidden.
+    [Test]
+    public async Task A_stale_registry_row_stays_while_the_listing_says_live() {
+        var (_, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        remote.Cache.AddOrUpdate(Remote("r1", daemon: "elsewhere", owner: "me", sessionId: "S"));
+        MineLive(sessions, "S");
+        await Assert.That(dir.Rows.Lookup("remote:r1").HasValue).IsTrue();
+
+        remote.CurrentSubject.OnNext(false);
+
+        await Assert.That(dir.Rows.Lookup("remote:r1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("server:S").HasValue).IsFalse();
+    }
+
+    /// The registry names the owner before the listing names the session: the viewer's own agent on
+    /// another machine shows under Mine from its first row, a teammate's waits for the listing.
+    [Test]
+    public async Task An_unlisted_registry_row_of_the_viewers_stays_under_Mine() {
+        var (_, remote, sessions, _, dir) = BuildWithSessions();
+        using var _d = dir;
+        using var _s = sessions;
+        sessions.ViewerIdsSubject.OnNext(new HashSet<string>(StringComparer.Ordinal) { "me" });
+        remote.Cache.AddOrUpdate(Remote("r1", daemon: "elsewhere", owner: "me"));
+        remote.Cache.AddOrUpdate(Remote("r2", daemon: "elsewhere", owner: "u2"));
+
+        await Assert.That(dir.Rows.Lookup("remote:r1").HasValue).IsTrue();
+        await Assert.That(dir.Rows.Lookup("remote:r2").HasValue).IsFalse();
+    }
+
     /// A daemon row knows when its agent registered, not when it last did anything; the listing does.
     [Test]
     public async Task A_hosted_row_takes_its_listings_activity_time() {

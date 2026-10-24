@@ -17,8 +17,9 @@ namespace Capacitor.App.ViewModels;
 public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
     public string Key { get; }
     public RailGrouping Kind { get; }
+    readonly string _rootDisplay;
     /// The repository key in a form worth showing a user, for the header tooltip; the label elsewhere.
-    public string RootDisplay { get; }
+    public string RootDisplay => Kind == RailGrouping.Repository ? _rootDisplay : Label;
     string _label;
     public string Label { get => _label; private set => this.RaiseAndSetIfChanged(ref _label, value); }
     public bool ShowsHeader => Kind != RailGrouping.None;
@@ -34,8 +35,7 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
     public AgentStatusPresentation? HeaderStatus => _headerStatus.Value;
     readonly ObservableAsPropertyHelper<bool> _showsHeaderBadge;
     public bool ShowsHeaderBadge => _showsHeaderBadge.Value;
-    readonly ObservableAsPropertyHelper<string> _tooltip;
-    public string Tooltip => _tooltip.Value;
+    public string Tooltip => HeaderStatus is { } status ? $"{RootDisplay}\n\n{status.Tip}" : RootDisplay;
 
     readonly ObservableAsPropertyHelper<string> _countText;
     public string CountText => _countText.Value;
@@ -63,7 +63,7 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
         Kind = kind;
         _label = label;
         IsNoRepository = kind == RailGrouping.Repository && label == "No repository";
-        RootDisplay = kind == RailGrouping.Repository ? DisplayFor(Key, label) : label;
+        _rootDisplay = kind == RailGrouping.Repository ? DisplayFor(Key, label) : label;
         _isExpanded = isExpanded;
         _setExpanded = setExpanded;
         _expanded = new BehaviorSubject<bool>(isExpanded).DisposeWith(_disposables);
@@ -87,9 +87,10 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
         _headerStatus = header.ToProperty(this, x => x.HeaderStatus, initialValue: null).DisposeWith(_disposables);
         _showsHeaderBadge = header.Select(status => status is not null)
             .ToProperty(this, x => x.ShowsHeaderBadge, initialValue: false).DisposeWith(_disposables);
-        _tooltip = header.Select(status => status is null ? RootDisplay : $"{RootDisplay}\n\n{status.Tip}")
-            .ToProperty(this, x => x.Tooltip, initialValue: RootDisplay).DisposeWith(_disposables);
-        header.Subscribe(_ => this.RaisePropertyChanged(nameof(ToggleAccessibleName))).DisposeWith(_disposables);
+        header.Subscribe(_ => {
+            this.RaisePropertyChanged(nameof(Tooltip));
+            this.RaisePropertyChanged(nameof(ToggleAccessibleName));
+        }).DisposeWith(_disposables);
 
         _countText = query
             .Select(rows => CountTextFor(rows.Items))
@@ -121,6 +122,8 @@ public sealed class RailGroupViewModel : ReactiveObject, IDisposable {
     internal void Relabel(string label) {
         if (Label == label) return;
         Label = label;
+        this.RaisePropertyChanged(nameof(RootDisplay));
+        this.RaisePropertyChanged(nameof(Tooltip));
         this.RaisePropertyChanged(nameof(ToggleAccessibleName));
     }
 

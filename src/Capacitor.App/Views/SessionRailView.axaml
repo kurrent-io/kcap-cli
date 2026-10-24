@@ -179,7 +179,7 @@
                             <StackPanel Orientation="Horizontal" Spacing="5">
                                 <TextBlock Text="Group" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                                 <TextBlock x:Name="RailGroupLabel" Text="{Binding GroupingLabel}" VerticalAlignment="Center" />
-                                <views:AppIcon Kind="ChevronDown" Size="11" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                <views:AppIcon Kind="ChevronDown" Size="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                             </StackPanel>
                             <Button.Flyout>
                                 <Flyout Placement="BottomEdgeAlignedLeft" VerticalOffset="4" FlyoutPresenterClasses="kcapPanel">
@@ -201,7 +201,7 @@
                             <StackPanel Orientation="Horizontal" Spacing="5">
                                 <TextBlock Text="Sort" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                                 <TextBlock x:Name="RailSortLabel" Text="{Binding SortLabel}" VerticalAlignment="Center" />
-                                <views:AppIcon Kind="ChevronDown" Size="11" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                <views:AppIcon Kind="ChevronDown" Size="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                             </StackPanel>
                             <Button.Flyout>
                                 <Flyout Placement="BottomEdgeAlignedLeft" VerticalOffset="4" FlyoutPresenterClasses="kcapPanel">
@@ -569,7 +569,7 @@
                                                                                 ToolTip.Tip="{x:Static vm:RailSessionViewModel.TerminalTooltip}"
                                                                                 AutomationProperties.Name="{x:Static vm:RailSessionViewModel.TerminalTooltip}">
                                                                             <StackPanel Orientation="Horizontal" Spacing="4">
-                                                                                <views:AppIcon Kind="Terminal" Size="10" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
+                                                                                <views:AppIcon Kind="Terminal" Size="12" Foreground="{StaticResource KcapMutedBrush}" VerticalAlignment="Center" />
                                                                                 <TextBlock Text="terminal" Classes="railChipLabel" Foreground="{StaticResource KcapMutedBrush}" />
                                                                             </StackPanel>
                                                                         </Border>

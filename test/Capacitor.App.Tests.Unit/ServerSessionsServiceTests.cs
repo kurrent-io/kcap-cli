@@ -1,3 +1,4 @@
+using System.Reactive.Concurrency;
 using Capacitor.App.Services;
 using Capacitor.Remote.Models;
 using DynamicData;
@@ -61,13 +62,14 @@ public class ServerSessionsServiceTests {
         lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Connected, Subject: subject, Epoch: epoch));
 
     static (FakeServerLane Lane, ScriptedListing Listing, FakeTimeProvider Time, ServerSessionsService Service) Build(
-            Func<CancellationToken, Task<SessionOwnerOptionDto[]?>>? owners = null, TimeSpan? reconcileEvery = null) {
+            Func<CancellationToken, Task<SessionOwnerOptionDto[]?>>? owners = null, TimeSpan? reconcileEvery = null,
+            TimeSpan? pushDebounce = null, IScheduler? pushScheduler = null) {
         var lane = new FakeServerLane();
         var listing = new ScriptedListing();
         var time = new FakeTimeProvider();
         var service = new ServerSessionsService(
             lane, listing.Fetch, owners ?? (_ => Task.FromResult<SessionOwnerOptionDto[]?>(Owners("me"))), time,
-            pushDebounce: TimeSpan.Zero, reconcileEvery: reconcileEvery);
+            pushDebounce: pushDebounce ?? TimeSpan.Zero, reconcileEvery: reconcileEvery, pushScheduler: pushScheduler);
         return (lane, listing, time, service);
     }
 
@@ -419,9 +421,10 @@ public class ServerSessionsServiceTests {
         listing.Gate = null;
         gate.SetResult();
 
+        // The deletion also asks for a fresh read, whose scripted answer still lists s3; only the
+        // read admitted before the deletion is under test here.
         await Eventually(() => seen.Count > before, "the in-flight read published");
-        await Assert.That(service.Ended.Lookup("s3").HasValue).IsFalse();
-        await Assert.That(seen[^1].Ended.Any(r => r.SessionId == "s3")).IsFalse();
+        await Assert.That(seen[before].Ended.Any(r => r.SessionId == "s3")).IsFalse();
     }
 
     /// A read that outlives its connection reports on a lane that is no longer there.
@@ -458,7 +461,88 @@ public class ServerSessionsServiceTests {
         lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.Deleted, "s3"));
 
         await Eventually(() => !service.Ended.Lookup("s3").HasValue, "deleted row gone");
+        await Eventually(() => listing.Count("ended", "me", 0) == 2, "prefix backfilled");
+        await Eventually(() => service.Ended.Count == 20, "next-oldest row filled the page");
     }
+
+    /// Retention exempts the open row from the page cut, not from whose sessions the scope shows.
+    [Test]
+    public async Task The_kept_row_does_not_cross_a_scope_change() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        listing.Answer("ended", null, 0, 2, Row("t1", owner: "other"), Row("t2", owner: "other"));
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "mine prefix");
+        service.Scope = RailScope.Team;
+        await Eventually(() => service.Ended.Lookup("t1").HasValue, "team prefix");
+        service.Keep("t1");
+        ServerSessionsSnapshot? latest = null;
+        using var sub = service.Snapshots.Subscribe(s => latest = s);
+
+        service.Scope = RailScope.Mine;
+
+        await Assert.That(latest!.Ended.Any(r => r.SessionId == "t1")).IsFalse();
+        await Eventually(() => service.Ended.Count == 20, "mine re-read");
+        await Assert.That(latest!.Ended.Any(r => r.SessionId == "t1")).IsFalse();
+    }
+
+    /// A debounce waits for a quiet an active org never gives; the live re-read runs once per window instead.
+    [Test]
+    public async Task A_steady_stream_of_changes_still_rereads_the_live_listing_each_window() {
+        var scheduler = new HistoricalScheduler();
+        var (lane, listing, _, service) = Build(pushDebounce: TimeSpan.FromMilliseconds(250), pushScheduler: scheduler);
+        using var _ = service;
+        ScriptDefault(listing);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first read");
+
+        for (var i = 0; i < 10; i++) {
+            lane.SessionPushesSubject.OnNext(new SessionPush(SessionPushKind.ActiveChanged, "live-me"));
+            scheduler.AdvanceBy(TimeSpan.FromMilliseconds(100));
+        }
+
+        await Eventually(() => listing.Count("active", null, 0) >= 4, "live re-reads during the stream");
+    }
+
+    /// A read admitted after the lane dropped is as stale as one that outlived it.
+    [Test]
+    public async Task A_read_admitted_while_disconnected_publishes_nothing() {
+        var (lane, listing, _, service) = Build();
+        using var _ = service;
+        ScriptDefault(listing);
+        var seen = new List<bool>();
+        using var sub = service.Current.Subscribe(seen.Add);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first read");
+        lane.StatusSubject.OnNext(new ServerLaneStatus(ServerLaneState.Retrying));
+
+        await service.ShowMoreAsync();
+
+        await Assert.That(service.Ended.Count).IsEqualTo(20);
+        await Assert.That(seen[^1]).IsFalse();
+    }
+
+    /// The viewer stays unresolved only as long as the owners read keeps failing.
+    [Test]
+    public async Task A_failed_owners_read_is_retried_on_the_cadence() {
+        var attempts = 0;
+        var (lane, listing, time, service) = Build(
+            owners: _ => Task.FromResult<SessionOwnerOptionDto[]?>(++attempts == 1 ? null : Owners("me")),
+            reconcileEvery: TimeSpan.FromSeconds(60));
+        using var _ = service;
+        ScriptDefault(listing);
+        IReadOnlySet<string>? ids = null;
+        using var sub = service.ViewerIds.Subscribe(v => ids = v);
+        Connect(lane);
+        await Eventually(() => service.Ended.Count == 20, "first read");
+        await Assert.That(ids!.Count).IsEqualTo(0);
+
+        time.Advance(TimeSpan.FromSeconds(60));
+
+        await Eventually(() => ids!.Count > 0, "owners retried");
+    }
+
 
     [Test]
     public async Task The_cadence_reconciles_while_connected_only() {

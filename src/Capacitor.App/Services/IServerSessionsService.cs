@@ -16,6 +16,9 @@ public interface IServerSessionsService {
     IObservableCache<RepoSessionDto, string> Ended { get; }
     /// All three sets as one read left them, published once per read; replays the latest.
     IObservable<ServerSessionsSnapshot> Snapshots { get; }
+    /// Sessions the server deleted, and every listed session when the account changes: the two
+    /// removals that are the server's word rather than a page cut or a scope switch.
+    IObservable<string> Dropped { get; }
     IObservable<ServerSessionsPaging> Paging { get; }
     /// Live sessions of the scope the listing's offset cap kept out of Live; zero in practice.
     IObservable<int> LiveNotShown { get; }
