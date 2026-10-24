@@ -804,7 +804,7 @@ public class MainWindowViewModelTests {
             var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System);
 
             vm.OpenSession("0123456789abcdef0123456789abcdef");
-            vm.OpenSessionIfCurrent("0123456789abcdef0123456789abcdef", vm.NavigationGeneration);
+            vm.OpenSessionIfCurrent("0123456789abcdef0123456789abcdef", AgentOrigin.Local, vm.NavigationGeneration);
 
             await Assert.That(vm.CurrentWorkspace).IsNull();
         });
@@ -908,7 +908,7 @@ public class MainWindowViewModelTests {
             foreach (var repo in rail.Repos) repo.ToggleCommand.Execute().Subscribe();
             var target = rail.Repos.Single(repo => repo.Sessions.Any(session => session.Id == id));
             var other = rail.Repos.Single(repo => repo != target);
-            vm.OpenSessionIfCurrent(id, vm.NavigationGeneration);
+            vm.OpenSessionIfCurrent(id, remote ? AgentOrigin.Remote : AgentOrigin.Local, vm.NavigationGeneration);
             await Assert.That(target.IsExpanded).IsTrue();
             await Assert.That(other.IsExpanded).IsFalse();
             await Assert.That(rail.SelectedSessionKey).IsEqualTo($"{(remote ? "remote" : "local")}:{id}");
