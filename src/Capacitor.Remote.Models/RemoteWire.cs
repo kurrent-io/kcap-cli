@@ -7,6 +7,7 @@ public static class HubMethods {
     public const string RequestLaunchAgentV2   = "RequestLaunchAgentV2";
     public const string RequestStopAgent       = "RequestStopAgent";
     public const string SendUserInput          = "SendUserInput";
+    public const string DiscardQueuedInput     = "DiscardQueuedInput";
     public const string SendSpecialKey         = "SendSpecialKey";
     public const string SubscribeToTerminal    = "SubscribeToTerminal";
     public const string UnsubscribeFromTerminal = "UnsubscribeFromTerminal";

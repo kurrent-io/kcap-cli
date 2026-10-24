@@ -451,6 +451,8 @@ public sealed class ServerConnectionService : IServerLane, ILaunchClient, IAsync
     // Three arguments always: the method's arity is frozen and SignalR does not backfill a
     // missing trailing one.
     public Task<HubCallOutcome> SendUserInputAsync(string agentId, string text, CancellationToken ct) => InvokeAsync(HubMethods.SendUserInput, ct, agentId, text, null);
+    public Task<HubCallOutcome> DiscardQueuedInputAsync(string agentId, Guid dispatchId, CancellationToken ct) =>
+        InvokeAsync(HubMethods.DiscardQueuedInput, ct, new DiscardQueuedInputRequest(agentId, dispatchId));
     public Task<HubCallOutcome> SendSpecialKeyAsync(string agentId, string key, CancellationToken ct) => InvokeAsync(HubMethods.SendSpecialKey, ct, agentId, key);
 
     /// Denied is the server's session-visibility refusal (HubException carrying WireTokens.

@@ -47,6 +47,14 @@ internal sealed class ServerChatInput : ChatInput {
         : SendAvailability.Connecting;
 
     public override bool CanAcceptText => Availability == SendAvailability.Ready;
+    public override bool CanDiscardQueued => !_disposed && _laneState == ServerLaneState.Connected && _access == SessionAccessState.Established;
+
+    public override async Task<bool> DiscardQueuedAsync(Guid dispatchId, CancellationToken ct) {
+        if (!CanDiscardQueued || ct.IsCancellationRequested) return false;
+        try {
+            return (await _lane.DiscardQueuedInputAsync(_agentId, dispatchId, ct)).Result == HubCallResult.Ok;
+        } catch (Exception) { return false; }
+    }
 
     /// Escape is a PTY keystroke; a frame-driven harness has nothing it would reach.
     public override bool CanInterrupt => _hasTerminal && CanAcceptText;
@@ -81,9 +89,23 @@ internal sealed class ServerChatInput : ChatInput {
 
     public override async Task InterruptAsync(CancellationToken ct) {
         if (!CanInterrupt || ct.IsCancellationRequested) return;
-        try { await _lane.SendSpecialKeyAsync(_agentId, SpecialKeys.Escape, ct); }
+        try {
+            var outcome = await _lane.SendSpecialKeyAsync(_agentId, SpecialKeys.Escape, ct);
+            if (_disposed) return;
+            _notice = outcome.Result switch {
+                HubCallResult.Ok => "Interrupt requested; waiting for the agent",
+                HubCallResult.Denied => "you cannot interrupt this session",
+                _ => "interrupt delivery unconfirmed — check the agent's terminal",
+            };
+            Raise();
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-        catch (Exception ex) { Console.Error.WriteLine($"kcap: composer interrupt failed: {ex.Message}"); }
+        catch (Exception ex) {
+            Console.Error.WriteLine($"kcap: composer interrupt failed: {ex.Message}");
+            if (_disposed) return;
+            _notice = "interrupt delivery unconfirmed — check the agent's terminal";
+            Raise();
+        }
     }
 
     ChatSendOutcome Settle(ChatSendOutcome outcome, string? notice) {
@@ -103,6 +125,7 @@ internal sealed class ServerChatInput : ChatInput {
         this.RaisePropertyChanged(nameof(Availability));
         this.RaisePropertyChanged(nameof(CanAcceptText));
         this.RaisePropertyChanged(nameof(CanInterrupt));
+        this.RaisePropertyChanged(nameof(CanDiscardQueued));
         this.RaisePropertyChanged(nameof(Hint));
     }
 
