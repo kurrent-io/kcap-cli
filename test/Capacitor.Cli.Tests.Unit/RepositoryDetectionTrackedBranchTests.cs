@@ -12,6 +12,7 @@ namespace Capacitor.Cli.Tests.Unit;
 /// probes share one provider deadline that real git on a loaded runner can spend before the
 /// fallback's lookup is reached.
 /// </summary>
+[ParallelLimiter<SubprocessLimit>]
 public class RepositoryDetectionTrackedBranchTests {
     [TempConfigRoot] public required TempConfigRoot Config { get; init; }
 
