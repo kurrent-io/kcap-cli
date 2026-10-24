@@ -279,7 +279,7 @@ public partial class WorktreeManager(
                 // --no-auto-maintenance: that flag needs a newer git than the override transport does.
                 await RunGit(repoPath, FetchTimeout,
                     time,
-                    [new("maintenance.auto", "false"), new("gc.auto", "0")],
+                    [new("maintenance.auto", "false"), new("gc.auto", "0"), .. NoSubmoduleRecursion()],
                     "fetch", "origin", $"{baseRef}:{fetchedRef}");
                 await WithWorktreeMetadataGate(repoPath, time, () =>
                     RunGit(repoPath, GitTimeout, time, noHooks,
@@ -435,29 +435,34 @@ public partial class WorktreeManager(
         StripWorkspaceMcpConfig(worktreePath);
         var noHooks = NoBranchHooks();
         await RunGit(worktreePath, GitTimeout, time, noHooks, "init");
+        var verbatim = VerbatimLineEndings(CreateEmptyAttributesFile(worktreePath));
+        // Kept in the snapshot's own config too, so the agent's later diffs compare the bytes that were copied.
+        foreach (var setting in verbatim)
+            await RunGit(worktreePath, GitTimeout, time, noHooks, "config", setting.Key, setting.Value);
         // Inventoried here: `add -A` is where this snapshot's filters resolve.
         var standaloneOverrides = await FilterOverridesForAsync(worktreePath);
-        await RunGit(worktreePath, GitTimeout, time, [.. noHooks, .. standaloneOverrides], "add", "-A");
+        await RunGit(worktreePath, GitTimeout, time, sourceReadOnly: false, [.. noHooks, .. verbatim, .. standaloneOverrides],
+            NoSystemAttributes, "add", "-A");
         // Exit 0 = empty index (greenfield: nothing to copy). Exit 1 = staged content.
         // Any other code is a real git failure — without this check, commit --allow-empty would
         // hide it behind a successful empty tree.
         var staged = await RunGitCaptureResult(
             worktreePath, GitTimeout, time, sourceReadOnly: false,
-            [.. noHooks, .. standaloneOverrides],
+            [.. noHooks, .. verbatim, .. standaloneOverrides], NoSystemAttributes,
             "diff", "--cached", "--quiet");
         if (staged.ExitCode is not (0 or 1))
             throw new InvalidOperationException(
                 $"git diff --cached --quiet failed: {GitFailureDetail(staged.Stderr, staged.Stdout)}");
-        // Bookkeeping commit. Identity is explicit: a host with no user.email fails with
-        // "Author identity unknown". An empty folder is a valid start — commit an empty tree
-        // so the agent has a real HEAD to build on.
+        // Bookkeeping commit, with its own identity and unsigned: an unattended daemon cannot drive the
+        // user's signing program. An empty folder is a valid start — commit an empty tree so the agent
+        // has a real HEAD to build on.
         var commitArgs = staged.ExitCode == 0
             ? new[] { "commit", "--allow-empty", "-m", "Initial snapshot" }
             : new[] { "commit", "-m", "Initial snapshot" };
-        await RunGit(worktreePath, GitTimeout,
-            time,
-            [.. noHooks, new("user.email", "daemon@kcap.local"), new("user.name", "kcap")],
-            commitArgs);
+        await RunGit(worktreePath, GitTimeout, time, sourceReadOnly: false,
+            [.. noHooks, .. verbatim,
+             new("user.email", "daemon@kcap.local"), new("user.name", "kcap"), new("commit.gpgsign", "false")],
+            NoSystemAttributes, commitArgs);
 
         return new WorktreeInfo(worktreePath, "", repoPath, IsStandalone: true);
     }
@@ -500,6 +505,33 @@ public partial class WorktreeManager(
     /// <summary>The hook override. The transport carrying it is proved by the runner that hands it to git
     /// (see <c>ProveConfigTransportIfCarryingAsync</c>), so nothing here has to remember to.</summary>
     static GitConfigOverride[] NoBranchHooks() => [new("core.hooksPath", NoHooksPath)];
+
+    /// <summary>A standalone snapshot records the bytes it copied: a user's line-ending conversion would rewrite
+    /// them, and its strict form refuses the commit outright. A user's own attributes file is replaced by an
+    /// empty one, so only the project's <c>.gitattributes</c> decides a file's conversion.</summary>
+    static GitConfigOverride[] VerbatimLineEndings(string emptyAttributesFile) =>
+        [new("core.autocrlf", "false"), new("core.safecrlf", "false"), new("core.attributesFile", emptyAttributesFile)];
+
+    /// <summary>The machine's attributes file is not the project's either, and no config replaces it, so the snapshot's
+    /// add, diff and commit skip it.</summary>
+    static readonly KeyValuePair<string, string>[] NoSystemAttributes = [new("GIT_ATTR_NOSYSTEM", "1")];
+
+    /// <summary>An empty attributes file inside the snapshot's git dir, as a path git reads the same on every
+    /// platform: a config value read from the environment is not unescaped, so it carries no backslash.</summary>
+    static string CreateEmptyAttributesFile(string worktreePath) {
+        var info = Path.Combine(worktreePath, ".git", "info");
+        Directory.CreateDirectory(info);
+        var path = Path.Combine(info, "kcap-no-user-attributes");
+        File.WriteAllBytes(path, []);
+
+        return Path.GetFullPath(path).Replace('\\', '/');
+    }
+
+    /// <summary>A linked worktree's submodule has no gitdir of its own, so a checkout that recursed into it
+    /// fails outright; and a fetch that recursed would reach each submodule's own remote. Neither may
+    /// depend on the user's git config.</summary>
+    static GitConfigOverride[] NoSubmoduleRecursion() =>
+        [new("submodule.recurse", "false"), new("fetch.recurseSubmodules", "false")];
 
     /// <summary>
     /// Neutralizes the tree, and UNDOES the creation if that fails.
@@ -545,7 +577,8 @@ public partial class WorktreeManager(
         // pathspec matches nothing. This is the step that materialises the tree, and therefore the step
         // the overrides have to guard.
         await RunGit(worktreePath, GitTimeout, time,
-            [.. noHooks, .. overrides, .. ParallelCheckoutFor(OperatingSystem.IsWindows())], "reset", "--hard", "HEAD");
+            [.. noHooks, .. NoSubmoduleRecursion(), .. overrides, .. ParallelCheckoutFor(OperatingSystem.IsWindows())],
+            "reset", "--hard", "HEAD");
     }
 
     /// Windows only: its per-file write cost makes a serial checkout most of a launch's wait (7.5k files,
@@ -1019,12 +1052,10 @@ public partial class WorktreeManager(
                 throw new InvalidOperationException("borrowed_snapshot_sparse_checkout_unsupported");
 
             await RunGit(parent, GitTimeout, time, "clone", "--no-hardlinks", "--no-checkout", "--", bundle, destination);
-            // Same guard as `worktree add`: this checkout materialises branch content, so a relative
-            // core.hooksPath would run the branch's post-checkout here too. Missed when the guard was
-            // added — it went on the worktree paths only.
+            // Same guards as the worktree checkout: this one materialises branch content too.
             await RunGit(destination, GitTimeout,
                 time,
-                [.. NoBranchHooks(), .. await FilterOverridesForAsync(destination)],
+                [.. NoBranchHooks(), .. NoSubmoduleRecursion(), .. await FilterOverridesForAsync(destination)],
                 "checkout", "--detach", "HEAD");
             var clonedHead = (await RunGitCapture(destination, GitTimeout, time, false, "rev-parse", "HEAD")).Trim();
             if (!string.Equals(sourceHead, clonedHead, StringComparison.Ordinal)) throw new SourceChangedException();
@@ -1729,8 +1760,8 @@ public partial class WorktreeManager(
     static readonly TimeSpan FetchTimeout = TimeSpan.FromMinutes(2);
 
     /// <summary>How long to wait for a timed-out git process to actually die after being killed,
-    /// before giving up and unwinding anyway. See the timeout path in
-    /// <see cref="RunGitCaptureResult"/> for why the wait matters.</summary>
+    /// before giving up and unwinding anyway. The wait is why the capture path's timeout cannot let a
+    /// killed git outlive the metadata gate its caller holds.</summary>
     static readonly TimeSpan KillGrace = TimeSpan.FromSeconds(5);
 
     static async Task<bool> IsGitRepoWithCommits(string path, TimeProvider time) {
@@ -1791,10 +1822,15 @@ public partial class WorktreeManager(
             params string[] args) =>
         RunGit(cwd, timeout, time, sourceReadOnly: false, config, args);
 
+    static Task RunGit(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
+            params string[] args) =>
+        RunGit(cwd, timeout, time, sourceReadOnly, config, [], args);
+
     static async Task RunGit(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
-            params string[] args) {
-        var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, args);
+            KeyValuePair<string, string>[] environment, params string[] args) {
+        var result = await RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, environment, args);
         if (result.ExitCode != 0)
             throw new InvalidOperationException(
                 $"git {string.Join(' ', args)} failed: {GitFailureDetail(result.Stderr, result.Stdout)}");
@@ -1827,12 +1863,17 @@ public partial class WorktreeManager(
         return string.Equals(result.Stdout.Trim(), "true", StringComparison.OrdinalIgnoreCase);
     }
 
-    internal static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
+    internal static Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
-            params string[] args) {
+            params string[] args) =>
+        RunGitCaptureResult(cwd, timeout, time, sourceReadOnly, config, [], args);
+
+    static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResult(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
+            KeyValuePair<string, string>[] environment, params string[] args) {
         await ProveConfigTransportIfCarryingAsync(cwd, time, sourceReadOnly, config);
 
-        return await RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, args);
+        return await RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, environment, args);
     }
 
     /// <summary>
@@ -1861,10 +1902,16 @@ public partial class WorktreeManager(
     /// <summary>Runs git WITHOUT proving the transport first. Only the probe itself may use this — it is
     /// what the gate above is measuring, so routing it through the gate would deadlock on the
     /// non-reentrant semaphore.</summary>
+    static Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResultUnproven(
+            string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
+            params string[] args) =>
+        RunGitCaptureResultUnproven(cwd, timeout, time, sourceReadOnly, config, [], args);
+
     static async Task<(int ExitCode, string Stdout, string Stderr)> RunGitCaptureResultUnproven(
             string cwd, TimeSpan timeout, TimeProvider time, bool sourceReadOnly, GitConfigOverride[] config,
-            params string[] args) {
+            KeyValuePair<string, string>[] environment, params string[] args) {
         var psi = NewGitPsi(cwd, args, sourceReadOnly, config);
+        foreach (var (key, value) in environment) psi.Environment[key] = value;
         using var proc = Process.Start(psi)!;
         using var cts = new CancellationTokenSource(timeout, time);
 
