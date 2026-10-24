@@ -672,9 +672,10 @@ public sealed class MainWindowViewModel : ReactiveObject, IActivatableViewModel 
     /// arriving after any navigation (closing the workspace, another session, close-to-hide, the
     /// shutdown latch) opens nothing, rather than attaching an invisible terminal or replacing what
     /// the user opened while the launch was in flight.
-    public void OpenSessionIfCurrent(string agentId, int generation) {
+    public void OpenSessionIfCurrent(string agentId, int generation, string? launchPrompt = null) {
         if (generation != _navigation.Generation) return;
-        OpenSession(agentId);
+        if (OpenSession(agentId) && launchPrompt is { Length: > 0 } && CurrentWorkspace is WorkspaceViewModel workspace)
+            workspace.ShowLaunchPrompt(launchPrompt);
     }
 
     /// The launcher words a launch failure, and an open workspace covers the launcher. Only a

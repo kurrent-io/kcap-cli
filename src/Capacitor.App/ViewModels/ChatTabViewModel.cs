@@ -51,6 +51,9 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
     // token it can ask without an ObjectDisposedException.
     readonly CancellationToken _lifetimeToken;
     readonly AvaloniaList<ChatItemViewModel> _items = new();
+    /// Stands in for the launch prompt until the transcript's own rows land. Never a queued send:
+    /// the transcript's first read is history, which cannot acknowledge one.
+    UserTurnItem? _launchTurn;
     readonly AvaloniaList<QueuedChatMessage> _queuedMessages = new();
     // Keep retired sends eligible for late echoes without letting them consume a later send's receipt.
     readonly List<(QueuedChatMessage Old, QueuedChatMessage Replacement)> _superseded = new();
@@ -1020,10 +1023,18 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         SetTerminalMenuChoiceTaken(false);
     }
 
+    public void ShowLaunchPrompt(string text) {
+        if (_launchTurn is not null || _items.Count > 0) return;
+        _launchTurn = new UserTurnItem(text);
+        _items.Add(_launchTurn);
+        this.RaisePropertyChanged(nameof(PhaseNote));
+    }
+
     void SwitchFeed(string key, Func<string, IChatTranscriptFeed> open) {
         // A released tab's runs belong to the monitor that took its feed; this tab reads nothing more.
         if (_feedReleased) return;
         _items.Clear();
+        if (_launchTurn is not null) _items.Add(_launchTurn);
         _history.Clear();
         _literalInputHistory.Clear();
         _unechoed.Clear();
@@ -1339,6 +1350,7 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
                 // names where that history ends — anything past it arrived after and can acknowledge.
                 RebaseQueuedMessages(read.SnapshotOffset ?? CurrentOffset ?? 0);
                 _items.Clear();
+                if (_launchTurn is not null) _items.Add(_launchTurn);
                 _history.ClearForReplay();
                 _pendingTools.Clear();
                 _settledTools.Clear();
@@ -1485,7 +1497,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             foreach (var projected in cursor.Restored)
                 foreach (var text in projected.SubmittedInputs)
                     _history.Observe(AttachmentTrailer.Strip(text));
-            if (cursor.Fresh.Count > 0) _items.AddRange(cursor.Fresh);
+            if (cursor.Fresh.Count > 0) {
+                if (_launchTurn is not null) _items.Remove(_launchTurn);
+                _launchTurn = null;
+                _items.AddRange(cursor.Fresh);
+            }
         }
         Phase = ChatTabPhase.Reading;
         ApplyFeedRuns(read);

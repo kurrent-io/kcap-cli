@@ -56,6 +56,13 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
 
     public IObservable<Unit> Ended { get; }
 
+    string? _launchPrompt;
+
+    public void ShowLaunchPrompt(string prompt) {
+        if (Chat is { } chat) chat.ShowLaunchPrompt(prompt);
+        else _launchPrompt = prompt;
+    }
+
     ChatTabViewModel? _chat;
     /// Built once, on the first dto; the reader comes from transcript_format and the input channel
     /// from has_terminal.
@@ -331,6 +338,7 @@ public sealed class WorkspaceViewModel : ReactiveObject, ISessionWorkspace {
                 };
                 if (PullRequests is { } fixHost)
                     Chat.WhenAnyValue(chat => chat.ShowsComposer).Subscribe(_ => fixHost.FixAvailabilityChanged()).DisposeWith(_disposables);
+                if (_launchPrompt is { } launchPrompt) Chat.ShowLaunchPrompt(launchPrompt);
             })
             .DisposeWith(_disposables);
 

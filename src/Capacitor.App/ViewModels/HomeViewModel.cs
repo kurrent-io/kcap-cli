@@ -115,7 +115,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
     readonly ILaunchClient _launch;
     readonly Func<Task<string[]>> _knownRepos;
     readonly Func<int>? _navigationGeneration;
-    readonly Action<string, int>? _openSessionIfCurrent;
+    readonly Action<string, int, string?>? _openSessionIfCurrent;
     readonly Action<string>? _launchFailed;
     readonly CompositeDisposable _disposables = new();
 
@@ -471,7 +471,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
             IDaemonClientService daemon, IAppStateStore state, ILaunchClient launch,
             Func<Task<string[]>> knownRepos, TimeProvider time, CancellationToken shutdown = default,
             Func<int>? navigationGeneration = null,
-            Action<string, int>? openSessionIfCurrent = null, Action? requestSignIn = null,
+            Action<string, int, string?>? openSessionIfCurrent = null, Action? requestSignIn = null,
             IObservable<IReadOnlyList<DaemonInfo>>? daemons = null,
             Func<CancellationToken, Task<string?>>? viewerId = null,
             IObservable<ServerLaneStatus>? laneStatus = null, string? localMachineId = null,
@@ -1373,7 +1373,7 @@ public sealed class HomeViewModel : ReactiveObject, IDisposable, IAttachmentSink
         // Untracked with no row is a failure that beat the call's own return: opening would cover
         // the launcher that has just worded it.
         if (!draft.Remote && (tracked || RowExists(agentId, AgentOrigin.Local)))
-            _openSessionIfCurrent?.Invoke(agentId, generation);
+            _openSessionIfCurrent?.Invoke(agentId, generation, draft.Goal);
     }
 
     async Task<bool> OwnsConnectedAsync(string machine) =>

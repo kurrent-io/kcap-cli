@@ -209,6 +209,9 @@ public static partial class DaemonRunner {
 
         Harness.Codex.CodexTransportDecision.BindFromEnvironment(config, Environment.GetEnvironmentVariable);
 
+        if (Environment.GetEnvironmentVariable("KCAP_CLAUDE_TRANSPORT") is { Length: > 0 } claudeTransport)
+            config.ClaudeTransport = claudeTransport.Trim();
+
         // One resolved fact for both the launch router and the certification advertisement.
         config.CodexAppServerActive = Harness.Codex.CodexTransportDecision.ResolveActive(
             config.CodexTransport, () => ProbeCliVersion(config.CodexPath));
@@ -457,15 +460,22 @@ public static partial class DaemonRunner {
         // Prepare/BuildArgs/Spawn inline. PtyHostedAgentRuntimeFactory wraps each registered PTY
         // launcher (Claude, Codex); AcpHostedAgentRuntimeFactory speaks ACP JSON-RPC over stdio for
         // Cursor (no IHostedAgentLauncher — Cursor never went through the PTY launcher contract).
-        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp =>
-            new PtyHostedAgentRuntimeFactory(
-                sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "claude")
-                    ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'"),
+        builder.Services.AddSingleton<IHostedAgentRuntimeFactory>(sp => {
+            var claudeLauncher = sp.GetServices<IHostedAgentLauncher>().SingleOrDefault(l => l.Vendor == "claude")
+                ?? throw new InvalidOperationException("No IHostedAgentLauncher registered for vendor 'claude'");
+            var pty = new PtyHostedAgentRuntimeFactory(
+                claudeLauncher,
                 sp.GetRequiredService<IPtyProcessFactory>(),
                 sp.GetRequiredService<ILogger<PtyHostedAgentRuntimeFactory>>(),
-                sp.GetRequiredService<TimeProvider>()
-            )
-        );
+                sp.GetRequiredService<TimeProvider>());
+            return new Harness.Claude.ClaudeHostedAgentRuntimeFactory(
+                claudeLauncher, pty,
+                sp.GetRequiredService<DaemonConfig>(),
+                sp.GetRequiredService<LocalPermissionBridge>(),
+                harnesses.Of<Core.Harness.Claude.ClaudeHarness>().Paths,
+                sp.GetRequiredService<ILoggerFactory>(),
+                time);
+        });
         // Codex is the ONE vendor with two transports. The composite factory routes review-flow
         // launches to codex app-server when this daemon resolved it active (config.CodexAppServerActive),
         // and delegates everything else — every interactive launch, and all launches under the PTY

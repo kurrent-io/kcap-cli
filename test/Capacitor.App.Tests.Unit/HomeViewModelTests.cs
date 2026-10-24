@@ -1832,7 +1832,7 @@ public class HomeViewModelTests {
             var opened = new List<(string AgentId, int Generation)>();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
-                openSessionIfCurrent: (id, generation) => opened.Add((id, generation)),
+                openSessionIfCurrent: (id, generation, _) => opened.Add((id, generation)),
                 daemons: remote.Daemons, viewerId: _ => Task.FromResult<string?>("u1"), laneStatus: lane.Status);
 
             await vm.SelectMachineAsync("home-pc", isLocal: false);
@@ -1853,7 +1853,7 @@ public class HomeViewModelTests {
             var opened = new List<(string AgentId, int Generation)>();
             using var vm = new HomeViewModel(
                 daemon, new AppStateStore(path), launch, Known(), TimeProvider.System,
-                openSessionIfCurrent: (id, generation) => opened.Add((id, generation)));
+                openSessionIfCurrent: (id, generation, _) => opened.Add((id, generation)));
 
             await vm.SelectRepositoryAsync("/repo/a");
             await vm.StartCommand.Execute();

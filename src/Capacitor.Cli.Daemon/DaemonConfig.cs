@@ -216,6 +216,10 @@ public class DaemonConfig {
     public string ClaudePath { get; set; } = Core.Harness.Claude.ClaudeHarness.CliBinary;
     public string CodexPath  { get; set; } = Core.Harness.Codex.CodexHarness.CliBinary;
 
+    /// <summary>Transport for interactive hosted Claude agents, from <c>KCAP_CLAUDE_TRANSPORT</c>:
+    /// <c>pty</c> (default) or <c>stream-json</c>. Any other value is <c>pty</c>.</summary>
+    public string ClaudeTransport { get; set; } = Harness.Claude.ClaudeHostedAgentRuntimeFactory.Pty;
+
     /// <summary>Transport for hosted Codex reviewers: <c>pty</c> (default) or <c>app-server</c>.
     /// Set via <c>KCAP_CODEX_TRANSPORT</c>. Governs NEW review-flow launches only; interactive
     /// launches always take the PTY path in this phase. The effective decision (this selection AND

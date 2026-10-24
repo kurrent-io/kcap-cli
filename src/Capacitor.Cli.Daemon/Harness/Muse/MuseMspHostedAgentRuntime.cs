@@ -34,7 +34,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
 
     const int ApprovalAlreadyResolvedCode = -32051;
 
-    readonly IMuseMspProcess _process;
+    readonly IJsonLineProcess _process;
     readonly ILogger         _logger;
     readonly string          _agentId;
     readonly string          _cwd;
@@ -106,7 +106,7 @@ internal sealed partial class MuseMspHostedAgentRuntime : IHostedAgentRuntime, I
     volatile bool                   _sessionClosedSeen;
 
     public MuseMspHostedAgentRuntime(
-            IMuseMspProcess process,
+            IJsonLineProcess process,
             ILogger         logger,
             string          agentId,
             string          cwd,
