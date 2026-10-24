@@ -318,6 +318,8 @@ public sealed class DaemonMutationLane : IAsyncDisposable {
 
     // The CLI reports Succeeded with a failed non-fatal step; the lane counts any failed step as a failure.
     async Task<MutationOutcome> ClassifyAccountVerbAsync(MutationRequest request, ProcessResult result, CancellationToken ct) {
+        // A killed run may or may not have committed, whatever it printed; the next snapshot shows which.
+        if (result.TimedOut) return new MutationOutcome.Unconfirmed("timeout");
         if (LastAccountResult(result.Stdout) is not { } dto) return new MutationOutcome.Unconfirmed("no_result");
 
         var failedStep = dto.Steps.FirstOrDefault(s => !s.Succeeded);

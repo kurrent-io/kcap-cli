@@ -1900,6 +1900,23 @@ public class DaemonMutationLaneTests {
         await Assert.That(probes).IsEqualTo(0);
     }
 
+    [Test]
+    [Arguments(0)]
+    [Arguments(137)]
+    public async Task A_timed_out_run_is_unconfirmed_even_with_a_succeeded_result_line(int exitCode) {
+        var cli = new FakeKcapCli {
+            AccountsBehavior = (_, _, _) => Task.FromResult(new ProcessResult(exitCode, ResultLine([Step("hooks")], revision: 6), "", true)),
+        };
+        var channel = new OutcomeChannel();
+        await using var lane = MakeLane(new RecordingExecutorFactory { Behavior = (_, _) => cli }, channel: channel);
+        lane.AccountsRevisionReached = (_, _) => Task.FromResult(true);
+
+        var outcome = await lane.RunAsync(AccountReq(), CancellationToken.None).WaitAsync(Bounded);
+
+        await Assert.That(outcome).IsEqualTo(new MutationOutcome.Unconfirmed("timeout"));
+        await AssertChannelEmptyAsync(channel);
+    }
+
     [Test, NotInParallel]
     public async Task An_account_verbs_failure_never_reaches_the_outcome_channel() {
         var runs = new Queue<Func<Task<ProcessResult>>>([
