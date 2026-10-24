@@ -29,6 +29,21 @@ public class AccountRowsTests {
         await Assert.That(rows[0]).IsEqualTo(new AccountRow("a1", "claude", "/u/.claude", "home", "recording", true));
     }
 
+    /// A directory key is compared exactly as its host computed it: folding case or trimming a
+    /// separator here would badge, or merge, an account the daemon treats as another directory.
+    [Test]
+    public async Task Keys_that_differ_only_by_case_or_a_trailing_separator_are_distinct_rows_and_only_the_exact_key_is_default() {
+        var snapshot = new AccountsSnapshotDto("h1", 1, [
+            Account("a1", "claude", "/u/.claude", "exact"),
+            Account("a2", "claude", "/U/.Claude", "cased"),
+            Account("a3", "claude", "/u/.claude/", "trailing"),
+        ], [Default("claude", "/u/.claude")]);
+
+        var rows = AccountRows.For(snapshot, "claude");
+
+        await Assert.That(string.Join(",", rows.Select(r => $"{r.Id}:{r.IsDefault}"))).IsEqualTo("a2:False,a1:True,a3:False");
+    }
+
     [Test]
     public async Task An_unregistered_default_is_one_more_row_labelled_by_directory_name_and_not_wired() {
         var snapshot = new AccountsSnapshotDto("h1", 4, [Account("a1", "claude", "/u/.claude-work", "work")], [Default("claude", "/u/.claude/")]);
