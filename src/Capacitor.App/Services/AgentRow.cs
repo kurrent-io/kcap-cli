@@ -26,7 +26,11 @@ public sealed record AgentRow(
         // The select dialog on the local agent's terminal. Null on a remote or pending row.
         TerminalDialogDto? TerminalDialog = null,
         // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
-        string? Interruption = null) {
+        string? Interruption = null,
+        // The account the session runs under. Null from an older daemon and on a pending row.
+        string? AccountDirectory = null,
+        string? AccountId = null,
+        string? AccountLabel = null) {
 
     public string? OwnerUserId { get; init; }
 
@@ -38,7 +42,8 @@ public sealed record AgentRow(
         MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
         CheckoutKey: ViewModels.SessionRailViewModel.WorktreeKeyFor(dto), CheckoutLabel: "",
         AwaitingInput: dto.AwaitingInput, LiveSubagents: dto.LiveSubagents, UsageLimit: dto.UsageLimit,
-        TerminalDialog: dto.TerminalDialog, Interruption: dto.Interruption);
+        TerminalDialog: dto.TerminalDialog, Interruption: dto.Interruption,
+        AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel);
 
     public static AgentRow FromRemote(AgentInstanceDto dto) {
         var daemonKey = $"{dto.OwnerUserId}/{dto.DaemonName}";
@@ -49,7 +54,8 @@ public sealed record AgentRow(
             RepoPath: dto.RepoPath, Title: TitleFromPrompt(dto.Prompt), Model: dto.Model, RequesterDisplay: null,
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
-            CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}") { OwnerUserId = dto.OwnerUserId };
+            CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}",
+            AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel) { OwnerUserId = dto.OwnerUserId };
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {

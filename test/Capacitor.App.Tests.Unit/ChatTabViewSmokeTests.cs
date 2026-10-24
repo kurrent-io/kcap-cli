@@ -266,6 +266,41 @@ public class ChatTabViewSmokeTests {
         });
     }
 
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task The_account_strip_sits_under_the_composer_card_inside_the_band() {
+        await RunOnUiAsync(async () => {
+            var host = new Host();
+            var path = Tmp.CreateFile("account.jsonl", [UserLine]);
+            try {
+                var strip = host.View.FindControl<Border>("AccountStrip")!;
+                var card = host.View.FindControl<Border>("ComposerCard")!;
+                var band = host.View.FindControl<Border>("ComposerBand")!;
+                await Assert.That(strip.IsVisible).IsFalse();
+
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with {
+                    TranscriptPath = path, AccountDirectory = "/home/me/.claude-work", AccountId = "acc1", AccountLabel = "work",
+                });
+                await (host.Chat.PendingReadForTesting ?? Task.CompletedTask);
+                host.Settle();
+
+                await Assert.That(strip.IsVisible).IsTrue();
+                await Assert.That(strip.Parent).IsSameReferenceAs(card.Parent);
+                await Assert.That(strip.GetVisualAncestors()).Contains(band);
+                var cardBottom = card.TranslatePoint(new Point(0, card.Bounds.Height), host.Window)!.Value.Y;
+                await Assert.That(strip.TranslatePoint(default, host.Window)!.Value.Y).IsGreaterThanOrEqualTo(cardBottom);
+                var texts = strip.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text).ToArray();
+                await Assert.That(texts).Contains("work");
+                await Assert.That(texts).Contains("/home/me/.claude-work");
+                await Assert.That(strip.GetVisualDescendants().OfType<ContentControl>().First().Content).IsNotNull();
+
+                host.Daemon.Agents.AddOrUpdate(Agent("a1", "claude", hasTerminal: true) with { TranscriptPath = path });
+                host.Settle();
+                await Assert.That(strip.IsVisible).IsFalse();
+            } finally { await host.CloseAsync(); }
+        });
+    }
+
     /// Pins the two costs a long transcript could impose on the UI thread: one collection
     /// notification for the whole initial load, and containers for the viewport only.
     [Test]
