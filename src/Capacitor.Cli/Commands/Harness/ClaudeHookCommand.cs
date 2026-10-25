@@ -276,15 +276,15 @@ public sealed class ClaudeHookCommand(
         // which runs no tool; a finished subagent covers its own prompts, since the parent's turn
         // ending says nothing about a background subagent's.
         if (command is "post-tool-use" or "post-tool-use-failure" && toolUseId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget.Remaining, toolName, toolInput,
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId, subagentId, budget, toolName, toolInput,
                 clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "stop" && agentId is null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget.Remaining,
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: null, budget,
                 sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         if (command == "subagent-stop" && subagentId is not null)
-            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget.Remaining,
+            await DaemonBridgeRelay.NotifyToolSettledAsync(hosted, "claude", sessionId, cwd, toolUseId: null, subagentId: subagentId, budget,
                 sentAtMs: clock.Time.GetUtcNow().ToUnixTimeMilliseconds());
 
         // A subagent's hook (agent_id set) runs with the parent's environment but is not the
@@ -293,9 +293,9 @@ public sealed class ClaudeHookCommand(
         if (subagentId is not null)
             await DaemonBridgeRelay.NotifySubagentAsync(
                 hosted, "claude", sessionId, cwd, subagentId, live: command != "subagent-stop",
-                clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget.Remaining);
+                clock.Time.GetUtcNow().ToUnixTimeMilliseconds(), budget);
         else if (command switch { "stop" => true, "user-prompt-submit" or "pre-tool-use" => false, _ => (bool?) null } is { } waiting)
-            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget.Remaining);
+            await DaemonBridgeRelay.NotifyInputWaitAsync(hosted, "claude", sessionId, cwd, waiting, budget);
 
         // The tool events have no server route and no other work, so they end here — after both
         // notices above have had their chance to post.

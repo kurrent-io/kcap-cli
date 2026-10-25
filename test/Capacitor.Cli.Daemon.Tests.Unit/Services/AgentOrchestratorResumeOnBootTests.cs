@@ -28,6 +28,8 @@ public class AgentOrchestratorResumeOnBootTests {
         public bool ThrowsFromSupports { get; init; }
         public bool SupportsRestartResume(string? runtimeTransport) =>
             ThrowsFromSupports ? throw new InvalidOperationException("the factory faulted") : true;
+        public bool ResumesIdle { get; init; }
+        public bool ResumesIdleWithoutPrompt(string? runtimeTransport) => ResumesIdle;
 
         public ConcurrentQueue<RuntimeStartContext> Contexts { get; } = new();
         public TaskCompletionSource? Gate { get; set; }
@@ -102,7 +104,8 @@ public class AgentOrchestratorResumeOnBootTests {
             Fixture f, string agentId, string? worktree = null, string? vendorSession = "vendor-session-1",
             bool isPrivate = false, ResumeState state = ResumeState.Resuming, DateTimeOffset? at = null,
             string? predecessor = "instance-old", string? daemonInstanceId = null, bool standalone = false,
-            string vendor = "cursor", string? permissionMode = null, IReadOnlyList<string>? inherited = null) {
+            string vendor = "cursor", string? permissionMode = null, IReadOnlyList<string>? inherited = null,
+            bool? awaitingInput = null) {
         var stamp = at ?? TimeProvider.System.GetUtcNow();
         var launch = new ResumeLaunchDescriptor(
             Prompt: "build the thing", Model: "auto", Effort: null, RepoPath: f.Repo,
@@ -117,10 +120,57 @@ public class AgentOrchestratorResumeOnBootTests {
             ResumeLedgerEntry.CurrentSchemaVersion, agentId, "daemon-1", stamp, stamp, vendor, "acp",
             $"session-{agentId}", vendorSession, launch, state, Attempts: 0, LastError: null,
             PredecessorInstanceId: predecessor, ResumingAt: state == ResumeState.Resuming ? stamp : null,
-            DaemonInstanceId: daemonInstanceId, InheritedAgentIds: inherited);
+            DaemonInstanceId: daemonInstanceId, InheritedAgentIds: inherited, AwaitingInput: awaitingInput);
         f.Orch.ResumeLedger!.Write(entry);
 
         return entry;
+    }
+
+    /// <summary>An agent that was waiting comes back waiting, with nothing sent, but only where the runtime can resume
+    /// without a turn. Mid-turn, an entry from an older daemon that recorded no wait, or a runtime that needs a first turn
+    /// all get the nudge.</summary>
+    [Test]
+    [Arguments(true, true, false)]
+    [Arguments(true, false, true)]
+    [Arguments(true, null, true)]
+    [Arguments(false, true, true)]
+    public async Task Only_a_waiting_agent_on_a_runtime_that_resumes_without_a_turn_comes_back_without_the_nudge(
+            bool resumesIdle, bool? awaitingInput, bool nudged) {
+        var f = Build(new ResumableFactory { PtyStyle = true, ResumesIdle = resumesIdle });
+        await using var _ = f.Orch;
+        var entry = Entry(f, "resume-idle", awaitingInput: awaitingInput);
+
+        f.Orch.LoadResumeLedger();
+        await f.Orch.ResumeOnBootAsync(CancellationToken.None);
+
+        var ctx = f.Factory.Contexts.Single();
+        await Assert.That(ctx.Prompt).IsEqualTo(nudged ? ResumeNudge.Build(entry.ResumingAt!.Value, "build the thing") : "");
+        await Assert.That(f.Orch.GetAgentForTest("resume-idle")!.ActivityClock.AwaitingInput).IsEqualTo(!nudged);
+        // The running entry holds no waiting state of its own: a crash before the next keep-agents shutdown must
+        // not read a turn started since as waiting.
+        await Assert.That(f.Orch.ResumeLedger!.TryRead("resume-idle")!.AwaitingInput).IsNull();
+    }
+
+    /// <summary>A silently resumed agent is waiting from the moment anything can reach it, so a turn that starts
+    /// while the resume is still registering is not overwritten as waiting.</summary>
+    [Test]
+    public async Task A_turn_that_starts_while_a_silent_resume_registers_stays_working() {
+        var server = new CaptureServerConnection {
+            AgentRegisteredEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+            AgentRegisteredGate    = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously),
+        };
+        var f = Build(new ResumableFactory { PtyStyle = true, ResumesIdle = true }, server: server);
+        await using var _ = f.Orch;
+        Entry(f, "resume-busy", awaitingInput: true);
+
+        f.Orch.LoadResumeLedger();
+        var resuming = f.Orch.ResumeOnBootAsync(CancellationToken.None);
+        await server.AgentRegisteredEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        f.Orch.GetAgentForTest("resume-busy")!.ActivityClock.SetAwaitingInput(false);
+        server.AgentRegisteredGate.SetResult();
+        await resuming;
+
+        await Assert.That(f.Orch.GetAgentForTest("resume-busy")!.ActivityClock.AwaitingInput).IsFalse();
     }
 
     [Test]

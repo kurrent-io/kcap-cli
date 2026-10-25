@@ -340,6 +340,18 @@
         <Setter Property="Width" Value="10" />
         <Setter Property="Opacity" Value="1" />
     </Style>
+    <!-- Mixed: an owner whose repositories disagree. Filled like checked, with the theme's dash. -->
+    <Style Selector="CheckBox.onboardingCheck:indeterminate /template/ Border#NormalRectangle,
+                     CheckBox.onboardingCheck:indeterminate:pointerover /template/ Border#NormalRectangle">
+        <Setter Property="BorderBrush" Value="{StaticResource OnboardingAccentBrush}" />
+        <Setter Property="Background" Value="{StaticResource OnboardingAccentBrush}" />
+    </Style>
+    <Style Selector="CheckBox.onboardingCheck:indeterminate /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:indeterminate:pointerover /template/ Path#CheckGlyph,
+                     CheckBox.onboardingCheck:indeterminate:pressed /template/ Path#CheckGlyph">
+        <Setter Property="Fill" Value="{StaticResource OnboardingAccentOnBrush}" />
+        <Setter Property="Opacity" Value="1" />
+    </Style>
     <Style Selector="CheckBox.onboardingCheck:disabled">
         <Setter Property="Opacity" Value="0.5" />
     </Style>
