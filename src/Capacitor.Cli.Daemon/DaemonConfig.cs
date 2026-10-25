@@ -1,5 +1,8 @@
+using System.Collections.Frozen;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.Config;
+using Capacitor.Cli.Core.Harness;
 using Capacitor.Cli.Core.Setup;
 using Capacitor.Cli.Daemon.Harness.Claude;
 using Capacitor.Cli.Core.LocalEdition;
@@ -178,8 +181,14 @@ public class DaemonConfig {
     /// instance.</summary>
     public Dictionary<string, VendorModelOption[]>? VendorModels { get; set; }
 
-    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe; the
-    /// vendor CLI watcher's starting point for them.</summary>
+    /// <summary>Each registered Codex account's launchable models, keyed by registry id. An unregistered
+    /// default has no id, so its catalog is only in <see cref="VendorModels"/>. Replaced by reference,
+    /// like <see cref="VendorModels"/>.</summary>
+    public Dictionary<string, VendorModelOption[]>? VendorModelsByAccount { get; set; }
+
+    /// <summary>Fingerprints of each vendor's catalog files, taken before the startup probe, and of each
+    /// account's, taken before its latest probe; the vendor CLI watcher's starting point for an entry
+    /// it begins watching. Replaced by reference.</summary>
     public IReadOnlyDictionary<string, Services.CatalogPathStat[]>? VendorCatalogBaselines { get; set; }
 
     /// <summary>
@@ -203,6 +212,12 @@ public class DaemonConfig {
         get => field ?? throw new InvalidOperationException($"DaemonConfig.Home was never set; pass a {nameof(UserHome)} in from the entry point.");
         set;
     }
+
+    /// <summary>The host's account registry; null leaves the accounts publisher inert.</summary>
+    public AccountStore? Accounts { get; set; }
+
+    /// <summary>The config directory each account-bearing vendor uses when no account is chosen.</summary>
+    public IReadOnlyDictionary<HarnessId, string> DefaultDirectories { get; set; } = FrozenDictionary<HarnessId, string>.Empty;
 
     /// <summary>The PATH probe resolved at boot, the one the <c>HarnessRegistry</c> is built over. A
     /// configured vendor path is not a harness question, so its resolvers take this.</summary>

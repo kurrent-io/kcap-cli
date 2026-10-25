@@ -1,6 +1,4 @@
-using Capacitor.Cli.Commands;
-
-namespace Capacitor.Cli.Tests.Unit.Commands;
+namespace Capacitor.Cli.Core.Tests.Unit;
 
 public class ShellArgumentTests {
     [Test]

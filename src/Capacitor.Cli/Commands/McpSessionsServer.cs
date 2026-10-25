@@ -66,7 +66,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         writer.AutoFlush = true;
 
         try {
-            await McpStdioLoop.RunAsync(reader, writer, TimedDispatchToolCallAsync, (id, method, request) => method switch {
+            await McpStdioLoop.RunAsync(reader, writer, tools, TimedDispatchToolCallAsync, (id, method, request) => method switch {
                 "initialize" => BuildInitializeResponse(id, request),
                 "tools/list" => BuildToolsListResponse(id, tools),
                 _            => McpProtocol.TryHandleStandardMethod(method, id)
@@ -693,12 +693,32 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             first["hits"]                 = merged;
             first["widened_to_all_repos"] = true;
 
-            // The flag describes one request's lexical lanes; a lexical hit in either scope clears it.
-            var firstNoLexical   = ReadNoLexicalMatch(first);
-            var widenedNoLexical = ReadNoLexicalMatch(widened);
+            // Each flag describes one request. A null no_lexical_match is unknown (a timed-out transcript lane), so
+            // "no match" survives only when both requests said so. A body without the flag says nothing, so the other
+            // request's answer stands; null lane flags mean that request ran no lexical search.
+            if (first.ContainsKey("no_lexical_match") && widened.ContainsKey("no_lexical_match")) {
+                var firstNoLexical   = ReadBool(first, "no_lexical_match");
+                var widenedNoLexical = ReadBool(widened, "no_lexical_match");
+                first["no_lexical_match"] = firstNoLexical is false || widenedNoLexical is false ? false
+                                          : firstNoLexical is true && widenedNoLexical is true ? true
+                                          : null;
+            } else if (widened.ContainsKey("no_lexical_match")) {
+                first["no_lexical_match"] = widened["no_lexical_match"]?.DeepClone();
+            }
 
-            if (firstNoLexical is not null || widenedNoLexical is not null) {
-                first["no_lexical_match"] = (firstNoLexical ?? true) && (widenedNoLexical ?? true);
+            foreach (var field in new[] { "bounded_lanes", "timed_out_lanes" }) {
+                var firstLanes   = first[field] as JsonArray;
+                var widenedLanes = widened[field] as JsonArray;
+                if (firstLanes is null && widenedLanes is null) continue;
+
+                var names = new List<string>();
+                foreach (var lane in (firstLanes ?? new JsonArray()).Concat(widenedLanes ?? new JsonArray())) {
+                    if (lane is JsonValue v && v.TryGetValue<string>(out var name) && !names.Contains(name)) names.Add(name);
+                }
+
+                var union = new JsonArray();
+                foreach (var name in names) union.Add((JsonNode?)JsonValue.Create(name));
+                first[field] = union;
             }
 
             return first.ToJsonString();
@@ -706,8 +726,8 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
             return firstBody;
         }
 
-        static bool? ReadNoLexicalMatch(JsonObject body) =>
-            body["no_lexical_match"] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
+        static bool? ReadBool(JsonObject body, string field) =>
+            body[field] is JsonValue v && v.TryGetValue<bool>(out var b) ? b : null;
     }
 
     static string BuildSummaryUrl(string baseUrl, string sessionId) =>
@@ -1055,7 +1075,7 @@ sealed class McpSessionsServer(ConfigRoot config, ProfileContext profiles, Token
         ),
         new(
             "list_repo_sessions",
-            "List the sessions you are allowed to see on a repository, or on every repository with repo: \"all\". Without a time window, state defaults to active and rows are ordered by last activity, running ones first, so no finished session appears unless you pass state: \"all\" or \"ended\", and one row back on a busy repo usually means only your own session is running. With since and/or until the tool lists the sessions worked on in that period: state then defaults to all, rows are ordered by started_at, newest first, and the response echoes the window it applied as since and until. A session is in the window when it started before until and ended at or after since, or, while still open, was last active at or after since. Activity is not checked event by event, so a session that spans the window lists for it even if it was idle inside it. since and until each take an instant ending in Z or an offset (2026-09-27T09:00:00Z), a date (2026-09-27, the start of that day in this machine's time zone) or a duration back from now (36h, 14d, 2w); for one whole day pass that date as since and the next date as until, and pass the same instant as both to list the sessions that spanned it. When the response carries next_cursor there are more rows: call again with cursor set to it, the same repo and optionally limit, and nothing else, because the cursor carries the window, state, owner and touching_path of the page it came from. total counts the whole window, not the rows left. An argument the tool does not declare (from, to, a date range) is ignored rather than rejected. Each row carries session_id, owner, repo, vendor, status, access_level, stale, started_at, ended_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count; repo is the session's primary repository, null when it has none. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it, or to answer what you or the team worked on over a period: owner: \"me\" for your own work, no owner for everyone you can see. Read what a listed session did with get_session_summary.",
+            "List the sessions you are allowed to see on a repository, or on every repository with repo: \"all\". Without a time window, state defaults to active and rows are ordered by last activity, running ones first, so no finished session appears unless you pass state: \"all\" or \"ended\", and one row back on a busy repo usually means only your own session is running. With since and/or until the tool lists the sessions worked on in that period: state then defaults to all, rows are ordered by started_at, newest first, and the response echoes the window it applied as since and until. A session is in the window when it started before until and ended at or after since, or, while still open, was last active at or after since. Activity is not checked event by event, so a session that spans the window lists for it even if it was idle inside it. since and until each take an instant ending in Z or an offset (2026-09-27T09:00:00Z), a date (2026-09-27, the start of that day in this machine's time zone) or a duration back from now (36h, 14d, 2w); for one whole day pass that date as since and the next date as until, and pass the same instant as both to list the sessions that spanned it. When the response carries next_cursor there are more rows: call again with cursor set to it, the same repo and optionally limit, and nothing else, because the cursor carries the window, state, owner and touching_path of the page it came from. total counts the whole window, not the rows left. An argument the tool does not declare (from, to, a date range) is refused with an error naming it. Each row carries session_id, owner, repo, vendor, status, access_level, stale, started_at, ended_at, last_activity_at, branch, cwd, last_prompt, write_attempt_paths and write_attempt_count; repo is the session's primary repository, null when it has none. Rows are visibility-filtered: a teammate who is missing may simply have a private session. Below access_level \"full\" the branch, cwd, prompt and paths are blank, and touching_path only ever matches sessions you hold at \"full\". stale is set only on an active session with no activity for over an hour; an ended session is never stale. write_attempt_paths are Edit/Write tool inputs recorded at invocation time: attempts, not confirmed writes; first call per event only; paths as the tool received them; nothing from Bash, MultiEdit, NotebookEdit, apply_patch, MCP file tools or subagents. On a running session, list_turns works at \"activity\" and above while get_turn and get_session_transcript need \"full\": for a full row, the latest closed turn is get_turn on the last index list_turns returns; an activity row stops at list_turns. Reach for this when you find unexplained state in a checkout and need to know which session is doing it, or to answer what you or the team worked on over a period: owner: \"me\" for your own work, no owner for everyone you can see. Read what a listed session did with get_session_summary.",
             new(
                 "object",
                 new() {
