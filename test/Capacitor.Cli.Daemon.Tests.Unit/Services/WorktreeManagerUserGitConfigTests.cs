@@ -110,6 +110,27 @@ public class WorktreeManagerUserGitConfigTests {
         await Assert.That(snapshot.Do("status", "--porcelain").Text).IsEqualTo("");
     }
 
+    /// <summary>
+    /// The machine's attributes file sits below the snapshot's, and git resolves each attribute on its own, so the
+    /// snapshot's file must reset <c>eol</c> as well as <c>text</c>: a machine-wide <c>* eol=crlf</c> would otherwise
+    /// still convert every file. The machine's file cannot be staged, so the same ranking is built in a scratch
+    /// repository, where a subdirectory's attributes outrank the root's.
+    /// </summary>
+    [Test]
+    public async Task The_snapshot_attributes_reset_a_lower_ranked_text_and_eol() {
+        var source = Tmp.CreateDir("proj");
+        source.CreateFile("README.md", "hello");
+        var worktree = await NewManager().CreateAsync(source);
+        var rules    = File.ReadAllText(GitRepo.At(worktree.Path).Do("config", "--local", "core.attributesFile").Text);
+
+        using var scratch = GitRepo.CreateWithCommit("ranking");
+        scratch.CreateFile(".gitattributes", "* text eol=crlf\n");
+        scratch.CreateFile(Path.Combine("snapshot", ".gitattributes"), rules);
+
+        await Assert.That(scratch.Do("check-attr", "text", "eol", "--", "snapshot/file.txt").Text)
+            .IsEqualTo("snapshot/file.txt: text: unspecified\nsnapshot/file.txt: eol: unspecified");
+    }
+
     /// <summary>A project rule that sets only <c>eol</c> relies on <c>text</c> being unspecified, so the snapshot's own
     /// attributes must not unset it: a checkout then writes the line ending the project asks for.</summary>
     [Test]

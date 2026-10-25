@@ -517,16 +517,16 @@ public partial class WorktreeManager(
     static readonly KeyValuePair<string, string>[] NoSystemAttributes = [new("GIT_ATTR_NOSYSTEM", "1")];
 
     /// <summary>The snapshot's attributes file, inside its git dir, as a path git reads the same on every platform: a
-    /// config value read from the environment is not unescaped, so it carries no backslash. Its <c>!text</c> resets
-    /// <c>text</c> to unspecified for every path: <c>-text</c> would mark every path binary and void a project rule
-    /// that sets only <c>eol</c>. Git ranks the file above the machine's attributes and below the project's
+    /// config value read from the environment is not unescaped, so it carries no backslash. Its <c>!text !eol</c>
+    /// resets both to unspecified for every path; git resolves each attribute on its own, so both are named.
+    /// <c>-text</c> would mark every path binary and void a project rule that sets only <c>eol</c>. Git ranks the file above the machine's attributes and below the project's
     /// <c>.gitattributes</c>, so the agent's later commands, which skip neither, still convert only what the project
     /// asks for. <c>info/attributes</c> would not do: it outranks the project's own file.</summary>
     static string CreateSnapshotAttributesFile(string worktreePath) {
         var info = Path.Combine(worktreePath, ".git", "info");
         Directory.CreateDirectory(info);
         var path = Path.Combine(info, "kcap-snapshot-attributes");
-        File.WriteAllText(path, "* !text\n");
+        File.WriteAllText(path, "* !text !eol\n");
 
         return Path.GetFullPath(path).Replace('\\', '/');
     }
