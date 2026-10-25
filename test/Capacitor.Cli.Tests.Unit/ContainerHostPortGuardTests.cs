@@ -18,6 +18,9 @@ public partial class ContainerHostPortGuardTests {
     [GeneratedRegex(@"new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*new\s*\(")]
     private static partial Regex PublishingBuilder();
 
+    [GeneratedRegex(@"\G(?:new\s+(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\s*\(|(?:[\w.]+\.)?(?:KurrentDb|PostgreSql)Builder\??\s+\w+\s*=\s*new\s*\()")]
+    private static partial Regex PublishingBuilderHere();
+
     [GeneratedRegex(@"\.WithPortBinding\s*\(\s*ContainerHostPorts\.Next\s*\(\s*\)\s*,(?!\s*(?:true\b|assignRandomHostPort\s*:))")]
     private static partial Regex PickedBinding();
 
@@ -44,6 +47,7 @@ public partial class ContainerHostPortGuardTests {
     [Arguments("new KurrentDbBuilder(image).WithCreateParameterModifier(_ => Side(new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80))).Build()")]
     [Arguments("var s = \"\"\"\"x\"\"\"\"; new KurrentDbBuilder(image).Build(); var t = \"\"\"\"y\"\"\"\";")]
     [Arguments("(new KurrentDbBuilder(image), new ContainerBuilder(i).WithPortBinding(ContainerHostPorts.Next(), 80))")]
+    [Arguments("var b = flag ? new KurrentDbBuilder(image) : new KurrentDbBuilder(image).WithPortBinding(ContainerHostPorts.Next(), 2113);")]
     public async Task Pattern_flags_a_port_docker_chooses(string code) =>
         await Assert.That(PublishesOnDockersChoice(code)).IsTrue();
 
@@ -79,10 +83,10 @@ public partial class ContainerHostPortGuardTests {
     }
 
     /// <summary>Whether the builder's own chain, from its construction to its <c>.Build()</c> or the end of the expression
-    /// holding it (a <c>;</c>, a <c>,</c> or the bracket closing around it), carries a picked binding. Only a call chained
-    /// on the builder itself counts, outside every bracket opened after it: a binding, a <c>.Build()</c> or another
-    /// builder inside an argument or a lambda in the chain belongs to something else, and a binding added in a later
-    /// statement does not count.</summary>
+    /// holding it (a <c>;</c>, a <c>,</c>, a conditional's <c>?</c> or <c>:</c>, a sibling builder, or the bracket closing
+    /// around it), carries a picked binding. Only a call chained on the builder itself counts, outside every bracket
+    /// opened after it: a binding, a <c>.Build()</c> or another builder inside an argument or a lambda in the chain
+    /// belongs to something else, and a binding added in a later statement does not count.</summary>
     static bool BindsItsOwnPort(string code, Match builder) {
         var start = builder.Index + builder.Length;
 
@@ -94,10 +98,16 @@ public partial class ContainerHostPortGuardTests {
                 case '(' or '[' or '{': depth++; continue;
                 case ')' or ']' or '}' when depth == 0: return false;
                 case ')' or ']' or '}': depth--; continue;
-                case ';' or ',' when depth == 0: return false;
+                case ';' or ',' or ':' when depth == 0: return false;
+                case '?' when depth == 0 && (i + 1 >= code.Length || code[i + 1] != '.'): return false;
             }
 
-            if (depth != 0 || code[i] != '.') continue;
+            if (depth != 0) continue;
+
+            // A sibling builder at the same depth, such as the other branch of a conditional, has a chain of its own.
+            if (PublishingBuilderHere().IsMatch(code[i..Math.Min(code.Length, i + 200)])) return false;
+
+            if (code[i] != '.') continue;
 
             if (Build().IsMatch(code[i..Math.Min(code.Length, i + 16)])) return false;
 
