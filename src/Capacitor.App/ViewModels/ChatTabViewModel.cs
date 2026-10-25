@@ -648,11 +648,11 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             SessionRuns runs, string? unavailableNote = null, IObservable<string?>? sessionId = null,
             IObservable<bool>? localDaemonOnAppServer = null, PlanActivity? planActivity = null,
             Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, LocalTranscripts? transcripts = null,
-            IMessageSenderSource? senders = null)
+            IMessageSenderSource? senders = null, IObservable<Unit>? signInCompleted = null)
         : this(agentId, AgentOrigin.Local, LocalSession(agentId, daemon), daemon.Snapshots.Select(s => s.Daemon.SupportedVendors),
                input, uploader, projection is null ? null : LocalFeed(agentId, projection, time, transcripts), opener, time, permissions,
                runs, unavailableNote, null, sessionId, localDaemonOnAppServer, planActivity: planActivity, openCard: openCard,
-               drafts: drafts, senders: senders) { }
+               drafts: drafts, senders: senders, signInCompleted: signInCompleted) { }
 
     public ChatTabViewModel(
             string agentId, AgentOrigin origin, IObservable<ChatSessionInfo> session, IObservable<string[]?> supportedVendors,
@@ -660,7 +660,8 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
             IPermissionService permissions, SessionRuns runs, string? unavailableNote = null, string? missingNote = null,
             IObservable<string?>? sessionId = null, IObservable<bool>? localDaemonOnAppServer = null,
             IObservable<IReadOnlyList<QueuedInputItem>>? serverQueue = null, PlanActivity? planActivity = null,
-            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null) {
+            Action<ToolCard>? openCard = null, ComposerDrafts? drafts = null, IMessageSenderSource? senders = null,
+            IObservable<Unit>? signInCompleted = null) {
         _drafts = drafts;
         _origin = origin;
         _agentId = agentId;
@@ -688,8 +689,12 @@ public sealed class ChatTabViewModel : ReactiveObject, IAttachmentSink {
         var onAppServer = origin == AgentOrigin.Remote ? Observable.Return(true) : localDaemonOnAppServer ?? Observable.Return(true);
         var admittedSessionId = sessionId?.CombineLatest(onAppServer, (id, admitted) => admitted ? id : null);
         admittedSessionId?.Subscribe(id => _sessionId = id).DisposeWith(_disposables);
-        if (_senders is { } lookup)
-            admittedSessionId?.ObserveOn(RxSchedulers.MainThreadScheduler).Subscribe(lookup.SetSession).DisposeWith(_disposables);
+        if (_senders is { } lookup) {
+            admittedSessionId?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(id => lookup.SetSession(id, SenderLabels(_items))).DisposeWith(_disposables);
+            signInCompleted?.ObserveOn(RxSchedulers.MainThreadScheduler)
+                .Subscribe(_ => lookup.Restart(SenderLabels(_items))).DisposeWith(_disposables);
+        }
         Cards = new PendingCardsViewModel(
             agentId, origin, sessionId ?? Observable.Return<string?>(null), permissions, _rootSubject,
             localDaemonOnAppServer);

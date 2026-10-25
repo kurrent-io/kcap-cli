@@ -1,3 +1,4 @@
+using ReactiveUnit = System.Reactive.Unit;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using Capacitor.App.Services;
@@ -106,6 +107,33 @@ public class ChatMessageSenderTests {
             await Assert.That(turns[1].Sender.HasTitle).IsFalse();
             await Assert.That(senders.Reads.Single().Request.DispatchIds).IsEquivalentTo(new[] { dispatch });
             await Assert.That(senders.Reads.Single().Request.EventIds).IsEmpty();
+        } finally { await chat.TeardownAsync(); }
+    });
+
+    /// The feed is not replayed when the session or the viewer changes, so the chat hands its visible messages over itself.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public Task A_session_change_and_a_sign_in_ask_again_about_the_messages_on_screen() => RunOnUiAsync(async () => {
+        var time = new FakeTimeProvider();
+        var id = Guid.NewGuid();
+        using var sessionId = new BehaviorSubject<string?>("s1");
+        using var signedIn = new Subject<ReactiveUnit>();
+        var senders = new FakeMessageSenderSource();
+        senders.Answer = _ => new(MessageSendersReadKind.Ready, [new MessageSenderDto { EventId = id, SenderName = $"read {senders.Reads.Count}" }]);
+        var feed = new LinesFeed(UserLine("hello", 0, id));
+        var chat = new ChatTabViewModel("a1", AgentOrigin.Local, Observable.Return(Session("/t.jsonl")), Observable.Return<string[]?>(null),
+            new ReadOnlyChatInput(), new NoAttachmentUploader(), _ => feed, new RecordingOpener(), time,
+            new FakePermissionService(), new SessionRuns(time), sessionId: sessionId, senders: senders, signInCompleted: signedIn);
+        try {
+            await WaitUntilAsync(() => chat.Items.OfType<UserTurnItem>().SingleOrDefault()?.Sender.Title == "read 1", what: "the first title");
+            var turn = chat.Items.OfType<UserTurnItem>().Single();
+
+            sessionId.OnNext("s2");
+            await WaitUntilAsync(() => turn.Sender.Title == "read 2", what: "the title under the new session");
+            await Assert.That(senders.Reads[1].SessionId).IsEqualTo("s2");
+
+            signedIn.OnNext(ReactiveUnit.Default);
+            await WaitUntilAsync(() => turn.Sender.Title == "read 3", what: "the title after the sign-in");
         } finally { await chat.TeardownAsync(); }
     });
 }

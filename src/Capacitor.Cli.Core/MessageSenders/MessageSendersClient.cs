@@ -21,8 +21,8 @@ public sealed class MessageSendersClient(HttpClient http, string serverUrl) {
             return (int)resp.StatusCode switch {
                 401        => MessageSendersRead.Of(MessageSendersReadKind.SignedOut),
                 403 or 404 => MessageSendersRead.Of(MessageSendersReadKind.Unavailable),
-                >= 200 and < 300 when await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.MessageSendersResponseDto, ct).ConfigureAwait(false) is { } body
-                    => new(MessageSendersReadKind.Ready, body.Senders),
+                >= 200 and < 300 when await resp.Content.ReadFromJsonAsync(CapacitorJsonContext.Default.MessageSendersResponseDto, ct).ConfigureAwait(false) is { Senders: { } senders }
+                    => new(MessageSendersReadKind.Ready, senders),
                 _ => MessageSendersRead.Of(MessageSendersReadKind.Unreachable),
             };
         } catch (Exception e) when (IsTransient(e, ct)) {
