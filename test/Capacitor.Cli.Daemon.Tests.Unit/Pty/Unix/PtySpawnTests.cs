@@ -209,7 +209,7 @@ public class PtySpawnTests {
     /// exactly as exec alone would.</summary>
     [Test, RunOn(OS.Linux)]
     public async Task Child_starts_with_the_callers_blocked_and_ignored_signals() {
-        var plan = Preflight("/bin/cat", ["cat", "/proc/self/status"]);
+        var plan = Preflight("/bin/grep", ["grep", "^Sig", "/proc/self/status"]); // not cat: see IdleReader
         try {
             var caller = ReadStatusFields(File.ReadAllText("/proc/thread-self/status"));
             var rc     = Spawn(plan, out var result);
@@ -240,7 +240,7 @@ public class PtySpawnTests {
         var saved = new byte[SigactionSize];
         if (sigaction(sigurg, ignore, saved) != 0) throw new InvalidOperationException("sigaction failed");
 
-        var plan = Preflight("/bin/cat", ["cat", "/proc/self/status"]);
+        var plan = Preflight("/bin/grep", ["grep", "^Sig", "/proc/self/status"]); // not cat: see IdleReader
         try {
             var rc = Spawn(plan, out var result);
             try {
