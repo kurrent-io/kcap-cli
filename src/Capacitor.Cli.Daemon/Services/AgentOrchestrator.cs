@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Capacitor.Cli.Daemon.Pty;
 using Capacitor.Cli.Daemon.Acp;
 using Capacitor.Cli.Core;
+using Capacitor.Cli.Core.Accounts;
 using Capacitor.Cli.Core.LocalIpc;
 using Capacitor.Cli.Core.Auth;
 using Capacitor.Cli.Core.Config;
@@ -60,7 +61,8 @@ internal record AgentInstance(
         string                  Vendor,
         IHostedAgentRuntime     Runtime,
         WorktreeInfo            Worktree,
-        CancellationTokenSource ReadCts
+        CancellationTokenSource ReadCts,
+        ResolvedAccount?        Account = null
     ) {
     public string?              SessionId         { get; set; }
 
@@ -829,8 +831,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             PolicySnapshotProvider?                           policySnapshots = null,
             // Null outside DaemonRunner: a private fence over this daemon's own marker path. DaemonRunner
             // passes the singleton the control socket fences.
-            AdmissionFence?                                   admissionFence = null
+            AdmissionFence?                                   admissionFence = null,
+            // Null outside DaemonRunner: no accounts, so no catalog is probed per account.
+            AccountsPublisher?                                accounts = null
         ) {
+        AccountsSnapshot = accounts is null ? static () => null : () => accounts.Current;
         _admission = admissionFence ?? new AdmissionFence(
             config.Store.RetiringMarkerPath(config.Name), config.InstanceId, time,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<AdmissionFence>.Instance);
@@ -1599,18 +1604,38 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 var fresh     = DaemonRunner.RetainAdvertisedVersions(current,
                     DaemonRunner.ComputeUnattendedVendorCapabilities(_runtimeFactories.Values, _config, _config.UnattendedVendors));
 
-                var previousCatalog = _config.VendorModels;
-                var supported       = _config.SupportedVendors ?? [];
-                var catalogVendors  = !probeCatalog ? [] : _runtimeFactories.Values
+                var previousCatalog   = _config.VendorModels;
+                var previousByAccount = _config.VendorModelsByAccount;
+                var supported         = _config.SupportedVendors ?? [];
+                var catalogVendors    = !probeCatalog ? [] : _runtimeFactories.Values
                     .Where(f => supported.Contains(f.Vendor, StringComparer.Ordinal))
                     .Where(f => f.CatalogFingerprintPaths.Count > 0 || (previousCatalog?.ContainsKey(f.Vendor) ?? false))
                     .Select(f => f.Vendor)
                     .ToArray();
-                var mergedCatalog = catalogVendors.Length == 0
+                var accountFactory = probeCatalog ? VendorModelCatalogs.AccountFactory(_runtimeFactories.Values, supported) : null;
+                var accounts       = accountFactory is null ? [] : VendorModelCatalogs.AccountsIn(AccountsSnapshot());
+                // Fingerprinted before the probe, as at startup: the watcher starts watching an added
+                // account from this, so a write between the probe and that start still reads as a change.
+                if (accountFactory is not null)
+                    _config.VendorCatalogBaselines = VendorModelCatalogs.WithAccountBaselines(_config.VendorCatalogBaselines, accountFactory, accounts);
+
+                var vendorProbe = catalogVendors.Length == 0
+                    ? null
+                    : VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token);
+                var accountProbe = accounts.Count == 0
+                    ? null
+                    : VendorModelCatalogs.ProbeByAccountAsync(accountFactory!, accounts, _shutdownCts.Token);
+                await Task.WhenAll(vendorProbe ?? Task.CompletedTask, accountProbe ?? Task.CompletedTask);
+
+                var mergedCatalog = vendorProbe is null
                     ? previousCatalog
-                    : VendorModelCatalogs.Merge(previousCatalog,
-                        await VendorModelCatalogs.ProbeAsync(_runtimeFactories.Values, catalogVendors, _shutdownCts.Token));
-                var catalogChanged = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog);
+                    : VendorModelCatalogs.Merge(previousCatalog, await vendorProbe);
+                // Read after the probes: an account removed while its probe ran is not advertised.
+                var live = VendorModelCatalogs.AccountsIn(AccountsSnapshot()).Select(a => a.AccountId).ToHashSet(StringComparer.Ordinal);
+                var mergedByAccount = VendorModelCatalogs.MergeByAccount(
+                    previousByAccount, accountProbe is null ? new Dictionary<string, VendorModelOption[]>() : await accountProbe, live);
+                var catalogChanged  = !VendorModelCatalogs.Equal(previousCatalog, mergedCatalog)
+                                   || !VendorModelCatalogs.Equal(previousByAccount, mergedByAccount);
 
                 if (!republish && !catalogChanged && current is not null && current.SequenceEqual(fresh)) return;
 
@@ -1618,7 +1643,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 // One reference swap: status serializers on other threads may be enumerating the old one.
                 // Pulsed before the re-register so a failed one cannot keep the change from local subscribers.
                 if (catalogChanged) {
-                    _config.VendorModels = mergedCatalog;
+                    _config.VendorModels          = mergedCatalog;
+                    _config.VendorModelsByAccount = mergedByAccount;
                     _statusNotifier.Pulse();
                 }
                 LogReAdvertising(_logger, reason,
@@ -1631,6 +1657,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>Test seam: the most recently scheduled capability refresh, for awaiting quiescence.</summary>
     internal Task CapabilityRefreshForTest => _capabilityRefresh.Current;
+
+    /// <summary>The host's accounts as last published; the per-account catalogs follow it.</summary>
+    internal Func<AccountsSnapshotDto?> AccountsSnapshot { get; set; }
 
     /// <summary>
     /// Re-sends the registration on the current connection so the server's copy of a connect
@@ -2042,7 +2071,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 ActivitySeq:  a.ActivityClock.ActivitySeq,
                 IdleForMs:    a.ActivityClock.IdleForMs,
                 TurnInFlight: a.ActivityClock.TurnInFlight,
-                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null))
+                LaunchStage:  a.Status == "Starting" ? a.ActivityClock.LaunchStage : null,
+                AccountDirectory: a.Account?.Directory,
+                AccountId:        a.Account?.AccountId,
+                AccountLabel:     a.Account?.Label))
             .ToList();
 
         foreach (var p in _pendingLaunches.Values) {
@@ -2055,7 +2087,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 TurnInFlight: p.ActivityClock.TurnInFlight,
                 // A pending launch IS "Starting" by definition — there is no other status it can hold —
                 // so the Status gate above is satisfied unconditionally here.
-                LaunchStage:  p.ActivityClock.LaunchStage));
+                LaunchStage:  p.ActivityClock.LaunchStage,
+                AccountDirectory: p.Account?.Directory,
+                AccountId:        p.Account?.AccountId,
+                AccountLabel:     p.Account?.Label));
         }
 
         return live;
@@ -2074,7 +2109,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         AgentActivityClock ActivityClock,
         string?            Vendor,
         string?            RepoPath,
-        string?            Title);
+        string?            Title,
+        ResolvedAccount?   Account);
 
     readonly ConcurrentDictionary<string, PendingLaunch> _pendingLaunches = new(StringComparer.Ordinal);
 
@@ -2163,10 +2199,11 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// <c>_agents</c>.</summary>
     internal IDisposable TrackPendingLaunch(
             string agentId, LaunchKind kind, string? flowRunId, string? flowRole, AgentActivityClock clock,
-            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null) {
+            string? vendor = null, string? repoPath = null, string? title = null, DateTime? createdAt = null,
+            ResolvedAccount? account = null) {
         lock (_membership)
             _pendingLaunches[agentId] = new PendingLaunch(
-                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title);
+                agentId, kind, createdAt ?? _time.GetUtcNow().UtcDateTime, flowRunId, flowRole, clock, vendor, repoPath, title, account);
         _statusNotifier.Pulse();
 
         return new PendingLaunchScope(this, agentId);
@@ -2370,6 +2407,27 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         return new CommandOutcome(CommandOutcomeKind.LaunchRejected, cmd.AgentId, RejectReason: CommandRejectedReason.Semantic);
     }
 
+    /// <summary>The account a launch runs under. A vendor without a default directory has no accounts:
+    /// a launch without an id carries none, and one naming an id is refused.</summary>
+    internal AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId) =>
+        ResolveAccount(vendorToken, accountId, resumed: null);
+
+    /// <summary>A resume resolves the account its ledger entry <paramref name="resumed"/> recorded, and
+    /// ignores <paramref name="accountId"/>.</summary>
+    AccountResolutionOutcome ResolveAccount(string vendorToken, string? accountId, ResumeLaunchDescriptor? resumed) {
+        if (HarnessId.From(vendorToken) is not { } vendor || !_config.DefaultDirectories.TryGetValue(vendor, out var defaultDirectory)) {
+            return resumed is null && !string.IsNullOrEmpty(accountId)
+                ? new AccountResolutionOutcome(null, $"{AccountResolution.Unavailable}: {vendorToken} has no accounts")
+                : new AccountResolutionOutcome(null, null);
+        }
+
+        var registry = _config.Accounts?.TryLoad();
+
+        return resumed is null
+            ? AccountResolution.Resolve(registry, vendor, accountId, defaultDirectory)
+            : AccountResolution.ResolveForResume(registry, vendor, resumed.AccountId, resumed.AccountDirectory, defaultDirectory);
+    }
+
     /// <summary>The server's start title, or — from a server that sends none — one derived from the prompt.</summary>
     internal static AgentStartTitle? StartTitleOf(LaunchAgentCommand cmd) =>
         !string.IsNullOrWhiteSpace(cmd.Title)
@@ -2378,8 +2436,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
     /// <summary>The launch body. Its outcome drives the sequenced lane: a pre-flight rejection is
     /// <c>LaunchRejected</c> (capacity as <c>daemon_capacity</c>, every other validation as
-    /// <c>semantic</c>) alongside its LaunchFailed; a spawn or registration failure that was cleaned up is
-    /// <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
+    /// <c>semantic</c>) alongside its LaunchFailed; an account refusal, or a spawn or registration failure
+    /// that was cleaned up, is <c>launch_failed_cleaned</c>; a registered agent is <c>launch_executed</c>.</summary>
     async Task<CommandOutcome> HandleAdmittedLaunchAsync(
             LaunchAgentCommand cmd, LaunchHold hold, CancellationToken cancel = default, Action<AgentInstance>? onPublished = null) {
         var agentId = cmd.AgentId;
@@ -2551,8 +2609,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             }
         }
 
-        WorktreeInfo? worktree      = null;
-        string?       mcpConfigPath = null;
+        WorktreeInfo?    worktree      = null;
+        string?          mcpConfigPath = null;
+        ResolvedAccount? account       = null;
 
         // Declared OUTSIDE the try so it is in scope in the catch blocks below: the failed-launch
         // cleanup must consult it to decide whether the worktree is ours to remove. A borrowed cwd
@@ -2655,6 +2714,21 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
                 return new CommandOutcome(CommandOutcomeKind.LaunchRejected, agentId, RejectReason: CommandRejectedReason.Semantic);
             }
+
+            // A reviewer runs on the daemon's default account, where its MCP inventory and hooks are read.
+            var resolution = cmd.Kind != LaunchKind.Default && !string.IsNullOrEmpty(cmd.AccountId)
+                ? new AccountResolutionOutcome(null, $"{AccountResolution.Unavailable}: a {(isReview ? "review" : "review-flow")} launch runs on the default account")
+                : ResolveAccount(cmd.Vendor, cmd.AccountId, resume?.Entry.Launch);
+
+            // A failure, not a rejection: the refusal reaches the caller by name, never as a generic rejection.
+            if (resolution.Refusal is { } refusal) {
+                if (resume is not null) resume.AccountRefusal = refusal;
+                await LaunchFailedUnlessPrivateAsync(isPrivate, agentId, refusal);
+
+                return new CommandOutcome(CommandOutcomeKind.LaunchFailedCleaned, agentId);
+            }
+
+            account = resolution.Account;
 
             LogLaunching(agentId, repoPath, cmd.Vendor, effort ?? "default", effectiveModel);
 
@@ -2900,7 +2974,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                 IsPrivate: isPrivate,
                 PinnedSessionId: pinnedSessionId,
                 RequestedTransport: resume?.Entry.Transport,
-                PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null
+                PersistenceProbe: () => _agents.TryGetValue(agentId, out var bound) ? bound.AcpForwarder?.Forwarder : null,
+                Account: account
             );
 
             HostedRuntimeStart start;
@@ -2910,14 +2985,14 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // written by THIS agent's process, not the user's earlier sessions.
             var spawnedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId);
+            if (resume is null) WritePreStartLedger(cmd, prompt, effectiveModel, effort, worktree, work, consent, pinnedSessionId, account);
 
             // Make this launch describable for the duration of the handshake below: the AgentInstance
             // does not exist until StartAsync returns, so without this the out-of-cycle report each
             // SetLaunchStage fires would omit the very agent it is reporting a stage for.
             using var pendingLaunch = isPrivate ? null : TrackPendingLaunch(
                 agentId, cmd.Kind, cmd.FlowRunId, cmd.FlowRole, activityClock,
-                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt));
+                vendor: cmd.Vendor, repoPath: repoPath, title: startTitle?.Text ?? AgentStartTitle.Shorten(prompt), account: account);
 
             try {
                 // A resume's start also ends with its attempt, so a stop during the handshake does not wait for the vendor.
@@ -3010,7 +3085,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // server and the rail report.
             var startedAtUtc = _time.GetUtcNow().UtcDateTime;
 
-            var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts) {
+            var agent = new AgentInstance(agentId, prompt, registeredModel, effort, repoPath, cmd.Vendor, runtime, worktree, cts, account) {
                 CreatedAt = startedAtUtc, LastOutputAt = startedAtUtc,
                 // Set in the initializer, not after: PublishAgent below is the first snapshot anyone
                 // reads, and RegisterAgentAsync after it can stall on a server outage.
@@ -3093,7 +3168,7 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             if (!agent.IsServerSilent) runtime.OnCommandsAvailable = commands => ReportCommands(agentId, commands);
 
             if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "claude", StringComparison.OrdinalIgnoreCase) && cmd.Kind == LaunchKind.Default)
-                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path);
+                _ = ProbeClaudeCommandsAsync(agentId, worktree.Path, agent.Account);
 
             // A runtime with no terminal output (ACP/cursor) has no output-chunk signal to flip
             // Starting→Running on — ReadAgentOutputAsync's read loop never yields a byte for such
@@ -3196,17 +3271,13 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
             // Report the resolved model so the server can display / validate the real model the agent
             // is running. Best-effort: never let a report failure break the launch.
             if (!agent.IsServerSilent && cmd.ExplicitReviewerModel is { } explicitReviewerModel) {
-                // Task 8: a protocol-v3 explicit-model reviewer launch reports the CONCRETE
-                // resolved model via the dedicated ReportExplicitReviewerModelResolved channel, keyed by
-                // the durable LaunchAttemptId, so the server's one-shot waiter can validate + re-price it.
+                // An explicit-model reviewer reports the concrete model on its own channel, keyed by the
+                // LaunchAttemptId, so the server's one-shot waiter can validate and re-price it.
                 ReportExplicitReviewerModel(agentId, cmd.Vendor, explicitReviewerModel, runtimeFactory);
             } else if (!agent.IsServerSilent && string.Equals(cmd.Vendor, "codex", StringComparison.OrdinalIgnoreCase)) {
-                // Legacy path (name/arity/behavior UNCHANGED): the dispatched `model` may be the "default"
-                // no-override sentinel, in which case Codex resolves the model from ~/.codex/config.toml.
-                // Codex-only — Claude/other agents never call the ReportAgentResolvedModel hub.
                 // updateLocal only on the PTY path: an app-server Codex (Transcript present) already
                 // registered its confirmed handshake model, which must not be overwritten locally.
-                ReportResolvedModel(agentId, cmd.Vendor, model, updateLocal: start.Transcript is null);
+                ReportResolvedModel(agentId, cmd.Vendor, model, agent.Account, updateLocal: start.Transcript is null);
             }
 
             // Phase B2-b (sequenced-settlement design §4.2.2): the launch executed — the agent is registered.
@@ -3259,7 +3330,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
                             cmd.Vendor,
                             new PtyHostedAgentRuntime(cmd.Vendor, NoopPtyProcess.Instance, _time),
                             worktree,
-                            new CancellationTokenSource()
+                            new CancellationTokenSource(),
+                            account
                         ) {
                             CreatedAt     = _time.GetUtcNow().UtcDateTime,
                             LastOutputAt  = _time.GetUtcNow().UtcDateTime,
@@ -3331,15 +3403,15 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     /// (ReportAgentResolvedModel) and the config resolution are Codex-specific, so the caller
     /// gates this on <c>vendor == "codex"</c>. The dispatched <paramref name="model"/> may be
     /// the "default" no-override sentinel (or empty), in which case Codex resolves the model from
-    /// <c>~/.codex/config.toml</c> — we resolve the same value here. Never throws: a resolve/report
+    /// the launch's <c>config.toml</c> — we resolve the same value here. Never throws: a resolve/report
     /// failure must not break launch.
     /// </summary>
-    void ReportResolvedModel(string agentId, string vendor, string model, bool updateLocal) {
+    void ReportResolvedModel(string agentId, string vendor, string model, ResolvedAccount? account, bool updateLocal) {
         try {
             var isDefault = string.IsNullOrEmpty(model) || string.Equals(model, "default", StringComparison.OrdinalIgnoreCase);
 
             var resolved = isDefault && string.Equals(vendor, "codex", StringComparison.OrdinalIgnoreCase)
-                ? CodexResolvedModel(model)
+                ? CodexResolvedModel(model, account)
                 : model;
 
             if (string.IsNullOrEmpty(resolved)) return;
@@ -3378,10 +3450,10 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
         }
     }
 
-    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath) {
+    async Task ProbeClaudeCommandsAsync(string agentId, string worktreePath, ResolvedAccount? account) {
         try {
             var commands = await Harness.Claude.ClaudeCommandProbe.ProbeAsync(
-                _harnesses, worktreePath, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
+                _harnesses, worktreePath, account, _config.Home, _time, TimeSpan.FromSeconds(30), LogClaudeCommandProbe, _shutdownCts.Token);
 
             if (commands.Count > 0) ReportCommands(agentId, commands);
         } catch (Exception ex) {
@@ -3417,15 +3489,20 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     }
 
     /// <summary>
-    /// Reads the top-level <c>model = "…"</c> from <c>~/.codex/config.toml</c> (honouring
-    /// <c>CODEX_HOME</c> via <see cref="CodexPaths"/>); falls back to <paramref name="fallback"/>
-    /// when the file is missing/unreadable or has no top-level model key.
+    /// Reads the top-level <c>model = "…"</c> from the launch layout's <c>config.toml</c>; falls back
+    /// to <paramref name="fallback"/> when the file is missing/unreadable or has no top-level model key.
     /// </summary>
-    string CodexResolvedModel(string fallback) {
-        var fromConfig = CodexConfigToml.ReadTopLevelModel(_harnesses.Of<CodexHarness>().Paths.ConfigToml);
+    string CodexResolvedModel(string fallback, ResolvedAccount? account) {
+        var fromConfig = CodexConfigToml.ReadTopLevelModel(CodexPathsFor(account).ConfigToml);
 
         return string.IsNullOrWhiteSpace(fromConfig) ? fallback : fromConfig;
     }
+
+    ClaudePaths ClaudePathsFor(ResolvedAccount? account) =>
+        account is null ? _harnesses.Of<ClaudeHarness>().Paths : AccountLayouts.Claude(_config.Home, account.Directory);
+
+    CodexPaths CodexPathsFor(ResolvedAccount? account) =>
+        account is null ? _harnesses.Of<CodexHarness>().Paths : AccountLayouts.Codex(_config.Home, account.Directory);
 
     static readonly TimeSpan GitGuardTimeout = TimeSpan.FromSeconds(10);
 
@@ -5119,7 +5196,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     async Task<AgentRegisteredResponse> RegisterAgentAsync(AgentInstance agent) {
         if (agent.IsPrivate) return AgentRegisteredResponse.Accepted;
 
-        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId);
+        var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
+            agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
         if (!registration.Registered) {
             agent.RegistrationRefused = true;
@@ -5616,7 +5694,8 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
 
             for (var attempt = 1; ; attempt++) {
                 try {
-                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId);
+                    var registration = await _server.AgentRegisteredAsync(agent.Id, agent.Prompt, agent.Model, agent.Effort, agent.RepoPath, agent.SandboxPolicy, agent.ApprovalPolicy, agent.PermissionPreset, agent.RuntimeTransport, agent.Vendor, agent.StartTitle, agent.ContinuesAgentId,
+                        agent.Account?.Directory, agent.Account?.AccountId, agent.Account?.Label);
 
                     // A refusal is the server's answer, not a transient failure: it is not retried, and the agent is
                     // left out of later re-registrations too. A status sent for the refused id could clear the
@@ -5762,9 +5841,9 @@ internal partial class AgentOrchestrator : IAsyncDisposable {
     Task DetectSessionIdAsync(AgentInstance agent, string vendor, DateTime spawnedAtUtc) {
         Func<ISet<string>, (string SessionId, string Path)?>? locate = vendor.ToLowerInvariant() switch {
             "claude" => ruledOut => SessionTranscriptLocator.TryLocateWinner(
-                _harnesses.Of<ClaudeHarness>().Paths.ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
+                ClaudePathsFor(agent.Account).ProjectDir(agent.Worktree.Path), agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "codex"  => ruledOut => CodexSessionRolloutLocator.TryLocateWinner(
-                _harnesses.Of<CodexHarness>().Paths.Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
+                CodexPathsFor(agent.Account).Sessions, agent.Worktree.Path, spawnedAtUtc, ruledOut),
             "muse"   => _ => MuseHostedSessionLocator.TryLocate(
                 _config.Home, _harnesses.Of<MuseHarness>().Paths, agent.Id, DateOnly.FromDateTime(_time.GetLocalNow().DateTime),
                 (agent.Runtime as MuseMspHostedAgentRuntime)?.Session),

@@ -59,7 +59,7 @@ public class HelloProbeTests {
         Skip.When(OperatingSystem.IsWindows(), "Unix-domain socket path");
 
         var replyJson = JsonSerializer.Serialize(
-            new HelloReplyDto(1, "9.9.9", "probed-daemon", []), HelloIpcJsonContext.Default.HelloReplyDto);
+            new HelloReplyDto(1, "9.9.9", "probed-daemon", ["accounts/1"]), HelloIpcJsonContext.Default.HelloReplyDto);
 
         await WithServerAsync(ReplyWith(LocalFrame.HelloJson(FrameType.HelloReply, replyJson)), async name => {
             var result = await HelloProbe.RunAsync(Daemons.Store, name, TimeProvider.System, TimeSpan.FromSeconds(5));
@@ -69,6 +69,7 @@ public class HelloProbeTests {
             await Assert.That(result.ProtocolVersion).IsEqualTo(1);
             await Assert.That(result.DaemonVersion).IsEqualTo("9.9.9");
             await Assert.That(result.DaemonName).IsEqualTo("probed-daemon");
+            await Assert.That(result.Capabilities).IsEquivalentTo(new[] { "accounts/1" });
         });
     }
 

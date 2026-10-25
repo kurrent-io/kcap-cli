@@ -184,6 +184,13 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem x:Name="SearchTab" Classes="kcapSettingsTab" Header="Search"
+                     IsVisible="{Binding Search, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Margin="0,18,0,0">
+                    <views:SearchSettingsView DataContext="{Binding Search}" />
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem x:Name="AppearanceTab" Classes="kcapSettingsTab" Header="Appearance"
                      IsVisible="{Binding Appearance, Converter={x:Static ObjectConverters.IsNotNull}}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="0,18,0,0">
