@@ -14,7 +14,7 @@ runs:
   steps:
     # A channel install follows aka.ms, which moves to a new SDK mid-release and points at a storage
     # account that refuses public reads, failing every job. An explicit version downloads from the CDN,
-    # and latest-sdk only moves once the release is out. Without an answer, global.json decides as before.
+    # and latest-sdk only moves once the release is out. When no version resolves, global.json picks the SDK.
     - name: Resolve the SDK version
       id: sdk
       shell: bash
