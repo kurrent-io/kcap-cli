@@ -20,25 +20,25 @@ public static class ClaudePermissions {
     /// The rules Claude suggested for the call's own tool, or a session rule for that tool when it suggested none; null
     /// when the answer approves no tool, or one other than the call's.
     public static JsonArray? UpdatesFor(JsonElement? applyPermissions, JsonElement? permissionSuggestions, string? toolName) {
-        if (string.IsNullOrEmpty(toolName) || applyPermissions is not { ValueKind: JsonValueKind.Array } entries) return null;
+        if (string.IsNullOrEmpty(toolName) || applyPermissions is not { IsArray: true } entries) return null;
 
-        var approved = entries.EnumerateArray()
-            .Any(e => e.ValueKind == JsonValueKind.Object && Text(e, "type") == ToolAlwaysAllow && Text(e, "tool") == toolName);
+        var approved = entries.EnumerateArray().Any(e => e.Str("type") == ToolAlwaysAllow && e.Str("tool") == toolName);
 
         if (!approved) return null;
 
-        var suggested = permissionSuggestions is { ValueKind: JsonValueKind.Array } all ? ForTool(all, toolName) : [];
+        var suggested = permissionSuggestions is { IsArray: true } all ? ForTool(all, toolName) : new JsonArray();
 
         if (suggested.Count > 0) return suggested;
 
-        return [
-            new JsonObject {
-                ["type"]        = "addRules",
-                ["rules"]       = new JsonArray(new JsonObject { ["toolName"] = toolName }),
-                ["behavior"]    = "allow",
-                ["destination"] = "session"
-            }
-        ];
+        // A collection expression would bind JsonArray.Add<T>, which fails the AOT publish.
+        var rule = new JsonObject {
+            ["type"]        = "addRules",
+            ["rules"]       = new JsonArray(new JsonObject { ["toolName"] = toolName }),
+            ["behavior"]    = "allow",
+            ["destination"] = "session"
+        };
+
+        return new JsonArray(rule);
     }
 
     /// The suggested allow rules, each update cut to its rules for the tool. Mode and directory changes name no tool, so
@@ -48,16 +48,10 @@ public static class ClaudePermissions {
 
         foreach (var suggestion in suggestions.EnumerateArray()) {
             // Allow always adds allow rules; a suggestion that removes, replaces, denies or asks is not what was approved.
-            if (suggestion.ValueKind != JsonValueKind.Object
-             || Text(suggestion, "type") != "addRules"
-             || Text(suggestion, "behavior") != "allow"
-             || !suggestion.TryGetProperty("rules", out var rules)
-             || rules.ValueKind != JsonValueKind.Array)
+            if (suggestion.Str("type") != "addRules" || suggestion.Str("behavior") != "allow" || suggestion.Arr("rules") is not { } rules)
                 continue;
 
-            var own = rules.EnumerateArray()
-                .Where(rule => rule.ValueKind == JsonValueKind.Object && Text(rule, "toolName") == toolName)
-                .ToList();
+            var own = rules.EnumerateArray().Where(rule => rule.Str("toolName") == toolName).ToList();
 
             if (own.Count == 0) continue;
 
@@ -68,9 +62,6 @@ public static class ClaudePermissions {
 
         return kept;
     }
-
-    static string? Text(JsonElement entry, string name) =>
-        entry.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     internal sealed record AlwaysAllowEntry(string Type, string Tool);
 }
