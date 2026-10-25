@@ -531,6 +531,7 @@ public class LocalUpgradeTests {
 
     [Test]
     public async Task A_record_that_cannot_be_rewritten_keeps_the_model_set_it_names() {
+        Skip.Unless(!Environment.IsPrivilegedProcess, "needs an unprivileged user: root ignores the read-only data directory");
         Installed();
         Recorded(LocalEmbeddingSetting.Builtin(OldSet));
         var bundle = PublishModelSet();
