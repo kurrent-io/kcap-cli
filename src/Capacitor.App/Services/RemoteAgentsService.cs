@@ -247,6 +247,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     async Task RefreshDaemonAccountsAsync() {
         lock (_lock) {
+            if (_disposed) return;
             if (_daemonAccountsBusy) { _daemonAccountsRerun = true; return; }
             _daemonAccountsBusy = true;
         }
@@ -260,6 +261,8 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
             } catch (Exception) {
             }
             lock (_lock) {
+                // Dispose takes this lock before disposing the subject, so a result landing after it stops here.
+                if (_disposed) { _daemonAccountsBusy = false; return; }
                 if (result is not null) {
                     _accountsRetry.Reset();
                     if (generation == _generation) _daemonAccounts.OnNext(result);
