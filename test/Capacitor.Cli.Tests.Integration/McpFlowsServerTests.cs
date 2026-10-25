@@ -1849,7 +1849,7 @@ public class McpFlowsServerTests : IDisposable {
         // Windows does not reparent, so the server stays in this process tree; it would shed the agent id under test
         // wherever that tree already holds the coding agents its own walk counts
         if (OperatingSystem.IsWindows()
-         && NestedHarness.IsNested(Environment.ProcessId, [.. ProcessHelpers.NestableAgents, "muse"], ProcessHelpers.GetProcessInfo))
+         && NestedHarness.IsNested(Environment.ProcessId, NestedHarness.AgentNames, ProcessHelpers.GetProcessInfo))
             Skip.Test("On Windows the server cannot leave this process tree, and the tree holds nested coding agents");
 
         const string runningSession = "11111111-2222-3333-4444-555555555555";
