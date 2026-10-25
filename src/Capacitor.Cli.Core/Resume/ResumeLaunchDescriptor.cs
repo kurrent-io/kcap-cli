@@ -27,6 +27,8 @@ public sealed record ResumeLaunchDescriptor(
     bool? WorktreeIsStandalone = null,
     string? WorktreeSourceRepo = null,
     string? PermissionMode = null,
+    // A ledger entry without the field reads as null, and resume treats it as derived.
+    bool? TitleDerived = null,
     int? InactivityBoundSeconds = null,
     string? AccountDirectory = null,
     string? AccountId = null,
