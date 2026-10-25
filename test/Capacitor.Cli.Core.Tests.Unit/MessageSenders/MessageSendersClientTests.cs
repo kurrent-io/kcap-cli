@@ -90,8 +90,10 @@ public class MessageSendersClientTests {
     }
 
     [Test]
-    public async Task A_success_with_a_null_sender_list_is_unreachable() {
-        using var server = Serve(200, """{"senders":null}""");
+    [Arguments("""{"senders":null}""")]
+    [Arguments("{}")]
+    public async Task A_success_without_a_sender_list_is_unreachable(string body) {
+        using var server = Serve(200, body);
         using var http = new HttpClient();
 
         var read = await new MessageSendersClient(http, server.Urls[0]).ReadAsync(Dashed, AnyKey, CancellationToken.None);
