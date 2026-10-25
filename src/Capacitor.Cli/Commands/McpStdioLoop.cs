@@ -10,12 +10,15 @@ namespace Capacitor.Cli.Commands;
 /// order, still without holding up anything else.
 /// </summary>
 static class McpStdioLoop {
+    /// <param name="tools">The tools this server publishes. A call to one of them that passes an argument its schema
+    /// does not declare is refused here, before <paramref name="callTool"/> runs.</param>
     /// <param name="callTool">Answers a <c>tools/call</c>; expected to turn its own failures into tool errors.</param>
     /// <param name="answer">Answers any other request that carries an id, given its method (null when absent or not a string).</param>
     /// <param name="orderKey">The key a <c>tools/call</c> is ordered under, or null for one that runs alongside everything.</param>
     public static async Task RunAsync(
             TextReader reader,
             TextWriter writer,
+            IReadOnlyList<McpTool> tools,
             Func<JsonNode, JsonObject, Task<string>> callTool,
             Func<JsonNode, string?, JsonObject, string> answer,
             string serverName,
@@ -37,7 +40,9 @@ static class McpStdioLoop {
         async Task CallAsync(JsonNode id, JsonObject request) {
             string response;
             try {
-                response = await callTool(id, request);
+                response = McpToolArguments.UndeclaredArguments(tools, request) is { } refusal
+                    ? ToolError(id, refusal)
+                    : await callTool(id, request);
             } catch (Exception ex) {
                 // Without an answer the client waits on this id forever.
                 await LogAsync($"kcap mcp {serverName}: unexpected error handling tools/call: {ex}");
@@ -139,6 +144,15 @@ static class McpStdioLoop {
 
     /// <summary>An <c>orderKey</c> that runs every call in arrival order.</summary>
     public static string? InArrivalOrder(JsonObject request) => "";
+
+    static string ToolError(JsonNode id, string text) => new JsonObject {
+        ["jsonrpc"] = "2.0",
+        ["id"]      = id.DeepClone(),
+        ["result"]  = new JsonObject {
+            ["content"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = text }),
+            ["isError"] = true,
+        },
+    }.ToJsonString();
 
     static string Error(JsonNode id, int code, string message) => new JsonObject {
         ["jsonrpc"] = "2.0",

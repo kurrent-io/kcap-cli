@@ -2333,11 +2333,13 @@ kcap agent start claude -- --model opus       # everything after `--` is passed 
 kcap agent start codex --worktree -- -m gpt-5 # run in an isolated git worktree instead of in place
 kcap agent start claude -d                    # start without attaching; prints the agent id
 kcap agent start claude --title "Fix login" -- "fix the login redirect"  # name the session
+kcap agent start claude --account ~/.claude-work  # run under a registered account (id prefix or directory)
 ```
 
-- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--private`, `--title <text>`, `--daemon <name>`, `-d`/`--detach`.
+- **`--` boundary:** flags before `--` are kcap's; everything after `--` is forwarded to the `claude`/`codex` CLI unchanged. kcap flags: `--worktree`, `--private`, `--title <text>`, `--account <id|dir>`, `--daemon <name>`, `-d`/`--detach`.
 - **Visibility:** by default the agent is **registered with the server**, so it appears in your own web UI immediately and you can drive it from the browser — start in the terminal, continue from anywhere. It is **visible only to you** until you share it. Pass `--private` to keep it purely local: unregistered, not streamed to the server, and not shown in the web UI.
 - **Session title:** `--title <text>` (or `--title=<text>`) names the agent's session, and that name sticks until it is renamed. Without it, the session starts titled after the prompt — the last argument after `--`, when neither it nor the argument before it is a flag — and a generated title replaces that once one lands. `--private` agents are never registered, so a title has no effect on them.
+- **Account:** `--account <id|dir>` (or `--account=<id|dir>`) runs a Claude or Codex agent under one of your [accounts](#accounts): an id prefix of at least 4 characters, or the account's directory (`~` is expanded). kcap refuses and starts nothing when the value matches no account of that vendor, when a prefix matches more than one, or when the daemon is too old to choose an account. Without the flag the agent uses the vendor's default configuration directory, as before.
 - **Work location:** by default the agent runs **in place in your current directory** (it edits your real files). Pass `--worktree` to run in a throwaway git worktree instead.
 
 - **What a worktree deliberately does NOT inherit:** an agent worktree is a checkout of whatever branch is
@@ -2447,7 +2449,9 @@ kcap accounts rewire [<id|dir>]                # reinstall recording into one or
 kcap accounts remove <id|dir>                  # remove kcap's recording and forget the account
 ```
 
-`<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`. For a Codex account, `add` and `rewire` also enable Codex sandbox network access for your server(s), as `kcap plugin install --codex` does; pass `--skip-codex-network-access` to leave that home's `config.toml` network keys untouched.
+`<id|dir>` is an account id prefix (at least 4 characters) or its directory. `kcap agent start <claude|codex> --account <id|dir>` starts a [local agent](#local-agents-kcap-agent) under one. `kcap setup` offers the directories it discovers in your home folder. `remove` leaves the directory and its login untouched. Codex asks you to trust the kcap hooks once per home, the next time you start it with that `CODEX_HOME`. For a Codex account, `add` and `rewire` also enable Codex sandbox network access for your server(s), as `kcap plugin install --codex` does; pass `--skip-codex-network-access` to leave that home's `config.toml` network keys untouched.
+
+`add`, `remove`, `rename` and `rewire` accept `--json`: stdout then carries exactly one JSON line (`action`, `account_id`, `succeeded`, `steps` with `name`/`succeeded`/`detail`, `revision`, `error`) and errors still go to stderr. `revision` is the account registry revision the command committed after its wiring attempt (`null` when it committed nothing), so a reader that sees a snapshot at or past it knows the snapshot follows that attempt. `add` and `rewire` commit one even when wiring finds nothing to change, and an `add` whose wiring fails still registers the account and records the failure. A `remove` that cannot unwire leaves the account registered, records the failure on it and commits a revision too, since it may have unwired part of the account. The exit code is 0 only when `succeeded` is true. `list` ignores the flag.
 
 ### Profiles
 
