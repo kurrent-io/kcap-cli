@@ -45,7 +45,7 @@ public abstract class DesktopHost : IDisposable {
         var cliDirectory = BundleLayout.CliDirectory(AppContext.BaseDirectory);
         if (OperatingSystem.IsMacOS()) return new MacDesktopHost(cliDirectory, false, SingleInstanceLock.Unenforced);
         if (OperatingSystem.IsWindows()) return new WindowsDesktopHost(cliDirectory, false, SingleInstanceLock.Unenforced);
-        return new LinuxDesktopHost(cliDirectory, false, null, SingleInstanceLock.Unenforced);
+        return new LinuxDesktopHost(cliDirectory, false, null, false, SingleInstanceLock.Unenforced);
     }
 
     public string CliDirectory { get; }
@@ -58,7 +58,11 @@ public abstract class DesktopHost : IDisposable {
     /// the model changes and the pause state is refreshed on a timer.
     public virtual bool TrayAnnouncesMenuOpen => true;
 
+    /// False when a new copy could not start, so the app must not quit for one.
     public virtual bool CanRelaunchNow => true;
+
+    /// False while the CLI runs from somewhere that vanishes when the app exits, so nothing may link to it.
+    public virtual bool CliOutlivesApp => true;
 
     public virtual AppBuilder ConfigureAvalonia(AppBuilder builder) => builder;
 

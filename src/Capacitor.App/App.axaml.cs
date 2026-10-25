@@ -33,6 +33,7 @@ using Capacitor.Cli.Core.PullRequests.Readers.GitHubCli;
 using Capacitor.Cli.Core.Resume;
 using Capacitor.Cli.Core.Setup;
 using Microsoft.Extensions.DependencyInjection;
+using Capacitor.App.Platform.Linux;
 using Capacitor.App.Platform.Mac;
 
 namespace Capacitor.App;
@@ -430,9 +431,12 @@ public partial class App : Application {
         }
         var run = OperatingSystem.IsMacOS()
             ? uninstall.BuildRun(Environment.ProcessPath, root => new MacAppRemoval(runner, _userHome, root), cli, () => Quit(0))
-            : null;
+            : OperatingSystem.IsLinux()
+                ? uninstall.BuildAppImageRun(AppImageInstall.Detect(Environment.GetEnvironmentVariable),
+                    install => new LinuxAppRemoval(runner, _userHome, install, Environment.GetEnvironmentVariable, _time), cli, () => Quit(0))
+                : null;
         if (run is null) {
-            Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app.");
+            Console.Error.WriteLine("kcap: uninstalling from the app needs the installed kcap.app or the kcap AppImage.");
             // Posted: the lifetime's main loop has not started yet.
             Dispatcher.UIThread.Post(() => Quit(1));
             return;
@@ -887,7 +891,8 @@ public partial class App : Application {
                 remoteWorkspaceFactory: BuildRemote, serverWorkspaceFactory: BuildServer,
                 sessions: sessions, railPreferences: railPreferences, profileName: profiles?.Name,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
-                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, adopt: TakeAdoptableWindow(),
+                openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, uninstallAction: _appMenu.UninstallAction,
+                adopt: TakeAdoptableWindow(),
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
                 historyImport: _historyImport?.Run,
                 backgroundPriority: lifecycle.BackgroundPriority, reloadState: lifecycle.ReloadState,
@@ -950,6 +955,11 @@ public partial class App : Application {
         if (OperatingSystem.IsMacOS() && InstallLocation.BundleRoot(Environment.ProcessPath) is { } bundleRoot) {
             var facts = UninstallFactsFor(bundleRoot, service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
             _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
+        } else if (OperatingSystem.IsLinux() && AppImageInstall.Detect(Environment.GetEnvironmentVariable) is not null) {
+            // The links and the CLI copy live under the staged root, so a kcap that resolves there is this app's.
+            var facts = UninstallFactsFor(AppImageInstall.StagedRoot(Environment.GetEnvironmentVariable, _userHome),
+                service.DaemonName, profiles?.Resolution.ServerUrl, lifecycle, lifecycleProbe);
+            _appMenu.SetUninstallAction(() => _ = RelaunchForUninstallAsync(desktop, facts));
         }
 
         // LAST, deliberately: anything above throwing lands in the catch with no
@@ -1011,6 +1021,10 @@ public partial class App : Application {
         try {
             var request = UninstallConfirmation.Build(await source.GatherAsync(_shutdown.Token));
             if (!await ShowLifecyclePromptDialogAsync(_coordinator?.Window, request.Prompt, _shutdown.Token)) return;
+            if (!Program.Host.CanRelaunchNow) {
+                _coordinator?.Window?.Notifier?.Notify("kcap cannot restart from where it was started. Run kcap uninstall in a terminal instead.");
+                return;
+            }
             var start = Program.Host.NewCopy([.. request.RelaunchArgs]);
             desktop.Exit += (_, _) => {
                 try { Process.Start(start); }
@@ -1219,7 +1233,7 @@ public partial class App : Application {
             IProcessRunner runner, ILoginShellProbe probe, ProfileContext? profiles, bool alreadyAuthenticated) {
         var cliPath = CliResolver.ResolvePath(Environment.GetEnvironmentVariable, File.Exists, Program.Host.CliDirectory);
         // Same rule as the shim coordinator's: only a resolved ABSOLUTE path is linkable.
-        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         var shimInstaller = CliPathInstallers.Create(runner, probe, _userHome);
         var shimApplicable = await ResolveShimApplicableAsync(
             shimInstaller is not null, shimTarget, ct => probe.KcapOnPathAsync(ct), _shutdown.Token);
@@ -1581,7 +1595,7 @@ public partial class App : Application {
             IObservable<IReadOnlyDictionary<string, IReadOnlyList<ModelChoice>>>? modelCatalog = null,
             IAttachmentUploader? uploader = null, string? appServerUrl = null,
             Action<FeedbackCategory>? openFeedback = null, IObservable<Action?>? settingsAction = null,
-            (MainWindow Window, AppState State)? adopt = null,
+            IObservable<Action?>? uninstallAction = null, (MainWindow Window, AppState State)? adopt = null,
             Action? requestSetup = null, HistoryImportRun? historyImport = null,
             IObservable<bool>? backgroundPriority = null, IObservable<ReloadState?>? reloadState = null,
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
@@ -1657,7 +1671,7 @@ public partial class App : Application {
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
             serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
-            settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
+            settingsAction: settingsAction, uninstallAction: uninstallAction, requestSetup: requestSetup, historyImport: historyImport,
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
             LocalStack = localStack,
             Web = web,
@@ -1714,7 +1728,7 @@ public partial class App : Application {
         // The shim links to the RESOLVED ABSOLUTE path only — CliResolver's bare "kcap" PATH
         // fallback means there is nothing to link, so the offer and the menu item both stay off
         // for the whole run.
-        var shimTarget = cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
+        var shimTarget = ShimTargetFor(cliPath, Program.Host.CliOutlivesApp);
         // autoOfferSuppressed: Start() always runs — Offerable/manual install must keep working in Incomplete mode; only the once-ever auto-offer dialog is skipped.
         var shimOffer = new ShimOfferCoordinator(
             lifecycle.PhaseClosed, probe, CliPathInstallers.Create(runner, probe, _userHome), _appState, surface, shimTarget,
@@ -1728,6 +1742,10 @@ public partial class App : Application {
 
         return (lifecycle, shimOffer, consentFlip, surface, probe, cli);
     }
+
+    /// A link needs an absolute path that is still there once the app exits.
+    internal static string? ShimTargetFor(string? cliPath, bool cliOutlivesApp) =>
+        cliOutlivesApp && cliPath is not null && Path.IsPathRooted(cliPath) ? cliPath : null;
 
     internal static bool IsLocalServer(string? serverUrl, LocalRoot local) =>
         LocalEndpoints.Read(local).Classify(serverUrl) is LocalEndpointClass.Local;
