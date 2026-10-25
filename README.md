@@ -375,6 +375,8 @@ export KCAP_CLIENT_ID=client_01ABC… KCAP_CLIENT_SECRET=…
 kcap setup --server-url https://my-tenant.kcap.ai --default-visibility org_public --no-prompt
 ```
 
+Without `--default-visibility`, `--no-prompt` takes the workspace's own default, which is narrower than `org_public` where the workspace names no organization whose repositories are shared. An older server that cannot say keeps `org_public`.
+
 `--no-prompt` requires a workspace (`<tenant>` or `--server-url`), `--local`, or `--org "<name>" --slug <slug>` to create the workspace as part of the run — those two supply the answers the creation prompts would have collected:
 
 ```bash

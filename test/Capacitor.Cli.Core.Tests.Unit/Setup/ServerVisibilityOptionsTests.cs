@@ -37,6 +37,20 @@ public class ServerVisibilityOptionsTests {
         await Assert.That(read.Problem is not null).IsEqualTo(problem);
     }
 
+    sealed class Failing : HttpMessageHandler {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            throw new InvalidOperationException("handler broke");
+    }
+
+    [Test]
+    public async Task Any_failure_short_of_cancellation_is_a_reason_not_a_throw() {
+        using var http = new HttpClient(new Failing());
+        var read = await ServerVisibilityOptions.ReadAsync(http, "http://kcap.test", CancellationToken.None);
+
+        await Assert.That(read.Offer).IsNull();
+        await Assert.That(read.Problem).IsEqualTo("handler broke");
+    }
+
     [Test]
     public async Task An_unreachable_server_is_a_reason_not_a_throw() {
         using var http = new HttpClient();

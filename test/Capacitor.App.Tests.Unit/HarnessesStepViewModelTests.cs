@@ -28,7 +28,8 @@ public class HarnessesStepViewModelTests {
 
         public Harness(ConfigRoot config, IReadOnlyDictionary<HarnessId, DetectedAgent>? detected = null,
                 IReadOnlySet<HarnessId>? declined = null, PathFixViewModel? pathFix = null, bool local = false,
-                Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null) {
+                Func<CancellationToken, Task<VisibilityOptionsResponse?>>? visibilityOptions = null,
+                Func<int, IReadOnlyDictionary<HarnessId, DetectedAgent>>? detectOnCall = null) {
             detected ??= new Dictionary<HarnessId, DetectedAgent> {
                 [HarnessId.Claude] = new(true, true),
                 [HarnessId.Cursor] = new(false, true),
@@ -36,7 +37,7 @@ public class HarnessesStepViewModelTests {
             };
             Vm = new HarnessesStepViewModel(
                 Cli,
-                _ => { DetectCalls++; return Task.FromResult(detected); },
+                _ => { DetectCalls++; return Task.FromResult(detectOnCall?.Invoke(DetectCalls) ?? detected); },
                 () => declined ?? new HashSet<HarnessId>(),
                 Stamped.AddRange,
                 config, pathFix,
@@ -289,6 +290,31 @@ public class HarnessesStepViewModelTests {
 
         await Assert.That(offered).IsEquivalentTo(values, CollectionOrdering.Matching);
         await Assert.That(label).IsEqualTo(firstLabel);
+        await Assert.That(visibility).IsNull();
+    }
+
+    /// An answer chosen from an earlier offer that the server no longer makes is cleared, so it cannot be saved.
+    [Test]
+    [NotInParallel("AvaloniaSession")]
+    public async Task A_revisit_after_the_offer_shrank_clears_an_answer_no_longer_offered() {
+        var (offered, visibility) = await AvaloniaSession.DispatchAsync(async () => {
+            var reads = 0;
+            var h = new Harness(Config.Root,
+                visibilityOptions: _ => Task.FromResult<VisibilityOptionsResponse?>(++reads == 1
+                    ? Offer("org_public", "private", "project", "org_public", "public")
+                    : Offer("private", "private", "public")),
+                detectOnCall: call => call == 1 ? throw new IOException("busy") : new Dictionary<HarnessId, DetectedAgent> {
+                    [HarnessId.Claude] = new(true, true),
+                });
+
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+            h.Vm.Visibility = "org_public";
+            await h.Vm.OnEnterAsync(CancellationToken.None);
+
+            return (h.Vm.VisibilityOptions.Select(o => o.Value).ToList(), h.Vm.Visibility);
+        });
+
+        await Assert.That(offered).IsEquivalentTo(["private", "public"], CollectionOrdering.Matching);
         await Assert.That(visibility).IsNull();
     }
 

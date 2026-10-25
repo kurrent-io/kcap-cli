@@ -261,6 +261,7 @@ public sealed class HarnessesStepViewModel : ReactiveObject, IWizardStep {
 
         VisibilityOptions = [.. offer.Options.Select(o => new VisibilityOption(o.Key!, o.Label!, o.Detail ?? ""))];
         this.RaisePropertyChanged(nameof(VisibilityOptions));
+        if (VisibilityOptions.All(o => o.Value != Visibility)) Visibility = null;
     }
 
     public async Task<bool> CanLeaveAsync(WizardNavigation direction, CancellationToken ct) {

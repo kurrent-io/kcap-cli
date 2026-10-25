@@ -26,7 +26,7 @@ public static class ServerVisibilityOptions {
                 : VisibilityOptionsRead.Failed("an answer naming no stop to preselect");
         } catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
-        } catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException) {
+        } catch (Exception ex) {
             return VisibilityOptionsRead.Failed(ex.Message);
         }
     }
