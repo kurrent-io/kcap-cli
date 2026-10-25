@@ -48,14 +48,9 @@ static class LocalServerProbe {
             using var doc  = JsonDocument.Parse(await response.Content.ReadAsStringAsync(linked.Token));
             var       root = doc.RootElement;
 
-            if (root.ValueKind != JsonValueKind.Object
-             || !root.TryGetProperty("provider", out var provider) || provider.ValueKind != JsonValueKind.String
-             || !root.TryGetProperty("usable", out var usable) || usable.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
-                return null;
+            if (root.Str("provider") is not { } provider || root.Bool("usable") is not { } usable) return null;
 
-            var reason = root.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
-
-            return new(provider.GetString()!, usable.GetBoolean(), reason);
+            return new(provider, usable, root.Str("reason"));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) {
             throw;
