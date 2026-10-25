@@ -52,6 +52,10 @@ public static class ApiRoutes {
     public const string AgentInstances = "api/agent-instances";
     public const string Daemons        = "api/daemons";
     public const string ModelOptions   = "api/agents/model-options";
+    public const string SessionOwners  = "api/sessions/owners";
+    public static string SessionListing(string state, string? owner, int limit, int offset) =>
+        $"api/sessions/listing?state={state}&limit={limit}&offset={offset}"
+        + (owner is null ? "" : $"&owner={Uri.EscapeDataString(owner)}");
     public static string SessionDetail(string sessionId) =>
         $"api/sessions/{Uri.EscapeDataString(sessionId)}/detail";
     public static string SubagentEvents(string sessionId, string agentId, long from) =>

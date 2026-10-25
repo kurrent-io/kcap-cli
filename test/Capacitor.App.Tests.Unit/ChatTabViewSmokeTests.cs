@@ -1247,6 +1247,10 @@ public class ChatTabViewSmokeTests {
             var you = host.View.GetVisualDescendants().OfType<TextBlock>()
                 .Single(t => t.Classes.Contains("toolKindChip") && t.Text == "You");
             await Assert.That(you.HorizontalAlignment).IsEqualTo(Avalonia.Layout.HorizontalAlignment.Left);
+
+            host.Chat.Items.OfType<UserTurnItem>().Single().Sender.Title = "Tony";
+            host.Settle();
+            await Assert.That(you.Text).IsEqualTo("Tony");
             await host.CloseAsync();
         });
     }

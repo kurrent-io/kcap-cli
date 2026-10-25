@@ -375,7 +375,9 @@ public class SettingsWindowSmokeTests {
         LocalUpgradeController? upgrade = null;
         var search = new LocalSearchController(() => cli, action => action(), held: () => upgrade?.Running == true);
         upgrade = new LocalUpgradeController(() => cli, action => action(), held: () => search.Running);
-        using var local = new LocalSearchViewModel(() => new LocalEmbeddingSetting("mxbai-embed-large"),
+        LocalEmbeddingModelManifest offered = new("builtin-test", 1, new('e', 64), [new("model.onnx", new('f', 64), 300L * 1024 * 1024)]);
+        using var local = new LocalSearchViewModel(() => LocalEmbeddingSetting.Ollama("mxbai-embed-large"),
+            _ => Task.FromResult<LocalEmbeddingModelManifest?>(offered),
             new BehaviorSubject<ServerLaneStatus>(new(ServerLaneState.Connected)), search, upgrade, () => Task.CompletedTask,
             CancellationToken.None, ImmediateScheduler.Instance);
         var service = new FakeDaemonClientService();

@@ -14,6 +14,9 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
     public Exception? StopFailure { get; set; }
 
+    /// <summary>Runs after an <see cref="Install"/> is logged, before it acts.</summary>
+    public Action? OnInstall { get; set; }
+
     /// <summary>Runs after a <see cref="Start"/> is logged, e.g. to change what the fake server answers.</summary>
     public Action? OnStart { get; set; }
 
@@ -43,6 +46,7 @@ sealed class FakeLocalServerService(List<string> log, UserHome home) : ILocalSer
 
     public void Install(LocalServerUnit unit) {
         Log("install");
+        OnInstall?.Invoke();
         if (InstallFailure is { } failure) throw failure;
 
         LoadedRoot = unit.Root.Directory;

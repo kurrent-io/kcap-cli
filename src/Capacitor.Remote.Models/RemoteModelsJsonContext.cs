@@ -16,4 +16,6 @@ namespace Capacitor.Remote.Models;
 [JsonSerializable(typeof(SubagentEventsDto))]
 [JsonSerializable(typeof(QueuedInputItem[]))]
 [JsonSerializable(typeof(Dictionary<string, VendorModelOptionDto[]>))]
+[JsonSerializable(typeof(RepoSessionsResponseDto))]
+[JsonSerializable(typeof(SessionOwnerOptionDto[]))]
 public partial class RemoteModelsJsonContext : JsonSerializerContext;

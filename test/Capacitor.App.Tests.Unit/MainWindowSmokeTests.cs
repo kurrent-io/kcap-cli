@@ -559,6 +559,37 @@ public class MainWindowSmokeTests {
 
     [Test]
     [NotInParallel("AvaloniaSession")]
+    public Task Clicking_the_team_segment_changes_the_rails_scope_and_persists_it() => AvaloniaSession.RunOnUiAsync(async () => {
+        var service = new FakeDaemonClientService();
+        service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
+        using var directory = new FakeAgentDirectory();
+        using var sessions = new FakeServerSessionsService();
+        var persisted = new List<RailPreferences>();
+        using var rail = new SessionRailViewModel(directory, _ => { }, _ => { }, TimeProvider.System, sessions: sessions, persistPreferences: persisted.Add);
+        var vm = new MainWindowViewModel(service, CancellationToken.None, TestActivity.New(), TimeProvider.System, rail: rail);
+        var window = new MainWindow { DataContext = vm };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try {
+            var view = window.FindDescendantOfType<SessionRailView>()!;
+            var mine = view.FindControl<Button>("RailScopeMineButton")!;
+            var team = view.FindControl<Button>("RailScopeTeamButton")!;
+            await Assert.That(mine.Classes.Contains("active")).IsTrue();
+
+            team.Command!.Execute(team.CommandParameter);
+            Dispatcher.UIThread.RunJobs();
+
+            await Assert.That(rail.Scope).IsEqualTo(RailScope.Team);
+            await Assert.That(team.Classes.Contains("active")).IsTrue();
+            await Assert.That(mine.Classes.Contains("active")).IsFalse();
+            await Assert.That(persisted.Select(p => p.Scope)).IsEquivalentTo(new[] { RailScope.Team });
+        } finally {
+            window.Close();
+        }
+    });
+
+    [Test]
+    [NotInParallel("AvaloniaSession")]
     public Task Repository_headers_collapse_the_body_and_keep_long_labels_clear_of_counts() => AvaloniaSession.RunOnUiAsync(async () => {
         var service = new FakeDaemonClientService();
         service.StatusSubject.OnNext(new(AttachState.Connected, null, null));
@@ -578,7 +609,7 @@ public class MainWindowSmokeTests {
             var headers = window.GetVisualDescendants().OfType<Button>().Where(b => b.Classes.Contains("railRepoHeader")).ToArray();
             await Assert.That(headers).Count().IsEqualTo(2);
             foreach (var header in headers) {
-                var repo = (RailRepoViewModel)header.DataContext!;
+                var repo = (RailGroupViewModel)header.DataContext!;
                 var label = header.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("eyebrow"));
                 var count = header.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("sectionMeta"));
                 var row = RailRow(window, repo.Sessions[0].Primary!);
@@ -645,7 +676,7 @@ public class MainWindowSmokeTests {
             pending.OnNext(new HashSet<string> { "a1" });
             Dispatcher.UIThread.RunJobs();
             window.UpdateLayout();
-            await Assert.That(rail.Repos[0].IsExpanded).IsFalse();
+            await Assert.That(rail.Groups[0].IsExpanded).IsFalse();
             await Assert.That(RailRow(window, "Waiting session").IsEffectivelyVisible).IsFalse();
             await Assert.That(mark.FindControl<TextBlock>("StatusWord")!.Text).IsEqualTo("Needs you");
             await Assert.That(ToolTip.GetTip(header) as string).Contains("Pending response");
@@ -749,7 +780,7 @@ public class MainWindowSmokeTests {
                 await Assert.That(ToolTip.GetTip(pr) as string).Contains("Open");
                 await Assert.That((pr.Background as ISolidColorBrush)!.Color.A).IsEqualTo((byte)0);
                 await Assert.That(pr.Bounds.Width).IsLessThan(card.Bounds.Width / 2);
-                var age = session.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("railMeta"));
+                var age = session.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta");
                 var prLabel = pr.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Text == "PR #142");
                 double Baseline(TextBlock text) => text.TranslatePoint(new Point(0, text.TextLayout.Baseline), card)!.Value.Y;
                 await Assert.That(Math.Abs(Baseline(age) - Baseline(prLabel))).IsLessThan(2);
@@ -827,11 +858,11 @@ public class MainWindowSmokeTests {
         Dispatcher.UIThread.RunJobs();
         try {
             var row = RailRow(window, "File listing");
-            var badge = row.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("railChip"));
+            var badge = row.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "SessionMachineBadge");
             var label = badge.GetVisualDescendants().OfType<TextBlock>().Single();
             await Assert.That(label.Text).IsEqualTo($"on {machine}");
             await Assert.That(((RailSessionViewModel)row.DataContext!).Meta).IsEqualTo("");
-            await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Classes.Contains("railMeta")).IsEffectivelyVisible).IsFalse();
+            await Assert.That(row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta").IsEffectivelyVisible).IsFalse();
             await Assert.That(badge.IsEffectivelyVisible).IsTrue();
             await Assert.That(badge.Bounds.Width).IsGreaterThan(0);
             await Assert.That(badge.BorderThickness).IsEqualTo(new Thickness(0));
@@ -991,7 +1022,7 @@ public class MainWindowSmokeTests {
                 var mark = row.GetVisualDescendants().OfType<AgentStatusMark>().First();
                 var word = mark.FindControl<TextBlock>("StatusWord")!;
                 var vendor = row.GetVisualDescendants().OfType<Border>().First(b => b.Classes.Contains("vendorMark"));
-                var meta = row.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var meta = row.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta");
                 double Center(Control control) =>
                     control.TranslatePoint(new Point(0, control.Bounds.Height / 2), row)!.Value.Y;
                 double Baseline(TextBlock text) =>
@@ -1067,7 +1098,7 @@ public class MainWindowSmokeTests {
                 var pendingRow = RailRow(window, "Pending launch");
                 var longWord = longRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
                 var needsYouWord = needsYouRow.GetVisualDescendants().OfType<AgentStatusMark>().First().FindControl<TextBlock>("StatusWord")!;
-                var pendingMeta = pendingRow.GetVisualDescendants().OfType<TextBlock>().First(t => t.Classes.Contains("railMeta"));
+                var pendingMeta = pendingRow.GetVisualDescendants().OfType<TextBlock>().Single(t => t.Name == "SessionMeta");
                 var pendingMark = pendingRow.GetVisualDescendants().OfType<AgentStatusMark>().First();
                 var stageWidth = NaturalWidth(pendingMeta, LaunchStages.Label("session_created"));
                 var result = (

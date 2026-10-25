@@ -20,6 +20,10 @@ public sealed record AppState(
     int? WindowX = null,
     int? WindowY = null,
     bool WindowMaximized = false,
+    // Rail shape per signed-in user, keyed "{server}|{userId}"; and the user each profile
+    // ("{server}|{profileName}") last resolved to, so startup opens in that user's shape.
+    IReadOnlyDictionary<string, ViewModels.RailPreferences>? RailPreferencesByUser = null,
+    IReadOnlyDictionary<string, string>? LastUserByProfile = null,
     double? UiScale = null,
     // When setup last sent the user to kcap.ai's sign-up; cleared once a sign-in commits.
     DateTimeOffset? WebSignUpOpenedAt = null,

@@ -24,6 +24,7 @@ sealed class FakeServerLane : IServerLane {
     public readonly Subject<ServerPermissionRequest> PermissionRequestsSubject = new();
     public readonly Subject<ServerElicitationRequest> ElicitationsSubject = new();
     public readonly Subject<string> SessionAccessChangedSubject = new();
+    public readonly Subject<SessionPush> SessionPushesSubject = new();
     public readonly Subject<PendingInputUpdate> PendingInputSubject = new();
     public readonly Subject<TerminalOutputFrame> TerminalOutputSubject = new();
     public readonly Subject<TerminalSize> TerminalDimensionsSubject = new();
@@ -73,6 +74,7 @@ sealed class FakeServerLane : IServerLane {
     public IObservable<ServerPermissionRequest> PermissionRequests => PermissionRequestsSubject;
     public IObservable<ServerElicitationRequest> ElicitationRequests => ElicitationsSubject;
     public IObservable<string> SessionAccessChanged => SessionAccessChangedSubject;
+    public IObservable<SessionPush> SessionPushes => SessionPushesSubject;
     public IObservable<PendingInputUpdate> PendingInputChanged => PendingInputSubject;
     public IObservable<TerminalOutputFrame> TerminalOutput => TerminalOutputSubject;
     public IObservable<TerminalSize> TerminalDimensions => TerminalDimensionsSubject;

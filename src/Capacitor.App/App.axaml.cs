@@ -213,6 +213,7 @@ public partial class App : Application {
     // Disposed together, before _serverClients, inside DisposeServerClientsAsync — _directory
     // subscribes to both _remoteAgents and serverLane, so it goes first.
     RemoteAgentsService? _remoteAgents;
+    ServerSessionsService? _sessions;
     AgentDirectory? _directory;
     ServerVendorModelCatalog? _modelCatalog;
     GitHubCliReaderProvider? _gh;
@@ -684,23 +685,29 @@ public partial class App : Application {
         var pullRequests = new ServerPullRequestSource(_config, profiles, _serverEnv, _machineEnv, _time, localRoot: _localRoot);
         var plans = new ServerPlanSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var planArtifacts = new ServerPlanArtifactSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
+        var senders = new ServerMessageSenderSource(_config, profiles, _serverEnv, _machineEnv, localRoot: _localRoot);
         var ghRunner = new ProcessRunner(_time);
         var gh = new GitHubCliRunner(ghRunner, OperatingSystem.IsWindows() ? null : new LoginShellProbe(ghRunner, Environment.GetEnvironmentVariable), Environment.GetEnvironmentVariable);
         // Registration order is precedence: local CLI readers before the server.
         var readers = new PullRequestReaderRegistry(pullRequests, [_gh = new GitHubCliReaderProvider(gh, _time), new ServerReaderProvider(pullRequests)], _time);
-        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts);
+        var serverClients = new ServerClients(serverLane, workContext, pullRequests, plans, planArtifacts, senders);
 
         var machineId = new MachineId(_config).ReadPersisted();
         var sessionHttp = ServerHttp(profiles);
         var remoteAgents = new RemoteAgentsService(
             serverLane, RemoteAgentsService.HttpFetch(sessionHttp, profiles),
             onUnauthorized: serverLane.ParkSignedOut);
+        var sessions = new ServerSessionsService(
+            serverLane, ServerSessionsService.HttpFetch(sessionHttp, profiles), ServerSessionsService.HttpOwners(sessionHttp, profiles),
+            _time, onUnauthorized: serverLane.ParkSignedOut);
         var repoIdentity = new RepoIdentityResolver();
         var directory = new AgentDirectory(
             service, remoteAgents, serverLane, repoIdentity, GitRepository.ResolveMainRepoRoot,
-            machineId, profiles?.Resolution.ServerUrl, _time);
+            machineId, profiles?.Resolution.ServerUrl, _time, sessions);
         _remoteAgents = remoteAgents;
+        _sessions = sessions;
         _directory = directory;
+        var railPreferences = new RailPreferencesStore(_appState);
 
         // The launcher's model dropdown, fetched once from the server (same catalog the web UI
         // uses). Best-effort: a miss leaves the curated per-vendor fallback in place.
@@ -798,7 +805,7 @@ public partial class App : Application {
             () => LocalEndpoints.Read(_localRoot).Active?.Version, serverLane.Status, localUpgrade, lifecycleCli.LocalStartAsync,
             () => serverLane.RestartAsync(), _shutdown.Token, searchChange: localSearch) {
             Search = localSearch is null ? null : new LocalSearchViewModel(
-                () => LocalEmbeddingFile.Read(_localRoot), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
+                () => LocalEmbeddingFile.Read(_localRoot), ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct), serverLane.Status, localSearch, localUpgrade, () => serverLane.RestartAsync(),
                 _shutdown.Token, openSettings: _openSearchSettings),
         };
         _localStack = localStack;
@@ -842,7 +849,7 @@ public partial class App : Application {
             commands: commands, drafts: drafts, inputSending: attention.ReplySending,
             resumeLedger: id => ResumeLedgerStore.For(_daemonStore, service.DaemonName).TryRead(id),
             pullRequestSnapshots: pullRequestSnapshots, transcripts: transcripts,
-            pullRequestLinksChanged: pullRequestTones.Refresh);
+            pullRequestLinksChanged: pullRequestTones.Refresh, senders: senders);
         // The origin lookup below and this call are two reads of a cache the directory's own
         // background recompute mutates, so the row can be gone by the time this runs: no row, no
         // host, and the click opens nothing.
@@ -850,6 +857,16 @@ public partial class App : Application {
             directory.Rows.Lookup($"remote:{agentId}") is { HasValue: true, Value: var row }
                 ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
                     () => new XtermTerminalSurface(80, 24, PtyDumpPath), planArtifacts, commands,
+                    pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
+                    signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
+                    pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent,
+                    senders: senders)
+                : null;
+        // A session the server lists with no daemon behind it: read-only, so no terminal surface.
+        RemoteSessionViewModel? BuildServer(string sessionId) =>
+            directory.Rows.Lookup($"server:{sessionId}") is { HasValue: true, Value: var row }
+                ? new RemoteSessionViewModel(row, directory, sessionAccess, permissions, actions, serverLane, readDetail, workspaceOpener, _time, workContext,
+                    surfaceFactory: null, planArtifacts, commands,
                     pullRequests: pullRequests, requestSignIn: requestSignIn, linkGitHub: linkGitHub,
                     signInCompleted: serverClients.SignInCompleted, plans: plans, drafts: drafts, inputSending: attention.ReplySending,
                     pullRequestSnapshots: pullRequestSnapshots, pullRequestLinksChanged: pullRequestTones.Refresh, readSubagent: readSubagent)
@@ -872,8 +889,10 @@ public partial class App : Application {
                 // workspace, and the directory only keeps both rows when the twin is unproven.
                 originOf: id => directory.Rows.Lookup($"local:{id}").HasValue || directory.Rows.Lookup($"pending:{id}").HasValue ? AgentOrigin.Local
                     : directory.Rows.Lookup($"remote:{id}").HasValue ? AgentOrigin.Remote
+                    : directory.Rows.Lookup($"server:{id}").HasValue ? AgentOrigin.Server
                     : null,
-                remoteWorkspaceFactory: BuildRemote,
+                remoteWorkspaceFactory: BuildRemote, serverWorkspaceFactory: BuildServer,
+                sessions: sessions, railPreferences: railPreferences, profileName: profiles?.Name,
                 modelCatalog: modelCatalog.Catalog, uploader: uploader, appServerUrl: profiles?.Resolution.ServerUrl,
                 openFeedback: openFeedback, settingsAction: _appMenu.SettingsAction, adopt: TakeAdoptableWindow(),
                 requestSetup: () => _ = RestartForSetupAsync(desktop),
@@ -1255,6 +1274,7 @@ public partial class App : Application {
             UrlOpener: new ShellUrlOpener(),
             Probe: probe,
             DetectionFeed: probe => HarnessesStepViewModel.BuildDetectionFeed(probe, _userHome),
+            BuiltinOffer: ct => LocalBuiltinOffer.LookupAsync(_localRoot, ct),
             CliPath: cliPath,
             ShimApplicable: shimApplicable,
             ShimTarget: shimTarget,
@@ -1591,7 +1611,9 @@ public partial class App : Application {
             IObservable<bool>? isReloading = null, Func<CancellationToken, Task>? reloadDaemon = null,
             LocalServerRecoveryViewModel? localServer = null, LocalStackViewModel? localStack = null,
             UiScaleSetting? uiScale = null, UsageDataNotice? usageNotice = null,
-            WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null) {
+            WebWorkspaceViewModel? web = null, Action? openLaunchApprovals = null,
+            Func<string, RemoteSessionViewModel?>? serverWorkspaceFactory = null, IServerSessionsService? sessions = null,
+            RailPreferencesStore? railPreferences = null, string? profileName = null) {
         // Notifier is set on the WINDOW (the toast overlay), not the ViewModel — the toast
         // is a View-level concern (WindowNotificationManager lives on MainWindow) independent of
         // the VM's WhenActivated-scoped projections.
@@ -1631,17 +1653,35 @@ public partial class App : Application {
         // Both rail actions route through the one call, each naming the lane of the row that was
         // clicked: an unproven twin pair keeps a row on each lane under the same id, and the VM's
         // own lookup would open the local one for both.
+        // Read once before the rail exists, like the window size, so it opens in the shape of the
+        // user this profile last resolved to; the lane's own answer rebinds it below.
+        RailPreferences? initialRail = null;
+        string? railUser = null;
+        Func<string, Task<RailPreferences>>? bindRailUser = null;
+        Action<RailPreferences>? persistRail = null;
+        if (railPreferences is { } prefs && appServerUrl is { Length: > 0 } url && profileName is { Length: > 0 } name) {
+            initialRail = prefs.LoadAsync(url, name).GetAwaiter().GetResult();
+            railUser = prefs.LastUserAsync(url, name).GetAwaiter().GetResult();
+            bindRailUser = async userId => {
+                railUser = userId;
+                return await prefs.BindUserAsync(url, name, userId).ConfigureAwait(false);
+            };
+            persistRail = set => { if (railUser is { } userId) _ = prefs.SaveAsync(url, userId, set); };
+        }
         var rail = new SessionRailViewModel(
             resolvedDirectory, openLocalSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Local),
             openRemoteSession: agentId => vm?.OpenSession(agentId, AgentOrigin.Remote), time: time, agentsWithPending: agentsWithPending,
             agentsAwaitingAnswer: agentsAwaitingAnswer, agentsRunningCommands: agentsRunningCommands,
-            pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin, subject) => vm?.OpenSessionPullRequest(agentId, origin, subject));
+            pullRequests: pullRequestSummaries, openPullRequest: (agentId, origin, subject) => vm?.OpenSessionPullRequest(agentId, origin, subject),
+            openServerSession: sessionId => vm?.OpenSession(sessionId, AgentOrigin.Server),
+            sessions: sessions, preferences: initialRail, persistPreferences: persistRail, bindUserPreferences: bindRailUser);
         vm = new MainWindowViewModel(
             service, shutdownToken, activity, time, startAction, lifecycleStatus, home: home,
             navigation: navigation, trackWorkspaceTeardown: trackWorkspaceTeardown, workspaceFactory: workspaceFactory,
             rail: rail, tenantName: tenantName, lifecycleAttention: lifecycleAttention, identityReport: identityReport,
             laneStatus: lane?.Status, restartPending: restartPending,
             originOf: originOf, remoteWorkspaceFactory: remoteWorkspaceFactory, directory: resolvedDirectory,
+            serverWorkspaceFactory: serverWorkspaceFactory, sessions: sessions,
             openFeedback: openFeedback, opener: new ShellUrlOpener(), requestSignIn: requestSignIn,
             settingsAction: settingsAction, requestSetup: requestSetup, historyImport: historyImport,
             backgroundPriority: backgroundPriority, reloadState: reloadState, isReloading: isReloading, reloadDaemon: reloadDaemon, openLaunchApprovals: openLaunchApprovals) {
@@ -1665,6 +1705,7 @@ public partial class App : Application {
         if (window.DataContext is not MainWindowViewModel vm) return window;
         var subscription = window.GetObservable(Window.IsActiveProperty)
             .CombineLatest(vm.WhenAnyValue(x => x.CurrentWorkspace), (active, open) => !active ? null : open switch {
+                RemoteSessionViewModel { IsSessionOnly: true } session => $"server:{session.AgentId}",
                 RemoteSessionViewModel remote => $"remote:{remote.AgentId}",
                 { } local => $"local:{local.AgentId}",
                 null => null,
@@ -2336,6 +2377,7 @@ public partial class App : Application {
     // the first rather than disposing anything again.
     async ValueTask DisposeServerClientsAsync() {
         _directory?.Dispose();
+        _sessions?.Dispose();
         _remoteAgents?.Dispose();
         _modelCatalog?.Dispose();
         if (_gh is { } gh) { _gh = null; await gh.DisposeAsync().ConfigureAwait(false); }

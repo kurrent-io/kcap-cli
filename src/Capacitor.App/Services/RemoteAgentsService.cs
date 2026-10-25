@@ -18,6 +18,9 @@ public interface IRemoteAgentsService {
     IObservable<DaemonListing> Listing { get; }
     /// Replay-1, seeded with an empty list.
     IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; }
+    /// Replay-1. True once a fetch in the lane's current connection returned rows; false while the
+    /// lane is not Connected and after a fetch that returned none, when Agents is retained history.
+    IObservable<bool> Current { get; }
     /// Fetches the daemon listing and every daemon's accounts now, ahead of any retry the backoff is
     /// waiting on.
     Task RefreshDaemonsAsync();
@@ -37,6 +40,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     readonly BehaviorSubject<IReadOnlyList<DaemonInfo>> _daemons = new([]);
     readonly BehaviorSubject<DaemonListing> _listing = new(new(null, 0, false));
     readonly BehaviorSubject<IReadOnlyList<DaemonAccountsDto>> _daemonAccounts = new([]);
+    readonly BehaviorSubject<bool> _current = new(false);
     readonly IDisposable _subscriptions;
     static readonly TimeSpan DaemonsRefreshTimeout = TimeSpan.FromSeconds(5);
     // The listing and the accounts otherwise refresh only on a connect or a push, so one failed fetch
@@ -63,7 +67,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     // park decision against the lane's CURRENT epoch rather than trusting this generation check
     // alone, whose lock releases before the callback runs.
     int _lastLaneEpoch;
-    bool _laneConnected;
+    bool _connected;
     bool _disposed;
     bool _agentsBusy;
     bool _agentsRerun;
@@ -101,13 +105,20 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         // Subscribed before the refresh triggers below (same lane.Status), so on a Connected
         // status this runs first: nothing seeded under one identity survives into another, even
         // when the refresh that follows fetches null and would otherwise leave stale rows in
-        // place, and the listing reads unanswered before the new generation's fetch starts.
+        // place, and the listing reads unanswered before the new generation's fetch starts. Caches
+        // clear only when the token subject changes; every Connected carrying a subject advances the
+        // generation, and so does a lost connection, so an older fetch can neither publish nor report
+        // an auth failure nor vouch for a lane that is gone.
         var laneStatus = lane.Status.Subscribe(s => {
             lock (_lock) {
-                _laneConnected = s.State == ServerLaneState.Connected;
+                _connected = s.State == ServerLaneState.Connected;
                 _listingRetry.Reset();
                 _accountsRetry.Reset();
-                if (!_laneConnected) return;
+                if (!_connected) {
+                    _generation++;
+                    _current.OnNext(false);
+                    return;
+                }
                 if (s.Subject is not null) {
                     if (_lastSubject is not null && _lastSubject != s.Subject) {
                         _agents.Clear();
@@ -148,6 +159,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
     public IObservable<IReadOnlyList<DaemonInfo>> Daemons => _daemons.AsObservable();
     public IObservable<DaemonListing> Listing => _listing.AsObservable();
     public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts => _daemonAccounts.AsObservable();
+    public IObservable<bool> Current => _current.AsObservable();
 
     async Task RefreshAgentsAsync(Func<CancellationToken, Task<RemoteFetch>> fetch) {
         lock (_lock) {
@@ -176,10 +188,12 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
                 // A completion from before the latest connect must never repopulate the cache or
                 // report an auth failure a fresher connect may already have superseded — checked
                 // under the same lock a connect's generation bump takes.
-                if (generation == _generation) {
+                // A refresh admitted after the lane dropped is as stale as one that outlived it.
+                if (generation == _generation && _connected) {
                     if (result?.Rows is { } rows)
                         _agents.EditDiff(rows, EqualityComparer<AgentInstanceDto>.Default);
                     if (result is { Unauthorized: true }) notifyUnauthorized = true;
+                    _current.OnNext(result?.Rows is not null);
                 }
                 rerun = _agentsRerun;
                 if (rerun) _agentsRerun = false;
@@ -236,7 +250,7 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
 
     // Runs under _lock. Nothing is pending while the lane is down or after Dispose: both reset every backoff.
     void ScheduleRetry(RetryBackoff backoff, Func<Task> refresh) {
-        if (_disposed || !_laneConnected) return;
+        if (_disposed || !_connected) return;
         backoff.Schedule(ticket => {
             lock (_lock) {
                 if (!backoff.Claim(ticket)) return;
@@ -320,5 +334,6 @@ public sealed class RemoteAgentsService : IRemoteAgentsService, IDisposable {
         _daemons.Dispose();
         _listing.Dispose();
         _daemonAccounts.Dispose();
+        _current.Dispose();
     }
 }

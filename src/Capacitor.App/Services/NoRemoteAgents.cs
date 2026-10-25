@@ -16,6 +16,7 @@ internal sealed class NoRemoteAgents : IRemoteAgentsService {
     public IObservable<DaemonListing> Listing { get; } = Observable.Return(new DaemonListing(null, 0, false));
     public IObservable<IReadOnlyList<DaemonAccountsDto>> DaemonAccounts { get; } = Observable.Return<IReadOnlyList<DaemonAccountsDto>>([]);
     public Task RefreshDaemonsAsync() => Task.CompletedTask;
+    public IObservable<bool> Current { get; } = Observable.Return(false);
 }
 
 /// Paired with <see cref="NoRemoteAgents"/>: a lane that never connects.
@@ -30,6 +31,7 @@ internal sealed class NoServerLane : IServerLane {
     public IObservable<ServerPermissionRequest> PermissionRequests => Observable.Never<ServerPermissionRequest>();
     public IObservable<ServerElicitationRequest> ElicitationRequests => Observable.Never<ServerElicitationRequest>();
     public IObservable<string> SessionAccessChanged => Observable.Never<string>();
+    public IObservable<SessionPush> SessionPushes => Observable.Never<SessionPush>();
     public IObservable<PendingInputUpdate> PendingInputChanged => Observable.Never<PendingInputUpdate>();
     public Task<IReadOnlyList<DaemonInfo>?> GetConnectedDaemonsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<DaemonInfo>?>(null);

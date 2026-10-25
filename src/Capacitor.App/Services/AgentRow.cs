@@ -4,11 +4,9 @@ using Capacitor.Remote.Models;
 
 namespace Capacitor.App.Services;
 
-/// Ordered: a session claimed on more than one lane resolves to the lowest.
-public enum AgentOrigin { Local, Remote, Pending }
-
-/// One merged row. Key is SOURCE-scoped ("local:{id}" / "remote:{id}" / "pending:{id}") so the
-/// lanes can never clobber each other; Id is the logical agent id workspaces bind to.
+/// One merged row. Key is SOURCE-scoped ("local:{id}" / "remote:{id}" / "pending:{id}" /
+/// "server:{sessionId}") so the lanes can never clobber each other; Id is the logical agent id
+/// workspaces bind to, which for a server row is the session id itself.
 public sealed record AgentRow(
         string Key, AgentOrigin Origin, string Id, string? SessionId, string Kind, string Vendor, string Status,
         DateTime CreatedAt, string? RepoPath, string? Title, string? Model, string? RequesterDisplay,
@@ -27,12 +25,27 @@ public sealed record AgentRow(
         TerminalDialogDto? TerminalDialog = null,
         // Why the local daemon could not resume the agent after a restart; null unless Interrupted.
         string? Interruption = null,
+        // The server's owner id for the session; null until the server has listed it.
+        string? OwnerUserId = null,
+        // The owner's display name or username from the listing, for the initials on another user's row.
+        string? OwnerName = null,
+        // Whether the owner is the signed-in account; null while the server has not said.
+        bool? OwnerIsViewer = null,
+        DateTime? LastActivityAt = null,
+        DateTime? EndedAt = null,
+        // The server's stale flag on a live session: no activity for over an hour.
+        bool IsStale = false,
+        // A live server row no daemon hosts, past the hand-over grace: started in a terminal.
+        bool IsTerminalSession = false,
+        // The listing's access level for the viewer; below "full" the server grants no chat.
+        string? AccessLevel = null,
         // The account the session runs under. Null from an older daemon and on a pending row.
         string? AccountDirectory = null,
         string? AccountId = null,
         string? AccountLabel = null) {
 
-    public string? OwnerUserId { get; init; }
+    /// A session the server lists as ended; a daemon row's Completed is not this.
+    public bool IsEndedSession => Origin == AgentOrigin.Server && Status == "Completed";
 
     public static AgentRow FromLocal(AgentStatusDto dto, RepoIdentity repo) => new(
         Key: $"local:{dto.Id}", Origin: AgentOrigin.Local, Id: dto.Id, SessionId: dto.SessionId, Kind: dto.Kind,
@@ -55,7 +68,27 @@ public sealed record AgentRow(
             WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
             MachineBadge: dto.DaemonName, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
             CheckoutKey: $"@{daemonKey}", CheckoutLabel: $"on {dto.DaemonName}",
-            AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel) { OwnerUserId = dto.OwnerUserId };
+            OwnerUserId: dto.OwnerUserId,
+            AccountDirectory: dto.AccountDirectory, AccountId: dto.AccountId, AccountLabel: dto.AccountLabel);
+    }
+
+    /// A row from the server's listing. The status is the daemon vocabulary the rail already reads:
+    /// Running for a live session, Completed for an ended one, with IsEndedSession telling the two
+    /// kinds of Completed apart. `hostedPresentation` keeps a live row looking hosted while a daemon
+    /// row for the same session has just gone, so a hand-over never flashes as a terminal session.
+    public static AgentRow FromServer(RepoSessionDto dto, bool hostedPresentation) {
+        var active = dto.Status == "active";
+        var repo = RepoIdentityResolver.ForRemote(dto.Repo?.Owner, dto.Repo?.Name, dto.Cwd, "server");
+        return new(
+            Key: $"server:{dto.SessionId}", Origin: AgentOrigin.Server, Id: dto.SessionId, SessionId: dto.SessionId,
+            Kind: "session", Vendor: dto.Vendor ?? "", Status: active ? "Running" : "Completed",
+            CreatedAt: dto.StartedAt.UtcDateTime, RepoPath: dto.Cwd, Title: dto.Title, Model: null, RequesterDisplay: null,
+            WorktreePath: null, WorkLocation: null, BorrowedFrom: null,
+            MachineBadge: null, RepoGroupKey: repo.Key, RepoGroupLabel: repo.Label,
+            CheckoutKey: "@server", CheckoutLabel: "",
+            OwnerUserId: dto.Owner?.UserId, OwnerName: dto.Owner?.DisplayName ?? dto.Owner?.Username,
+            LastActivityAt: dto.LastActivityAt.UtcDateTime, EndedAt: dto.EndedAt?.UtcDateTime,
+            IsStale: dto.Stale, IsTerminalSession: active && !hostedPresentation, AccessLevel: dto.AccessLevel);
     }
 
     static string CanonicalRemoteStatus(string status) => status.ToLowerInvariant() switch {
