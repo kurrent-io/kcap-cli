@@ -12,4 +12,7 @@ public interface IAppRemoval {
     Task<bool> TrashBundleAsync(CancellationToken ct);
 
     void RevealBundle();
+
+    /// What the user does when the app could not remove itself.
+    string FinishByHand => "Drag kcap to the Trash";
 }
