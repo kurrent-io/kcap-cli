@@ -380,8 +380,10 @@ internal sealed partial class LocalPermissionBridge(
             : urlOrToken.Trim('/');
     }
 
+    // Runs until the listener closes, not until the token fires: a request the loop stops taking
+    // sits in HttpListener's queue until Close() answers it with an empty 200 instead of a 503.
     async Task AcceptLoopAsync(CancellationToken ct) {
-        while (!ct.IsCancellationRequested && _listener!.IsListening) {
+        while (_listener!.IsListening) {
             HttpListenerContext context;
 
             try {
